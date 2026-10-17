@@ -228,14 +228,15 @@ describe('samples router — load waits on the state lock (#3625)', () => {
 
   it('does not write state.json while the lock is held, then lands', async () => {
     if (!bundleReady()) return;
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     const bookDir = join(ws, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
     const statePath = join(bookDir, '.audiobook', 'state.json');
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });

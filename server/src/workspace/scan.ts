@@ -17,9 +17,8 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson } from './state-io.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
-import { withStateLock } from './state-lock.js';
 import {
   analysisCompleteFor,
   hasCurrentTake,
@@ -688,7 +687,7 @@ async function scanBook(
   const castJson = castJsonPath(bookDir);
   const dotDir = dotAudiobook(bookDir);
   /* A stranded book (main absent, a backup beside it) still has state: the
-     recovering read below returns the backup. */
+     recovering read below returns the backup (#3625). */
   const hasState = existsSync(stateJson) || existsSync(`${stateJson}.bak.1`);
   const hasCast = existsSync(castJson);
 
@@ -777,15 +776,21 @@ async function scanBook(
        before the segments backfill so a freshly-uuid'd book is on disk
        even if the segments pass finds nothing to write. */
     if (ensureChapterUuids(state)) {
-      /* #3625 — re-read under the state lock and mint onto THAT read, so a
-         finalize stamp that landed since the top-of-scan read is not
-         reverted by this whole-document write. */
       try {
-        state = await mintChapterUuidsLocked(bookDir);
-      } catch (err) {
+        /* #3700 — mint + persist against a fresh read inside the per-book
+           state-json lock (ensureChapterUuids is idempotent and mutates in
+           place), then adopt the uuids that reached disk so this caller's
+           in-memory state matches it. */
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
+          ensureChapterUuids(fresh) ? fresh : null,
+        );
+        for (const ch of state.chapters) {
+          const onDisk = persisted?.chapters.find((c) => c.id === ch.id);
+          if (onDisk?.uuid) ch.uuid = onDisk.uuid;
+        }
+      } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
-        console.warn('[scan] chapter-uuid migration skipped:', err);
       }
     }
     const result = await backfillAudioModelKeysFromSegments(bookDir, state);
@@ -1120,16 +1125,9 @@ export async function backfillAudioModelKeysFromSegments(
   let totalSec = 0;
   let backfillNeeded = false;
   const next: BookStateJson['chapters'] = [...state.chapters];
-  /* #3625 — the fills this pass computed, keyed by chapter, so they can be
-     re-applied onto a fresh read under the state lock. */
-  const fills: Array<{
-    id: number;
-    slug: string;
-    audioModelKey?: string;
-    audioRenderedAt?: string;
-    duration?: string;
-    audioEngines?: NonNullable<BookStateJson['chapters'][number]['audioEngines']>;
-  }> = [];
+  /* The fields each chapter gained, so the persist below can apply just those
+     onto a FRESH read (#3700) instead of writing this call's stale snapshot. */
+  const patches = new Map<number, { slug: string; patch: Partial<BookStateJson['chapters'][number]> }>();
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
     if (ch.excluded) continue;
@@ -1167,22 +1165,15 @@ export async function backfillAudioModelKeysFromSegments(
         : {};
       const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
       if (needsModelKey || needsRenderedAt || needsDuration || needsEngines) {
-        next[i] = {
-          ...ch,
+        const patch = {
           ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
           ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
           ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
           ...(needsEngines ? { audioEngines: breakdown } : {}),
         };
+        next[i] = { ...ch, ...patch };
+        patches.set(ch.id, { slug: ch.slug, patch });
         backfillNeeded = true;
-        fills.push({
-          id: ch.id,
-          slug: ch.slug,
-          ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
-          ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
-          ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
-          ...(needsEngines ? { audioEngines: breakdown } : {}),
-        });
       }
     } catch {
       /* malformed segments file → skip */
@@ -1191,38 +1182,31 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      /* Re-read under the state lock and apply each fill only to a chapter
-         that STILL lacks that field in the fresh read — never write back the
-         outer `state` snapshot, which would revert a stamp a finalize landed
-         while this scan was reading segments files. */
-      const fresh = await withStateLock(bookDir, async () => {
-        const cur = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-        if (!cur) throw new Error('state.json vanished before the backfill write');
+      /* #3700 — read-modify-write under the per-book state-json lock: re-read,
+         then fill in each backfilled field only where the fresh chapter still
+         lacks it (a render that landed meanwhile has stamped its own). */
+      await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
         let changed = false;
-        const chapters = cur.chapters.map((c) => {
-          const fill = fills.find((f) => f.id === c.id && f.slug === c.slug);
-          if (!fill) return c;
-          const patch: Partial<BookStateJson['chapters'][number]> = {};
-          if (fill.audioModelKey && !c.audioModelKey) patch.audioModelKey = fill.audioModelKey;
-          if (fill.audioRenderedAt && !c.audioRenderedAt) patch.audioRenderedAt = fill.audioRenderedAt;
-          if (fill.duration && (!c.duration || c.duration === '00:00')) patch.duration = fill.duration;
-          if (fill.audioEngines && !c.audioEngines) patch.audioEngines = fill.audioEngines;
-          if (Object.keys(patch).length === 0) return c;
+        const chapters = fresh.chapters.map((c) => {
+          const entry = patches.get(c.id);
+          /* The patch was derived from `audio/<slug>.segments.json`; a restructure
+             that renumbered/renamed this id since would otherwise stamp another
+             chapter's duration/model onto it. Same id, different slug => skip. */
+          if (!entry || entry.slug !== c.slug) return c;
+          const p = entry.patch;
+          const add: Partial<BookStateJson['chapters'][number]> = {};
+          if (p.audioModelKey && !c.audioModelKey) add.audioModelKey = p.audioModelKey;
+          if (p.audioRenderedAt && !c.audioRenderedAt) add.audioRenderedAt = p.audioRenderedAt;
+          if (p.duration && (!c.duration || c.duration === '00:00')) add.duration = p.duration;
+          if (p.audioEngines && !c.audioEngines) add.audioEngines = p.audioEngines;
+          if (Object.keys(add).length === 0) return c;
           changed = true;
-          return { ...c, ...patch };
+          return { ...c, ...add };
         });
-        const merged: BookStateJson = { ...cur, chapters };
-        if (changed) {
-          await writeStateJsonAtomic(stateJsonPath(bookDir), {
-            ...merged,
-            language: merged.language ?? null,
-          });
-        }
-        return merged;
+        return changed ? { ...fresh, chapters } : null;
       });
-      return { state: fresh, totalSec };
-    } catch (err) {
-      console.warn('[scan] segments backfill write skipped:', err);
+      return { state: upgraded, totalSec };
+    } catch {
       /* Best-effort upgrade — a failed write just means the next call
          will try again. Return the upgraded shape in-memory so the
          current caller sees the fields even though disk hasn't caught
@@ -1231,22 +1215,4 @@ export async function backfillAudioModelKeysFromSegments(
     }
   }
   return { state, totalSec };
-}
-
-/** Site 1's locked read-through-write (#3625): mint chapter uuids onto a fresh
-    state.json read and persist only when something was minted. Its own function
-    so the `withStateLock` hold is not textually near the scan's later
-    `backfillAudioModelKeysFromSegments` call (which takes the lock itself). */
-async function mintChapterUuidsLocked(bookDir: string): Promise<BookStateJson> {
-  return withStateLock(bookDir, async () => {
-    const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-    if (!fresh) throw new Error('state.json vanished before the uuid write');
-    if (ensureChapterUuids(fresh)) {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), {
-        ...fresh,
-        language: fresh.language ?? null,
-      });
-    }
-    return fresh;
-  });
 }

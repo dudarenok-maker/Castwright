@@ -1147,15 +1147,16 @@ describe('reparse handler — #2099 round-2 finding 1: a non-parse cast.json rea
   });
 });
 
-describe('#3625 � reparse waits on the state lock', () => {
+describe('#3625 — reparse waits on the state lock', () => {
   const statePath = () => join(bookDir, '.audiobook', 'state.json');
   async function hold() {
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });

@@ -17,8 +17,7 @@ import { gzipSync } from 'node:zlib';
 import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { withStateLock } from '../workspace/state-lock.js';
+import { updateStateJsonLocked } from '../workspace/state-migrate.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
@@ -52,30 +51,25 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
     if (bookId) {
       const located = await findBookByBookId(bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir } = located;
-      let state = located.state;
+      const { bookDir, state } = located;
       /* srv-35 — guarantee a stable uuid on every chapter (and persist the
          migration) so the manifest keys are durable. Idempotent. */
       if (ensureChapterUuids(state)) {
-        /* #3625 — re-read inside the state lock and stamp THAT read, so a
-           concurrent writer's change is not dropped by this migration write.
-           Best-effort (swallow, but log): on any failure the in-memory uuids
-           on the snapshot still serve this response, as before. */
-        try {
-          state = await withStateLock(bookDir, async () => {
-            const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-            if (!fresh) return state;
-            if (ensureChapterUuids(fresh)) {
-              await writeStateJsonAtomic(stateJsonPath(bookDir), {
-                ...fresh,
-                language: fresh.language ?? null,
-              });
+        /* #3700 — persisted under the per-book state-json lock against a fresh
+           read; the uuids that reached disk are adopted below. */
+        await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
+          ensureChapterUuids(fresh) ? fresh : null,
+        )
+          .then((persisted) => {
+            for (const ch of state.chapters) {
+              const onDisk = persisted?.chapters.find((c) => c.id === ch.id);
+              if (onDisk?.uuid) ch.uuid = onDisk.uuid;
             }
-            return fresh;
+          })
+          .catch(() => {
+            /* best-effort migration write; the in-memory state already has
+               the uuids for this response. */
           });
-        } catch (err) {
-          console.warn('[sync-manifest] chapter-uuid migration write failed', err);
-        }
       }
       const audioRoot = audioDir(bookDir);
       const audioByChapterId = new Map<number, ChapterAudioFact>();

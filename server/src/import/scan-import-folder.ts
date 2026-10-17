@@ -42,8 +42,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { withStateLock } from '../workspace/state-lock.js';
 import {
   PORTABLE_SCHEMA_VERSION,
   type PortableBundleManifest,
@@ -218,7 +218,7 @@ export async function importPortableBundle(
   let renamedTo: string | undefined;
 
   /* The conflict decision is made, and the target dir CLAIMED (mkdir), inside
-     the target's state lock (#3625): decided outside it, two concurrent
+     the target's state-json lock (#3625): decided outside it, two concurrent
      imports of one title both saw "free" ('fail' both succeeded) or both
      picked the same "(2)" ('rename'). The unlocked pick below only chooses a
      candidate; the in-lock re-check is authoritative. A 'rename' candidate is
@@ -240,7 +240,7 @@ export async function importPortableBundle(
       resolvedBookId = renamed.bookId;
       renamedTo = bookDir;
     }
-    const claimed = await withStateLock(bookDir, async () => {
+    const claimed = await withStateJsonLock(stateJsonPath(bookDir), async () => {
       if (existsSync(bookDir)) {
         if (strategy === 'fail') throw new BundleConflictError(bookDir);
         /* 'overwrite' keeps the existing path; 'rename' lost the race. */
@@ -277,7 +277,8 @@ export async function importPortableBundle(
     staged.push({ dest, tmp: `${dest}${tmpSuffix}`, buf, sourceEntry });
   }
 
-  planEntry(stateJsonPath(bookDir), finalStateBuf, 'state.json');
+  const liveStatePath = stateJsonPath(bookDir);
+  planEntry(liveStatePath, finalStateBuf, 'state.json');
   const manuscriptBuf = entries.get(state.manuscriptFile);
   if (!manuscriptBuf) {
     throw new InvalidBundleError(
@@ -355,14 +356,17 @@ export async function importPortableBundle(
   /* Phase 2: rename each tmp file over its final destination. Failure
      mid-rename is the half-imported case called out in the header.
      This is the one state.json writer that does not go through
-     writeStateJsonAtomic, so the state-lock guard cannot see it: it is locked
+     writeStateJsonAtomic, so the state-json-lock guard cannot see it: it is locked
      by hand (#3625). Phase 1 (tmp writes) stays outside the lock.
      The cleanup wraps the lock acquisition itself, not just the renames:
      `withKeyLock` never runs its callback when acquisition times out, so a
      catch inside the callback would leak every staged tmp file on exactly
      that failure. */
   try {
-    await withStateLock(bookDir, async () => {
+    /* Always under the lock, fresh folder or not (#3700 locked only the
+       overwrite path): an 'overwrite' import can land on a folder another
+       import has just claimed, so a fresh folder is not writer-free. */
+    await withStateJsonLock(liveStatePath, async () => {
       for (const s of staged) {
         await rename(s.tmp, s.dest);
       }

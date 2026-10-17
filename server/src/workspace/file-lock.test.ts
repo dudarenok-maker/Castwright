@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   withKeyLock,
+  withStateJsonLock,
   __chainsSizeForTest,
+  __stateJsonWaitersForTest,
   LockAcquisitionTimeoutError,
   LOCK_ACQUISITION_TIMEOUT_CODE,
   isLockAcquisitionTimeout,
@@ -255,10 +257,6 @@ describe('withKeyLock typed timeout error (#2260 round 2)', { retry: 0 }, () => 
        but a maintainer still meets this string first. */
     expect((err as Error).message).toContain('withKeyLock: timed out after 20ms');
     expect((err as Error).message).toContain(`"${key}"`);
-    /* #3625: the rule-4 clause names the whole lock order, `state` included. */
-    expect((err as Error).message).toContain('design -> library-voice -> cast');
-    expect((err as Error).message).toContain('revision-op -> state -> revisions');
-    expect((err as Error).message).toContain('library-voice -> state');
   });
 
   it('isLockAcquisitionTimeout accepts the expiry and rejects everything a swallow site must keep swallowing', () => {
@@ -382,5 +380,47 @@ describe('requestFailureMessage (#2260 final round)', () => {
     expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('cast.json');
     expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('rule');
     expect(LOCK_CONTENTION_REQUEST_ERROR).toContain('contention');
+  });
+});
+
+/* #3700 review pass 1 -- `withStateJsonLock` curates the message (the key embeds
+   the absolute workspace path) but must keep the lock-timeout CLASS, or the
+   fail-loud sites (analysis persist, `classifyAnalysisFailure`) swallow it as a
+   disk fault. */
+describe('withStateJsonLock timeout keeps the lock-timeout class (#3700)', { retry: 0 }, () => {
+  it('rethrows the curated message with the timeout code, never the key', async () => {
+    const statePath = '/w/state-json-class/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    const err = await withStateJsonLock(statePath, async () => 'ran', 50).catch((e: unknown) => e);
+    expect(isLockAcquisitionTimeout(err)).toBe(true);
+    expect((err as Error).message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect((err as Error).message).not.toContain(statePath);
+  });
+
+  it('a timed-out acquisition leaves no stale waiter count behind', async () => {
+    const statePath = '/w/state-json-timeout-waiters/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+    await withStateJsonLock(statePath, async () => 'ran', 20).catch(() => undefined);
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+  });
+});
+
+describe('__stateJsonWaitersForTest (#3700)', { retry: 0 }, () => {
+  it('counts exactly the callers queued behind a holder, and drops to 0 once they run', async () => {
+    const statePath = '/tmp/waiters-test/.audiobook/state.json';
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const holder = withStateJsonLock(statePath, () => held);
+    // The holder acquires immediately; let its (zero-wait) acquisition settle.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+    const w1 = withStateJsonLock(statePath, async () => 'a');
+    const w2 = withStateJsonLock(statePath, async () => 'b');
+    expect(__stateJsonWaitersForTest(statePath)).toBe(2);
+    release();
+    await Promise.all([holder, w1, w2]);
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
   });
 });

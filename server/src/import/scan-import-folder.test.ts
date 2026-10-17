@@ -37,6 +37,7 @@ vi.mock('node:fs/promises', async () => {
 import sharp from 'sharp';
 import { audioDir, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { __stateJsonWaitersForTest, withStateJsonLock } from '../workspace/file-lock.js';
 
 /** Build a tiny portable bundle in-memory without going through the real
     build pipeline — gives the import-side tests a stable, ffmpeg-free
@@ -371,6 +372,43 @@ describe('importPortableBundle', () => {
     }
   });
 
+  it("'overwrite' replaces an existing book's state.json only under the state-json lock (#3700)", async () => {
+    const state = fixtureState({ title: 'Overwrite Lock Test' });
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
+    const target = targetDirFor(state);
+    mkdirSync(dotAudiobook(target), { recursive: true });
+    const sp = stateJsonPath(target);
+    writeFileSync(sp, JSON.stringify({ marker: 'old-book' }));
+    try {
+      let release!: () => void;
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      let acquired!: () => void;
+      const gotLock = new Promise<void>((r) => {
+        acquired = r;
+      });
+      const holder = withStateJsonLock(sp, () => {
+        acquired();
+        return held;
+      });
+      await gotLock;
+      const pending = importPortableBundle(bundle, { onConflict: 'overwrite' });
+      const deadline = Date.now() + 5000;
+      while (__stateJsonWaitersForTest(sp) < 1 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(__stateJsonWaitersForTest(sp), 'import never queued on the lock').toBe(1);
+      expect(JSON.parse(readFileSync(sp, 'utf8')).marker).toBe('old-book');
+      release();
+      await holder;
+      await pending;
+      expect(JSON.parse(readFileSync(sp, 'utf8')).title).toBe('Overwrite Lock Test');
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
   it("two concurrent 'rename' imports of one title land in distinct dirs", async () => {
     const state = fixtureState({ title: 'Concurrent Rename Test' });
     const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
@@ -496,7 +534,8 @@ describe('importPortableBundle', () => {
   });
 
   it("'overwrite' promotes state.json only after the state lock is released (#3625)", async () => {
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     const state = fixtureState({ title: 'Overwrite Lock Test' });
     const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const target = targetDirFor(state);
@@ -507,7 +546,7 @@ describe('importPortableBundle', () => {
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(target, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(target), async () => {
       acquired();
       await gate;
     });

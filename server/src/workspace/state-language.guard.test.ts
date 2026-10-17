@@ -12,7 +12,7 @@
 
    BUILT IN THE cast-lock.guard.test.ts IDIOM, as #2246 requires: a scan over
    raw source text under `server/src`, REUSING its `skipOpaqueToken` /
-   token-range helpers (now shared via ../test-utils/guard-scan.ts, #3685) so a comment or string that
+   `computeOpaqueRanges` / `isOpaque` helpers so a comment or string that
    happens to spell out one of these patterns verbatim is never a site. No
    parser, no import resolver, no call-graph — the same syntactic horizon
    cast-lock works inside, and the same zero-grammar scanner quirks come with
@@ -74,20 +74,90 @@
    `writeJsonAtomic(stateJsonPath(` and a string literal `join(dir,'state.json')`
    — both opaque, never sites. `git diff` empty of mutations before finalise. */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  collectSourceFiles,
-  computeTokenOpaqueRanges,
-  isOpaqueInTokenRanges,
-} from '../test-utils/guard-scan.js';
 import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './state-language.guard-targets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
 const SEAM_FILE = 'workspace/state-migrate.ts';
+
+/** Every non-test `.ts` file under `server/src`, recursively. */
+function collectSourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectSourceFiles(full, out);
+    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/** If `src[i]` opens a string/template literal or a line/block comment, return
+    the index just past its end (handling backslash escapes inside quotes, and
+    the unterminated-comment case by running to EOF). Otherwise return -1.
+    Reused behaviourally from cast-lock.guard.test.ts. */
+function skipOpaqueToken(src: string, i: number): number {
+  const n = src.length;
+  const ch = src[i];
+  if (ch === '"' || ch === "'" || ch === '`') {
+    const quote = ch;
+    let j = i + 1;
+    while (j < n) {
+      if (src[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (src[j] === quote) {
+        j++;
+        break;
+      }
+      j++;
+    }
+    return j;
+  }
+  if (ch === '/' && src[i + 1] === '/') {
+    let j = i + 2;
+    while (j < n && src[j] !== '\n') j++;
+    return j;
+  }
+  if (ch === '/' && src[i + 1] === '*') {
+    let j = i + 2;
+    while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
+    j += 2;
+    return j;
+  }
+  return -1;
+}
+
+/** Every [start, end) span in `content` that is a string/template literal or a
+    comment, per `skipOpaqueToken`. Reused behaviourally from
+    cast-lock.guard.test.ts. */
+function computeOpaqueRanges(content: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const n = content.length;
+  let i = 0;
+  while (i < n) {
+    const skip = skipOpaqueToken(content, i);
+    if (skip !== -1) {
+      ranges.push({ start: i, end: skip });
+      i = skip;
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+/** True iff `index` falls inside one of `ranges` — a string/template/comment,
+    not real code. Reused behaviourally from cast-lock.guard.test.ts. */
+function isOpaque(ranges: Array<{ start: number; end: number }>, index: number): boolean {
+  return ranges.some((r) => index >= r.start && index < r.end);
+}
 
 /** Count non-opaque (real-code) occurrences of `re` in `content`. `re` is
     shared global state so `lastIndex` is reset before scanning, exactly as
@@ -101,7 +171,7 @@ function countInCode(
   let m: RegExpExecArray | null;
   let c = 0;
   while ((m = re.exec(content))) {
-    if (!isOpaqueInTokenRanges(opaque, m.index)) c++;
+    if (!isOpaque(opaque, m.index)) c++;
   }
   return c;
 }
@@ -170,8 +240,7 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
 // ---------------------------------------------------------------- G2
 
 const RAW_STATE_WRITE_RE = /\b(?:planEntry|writeFile)\(\s*stateJsonPath\(/g;
-const JOIN_STATE_WRITE_RE =
-  /\b(?:writeFile|writeJsonAtomic(?:Ordered)?|planEntry)\([^)]*state\.json'/g;
+const JOIN_STATE_WRITE_RE = /\b(?:writeFile|writeJsonAtomic(?:Ordered)?|planEntry)\([^)]*state\.json'/g;
 
 /* The one raw-to-state-path writer that exists today, pinned with its count AND
    a required normalisation marker: the bundle importer writes state.json through
@@ -211,31 +280,35 @@ function countRawStateWrites(
    its `voice-not-designed` failure persist; analysis.ts went from 2 to 3
    when #3435's Start fresh began un-confirming the book, and to 4 when the
    subset route began reading castConfirmed at load for its result gate —
-   a read, not a write; routes/book-state.ts 9→15, routes/chapters-restructure.ts
-   1→2, routes/library-sync-manifest.ts 1→2 and workspace/scan.ts 4→6 because
-   #3625 took fresh state.json reads inside the per-book state lock — the
-   read-inside-the-lock rule, not aliased imports). Asserted BOTH
+   a read, not a write; #3700 wrapped each state.json writer in
+   withStateJsonLock, which re-spells `stateJsonPath(bookDir)` as the lock key
+   — book-state.ts +3 (the rename PUT also keys the new path), chapters-restructure.ts +2, import.ts +1, samples.ts +1,
+   auto-backup.ts +1 — not new write sites; the pass-3 absent-state refusals then added
+   book-state.ts +2 (DELETE's lock key + presence check) and auto-backup.ts +1
+   (restore's presence check) — reads, not writes; #3625 then added
+   scan-import-folder.ts +1 (the in-lock claim keys the target's state.json)
+   and book-state.ts +1 (DELETE's stateless-folder lock key)). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'cover/store.ts': 2,
   'cover/upload.ts': 2,
-  'import/scan-import-folder.ts': 1,
+  'import/scan-import-folder.ts': 2,
   'routes/analysis.ts': 4,
   'routes/book-state.ts': 15,
-  'routes/chapters-restructure.ts': 2,
+  'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
-  'routes/import.ts': 1,
-  'routes/library-sync-manifest.ts': 2,
-  'routes/samples.ts': 2,
+  'routes/import.ts': 2,
+  'routes/library-sync-manifest.ts': 1,
+  'routes/samples.ts': 3,
   'routes/voices.ts': 4,
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
-  'workspace/auto-backup.ts': 3,
+  'workspace/auto-backup.ts': 5,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
-  'workspace/scan.ts': 6,
+  'workspace/scan.ts': 4,
   'workspace/series-cast-scan.ts': 2,
   'workspace/series-full-cast-scan.ts': 1,
   'workspace/series-reuse-link.ts': 1,
@@ -265,7 +338,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       if (rel === SEAM_FILE) continue;
       const content = readFileSync(file, 'utf8');
-      const opaque = computeTokenOpaqueRanges(content);
+      const opaque = computeOpaqueRanges(content);
       const mentions = countInCode(content, STATE_PATH_RE, opaque);
       if (mentions === 0) continue; // not a stateJsonPath-mentioning file → G1 silent
       const writes = countInCode(content, WRITE_JSON_ATOMIC_RE, opaque);
@@ -309,7 +382,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     for (const file of files) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       const content = readFileSync(file, 'utf8');
-      const opaque = computeTokenOpaqueRanges(content);
+      const opaque = computeOpaqueRanges(content);
       const raw = countRawStateWrites(content, opaque);
       if (raw === 0) continue;
 
@@ -356,9 +429,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
       'await writeJsonAtomic(statePath, next);',
     ].join('\n');
     expect(countInCode(src, WRITE_JSON_ATOMIC_RE, [])).toBe(2);
-    expect(
-      countInCode('await writeJsonAtomicXOrdered(statePath, next);', WRITE_JSON_ATOMIC_RE, []),
-    ).toBe(0);
+    expect(countInCode('await writeJsonAtomicXOrdered(statePath, next);', WRITE_JSON_ATOMIC_RE, [])).toBe(0);
   });
 
   /* M7 (#3427): G2's join regex once listed the bare `writeJsonAtomic` only, so a
@@ -369,9 +440,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     const bare = "await writeJsonAtomic(join(dir, 'state.json'), { v: 1 });";
     expect(countRawStateWrites(ordered, [])).toBe(1);
     expect(countRawStateWrites(bare, [])).toBe(1);
-    expect(
-      countRawStateWrites("await writeJsonAtomicXOrdered(join(dir, 'state.json'), 1);", []),
-    ).toBe(0);
+    expect(countRawStateWrites("await writeJsonAtomicXOrdered(join(dir, 'state.json'), 1);", [])).toBe(0);
   });
 
   it('G3: fail closed — global floors plus the per-file expected-count map for stateJsonPath(', () => {
@@ -383,7 +452,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     for (const file of files) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       const content = readFileSync(file, 'utf8');
-      const opaque = computeTokenOpaqueRanges(content);
+      const opaque = computeOpaqueRanges(content);
       const n = countInCode(content, STATE_PATH_RE, opaque);
       if (n === 0) continue;
       perFile[rel] = n;

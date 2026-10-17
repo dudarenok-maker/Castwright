@@ -25,22 +25,22 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
 import { coverImagePath } from '../workspace/paths.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
 import { CoverSourceError } from '../cover/sources/types.js';
 import { findCandidateById, aggregateCovers } from '../cover/search.js';
 import {
   CoverDownloadError,
   clearStateCover,
-  downloadCover,
+  fetchCoverJpeg,
   patchStateCover,
+  writeCoverFile,
 } from '../cover/store.js';
 import {
   MAX_UPLOAD_BYTES,
   UploadError,
+  encodeUploadedCover,
   patchStateFraming,
   patchStateLocalCover,
   validateUpload,
-  writeUploadedCover,
   type UploadMimeType,
 } from '../cover/upload.js';
 
@@ -81,8 +81,14 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
         .json({ error: 'Selected cover is no longer available — try a fresh search.' });
     }
 
-    await downloadCover(candidate.coverUrl, coverImagePath(bookDir));
-    await patchStateCover(bookDir, candidate);
+    /* #3700 review pass 3 — fetch first, write the file inside the state-json
+       lock only once state.json is confirmed present: a book moved or deleted
+       while this request queued answers 404 with nothing written. */
+    const jpeg = await fetchCoverJpeg(candidate.coverUrl);
+    const dest = coverImagePath(bookDir);
+    if (!(await patchStateCover(bookDir, candidate, () => writeCoverFile(dest, jpeg)))) {
+      return res.status(404).json({ error: 'Book not found.' });
+    }
 
     res.json({ coverImageUrl: `/api/books/${state.bookId}/cover` });
   } catch (e) {
@@ -91,9 +97,7 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
       return res.status(502).json({ error: e.message, kind: e.kind });
     }
     console.error('[cover] POST failed', e);
-    res
-      .status(500)
-      .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover save failed.') });
+    res.status(500).json({ error: (e as Error).message || 'Cover save failed.' });
   }
 });
 
@@ -133,16 +137,18 @@ coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
     const path = coverImagePath(bookDir);
-    await rm(path, { force: true }).catch(() => {
-      /* best-effort */
-    });
-    await clearStateCover(bookDir);
+    /* #3700 review pass 3 — the file removal runs inside the state-json lock,
+       and only if state.json is still there (404 otherwise, nothing touched). */
+    const ok = await clearStateCover(bookDir, () =>
+      rm(path, { force: true }).catch(() => {
+        /* best-effort */
+      }),
+    );
+    if (!ok) return res.status(404).json({ error: 'Book not found.' });
     res.status(204).end();
   } catch (e) {
     console.error('[cover] DELETE failed', e);
-    res
-      .status(500)
-      .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover delete failed.') });
+    res.status(500).json({ error: (e as Error).message || 'Cover delete failed.' });
   }
 });
 
@@ -193,8 +199,9 @@ coverRouter.post(
         throw e;
       }
 
+      let jpeg: Buffer;
       try {
-        await writeUploadedCover(file!.buffer, sniffedMime, coverImagePath(bookDir));
+        jpeg = await encodeUploadedCover(file!.buffer, sniffedMime);
       } catch (e) {
         if (e instanceof UploadError && e.kind === 'transcode_failed') {
           return res.status(502).json({ error: e.message, kind: e.kind });
@@ -203,7 +210,12 @@ coverRouter.post(
       }
 
       const originalFilename = file!.originalname || null;
-      await patchStateLocalCover(bookDir, originalFilename);
+      /* #3700 review pass 3 — write the file inside the state-json lock only
+         once state.json is confirmed present (404 + nothing written otherwise). */
+      const dest = coverImagePath(bookDir);
+      if (!(await patchStateLocalCover(bookDir, originalFilename, () => writeCoverFile(dest, jpeg)))) {
+        return res.status(404).json({ error: 'Book not found.' });
+      }
 
       res.json({
         coverImageUrl: `/api/books/${state.bookId}/cover`,
@@ -211,9 +223,7 @@ coverRouter.post(
       });
     } catch (e) {
       console.error('[cover] upload failed', e);
-      res
-        .status(500)
-        .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover upload failed.') });
+      res.status(500).json({ error: (e as Error).message || 'Cover upload failed.' });
     }
   },
 );
@@ -241,10 +251,6 @@ coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) 
     res.status(204).end();
   } catch (e) {
     console.error('[cover] framing PATCH failed', e);
-    res
-      .status(500)
-      .json({
-        error: requestFailureMessage(e, (e as Error).message || 'Cover framing save failed.'),
-      });
+    res.status(500).json({ error: (e as Error).message || 'Cover framing save failed.' });
   }
 });

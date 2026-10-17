@@ -19,40 +19,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import {
-  LOCK_CONTENTION_REQUEST_ERROR,
-  LockAcquisitionTimeoutError,
-} from '../workspace/file-lock.js';
-
-/* Let a test make one named state-writing helper reject once; by default each
-   delegates to the real implementation. */
-const helperFailure = vi.hoisted(() => ({ next: null as null | { name: string; err: unknown } }));
-function wrapHelper<A extends unknown[], R>(name: string, fn: (...a: A) => Promise<R>) {
-  return async (...a: A): Promise<R> => {
-    const f = helperFailure.next;
-    if (f && f.name === name) {
-      helperFailure.next = null;
-      throw f.err;
-    }
-    return fn(...a);
-  };
-}
-vi.mock('../cover/store.js', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../cover/store.js')>();
-  return {
-    ...orig,
-    patchStateCover: wrapHelper('patchStateCover', orig.patchStateCover),
-    clearStateCover: wrapHelper('clearStateCover', orig.clearStateCover),
-  };
-});
-vi.mock('../cover/upload.js', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../cover/upload.js')>();
-  return {
-    ...orig,
-    patchStateLocalCover: wrapHelper('patchStateLocalCover', orig.patchStateLocalCover),
-    patchStateFraming: wrapHelper('patchStateFraming', orig.patchStateFraming),
-  };
-});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -134,7 +100,7 @@ function imageResponse(bytes: Uint8Array): Response {
   return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
 }
 
-/* #3640 / #3535: downloadCover now re-encodes every fetched body, so the
+/* #3640 / #3535: the cover download now re-encodes every fetched body, so the
    download fixture must be a real decodable image — the old 11-byte JFIF
    header stub was never decodable. Generated in beforeAll (sharp is async). */
 let SAMPLE_JPEG: Uint8Array;
@@ -578,78 +544,4 @@ describe('PATCH /:bookId/cover/framing (plan 40)', () => {
       .send({ offsetX: 0, offsetY: 0, zoom: 1 });
     expect(res.status).toBe(404);
   });
-});
-
-describe('cover routes — lock-timeout 500 bodies are curated (#3625)', () => {
-  const lockErr = () => new LockAcquisitionTimeoutError('state:/abs/secret/path', 10000);
-
-  async function jpeg(): Promise<Buffer> {
-    const sharp = (await import('sharp')).default;
-    return sharp({
-      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
-    })
-      .jpeg()
-      .toBuffer();
-  }
-
-  const routes: Array<{ name: string; helper: string; send: () => Promise<request.Response> }> = [
-    {
-      name: 'POST /cover',
-      helper: 'patchStateCover',
-      send: async () => {
-        fetchMock
-          .mockResolvedValueOnce(jsonResponse({ docs: [{ cover_i: 556 }] }))
-          .mockResolvedValueOnce(imageResponse(SAMPLE_JPEG));
-        return request(app)
-          .post(`/api/books/${bookId}/cover`)
-          .set('Content-Type', 'application/json')
-          .send({ candidateId: 'openlibrary:556' });
-      },
-    },
-    {
-      name: 'DELETE /cover',
-      helper: 'clearStateCover',
-      send: () => request(app).delete(`/api/books/${bookId}/cover`),
-    },
-    {
-      name: 'POST /cover/upload',
-      helper: 'patchStateLocalCover',
-      send: async () =>
-        request(app)
-          .post(`/api/books/${bookId}/cover/upload`)
-          .attach('image', await jpeg(), { filename: 'x.jpg', contentType: 'image/jpeg' }),
-    },
-    {
-      name: 'PATCH /cover/framing',
-      helper: 'patchStateFraming',
-      send: () =>
-        request(app)
-          .patch(`/api/books/${bookId}/cover/framing`)
-          .set('Content-Type', 'application/json')
-          .send({ offsetX: 0, offsetY: 0, zoom: 1 }),
-    },
-  ];
-
-  for (const r of routes) {
-    it(`${r.name} answers a lock timeout with the curated body, not the path`, async () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      helperFailure.next = { name: r.helper, err: lockErr() };
-      const res = await r.send();
-      helperFailure.next = null;
-      spy.mockRestore();
-      expect(res.status).toBe(500);
-      expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
-      expect(JSON.stringify(res.body)).not.toContain('/abs/secret/path');
-    });
-
-    it(`${r.name} still returns an ordinary error's own message`, async () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      helperFailure.next = { name: r.helper, err: new Error('boom') };
-      const res = await r.send();
-      helperFailure.next = null;
-      spy.mockRestore();
-      expect(res.status).toBe(500);
-      expect(res.body.error).toBe('boom');
-    });
-  }
 });

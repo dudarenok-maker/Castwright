@@ -50,9 +50,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withStateLock } from '../workspace/state-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -99,14 +98,15 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
-/* Best-effort: any parse failure yields null (state untouched). Skips the
-   parse unless some keyless, non-user-titled chapter has a generic "Chapter N"
-   title. Returns the parsed titles/flags for `backfillTitleSynthesized`, which
-   the caller applies to its in-lock read of state.json. */
-async function parseForLegacyTitleBackfill(
+/* Best-effort: any parse failure leaves the state untouched. Skips the parse
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title.
+   Returns the parsed title/flag lists (or null) WITHOUT touching state: the parse
+   is slow, so it runs outside the state-json lock (#3700) and the caller applies
+   `backfillTitleSynthesized` to the fresh read inside it. */
+async function parseForLegacyTitleFlags(
   state: Parameters<typeof backfillTitleSynthesized>[0],
   bookDir: string,
-): Promise<{ titles: string[]; synthesized: boolean[] } | null> {
+): Promise<{ titles: string[]; flags: boolean[] } | null> {
   /* Only a keyless, non-overridden chapter whose title looks generic can be
      flagged (renumbering and both refresh passes act on that shape alone), so
      a book without one never needs the parse. */
@@ -130,7 +130,7 @@ async function parseForLegacyTitleBackfill(
     });
     return {
       titles: parsed.chapters.map((c) => c.title),
-      synthesized: parsed.chapters.map((c) => c.titleSynthesized === true),
+      flags: parsed.chapters.map((c) => c.titleSynthesized === true),
     };
   } catch {
     return null;
@@ -155,7 +155,7 @@ async function applyRestructure(
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
   const { bookDir } = located;
-  const { state } = located;
+  let { state } = located;
   if (!state.manuscriptId) {
     return {
       status: 400,
@@ -172,36 +172,27 @@ async function applyRestructure(
     };
   }
 
-  /* Legacy book: chapters imported before titleSynthesized existed carry no
-     flag (#3628). The parse is slow and needs no lock, so it runs HERE, off
-     `located.state`; the flags are applied to the fresh in-lock read below. */
-  const legacyParse = await parseForLegacyTitleBackfill(state, bookDir);
+  /* #3628/#3700 — the legacy-title parse is slow (a full manuscript parse), so
+     it runs BEFORE the lock, off the `located.state` snapshot; only the cheap
+     `backfillTitleSynthesized` application happens inside, on the fresh read. */
+  const legacyParse = await parseForLegacyTitleFlags(state, bookDir);
 
-  // Read current sentences from manuscript-edits.json (may be empty/missing
-  // for a fresh book — that's fine, transform handles it). Each transform
-  // requires sentences for split when it needs to locate the body offset.
-  const editsPath = manuscriptEditsJsonPath(bookDir);
-  const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
-  const sentences = edits?.sentences ?? [];
-
-  /* #3625 — state.json read-modify-write: the lock spans the fresh re-read
-     through the write, and every decision derived from the state (hint-title
-     alignment, uuid stamping, the transform) uses THAT read, never
-     `located.state`. The manuscript hydrate and the sentences read stay
-     outside; the manuscript-edits write, hint update, audio ops and cache
-     rebuild stay after the hold. */
-  type Outcome =
-    | { early: { status: number; body: unknown } }
-    | { result: RestructureResult };
-  const outcome: Outcome = await withStateLock(bookDir, async () => {
-    const read = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-    if (!read) return { early: { status: 404, body: { error: 'Book not found.' } } };
-    // Recognise the app-made legacy titles (#3628) so every operation below
-    // renumbers them like a freshly imported book's.
-    const fresh = legacyParse
-      ? backfillTitleSynthesized(read, legacyParse.titles, legacyParse.synthesized)
-      : read;
-
+  /* #3700 — state.json is read, transformed and rewritten as one span under
+     the per-book state-json lock (leaf: nothing inside takes another lock), and
+     the read is FRESH from disk rather than the `located.state` snapshot, so a
+     sibling chapter render's stamp can't be reverted by the renumbered state. */
+  const outcome = await withStateJsonLock(stateJsonPath(bookDir), async () => {
+    // Legacy book: chapters imported before titleSynthesized existed carry no
+    // flag. Recognise the app-made ones against a fresh parse (#3628) so every
+    // operation below renumbers them like a freshly imported book's.
+    const freshState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+    /* #3700 review pass 2 — absent: the book was deleted or moved after
+       `located` resolved it. Writing the stale snapshot back would resurrect
+       it; refuse and write nothing. */
+    if (!freshState) return { early: { status: 404, body: { error: 'Book not found.' } } };
+    state = legacyParse
+      ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
+      : freshState;
     // Align hint titles with state.json's user-facing chapter titles.
     // The parser-derived hint titles can diverge (e.g. when state.json
     // captures a more refined title from a later parser-version refresh,
@@ -209,19 +200,26 @@ async function applyRestructure(
     // source of truth for slugs and display; hints contribute the body
     // text only.
     const alignedHints = record.chapterHints.map((h) => {
-      const sc = fresh.chapters.find((c) => c.id === h.id);
+      const sc = state.chapters.find((c) => c.id === h.id);
       return sc ? { ...h, title: sc.title } : h;
     });
+
+    // Read current sentences from manuscript-edits.json (may be empty/missing
+    // for a fresh book — that's fine, transform handles it). Each transform
+    // requires sentences for split when it needs to locate the body offset.
+    const editsPath = manuscriptEditsJsonPath(bookDir);
+    const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
+    const sentences = edits?.sentences ?? [];
 
     /* srv-35 — ensure the OLD chapters carry uuids before the transform so
        buildNewStateChapters can inherit them by identity (a book that has
        never been written since the upgrade has none yet). The result.state
        is persisted below, so this also migrates the book. */
-    ensureChapterUuids(fresh);
+    ensureChapterUuids(state);
 
-    let transformed: RestructureResult;
+    let result: RestructureResult;
     try {
-      transformed = transform(fresh, alignedHints, sentences);
+      result = transform(state, alignedHints, sentences);
     } catch (e) {
       return {
         early: {
@@ -235,16 +233,12 @@ async function applyRestructure(
     // in-memory hints → audio ops → analysis cache. If any step throws past
     // here, earlier writes are already on disk; partial state is recoverable
     // via the reconciliation filter in book-state.ts:166-185.
-    await writeStateJsonAtomic(stateJsonPath(bookDir), {
-      ...transformed.state,
-      language: transformed.state.language ?? null,
-    });
-    return { result: transformed };
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
+    await writeJsonAtomic(editsPath, { sentences: result.sentences });
+    return { early: null, result, editsPath };
   });
-  if ('early' in outcome) return outcome.early;
-  const result = outcome.result;
-
-  await writeJsonAtomic(editsPath, { sentences: result.sentences });
+  if (outcome.early) return outcome.early;
+  const { result, editsPath } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -296,9 +290,7 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] merge failed', e);
-      res.status(500).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Merge failed.'),
-      });
+      res.status(500).json({ error: (e as Error).message || 'Merge failed.' });
     }
   },
 );
@@ -326,9 +318,7 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] split failed', e);
-      res.status(500).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Split failed.'),
-      });
+      res.status(500).json({ error: (e as Error).message || 'Split failed.' });
     }
   },
 );
@@ -383,7 +373,7 @@ chaptersRestructureRouter.post(
     } catch (e) {
       console.error('[chapters-restructure] refresh-titles failed', e);
       res.status(500).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Refresh chapter titles failed.'),
+        error: (e as Error).message || 'Refresh chapter titles failed.',
       });
     }
   },
@@ -414,9 +404,7 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] exclude failed', e);
-      res.status(500).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Exclude failed.'),
-      });
+      res.status(500).json({ error: (e as Error).message || 'Exclude failed.' });
     }
   },
 );
@@ -471,7 +459,7 @@ chaptersRestructureRouter.post(
         titleOverridden: updated.titleOverridden === true,
       });
     } catch (e) {
-      const msg = requestFailureMessage(e, (e as Error).message || 'Rename failed.');
+      const msg = (e as Error).message || 'Rename failed.';
       // Surface validation errors from applyRename as 400, anything
       // else (filesystem write failures, etc.) as 500.
       if (/not found/.test(msg)) {
@@ -503,9 +491,7 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] reorder failed', e);
-      res.status(500).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Reorder failed.'),
-      });
+      res.status(500).json({ error: (e as Error).message || 'Reorder failed.' });
     }
   },
 );

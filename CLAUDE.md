@@ -586,19 +586,15 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
+  other lock is taken while it is held. The per-book `state-json` lock
+  (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is likewise a **leaf**
+  around every `.audiobook/state.json` read-modify-write — the read goes inside
+  it, and `workspace/state-json-lock.guard.test.ts` fails the build on an
+  unlocked `writeStateJsonAtomic`. Accept/reject (and the legacy
   `…/audio/previous` routes) additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
-  while holding `revisions`. Every `state.json` read-modify-write goes through
-  `withStateLock` (`workspace/state-lock.ts`, #3625), keyed per book by
-  `stateLockKey(bookDir)`; the full order is **`revision-op` → `state` →
-  `revisions`**. `state` may be taken while holding `design`, `library-voice`,
-  `cast` or `revision-op`; while holding `state` nothing but `revisions` may be
-  acquired; `state` is never taken while holding `revisions`; and never call a
-  `findBookBy*`/scan helper inside a state hold (they lazily take it, so it
-  would wait on itself for 10s). `server/src/workspace/state-lock.guard.test.ts`
-  fails the build on an unlocked `state.json` write. Since #2260 that
+  while holding `revisions`. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
@@ -615,7 +611,7 @@ Design rationale:
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort — plus four
-  `state.json` sites (#3625): finalize's duration/model/render stamp
+  `state.json` sites under `withStateJsonLock` (#3625): finalize's duration/model/render stamp
   (`server/src/audio/finalize-chapter-write.ts`), Start fresh's `castConfirmed`
   un-confirm (`analysis.ts`), and the two analysis persist `state.json` writes
   (parked in `persistLockTimeout` and rethrown after the remaining writes, like
@@ -633,7 +629,7 @@ Design rationale:
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
   `reviewRecorded: false`, never the lock key; and six `state.json` sites
-  (#3625), each logged in full: generation's failure stamp
+  under `withStateJsonLock` (#3625): generation's failure stamp
   (`routes/generation.ts`), which only annotates a reload after `chapter_failed`
   already went out over SSE; `refreshChapterTitles` (`routes/book-state.ts`),
   whose re-derived titles are recomputed on the next read; the sync-manifest
@@ -658,27 +654,28 @@ Design rationale:
   timeout's own message** — not an escalating body, not a per-item reason, and
   not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  HTTPS. Three route-level curation seams, all in `workspace/file-lock.ts`, and a route
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all forty sites (`book-state` ×7, `chapters-restructure` ×6,
-  `cover` ×4, `voice-library` ×3, `revision-ops` ×3, `cast-design` ×2 (both
-  arms of its defensive outer), `revisions` ×2 (the single-book and bulk
-  polls), `qa-report` ×2 (the GET and `resume-scoring`), and one each in
-  `backup`, `chapter-qa-repair`, `chapter-splice`, `exports-portable`,
-  `import`, `qwen-voice`, `samples`, `script-review`, `single-design`,
-  `voice-style`, `voices`),
+  enumerates all twenty-one sites (`book-state` ×4, `voice-library` ×3,
+  `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
+  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of the two legacy `…/audio/previous` routes in
   `chapter-audio.ts` (`DELETE` and `…/restore`); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
+  leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
+  so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round). See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` alone, which already
+  curates its own message. See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

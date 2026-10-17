@@ -316,6 +316,32 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 1 });
   });
 
+  /* #3700's intent re-expressed on the rename-away order (#3625 pass 3): main
+     IS briefly absent between the two renames, but a recovering reader
+     (`recoverMissing`, which state.json reads always set) must still find a
+     document at every rename, and it must be a real one: the old state or the
+     new one, never null. */
+  it('a recovering reader always finds a document during a rotated write (#3700 intent)', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const seenAtRename: unknown[] = [];
+    setRenameImpl(async (src: string, dest: string) => {
+      seenAtRename.push(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
+      await actual.rename(src, dest);
+      seenAtRename.push(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
+    });
+    await writeJsonAtomic(target, { v: 3 }, { rotate: { keep: 3 } });
+
+    expect(seenAtRename.length).toBeGreaterThan(0);
+    for (const seen of seenAtRename) expect([{ v: 2 }, { v: 3 }]).toContainEqual(seen);
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 3 });
+    expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 2 });
+    expect(JSON.parse(await readFile(`${target}.bak.2`, 'utf8'))).toEqual({ v: 1 });
+  });
+
   it('rotation is opt-in: no { rotate } option means no backup is created', async () => {
     const target = join(workdir, 'state.json');
     /* Cast/manuscript/revisions writers stay on the single-file shape so the

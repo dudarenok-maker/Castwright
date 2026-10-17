@@ -29,6 +29,7 @@
 
 import type { BookStateJson } from './scan.js';
 import { writeJsonAtomic, readJsonWithRecovery } from './state-io.js';
+import { withStateJsonLock } from './file-lock.js';
 
 /** The shape writeStateJsonAtomic accepts. Identical to BookStateJson except
  *  `language` is REQUIRED and explicitly nullable: a writer must state the
@@ -133,6 +134,42 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJsonWri
       rotate: { keep: STATE_BACKUP_KEEP },
     },
   );
+}
+
+/** #3700 — the ONE locked read-modify-write of state.json for call sites that
+ *  patch a field or two onto whatever is on disk. Takes the per-book
+ *  `state-json` leaf lock, re-reads state.json INSIDE it (never the caller's
+ *  earlier snapshot, which a sibling chapter render may have stamped past),
+ *  hands that fresh document to `mutate`, and writes the result. `mutate`
+ *  returning `null` means "nothing to change" and skips the write. When the
+ *  file is absent nothing is written (a delete/move raced us) and the result is
+ *  `null` — "absent" is its own outcome, so a mutating caller must refuse
+ *  (404) rather than answer success for a write that did not happen, while a
+ *  read-path caller may fall back to its own snapshot. Leaf lock: `mutate` must not take
+ *  another lock or call something that does. Returns the document that is on
+ *  disk afterwards (the mutated one, or the fresh read when `mutate` declined),
+ *  or `null` when state.json is absent. */
+export async function updateStateJsonLocked(
+  path: string,
+  mutate: (fresh: BookStateJson) => BookStateJson | null,
+  /** Runs inside the lock, only once state.json is known present and `mutate`
+   *  has produced a change, immediately before the write. For a caller whose
+   *  other disk writes must not happen unless the book is still there. */
+  beforeWrite?: () => Promise<void>,
+): Promise<BookStateJson | null> {
+  return withStateJsonLock(path, async () => {
+    const onDisk = await readStateJsonWithRecovery(path);
+    /* Absent means the book was deleted or moved after the caller resolved it:
+       writing would recreate `.audiobook/` (writeJsonAtomic mkdirs) and bring
+       a deleted book back. Skip the write and report absence as `null`. */
+    if (!onDisk) return null;
+    const fresh = onDisk;
+    const next = mutate(fresh);
+    if (!next) return fresh;
+    if (beforeWrite) await beforeWrite();
+    await writeStateJsonAtomic(path, { ...next, language: next.language ?? null });
+    return next;
+  });
 }
 
 /** Read state.json with backup recovery. On a torn / corrupt main

@@ -214,7 +214,8 @@ describe('GET /api/library/sync-manifest?bookId= — detail', () => {
 describe('GET /api/library/sync-manifest?bookId= — chapter-uuid migration state lock (#3625)', () => {
   it('waits on the state lock: no uuids on disk while held, persisted after release', async () => {
     const { makeBookId } = await import('../workspace/paths.js');
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     const id = makeBookId('Gamma Author', SERIES, 'Gamma Book');
     const { bookDir } = seedBook('Gamma Author', 'Gamma Book', id, {
       updatedAt: '2026-02-01T00:00:00.000Z',
@@ -234,7 +235,7 @@ describe('GET /api/library/sync-manifest?bookId= — chapter-uuid migration stat
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });

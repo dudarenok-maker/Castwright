@@ -22,7 +22,7 @@ import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-pa
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
 import { writeStateJsonAtomic } from './state-migrate.js';
-import { withStateLock } from './state-lock.js';
+import { withStateJsonLock } from './file-lock.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
@@ -230,16 +230,22 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
      prior local override of 5). Three slots cover the realistic recovery
      window: the last completed write, the one before it, and one earlier. */
   const parsed = value as BookStateJson;
-  /* #3625 — a restore is a whole-file overwrite, but unlocked it can still be
-     clobbered by a concurrent read-modify-write that read the pre-restore
-     file. Only the write is held: the snapshot read/validation above is the
-     slow part and derives nothing from the live state.json. */
-  await withStateLock(bookDir, () =>
-    writeStateJsonAtomic(stateJsonPath(bookDir), {
+  /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+     per-book state-json lock so it can't interleave with a render's stamp. */
+  await withStateJsonLock(stateJsonPath(bookDir), async () => {
+    /* #3700 review pass 3 — the book may have been deleted or moved (a folder-
+       renaming PUT held this key) after `bookDir` was resolved above. The
+       write below would recreate the old folder with the same bookId, so an
+       absent state.json is "book not found": write nothing. A stranded main
+       (absent, `.bak.1` beside it: a write died between its renames, #3625)
+       is still the book, so the restore goes ahead. */
+    const sp = stateJsonPath(bookDir);
+    if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
+    await writeStateJsonAtomic(stateJsonPath(bookDir), {
       ...parsed,
       language: parsed.language ?? null,
-    }),
-  );
+    });
+  });
 }
 
 /* ── Scheduler ──────────────────────────────────────────────────────────── */

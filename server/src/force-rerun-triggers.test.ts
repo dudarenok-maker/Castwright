@@ -33,7 +33,6 @@ import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './tts/coqui-residency-p
 import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './workspace/state-language.guard-targets.js';
 import { SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS } from './spawn-windows-hide.guard-targets.js';
 import { CAST_LOCK_GUARD_SCAN_GLOB } from './workspace/cast-lock.guard-targets.js';
-import { STATE_LOCK_GUARD_SCAN_GLOB } from './workspace/state-lock.guard-targets.js';
 import { ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB } from './tts/engine-language-coverage.guard-targets.js';
 
 const SERVER_ROOT = resolve(__dirname, '..');
@@ -225,14 +224,6 @@ const MAIN_COVERED = [
     file: 'a file under the state-language guard scan scope (STATE_LANGUAGE_GUARD_SCAN_GLOB)',
     base: REPO_ROOT,
   },
-  /* state-lock.guard.test.ts (#3625): a tree-wide scanner over server/src/**
-     read at RUNTIME, like the two above. The rel path is DERIVED from
-     STATE_LOCK_GUARD_SCAN_GLOB, the constant the guard itself imports. */
-  {
-    rel: STATE_LOCK_GUARD_SCAN_GLOB.replace(/\*\*$/, 'index.ts'),
-    file: 'a file under the state-lock guard scan scope (STATE_LOCK_GUARD_SCAN_GLOB)',
-    base: REPO_ROOT,
-  },
 ];
 
 const SLOW_COVERED = [
@@ -311,13 +302,6 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
      can never diverge. */
   it('main forceRerunTriggers has the exact entry derived from CAST_LOCK_GUARD_SCAN_GLOB (#3085)', () => {
     const expected = `{**/${CAST_LOCK_GUARD_SCAN_GLOB},**/.*/**/${CAST_LOCK_GUARD_SCAN_GLOB}}`;
-    expect(mainTriggers).toContain(expected);
-  });
-
-  /* state-lock.guard.test.ts (#3625): same whole-tree scope, same shared
-     trigger, verified against its own constant independently. */
-  it('main forceRerunTriggers has the exact entry derived from STATE_LOCK_GUARD_SCAN_GLOB (#3085)', () => {
-    const expected = `{**/${STATE_LOCK_GUARD_SCAN_GLOB},**/.*/**/${STATE_LOCK_GUARD_SCAN_GLOB}}`;
     expect(mainTriggers).toContain(expected);
   });
 

@@ -3,6 +3,10 @@
    listen-stats read-modify-write) get isolation without coupling to the
    voice-design busy registry. */
 const chains = new Map<string, Promise<unknown>>();
+/** Test-only: per-key count of callers currently waiting to acquire (see
+ *  `__stateJsonWaitersForTest`). Incremented before the wait, decremented once
+ *  the wait settles, so it is exactly the callers queued behind a holder. */
+const waiters = new Map<string, number>();
 
 /* #2260 — cast-lock.ts's header documents two rules whose violation deadlocks
    this mutex with no timeout and no diagnostic: rule 1 (a locked function
@@ -83,10 +87,8 @@ export class LockAcquisitionTimeoutError extends Error {
     super(
       `withKeyLock: timed out after ${timeoutMs}ms waiting to acquire "${key}" -- ` +
         'either a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
-        'same key) or rule 4 (lock-order cycle: design -> library-voice -> cast; ' +
-        'revision-op -> state -> revisions; library-voice -> state (state may be ' +
-        'taken after design, library-voice, cast or revision-op, never while ' +
-        'holding revisions)) violation, OR ordinary contention behind a legitimately long holder on ' +
+        'same key) or rule 4 (lock-order cycle across design/library-voice/cast) ' +
+        'violation, OR ordinary contention behind a legitimately long holder on ' +
         'this key (see the budget note above). Check for a long holder before ' +
         'hunting a rule violation -- both reach here',
     );
@@ -217,6 +219,12 @@ export function requestFailureMessage(err: unknown, fallback: string): string {
   return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_REQUEST_ERROR : fallback;
 }
 
+function decrementWaiters(key: string): void {
+  const n = (waiters.get(key) ?? 1) - 1;
+  if (n <= 0) waiters.delete(key);
+  else waiters.set(key, n);
+}
+
 export async function withKeyLock<T>(
   key: string,
   fn: () => Promise<T>,
@@ -249,9 +257,11 @@ export async function withKeyLock<T>(
     timer.unref();
   });
 
+  waiters.set(key, (waiters.get(key) ?? 0) + 1);
   try {
     await Promise.race([prior.catch(() => undefined), timedOut]);
   } catch (err) {
+    decrementWaiters(key);
     /* Never fall through to fn() on expiry -- that would run the critical
        section without ever having held the lock, defeating the mutex
        outright. Do release the gate -- our own critical section never ran,
@@ -296,6 +306,7 @@ export async function withKeyLock<T>(
     release();
     throw err;
   }
+  decrementWaiters(key);
   clearTimeout(timer);
 
   try {
@@ -311,4 +322,43 @@ export async function withKeyLock<T>(
  *  rejected). */
 export function __chainsSizeForTest(): number {
   return chains.size;
+}
+
+/** Test-only: how many callers are currently queued (waiting to acquire) on the
+ *  `state-json` lock for `statePath`. Lets a test wait for a request to be
+ *  genuinely blocked on the lock rather than sleeping and hoping. */
+export function __stateJsonWaitersForTest(statePath: string): number {
+  return waiters.get(`state-json:${statePath}`) ?? 0;
+}
+
+/** #3700 — serialise a read-modify-write of one book's `.audiobook/state.json`
+ *  across concurrent chapter renders. A LEAF lock (outside the design ->
+ *  library-voice -> cast order): hold it only across the single
+ *  read-through-write, never while taking another lock. Without it two sibling
+ *  chapters finalizing together both read the same snapshot and the second
+ *  write clobbered the first chapter's stamp (and on Windows the read could land
+ *  in the rename-over window and throw ENOENT). An expired acquisition is
+ *  re-thrown as the curated request error so the lock key (which embeds the
+ *  absolute workspace path) never reaches a client-facing failure body. */
+export async function withStateJsonLock<T>(
+  statePath: string,
+  fn: () => Promise<T>,
+  /** Test-only override for the acquisition budget -- no production caller passes this. */
+  timeoutMs?: number,
+): Promise<T> {
+  try {
+    return await withKeyLock(`state-json:${statePath}`, fn, timeoutMs);
+  } catch (err) {
+    if (isLockAcquisitionTimeout(err)) {
+      console.warn('[state-json-lock]', err);
+      /* Curated message, SAME class: the `code` is what the fail-loud sites
+         (analysis persist, `classifyAnalysisFailure`, `requestFailureMessage`)
+         discriminate on, so a plain `Error` here would be swallowed as a disk
+         fault and reported as `unknown`. */
+      throw Object.assign(new Error(LOCK_CONTENTION_REQUEST_ERROR), {
+        code: LOCK_ACQUISITION_TIMEOUT_CODE,
+      });
+    }
+    throw err;
+  }
 }

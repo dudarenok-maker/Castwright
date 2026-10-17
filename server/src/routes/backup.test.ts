@@ -219,12 +219,13 @@ describe('POST /api/books/:bookId/backups/restore — state lock (#3625)', () =>
     await writeFile(paths.stateJsonPath(bookDir()), JSON.stringify(makeState({ v: 'changed' })), 'utf8');
     const before = await readFile(paths.stateJsonPath(bookDir()), 'utf8');
 
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir(), async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir()), async () => {
       acquired();
       await gate;
     });

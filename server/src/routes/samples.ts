@@ -22,8 +22,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { withStateLock } from '../workspace/state-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -97,7 +96,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     /* The idempotency check and the state.json write are one atomic span: two
        concurrent loads of the same sample would otherwise both pass the check
        and both write (#3625). Only small local copies sit inside the lock. */
-    const alreadyLoaded = await withStateLock(bookDir, async () => {
+    const alreadyLoaded = await withStateJsonLock(stateJsonPath(bookDir), async () => {
       // Idempotent: already present → no-op (never clobber a user's edited copy).
       /* "Present" is the recovering reader's verdict, not main's existence: a
          stranded copy (main missing, a good .bak.N) is present too, and a
@@ -188,8 +187,6 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     res.json({ bookId, manuscriptId, alreadyLoaded: false });
   } catch (e) {
     console.error('[samples] load failed', e);
-    res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Failed to load sample.'),
-    });
+    res.status(500).json({ error: (e as Error).message || 'Failed to load sample.' });
   }
 });

@@ -241,12 +241,13 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
 describe('#3625 — PUT /:bookId/state rename waits on the old dir state lock', () => {
   it('does not move the folder while the lock is held, then renames', async () => {
     seedBook();
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });

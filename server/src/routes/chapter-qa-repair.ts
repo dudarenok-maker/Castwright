@@ -23,7 +23,6 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId, bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
   canonicalModelKeyForEngine,
@@ -38,12 +37,10 @@ import { decodeAudioToPcm } from '../tts/mp3.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import {
   synthesiseChapter,
-  toVoiceLike,
-  buildHintFromCast,
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
-import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import { currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -433,8 +430,8 @@ chapterQaRepairRouter.post(
          `synthesiseChapter` routes a character (the centroid key, a render-time
          id, is resolved through `castResolver` — #2040 — never a raw cast-id
          lookup) —
-         pickVoiceForEngine(resolveCharacterEngine(c, engine), toVoiceLike(c),
-         buildHintFromCast(c)) — NOT from the previous render's snapshot. The
+         currentCastVoiceName(c, engine) (render-integrity/current-voice.ts, the same
+         helper scoreBook uses) — NOT from the previous render's snapshot. The
          snapshot's `resolvedVoiceName` is deliberately the voice ACTUALLY SENT on
          the last render (#1972 — not re-derived from the cast), so after a voice
          reassignment with no re-render in between it still names the OLD voice and
@@ -448,21 +445,16 @@ chapterQaRepairRouter.post(
          valid and an engine change is caught by the voice-name mismatch above —
          except a Qwen tier change (per-character elevation or a repair at a different
          tier), which keeps the old tier's centroid; known gap, #3518. After this filter a filtered-out character behaves exactly like "no
-         centroid" at every downstream `centroids?.[charId]` site. in-book rows are
-         kept; they are rebuilt only when the book is rescored, so after a voice
-         change with no re-render they still reflect the old voice (#3517). */
+         centroid" at every downstream `centroids?.[charId]` site. An in-book row is
+         kept only when it recorded no `inBookVoiceName` (legacy) or that name
+         equals the current cast voice; one built from an older voice is dropped
+         (#3524, settles #3517's in-book half). */
       const centroids: Record<string, CharacterCentroid> | null =
         readCentroidsMap &&
         Object.fromEntries(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
             const current = castResolver.resolve(charId)?.character;
-            const currentVoiceName = current
-              ? pickVoiceForEngine(
-                  resolveCharacterEngine(current, engine),
-                  toVoiceLike(current),
-                  buildHintFromCast(current),
-                )
-              : undefined;
+            const currentVoiceName = current ? currentCastVoiceName(current, engine) : undefined;
             const snap = segFile.characterSnapshots?.[charId];
             return auditionCentroidUsableForCurrent(
               row,
@@ -910,8 +902,7 @@ chapterQaRepairRouter.post(
       });
       res.end();
     } catch (err) {
-      console.error('[qa-repair] failed:', err);
-      fail(requestFailureMessage(err, `Audio-QA repair failed: ${(err as Error).message}`));
+      fail(`Audio-QA repair failed: ${(err as Error).message}`);
     } finally {
       releaseSlot?.();
     }

@@ -804,12 +804,13 @@ describe('scan lazy state.json migrations take the state lock (#3625)', () => {
   };
   /* Hold the book's real state lock until `release()` is called. Resolves once held. */
   async function holdStateLock(bookDir: string) {
-    const { withStateLock } = await import('./state-lock.js');
+    const { withStateJsonLock } = await import('./file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('./paths.js');
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let held!: () => void;
     const acquired = new Promise<void>((r) => (held = r));
-    const done = withStateLock(bookDir, async () => {
+    const done = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       held();
       await gate;
     });

@@ -32,15 +32,6 @@
  *      across the whole audio step; its order is `revision-op` -> `revisions`
  *      — never take `revision-op` while holding `revisions`.
  *
- *      The per-book STATE lock (`state:<abs bookDir>`, state-lock.ts, #3625)
- *      serialises every state.json read-modify-write. Its order is
- *      `revision-op` -> `state` -> `revisions`: `state` may be taken while
- *      holding `design`, `library-voice`, `cast` or `revision-op`, but while
- *      holding `state` nothing except `revisions` may be acquired, and `state`
- *      is never taken while holding `revisions`. Never call a
- *      `findBookBy*`/scan helper inside a state hold (they lazily take it).
- *      state-lock.guard.test.ts fails the build on an unlocked state.json write.
- *
  * SINCE #2260 THIS MUTEX HAS A TIMEOUT (file-lock.ts): each acquisition is
  * bounded at 10s and throws `LockAcquisitionTimeoutError`, naming the key and
  * pointing at rules 1 and 4. That replaces the permanent, diagnostic-free hang

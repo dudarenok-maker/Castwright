@@ -1,16 +1,17 @@
 /* #3625 — analysis "Start fresh" un-confirms the book (`castConfirmed: false`)
    with a state.json read-modify-write. That write must hold the per-book
-   `state` lock, or a concurrent state.json writer's stamp is dropped (or this
+   `state-json` lock (`withStateJsonLock`, #3700), or a concurrent state.json writer's stamp is dropped (or this
    un-confirm is) by whichever atomic rename lands last.
 
    Two directions, each in its own describe so the lock mock cannot leak:
-     1. WAITS ON THE LOCK — the real `withStateLock`, held by the test: state.json
-        must still read `castConfirmed: true` while held and flip to `false`
-        once released. Removing the site's `withStateLock` turns the "still
+     1. WAITS ON THE LOCK — the real `withStateJsonLock`, held by the test:
+        state.json must still read `castConfirmed: true` while held and flip to
+        `false` once released. Removing the site's lock turns the "still
         confirmed while held" assertion red.
-     2. FAILS LOUD — `withStateLock` rejects with a LockAcquisitionTimeoutError:
-        the job must end through its top-level catch as `code: 'lock-contention'`
-        and the workspace path in the lock key must never reach the event.
+     2. FAILS LOUD — `withStateJsonLock` really times out (a queued holder and a
+        50ms budget): the job must end through its top-level catch as
+        `code: 'lock-contention'` and the workspace path in the lock key must
+        never reach the event.
 
    Fixture setup is copied from analysis.fresh-cast-lock.test.ts; its assertion
    shape deliberately is not (#3022: that test cannot detect removal of its
@@ -57,16 +58,15 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
 
 /* Passthrough by default; the fail-loud describe swaps in a rejecting
    implementation for its own test and restores it in a finally. */
-vi.mock('../workspace/state-lock.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/state-lock.js')>();
-  return { ...actual, withStateLock: vi.fn(actual.withStateLock) };
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return { ...actual, withStateJsonLock: vi.fn(actual.withStateJsonLock) };
 });
 
 const AUTHOR = 'Fresh State Lock Author';
 const SERIES = 'Standalones';
 const TITLE = 'Fresh State Lock Book';
 const CHAPTER_BODY = 'Nova said the plan out loud.';
-const SECRET_PATH = '/abs/secret/path';
 
 let workspaceRoot: string;
 
@@ -259,8 +259,8 @@ describe('#3625 — "Start fresh" un-confirm waits on the state lock', () => {
     'leaves castConfirmed:true while the state lock is held, then un-confirms on release',
     async () => {
       const fx = await buildFixture('waits');
-      const { withStateLock } = await vi.importActual<typeof import('../workspace/state-lock.js')>(
-        '../workspace/state-lock.js',
+      const { withStateJsonLock } = await vi.importActual<typeof import('../workspace/file-lock.js')>(
+        '../workspace/file-lock.js',
       );
       let release!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -270,7 +270,7 @@ describe('#3625 — "Start fresh" un-confirm waits on the state lock', () => {
       const acquiredSignal = new Promise<void>((resolve) => {
         acquired = resolve;
       });
-      const holder = withStateLock(fx.bookDir, async () => {
+      const holder = withStateJsonLock(fx.statePath, async () => {
         acquired();
         await held;
       });
@@ -304,17 +304,21 @@ describe('#3625 — "Start fresh" un-confirm fails loud on a state-lock timeout'
     'ends the job as lock-contention without leaking the lock key path',
     async () => {
       const fx = await buildFixture('timeout');
-      const stateLock = await import('../workspace/state-lock.js');
-      const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
-      const spy = vi.mocked(stateLock.withStateLock);
-      const actualImpl = (
-        await vi.importActual<typeof import('../workspace/state-lock.js')>(
-          '../workspace/state-lock.js',
-        )
-      ).withStateLock;
-      spy.mockImplementation(() =>
-        Promise.reject(new LockAcquisitionTimeoutError(`state:${SECRET_PATH}`, 10_000)),
+      const fileLock = await import('../workspace/file-lock.js');
+      const spy = vi.mocked(fileLock.withStateJsonLock);
+      const actual = await vi.importActual<typeof import('../workspace/file-lock.js')>(
+        '../workspace/file-lock.js',
       );
+      const actualImpl = actual.withStateJsonLock;
+      spy.mockImplementation(async (p, fn) => {
+        if (p !== fx.statePath) return actualImpl(p, fn);
+        const holder = actualImpl(p, () => new Promise<void>((r) => setTimeout(r, 300)));
+        try {
+          return await actualImpl(p, fn, 50);
+        } finally {
+          await holder;
+        }
+      });
       try {
         await fx.runFresh();
         await vi.waitFor(() => expect(fx.events.some((e) => e.kind === 'error')).toBe(true), {
@@ -323,7 +327,7 @@ describe('#3625 — "Start fresh" un-confirm fails loud on a state-lock timeout'
         });
         const err = fx.events.find((e) => e.kind === 'error')!;
         expect(err.code).toBe('lock-contention');
-        expect(JSON.stringify(err)).not.toContain(SECRET_PATH);
+        expect(JSON.stringify(err)).not.toContain('state-json:');
         /* The lock was never acquired, so the un-confirm never landed. */
         expect(readConfirmed(fx.statePath)).toBe(true);
       } finally {

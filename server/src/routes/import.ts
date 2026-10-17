@@ -35,8 +35,7 @@ import {
   slug,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
-import { withStateLock } from '../workspace/state-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -434,7 +433,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        state.json write are ONE span: two concurrent confirms of one title
        would otherwise both pass the check and the second state.json (with its
        own manuscriptId) would overwrite the first. */
-    const collided = await withStateLock(bookDir, async () => {
+    const collided = await withStateJsonLock(stateJsonPath(bookDir), async () => {
       if (existsSync(bookDir)) return true;
       await mkdir(bookDir, { recursive: true });
       await mkdir(dotAudiobook(bookDir), { recursive: true });
@@ -508,8 +507,6 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[import] confirm failed', e);
-    res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Confirm failed.'),
-    });
+    res.status(500).json({ error: (e as Error).message || 'Confirm failed.' });
   }
 });

@@ -422,10 +422,11 @@ const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both'
     the (trimmed) raw message as `userMessage` and a generic remediation,
     `fatal: false`. */
 export function classifyFailure(err: unknown, engine?: string): ClassifiedFailure {
-  /* #3625 — finalizeChapterAudioWrite takes the per-book state lock, so a chapter
-     failure can now be a LockAcquisitionTimeoutError whose message embeds the
-     absolute workspace path. Curate it before the signature scan (mirrors the
-     analysis classifier's branch); the raw error still reaches the server log. */
+  /* #3625 — finalizeChapterAudioWrite takes the per-book state-json lock
+     (#3700), so a chapter failure can be a lock timeout. `withStateJsonLock`
+     already curates the message but keeps the timeout `code`; map it to
+     `lock-contention` here before the signature scan (mirrors the analysis
+     classifier's branch) so it is not reported as an unknown failure. */
   if (isLockAcquisitionTimeout(err)) {
     return {
       ...withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR),
@@ -866,9 +867,9 @@ export function classifyAnalysisFailure(
      Scoped to the ANALYSIS classifier, not added to `FAILURE_SIGNATURES` as a
      `source: 'both'` row: the constant cannot live in the signature table's
      copy map (above), so a table row would be an untested claim of coverage.
-     (Generation reaches the same class since #3625: finalizeChapterAudioWrite
-     takes the state lock, so `classifyFailure` has its own branch above the
-     signature scan.) */
+     (Generation reaches the same class: finalizeChapterAudioWrite takes the
+     per-book state-json lock (#3700), so `classifyFailure` has its own branch
+     above the signature scan, #3625.) */
   if (isLockAcquisitionTimeout(err)) {
     return withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR);
   }

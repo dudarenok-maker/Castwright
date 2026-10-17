@@ -2,22 +2,22 @@
    state lock must not leak its staged `.tmp-*` files.
 
    `withKeyLock` never runs the callback when acquisition times out, so cleanup
-   that lives INSIDE the `withStateLock` callback is skipped on exactly that
-   failure. withStateLock is mocked here (a real 10s budget would race vitest's
-   own timeout), so this lives apart from the real-lock tests in
+   that lives INSIDE the `withStateJsonLock` callback is skipped on exactly that
+   failure. withStateJsonLock is mocked here (a real 10s budget would race
+   vitest's own timeout), so this lives apart from the real-lock tests in
    scan-import-folder.test.ts. */
 
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ZipFile } from 'yazl';
-import { LockAcquisitionTimeoutError } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { audioDir, BOOKS_ROOT, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
 import { importPortableBundle } from './scan-import-folder.js';
 
-vi.mock('../workspace/state-lock.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/state-lock.js')>();
-  return { ...actual, withStateLock: vi.fn(actual.withStateLock) };
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return { ...actual, withStateJsonLock: vi.fn(actual.withStateJsonLock) };
 });
 
 function bundle(title: string): Promise<Buffer> {
@@ -66,31 +66,39 @@ const tmpFilesUnder = (dir: string): string[] =>
 
 describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
   it("'overwrite' removes every staged tmp file when the state lock times out", async () => {
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
     const title = 'Overwrite Lock Timeout';
     const target = join(BOOKS_ROOT, 'Demo Author', 'Standalones', title);
     mkdirSync(audioDir(target), { recursive: true });
     mkdirSync(dotAudiobook(target), { recursive: true });
     const existing = JSON.stringify({ title: 'Existing Book' });
     writeFileSync(stateJsonPath(target), existing);
-    const actual = await vi.importActual<typeof import('../workspace/state-lock.js')>(
-      '../workspace/state-lock.js',
+    const actual = await vi.importActual<typeof import('../workspace/file-lock.js')>(
+      '../workspace/file-lock.js',
     );
     /* The FIRST call is the claim (conflict decision + mkdir): let it through
        for real. Only the SECOND — the phase-2 promote, after phase 1 has staged
        its tmp files — times out. Rejecting the first call would abort before
        anything was staged and the empty-tmp assertion below could not fail. */
     let stagedAtTimeout: string[] = [];
-    vi.mocked(withStateLock)
-      .mockImplementationOnce((d, fn) => actual.withStateLock(d, fn))
-      .mockImplementationOnce(async () => {
+    vi.mocked(withStateJsonLock)
+      .mockImplementationOnce((p, fn) => actual.withStateJsonLock(p, fn))
+      .mockImplementationOnce(async (p, fn) => {
         stagedAtTimeout = tmpFilesUnder(target);
-        throw new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000);
+        /* A REAL acquisition timeout: a holder queued on the same key, then the
+           call with a 50ms budget (the curated error comes from the real lock). */
+        const holder = actual.withStateJsonLock(p, () => new Promise<void>((r) => setTimeout(r, 400)));
+        try {
+          return await actual.withStateJsonLock(p, fn, 50);
+        } finally {
+          await holder;
+        }
       });
     try {
-      await expect(importPortableBundle(await bundle(title), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
-        LockAcquisitionTimeoutError,
+      const err = await importPortableBundle(await bundle(title), { onConflict: 'overwrite' }).catch(
+        (e: unknown) => e,
       );
+      expect(isLockAcquisitionTimeout(err)).toBe(true);
       /* Positive control: phase 1 really left tmp files to be cleaned up. */
       expect(stagedAtTimeout.length).toBeGreaterThan(0);
       /* The seam fired, the live file was never promoted... */

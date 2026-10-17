@@ -31,7 +31,6 @@ import {
 import { findBookByBookId } from '../workspace/scan.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -130,10 +129,8 @@ portableImportRouter.post(
       return res.status(500).json({
         error: 'portable_import_failed',
         /* Fixed sentence: a raw fs error names the absolute workspace path,
-           and this app is served over LAN HTTPS. The raw error is logged above.
-           A state-lock timeout (#3625: the import claims the target dir under
-           the target's state lock) gets the curated contention sentence. */
-        message: requestFailureMessage(e, 'Importing the bundle failed. See the server log for details.'),
+           and this app is served over LAN HTTPS. The raw error is logged above. */
+        message: 'Importing the bundle failed. See the server log for details.',
       });
     }
   },

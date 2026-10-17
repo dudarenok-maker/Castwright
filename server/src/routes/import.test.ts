@@ -933,7 +933,8 @@ describe('POST /api/import — CJK-aware word count (fs-59 W2)', () => {
 
 describe('POST /api/books — new-book state.json write waits on the state lock (#3625)', () => {
   it('does not write state.json while the lock is held, then lands', async () => {
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     const { bookDirByDisplay, stateJsonPath } = await import('../workspace/paths.js');
     const md = `# Lock Title\n\n## Chapter One\n\nA short opening.\n`;
     const importRes = await request(app)
@@ -946,7 +947,7 @@ describe('POST /api/books — new-book state.json write waits on the state lock 
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });
@@ -973,7 +974,8 @@ describe('POST /api/books — new-book state.json write waits on the state lock 
 
 describe('POST /api/books — the existing-book 409 check and the write are one span (#3625)', () => {
   it('two concurrent confirms of one title: one 201, one 409, and nothing is created before the lock', async () => {
-    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
     const { bookDirByDisplay, stateJsonPath } = await import('../workspace/paths.js');
     const md = `# Race Title
 
@@ -991,7 +993,7 @@ A short opening.
     const gate = new Promise<void>((r) => (release = r));
     let acquired!: () => void;
     const got = new Promise<void>((r) => (acquired = r));
-    const held = withStateLock(bookDir, async () => {
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
       acquired();
       await gate;
     });

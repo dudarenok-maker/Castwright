@@ -69,9 +69,23 @@ export interface WriteJsonOpts {
   rotate?: { keep: number };
 }
 
+/** True for the error a read raises when the file is not there. */
+function isEnoent(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+}
+
 export async function readJson<T>(path: string): Promise<T | null> {
   if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf8');
+  /* #3700 — a concurrent writer can rename a file over/away between the
+     existence check above and this read (Windows rename-over window). That is
+     "missing", the same answer the check gives, not a failure. */
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (err) {
+    if (isEnoent(err)) return null;
+    throw err;
+  }
   /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
      when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
      invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a
@@ -120,8 +134,13 @@ export async function readJsonWithRecovery<T>(
   try {
     raw = await readFile(path, 'utf8');
   } catch (readErr) {
-    if (opts.recoverMissing && (readErr as NodeJS.ErrnoException).code === 'ENOENT') {
-      return (await readNewestBackup<T>(path, opts.keep, 'was missing')) ?? null;
+    if (isEnoent(readErr)) {
+      if (opts.recoverMissing) {
+        return (await readNewestBackup<T>(path, opts.keep, 'was missing')) ?? null;
+      }
+      /* #3700 — vanished between the check and the read: "missing", like the
+         check above, not a corrupt file to recover from a backup. */
+      return null;
     }
     throw readErr;
   }
@@ -292,6 +311,13 @@ async function rotateBackups(path: string, keep: number): Promise<boolean> {
       await renameWithRetry(src, dest);
     }
   }
+  /* RENAME, not copy (#3625 pass 3). #3700 copied main to `.bak.1` so main was
+     never absent, but the tmp -> main rename then REPLACES a file, and on
+     Windows that fails with EPERM while any reader holds main open (Node's own
+     readers included); the retry budget then runs out and the write throws.
+     Renaming main away is not blocked by an open handle. The cost is a
+     sub-millisecond absent window, which the write-in-flight marker and
+     `recoverMissing` cover (see the header). */
   await renameWithRetry(path, `${path}.bak.1`);
   return true;
 }
