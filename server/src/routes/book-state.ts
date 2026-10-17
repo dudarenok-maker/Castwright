@@ -1257,7 +1257,14 @@ async function applyReparse(
   bookDir: string,
   state: BookStateJson,
   parsed: Awaited<ReturnType<typeof parseManuscript>>,
-  opts: { changeLogType: string; changeLogTitle: string },
+  opts: {
+    changeLogType: string;
+    changeLogTitle: string;
+    /** Runs inside the state-json lock, after state.json is confirmed present
+     *  and just before it is rewritten — replace-manuscript's upload write, so
+     *  nothing reaches disk for a book that was moved or deleted. */
+    beforeWrite?: () => Promise<void>;
+  },
 ) {
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
     manuscriptEditsJsonPath(bookDir),
@@ -1298,7 +1305,7 @@ async function applyReparse(
       castConfirmed: false,
       updatedAt: new Date().toISOString(),
     };
-  });
+  }, opts.beforeWrite);
 
   /* #3700 review pass 2 — absent state.json: the book was deleted or moved
      after the caller resolved `bookDir`. Return BEFORE the destructive arms
@@ -1573,19 +1580,22 @@ bookStateRouter.post(
       const oldFile = state.manuscriptFile;
 
       safeSegment(newFile);
-      await writeFile(join(bookDir, newFile), req.file.buffer);
       state.manuscriptFile = newFile;
 
+      /* #3700 review pass 3 — the upload is written by applyReparse's
+         `beforeWrite`, inside the state-json lock and only once state.json is
+         confirmed present, so a book that was moved or deleted while this
+         request queued gets a 404 with NOTHING written (writing it up front
+         overwrote the moved book's same-name manuscript, or orphaned a
+         different-extension file there). */
       const payload = await applyReparse(bookDir, state, parsed, {
         changeLogType: 'replace-manuscript',
         changeLogTitle: 'Replaced manuscript',
+        beforeWrite: () => writeFile(join(bookDir, newFile), req.file!.buffer),
       });
       if (!payload) {
-        /* #3700 review pass 2 — the book vanished or moved mid-request, so
-           state.json was never rewritten and still names the OLD file: keep
-           it, and drop the new file we just wrote (best effort; the old path
-           is usually gone). */
-        if (oldFile !== newFile) await unlink(join(bookDir, newFile)).catch(() => {});
+        /* The book vanished or moved mid-request: neither the upload nor
+           state.json was written, and state.json still names the OLD file. */
         return res.status(404).json({ error: 'Book not found.' });
       }
       /* Only now that state.json names the new file is the old one dead. */
@@ -1780,13 +1790,30 @@ bookStateRouter.post(
    refresh-then-delete doesn't surface a noisy error. */
 bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) {
+    /* #3700 review pass 3 - the directory removal runs under the book's
+       state-json lock, so a writer that read state.json before the removal
+       cannot write it back after (recreating `.audiobook/state.json` for a
+       deleted book), and a writer queued behind us then sees it absent and
+       refuses. Leaf lock: nothing else is taken inside. If state.json is
+       already gone by the time we hold the lock, the folder moved (a rename
+       PUT held the key) - resolve the book again rather than answering 204
+       for a delete that removed nothing. */
+    let located = await findBookByBookId(req.params.bookId);
+    let removed = false;
+    for (let attempt = 0; located && !removed && attempt < 3; attempt += 1) {
+      const dir = located.bookDir;
+      removed = await withStateJsonLock(stateJsonPath(dir), async () => {
+        if (!existsSync(stateJsonPath(dir))) return false;
+        await rm(dir, { recursive: true, force: true });
+        return true;
+      });
+      if (!removed) located = await findBookByBookId(req.params.bookId);
+    }
+    if (!located || !removed) {
       res.status(204).end();
       return;
     }
-    const { bookDir, state } = located;
-    await rm(bookDir, { recursive: true, force: true });
+    const { state } = located;
     if (state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
     }

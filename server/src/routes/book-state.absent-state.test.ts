@@ -5,7 +5,7 @@
    answer 404, never a stale-snapshot write (resurrects the book / leaves two
    folders with one bookId) and never a false 200 for a write that did not
    happen. The interleave is forced: the test holds the old key itself, fires
-   the request, gives it time to queue, changes the filesystem, then releases. */
+   the request, waits (on the lock's own waiter count) until it is queued, changes the filesystem, then releases. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, readdirSync } from 'node:fs';
@@ -26,22 +26,37 @@ let bookId: string;
 let bookDir: string;
 let statePath: string;
 let withStateJsonLock: typeof import('../workspace/file-lock.js').withStateJsonLock;
+let waitersFor: typeof import('../workspace/file-lock.js').__stateJsonWaitersForTest;
 let saveAnalysisCache: typeof import('../store/analysis-cache.js').saveAnalysisCache;
 let loadAnalysisCache: typeof import('../store/analysis-cache.js').loadAnalysisCache;
 
 const movedDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, MOVED_TITLE);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Poll until a request is genuinely blocked on `state-json:<path>` (the
+ *  lock's own waiter count), so the interleave never depends on a timing guess. */
+async function waitUntilQueued(path: string): Promise<void> {
+  for (let i = 0; i < 500; i++) {
+    if (waitersFor(path) >= 1) return;
+    await sleep(10);
+  }
+  throw new Error('request never queued on the state-json lock');
+}
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-absent-state-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ bookStateRouter }, { makeBookId }, lock, cache] = await Promise.all([
+  const [{ bookStateRouter }, { makeBookId }, lock, cache, { coverRouter }, { backupRouter }, { chaptersRestructureRouter }] = await Promise.all([
     import('./book-state.js'),
     import('../workspace/paths.js'),
     import('../workspace/file-lock.js'),
     import('../store/analysis-cache.js'),
+    import('./cover.js'),
+    import('./backup.js'),
+    import('./chapters-restructure.js'),
   ]);
   withStateJsonLock = lock.withStateJsonLock;
+  waitersFor = lock.__stateJsonWaitersForTest;
   saveAnalysisCache = cache.saveAnalysisCache;
   loadAnalysisCache = cache.loadAnalysisCache;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
@@ -50,6 +65,9 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', bookStateRouter);
+  app.use('/api/books', coverRouter);
+  app.use('/api/books', backupRouter);
+  app.use('/api/books', chaptersRestructureRouter);
 });
 
 beforeEach(() => {
@@ -91,7 +109,7 @@ async function queueBehind(
   let res!: Promise<request.Response>;
   await withStateJsonLock(statePath, async () => {
     res = Promise.resolve(fire());
-    await sleep(300);
+    await waitUntilQueued(statePath);
     change();
   });
   return res;
@@ -177,6 +195,32 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
     expect(existsSync(bookDir)).toBe(false);
   });
 
+  it('replace-manuscript (SAME extension) queued behind a folder move -> 404, the moved book keeps its manuscript bytes', async () => {
+    const res = await queueBehind(
+      () =>
+        request(app)
+          .post(`/api/books/${bookId}/replace-manuscript`)
+          .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n\nChapter 2\n\nMore.\n'), 'new.txt'),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(readFileSync(join(movedDir(), 'manuscript.txt'), 'utf8')).toBe('Chapter 1\n\nSome text here.\n');
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('replace-manuscript (DIFFERENT extension) queued behind a folder move -> 404, no orphan manuscript.md in the moved folder', async () => {
+    const res = await queueBehind(
+      () =>
+        request(app)
+          .post(`/api/books/${bookId}/replace-manuscript`)
+          .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n'), 'new.md'),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(readdirSync(movedDir()).sort()).toEqual(['.audiobook', 'manuscript.txt']);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
   it('replace-manuscript queued behind a folder move -> 404, the moved book keeps its manuscript file', async () => {
     const res = await queueBehind(
       () =>
@@ -190,6 +234,79 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
       manuscriptFile: string;
     };
     expect(existsSync(join(movedDir(), moved.manuscriptFile))).toBe(true);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('restore backup queued behind a folder move -> 404, one folder, nothing recreated at the old path', async () => {
+    const { backupBook } = await import('../workspace/auto-backup.js');
+    const file = await backupBook({ bookId, bookDir }, { keep: 5, now: new Date(2026, 0, 1, 9, 0, 0) });
+    expect(file).toBeTruthy();
+    const res = await queueBehind(
+      () => request(app).post(`/api/books/${bookId}/backups/restore`).send({ backupFile: file }),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(existsSync(bookDir)).toBe(false);
+    expect(readdirSync(join(workspaceRoot, 'books', AUTHOR, SERIES))).toEqual([MOVED_TITLE]);
+  });
+
+  it('restructure (reorder) queued behind a folder move -> 404, one folder, moved book untouched', async () => {
+    const res = await queueBehind(
+      () => request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [1] }),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(existsSync(bookDir)).toBe(false);
+    expect(readdirSync(join(workspaceRoot, 'books', AUTHOR, SERIES))).toEqual([MOVED_TITLE]);
+  });
+
+  it('cover upload queued behind a folder move -> 404, no cover.jpg written into the moved folder', async () => {
+    const sharp = (await import('sharp')).default;
+    const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#336699' } })
+      .png()
+      .toBuffer();
+    const res = await queueBehind(
+      () =>
+        request(app)
+          .post(`/api/books/${bookId}/cover/upload`)
+          .attach('image', png, { filename: 'c.png', contentType: 'image/png' }),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(existsSync(join(movedDir(), '.audiobook', 'cover.jpg'))).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('cover DELETE queued behind a folder move -> 404, the moved book keeps its cover file', async () => {
+    writeFileSync(join(bookDir, '.audiobook', 'cover.jpg'), 'jpegbytes');
+    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}/cover`), moveBook);
+    expect(res.status).toBe(404);
+    expect(readFileSync(join(movedDir(), '.audiobook', 'cover.jpg'), 'utf8')).toBe('jpegbytes');
+  });
+
+  it('cover framing queued behind a folder move -> 404 (already refused; pins the shape)', async () => {
+    const res = await queueBehind(
+      () => request(app).patch(`/api/books/${bookId}/cover/framing`).send({ offsetX: 0, offsetY: 0, zoom: 1 }),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE takes the state-json lock: it does not remove the folder while another writer holds the key', async () => {
+    let res!: Promise<request.Response>;
+    await withStateJsonLock(statePath, async () => {
+      res = Promise.resolve(request(app).delete(`/api/books/${bookId}`));
+      await waitUntilQueued(statePath);
+      expect(existsSync(bookDir)).toBe(true); // queued, not yet removed
+    });
+    expect((await res).status).toBe(204);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('DELETE queued behind a folder move deletes the MOVED book (not a 204 for a no-op)', async () => {
+    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), moveBook);
+    expect(res.status).toBe(204);
+    expect(existsSync(movedDir())).toBe(false);
     expect(existsSync(bookDir)).toBe(false);
   });
 });

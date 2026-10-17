@@ -152,6 +152,10 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJsonWri
 export async function updateStateJsonLocked(
   path: string,
   mutate: (fresh: BookStateJson) => BookStateJson | null,
+  /** Runs inside the lock, only once state.json is known present and `mutate`
+   *  has produced a change, immediately before the write. For a caller whose
+   *  other disk writes must not happen unless the book is still there. */
+  beforeWrite?: () => Promise<void>,
 ): Promise<BookStateJson | null> {
   return withStateJsonLock(path, async () => {
     const onDisk = await readStateJsonWithRecovery(path);
@@ -162,6 +166,7 @@ export async function updateStateJsonLocked(
     const fresh = onDisk;
     const next = mutate(fresh);
     if (!next) return fresh;
+    if (beforeWrite) await beforeWrite();
     await writeStateJsonAtomic(path, { ...next, language: next.language ?? null });
     return next;
   });

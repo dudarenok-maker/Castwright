@@ -283,7 +283,9 @@ function countRawStateWrites(
    a read, not a write; #3700 wrapped each state.json writer in
    withStateJsonLock, which re-spells `stateJsonPath(bookDir)` as the lock key
    — book-state.ts +3 (the rename PUT also keys the new path), chapters-restructure.ts +2, import.ts +1, samples.ts +1,
-   auto-backup.ts +1 — not new write sites). Asserted BOTH
+   auto-backup.ts +1 — not new write sites; the pass-3 absent-state refusals then added
+   book-state.ts +2 (DELETE's lock key + presence check) and auto-backup.ts +1
+   (restore's presence check) — reads, not writes). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
@@ -292,7 +294,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'cover/upload.ts': 2,
   'import/scan-import-folder.ts': 1,
   'routes/analysis.ts': 4,
-  'routes/book-state.ts': 12,
+  'routes/book-state.ts': 14,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,
@@ -301,7 +303,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'routes/voices.ts': 4,
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
-  'workspace/auto-backup.ts': 4,
+  'workspace/auto-backup.ts': 5,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
   'workspace/scan.ts': 4,

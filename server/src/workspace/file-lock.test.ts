@@ -3,6 +3,7 @@ import {
   withKeyLock,
   withStateJsonLock,
   __chainsSizeForTest,
+  __stateJsonWaitersForTest,
   LockAcquisitionTimeoutError,
   LOCK_ACQUISITION_TIMEOUT_CODE,
   isLockAcquisitionTimeout,
@@ -394,5 +395,24 @@ describe('withStateJsonLock timeout keeps the lock-timeout class (#3700)', { ret
     expect(isLockAcquisitionTimeout(err)).toBe(true);
     expect((err as Error).message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
     expect((err as Error).message).not.toContain(statePath);
+  });
+});
+
+describe('__stateJsonWaitersForTest (#3700)', { retry: 0 }, () => {
+  it('counts exactly the callers queued behind a holder, and drops to 0 once they run', async () => {
+    const statePath = '/tmp/waiters-test/.audiobook/state.json';
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const holder = withStateJsonLock(statePath, () => held);
+    // The holder acquires immediately; let its (zero-wait) acquisition settle.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+    const w1 = withStateJsonLock(statePath, async () => 'a');
+    const w2 = withStateJsonLock(statePath, async () => 'b');
+    expect(__stateJsonWaitersForTest(statePath)).toBe(2);
+    release();
+    await Promise.all([holder, w1, w2]);
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
   });
 });

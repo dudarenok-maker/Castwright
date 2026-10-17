@@ -34,8 +34,32 @@ export class CoverDownloadError extends Error {
   }
 }
 
+/** Atomically write already-encoded cover JPEG bytes to `destPath`. */
+export async function writeCoverFile(destPath: string, jpegBytes: Buffer): Promise<void> {
+  await mkdir(dirname(destPath), { recursive: true });
+  const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, jpegBytes);
+  try {
+    await renameWithRetry(tmp, destPath);
+  } catch (e) {
+    await unlink(tmp).catch(() => {
+      /* best-effort */
+    });
+    throw e;
+  }
+}
+
 export async function downloadCover(url: string, destPath: string): Promise<{ bytes: number }> {
   assertContained(WORKSPACE_ROOT, destPath);
+  const reencoded = await fetchCoverJpeg(url);
+  await writeCoverFile(destPath, reencoded);
+  return { bytes: reencoded.length };
+}
+
+/** Fetch a candidate URL and return it as a clean JPEG - NO disk write, so a
+    caller can defer the write until it has confirmed (under the state-json
+    lock) that the book still exists. */
+export async function fetchCoverJpeg(url: string): Promise<Buffer> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), DOWNLOAD_TIMEOUT_MS);
   let res: Response;
@@ -81,18 +105,7 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
     throw new CoverDownloadError('invalid', `Cover is not a decodable image: ${(e as Error).message}`);
   }
 
-  await mkdir(dirname(destPath), { recursive: true });
-  const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, reencoded);
-  try {
-    await renameWithRetry(tmp, destPath);
-  } catch (e) {
-    await unlink(tmp).catch(() => {
-      /* best-effort */
-    });
-    throw e;
-  }
-  return { bytes: reencoded.length };
+  return reencoded;
 }
 
 /** Record provenance of the just-downloaded cover onto state.json so a
@@ -100,12 +113,17 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
 export async function patchStateCover(
   bookDir: string,
   candidate: Pick<CoverCandidate, 'id' | 'source' | 'coverUrl'>,
-): Promise<void> {
+  /** Runs inside the lock once state.json is confirmed present - the cover
+      file write, so nothing lands in a book folder that moved or was deleted. */
+  beforeWrite?: () => Promise<void>,
+): Promise<boolean> {
   const path = stateJsonPath(bookDir);
-  /* #3700 — read-modify-write under the per-book state-json lock. */
-  await withStateJsonLock(path, async () => {
+  /* #3700 — read-modify-write under the per-book state-json lock. `false` =
+     state.json absent (deleted/moved while queued): nothing was written. */
+  return withStateJsonLock(path, async () => {
     const state = await readJson<BookStateJson>(path);
-    if (!state) return;
+    if (!state) return false;
+    if (beforeWrite) await beforeWrite();
     state.coverImage = {
       source: candidate.source,
       candidateId: candidate.id,
@@ -114,18 +132,26 @@ export async function patchStateCover(
     };
     state.updatedAt = new Date().toISOString();
     await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+    return true;
   });
 }
 
-/** Inverse of patchStateCover — DELETE reverts to the procedural gradient. */
-export async function clearStateCover(bookDir: string): Promise<void> {
+/** Inverse of patchStateCover — DELETE reverts to the procedural gradient.
+    `beforeWrite` (the cover-file removal) runs inside the lock once state.json
+    is confirmed present; `false` = absent, nothing was removed or written. */
+export async function clearStateCover(
+  bookDir: string,
+  beforeWrite?: () => Promise<void>,
+): Promise<boolean> {
   const path = stateJsonPath(bookDir);
-  await withStateJsonLock(path, async () => {
+  return withStateJsonLock(path, async () => {
     const state = await readJson<BookStateJson>(path);
-    if (!state) return;
+    if (!state) return false;
+    if (beforeWrite) await beforeWrite();
     delete state.coverImage;
     state.updatedAt = new Date().toISOString();
     await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+    return true;
   });
 }
 
@@ -144,8 +170,10 @@ export async function backgroundFetchCover(
       console.log(`[cover] no match for "${title}" by "${author}" (${bookId})`);
       return;
     }
-    await downloadCover(top.coverUrl, coverImagePath(bookDir));
-    await patchStateCover(bookDir, top);
+    const jpeg = await fetchCoverJpeg(top.coverUrl);
+    const dest = coverImagePath(bookDir);
+    assertContained(WORKSPACE_ROOT, dest);
+    if (!(await patchStateCover(bookDir, top, () => writeCoverFile(dest, jpeg)))) return;
     console.log(`[cover] fetched ${top.id} (${top.source}) for ${bookId}`);
   } catch (e) {
     console.warn(`[cover] background fetch failed for ${bookId}: ${(e as Error).message}`);

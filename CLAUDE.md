@@ -660,7 +660,8 @@ Design rationale:
   so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round). See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` alone, which already
+  curates its own message. See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
