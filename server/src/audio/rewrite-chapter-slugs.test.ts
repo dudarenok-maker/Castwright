@@ -398,6 +398,56 @@ describe('rewriteChapterSlugs x applySplit then applyExclude (#3524 R)', () => {
   });
 });
 
+describe('rewriteChapterSlugs x applySplit then applyMerge of later chapters (#3524 R2)', () => {
+  it("the unrendered merged chapter owns no files: a deleted member's audio is not renamed onto its slug", async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: i === 1 ? 'Alpha one. Beta two.' : `body ${i + 1}` }));
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 's1' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Alpha one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Beta two.' },
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 's3' },
+      { id: 1, chapterId: 4, characterId: 'narrator', text: 's4' },
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 's5' },
+    ];
+    const suffixes = ['mp3', 'segments.json', 'peaks.json'];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.title}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const split = applySplit(state, hints, sentences, { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' });
+    expect((await rewriteChapterSlugs(audioRoot, split.audioOps)).errors).toEqual([]);
+    // After the split the old "Chapter 4"/"Chapter 5" sit at ids 5/6; merge them.
+    const merged = applyMerge(split.state, split.hints, split.sentences, { chapterIds: [5, 6] });
+    expect((await rewriteChapterSlugs(audioRoot, merged.audioOps)).errors).toEqual([]);
+
+    const mergedCh = merged.state.chapters.find((c) => c.id === 5)!;
+    expect(mergedCh.audioRenderedAt).toBeFalsy();
+    expect(readdirSync(audioRoot).filter((n) => n.startsWith(`${mergedCh.slug}.`))).toEqual([]);
+    // The rendered survivors still own their own content.
+    for (const [id, originalTitle] of [[4, 'Chapter 3']] as Array<[number, string]>) {
+      const ch = merged.state.chapters.find((c) => c.id === id)!;
+      for (const s of suffixes) {
+        const body = readFileSync(join(audioRoot, `${ch.slug}.${s}`), 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(`${s}:${originalTitle}`);
+      }
+    }
+  });
+});
+
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }
