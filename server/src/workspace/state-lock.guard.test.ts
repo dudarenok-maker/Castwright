@@ -95,12 +95,6 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
     count: 1,
     why: 'generation finalize: not blocked by the restructure lock (#3625 owns it).',
   },
-  'routes/analysis.ts': {
-    count: 3,
-    why:
-      'analysis persist blocks run under cast locks across a long job; moving them under the ' +
-      'book lock needs a design pass on the order (and on a minutes-long hold). Out of scope here.',
-  },
 };
 
 function collectSourceFiles(dir: string, out: string[] = []): string[] {

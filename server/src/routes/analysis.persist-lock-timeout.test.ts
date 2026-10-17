@@ -70,6 +70,10 @@ const historyStep = vi.hoisted(() => ({
   toThrow: null as unknown,
   reconcileThrow: null as unknown,
   armed: false,
+  /* #3400 pass 8 — runs once at the persist window (this same
+     `dropSupersededIdsReclaimedByLiveCast` step: after the authoritative
+     cast.json write, before the state.json step), outside any lock. */
+  onWindow: null as null | (() => Promise<void>),
 }));
 
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
@@ -77,6 +81,9 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   return {
     ...actual,
     dropSupersededIdsReclaimedByLiveCast: async (bookDir: string, liveIds: string[]) => {
+      const window = historyStep.onWindow;
+      historyStep.onWindow = null;
+      if (window) await window();
       if (historyStep.toThrow) throw historyStep.toThrow;
       return actual.dropSupersededIdsReclaimedByLiveCast(bookDir, liveIds);
     },
@@ -170,6 +177,43 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   };
 });
 
+/* #3400 pass 8 — seams on the persist's `state.json` step.
+
+   `beforeWrite` runs once, immediately before the next `writeStateJsonAtomic`
+   (armed from the persist window above, so it is the persist's own write): the
+   point where a stale-derived whole-file write is already decided and about to
+   land. `toThrow` makes `updateStateAtDir` — the locked step the persist now
+   goes through — fail the way a lock-acquisition timeout / disk fault would. */
+const stateStep = vi.hoisted(() => ({
+  toThrow: null as unknown,
+  beforeWrite: null as null | (() => Promise<void>),
+  calls: 0,
+}));
+
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  return {
+    ...actual,
+    writeStateJsonAtomic: async (...args: Parameters<typeof actual.writeStateJsonAtomic>) => {
+      const hook = stateStep.beforeWrite;
+      stateStep.beforeWrite = null;
+      if (hook) await hook();
+      return actual.writeStateJsonAtomic(...args);
+    },
+  };
+});
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...actual,
+    updateStateAtDir: async (...args: Parameters<typeof actual.updateStateAtDir>) => {
+      stateStep.calls += 1;
+      if (stateStep.toThrow) throw stateStep.toThrow;
+      return actual.updateStateAtDir(...args);
+    },
+  };
+});
+
 /* Same three environment mocks the sibling runMainAnalyzerJob fixture files
    use to keep the job off a real Ollama / real GPU-cost state and to let the
    test inject the Phase-1 analyzer selection. */
@@ -239,6 +283,7 @@ function expectCuratedContentionTerminal(
   expect(terminal?.message).not.toContain('rule 4');
 }
 const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+const { withBookLock } = await import('../workspace/book-lock.js');
 type AnalysisJob = import('./analysis.js').AnalysisJob;
 
 const CHAPTER_BODY = '“Are you sure this will work,” Nova asked.\n\nOlga nodded and looked away.';
@@ -315,7 +360,7 @@ function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
 }
 
 interface StateJsonOnDisk {
-  chapters: Array<{ id: number; title: string; duration?: number }>;
+  chapters: Array<{ id: number; title: string; duration?: number; held?: boolean; excluded?: boolean }>;
   analysisProvenance?: { engine?: string; model?: string; at?: string };
   updatedAt?: string;
 }
@@ -327,6 +372,12 @@ interface StateJsonOnDisk {
 async function runJob(
   label: string,
   kind: 'main' | 'subset' = 'main',
+  hooks: {
+    /** Called once the book + manuscript record exist, before the job starts. */
+    onSetup?: (ctx: { bookDir: string; bookId: string; manuscriptId: string }) => void;
+    /** Awaited after the job settles, before state.json is read back. */
+    afterJob?: () => Promise<void>;
+  } = {},
 ): Promise<{
   events: Array<{ kind?: string; code?: string; message?: string }>;
   state: StateJsonOnDisk;
@@ -391,6 +442,7 @@ async function runJob(
     buildPhase1Analyzer(),
     'phase1-model',
   );
+  hooks.onSetup?.({ bookDir, bookId: bookIdForRun, manuscriptId });
 
   const events: Array<{ kind?: string; code?: string; message?: string }> = [];
   const keepAlive = setInterval(() => {}, 60_000);
@@ -468,6 +520,7 @@ async function runJob(
     );
   }
 
+  await hooks.afterJob?.();
   const state = JSON.parse(
     readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'),
   ) as StateJsonOnDisk;
@@ -1064,3 +1117,155 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
     60_000,
   );
 });
+
+/* #3400 pass 8 — the persist's `state.json` write is a book-locked read ->
+   write (`updateStateAtDir`), not a bare write from an earlier read.
+
+   Before, the persist did `readJson` -> build `{ ...prev, chapters }` (the
+   chapter list from the job's in-memory hints) -> `writeStateJsonAtomic` with
+   no book lock. A chapter restructure (or a held / exclude write) that landed
+   between the read and the write — or between the job composing its chapter
+   list and the persist — was overwritten by it.
+
+   The competing writers here are modelled the way the real ones act: under
+   `withBookLock`, rewriting state.json and (for a restructure) swapping the
+   record's hints, exactly like `applyRestructure` / the exclude route. They are
+   started from the TEST's async context via a promise callback, not from inside
+   the job, because the book lock is re-entrant per async context: a competitor
+   launched from inside the holder would run inline instead of queueing. */
+describe.each(['main', 'subset'] as const)(
+  '%s persist block — the state.json write is book-locked (#3400 pass 8)',
+  (kind) => {
+    afterEach(() => {
+      historyStep.toThrow = null;
+      historyStep.onWindow = null;
+      stateStep.toThrow = null;
+      stateStep.beforeWrite = null;
+      stateStep.calls = 0;
+      delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+    });
+
+    type Ctx = { bookDir: string; bookId: string; manuscriptId: string };
+    const MERGED_TITLE = 'Chapters Two and Three';
+    const statePathOf = (bookDir: string): string => join(bookDir, '.audiobook', 'state.json');
+
+    /** What `applyRestructure` leaves behind for a merge of 2+3, under the lock. */
+    async function restructureMerge23(ctx: Ctx): Promise<void> {
+      const record = getManuscript(ctx.manuscriptId);
+      if (!record) throw new Error('record gone');
+      await withBookLock(ctx.bookId, async () => {
+        const st = JSON.parse(readFileSync(statePathOf(ctx.bookDir), 'utf8'));
+        st.chapters = [
+          st.chapters[0],
+          { id: 2, title: MERGED_TITLE, slug: '02-chapters-two-and-three' },
+        ];
+        writeFileSync(statePathOf(ctx.bookDir), JSON.stringify(st));
+        record.chapterHints = [
+          record.chapterHints[0],
+          { id: 2, title: MERGED_TITLE, body: CHAPTER_BODY },
+        ];
+      });
+    }
+    /** A held + exclude write, under the lock. */
+    async function holdAndExclude(ctx: Ctx): Promise<void> {
+      await withBookLock(ctx.bookId, async () => {
+        const st = JSON.parse(readFileSync(statePathOf(ctx.bookDir), 'utf8'));
+        st.chapters[0].held = true;
+        st.chapters[1].excluded = true;
+        writeFileSync(statePathOf(ctx.bookDir), JSON.stringify(st));
+      });
+    }
+
+    /** Runs `competitor` from the test's context the moment the persist's own
+        state write is about to land, and holds that write for up to 300ms for
+        it to finish. Unlocked, the competitor finishes first and the write then
+        lands over it; locked, it can only queue behind the write. */
+    function runCompetitorAtWrite(competitor: (ctx: Ctx) => Promise<void>) {
+      let ctx: Ctx | undefined;
+      let mutation: Promise<void> = Promise.resolve();
+      let started!: () => void;
+      let finished!: () => void;
+      const startedP = new Promise<void>((r) => (started = r));
+      const finishedP = new Promise<void>((r) => (finished = r));
+      historyStep.onWindow = async () => {
+        stateStep.beforeWrite = async () => {
+          started();
+          await Promise.race([finishedP, new Promise((r) => setTimeout(r, 300))]);
+        };
+      };
+      void startedP.then(() => {
+        mutation = competitor(ctx!).then(finished);
+      });
+      return {
+        hooks: { onSetup: (c: Ctx) => (ctx = c), afterJob: () => mutation },
+      };
+    }
+
+    it("a restructure landing before the persist's lock is not reverted by the job's in-memory chapter list", async () => {
+      let ctx!: Ctx;
+      historyStep.onWindow = () => restructureMerge23(ctx);
+      const run = await runJob(`${kind}-restructure-before`, kind, { onSetup: (c) => (ctx = c) });
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', MERGED_TITLE]);
+        expect(run.state.analysisProvenance?.model).toBe('phase1-model');
+      } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it("a restructure landing between the persist's read and its write queues behind it and applies on top", async () => {
+      const { hooks } = runCompetitorAtWrite(restructureMerge23);
+      const run = await runJob(`${kind}-restructure-during`, kind, hooks);
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', MERGED_TITLE]);
+        expect(run.state.analysisProvenance?.model).toBe('phase1-model');
+      } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it("a held / exclude write landing between the persist's read and its write is not reverted", async () => {
+      const { hooks } = runCompetitorAtWrite(holdAndExclude);
+      const run = await runJob(`${kind}-held-during`, kind, hooks);
+      try {
+        expect(run.state.chapters[0]?.held).toBe(true);
+        expect(run.state.chapters[1]?.excluded).toBe(true);
+        expect(run.state.analysisProvenance?.model).toBe('phase1-model');
+      } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it('a lock-acquisition timeout at the state.json step still ends the job with the curated lock-contention error', async () => {
+      stateStep.toThrow = new LockAcquisitionTimeoutError('book:/w/book', 10_000);
+      const run = await runJob(`${kind}-state-timeout`, kind);
+      try {
+        expect(stateStep.calls).toBeGreaterThan(0);
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedContentionTerminal(terminal, 'book:/w/book');
+        /* The write did not land: the seed is intact, not half-written. */
+        expect(run.state.chapters.every((c) => c.title === STALE_CHAPTER_TITLE)).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it('an EPERM-shaped disk fault at the same step is still swallowed (the job ends with a result)', async () => {
+      stateStep.toThrow = Object.assign(
+        new Error("EPERM: operation not permitted, rename 'state.json'"),
+        { code: 'EPERM' },
+      );
+      const run = await runJob(`${kind}-state-eperm`, kind);
+      try {
+        expect(stateStep.calls).toBeGreaterThan(0);
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('result');
+        expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+  },
+);
