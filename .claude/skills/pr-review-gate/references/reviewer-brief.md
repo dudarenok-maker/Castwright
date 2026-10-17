@@ -269,6 +269,26 @@ recite:
     detached job, name the condition it may run under; ask what stops it when
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
+27. **A sync-to-async conversion that drops error handling the sync API did
+    implicitly** — `scripts/lib/bounded-spawn.mjs`, PR #3705 gate pass 2:
+    `spawnSync` with `input` absorbed a stdin write failure (EPIPE/EOF, a
+    child that exits without draining) into `r.error` and still returned the
+    child's own status; the async `child.stdin.end(input)` raised it as an
+    unhandled `'error'` event that crashed the host (`write EOF`). Fixed with
+    a stdin `'error'` handler that ignores the benign codes and rejects on
+    the rest. Checkable: for every sync call replaced by an async one, list
+    what the sync version returned or swallowed instead of throwing (`r.error`,
+    a status, a buffered result) and confirm the async path handles each, with
+    a test where the child exits before reading its input.
+28. **A timeout that cannot fire because the wait it bounds blocks the event
+    loop** — PR #3705 gate pass 1: the e2e test's bound was a node:test
+    `{ timeout }` and then an async spawn bound, both wrapped around a
+    blocking `spawnSync` git call, so no timer could run until the call
+    returned and a hang produced silence, not the named failure; fixed by
+    making the spawn itself async (`boundedSpawn`). Checkable: for every
+    timeout or deadline, find the call it is meant to bound and confirm that
+    call yields to the event loop; a bound around a `*Sync` call is decorative
+    unless it is the call's own `timeout` option.
 
 ### Keeping the catalogue current
 
