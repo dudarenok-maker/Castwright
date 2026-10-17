@@ -1043,6 +1043,23 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
   return `[user-settings] ${what}; the entry was saved to ${archive}`;
 }
 
+/* THE READ PATH'S INVARIANTS (#3625 delta review 3). Every change to the
+   read path below, and to the marker handling in state-io.ts, keeps all four;
+   user-settings.invariants.test.ts holds one describe per invariant.
+
+     I1  A read never commits values older than the newest completed write in
+         this process. (`writeGeneration`: a read that a write overtook keeps
+         the write's cache instead of committing what it read.)
+     I2  A deliberate delete (no live write in flight) resets to defaults and
+         never resurrects. (A write-in-flight marker that outlived its write
+         is swept, so it cannot keep turning a delete into a recovery.)
+     I3  A crash mid-write is recovered from backup at most once, then main is
+         rewritten. (A stranded recovery whose markers are all dead writes the
+         recovered settings back to main and drops the markers.)
+     I4  Any uncertainty (a readdir error, unknown marker state) refuses writes
+         rather than serving defaults. (It is handled like a non-parse read
+         error: the last-known settings stay, `readUnverified` is set.) */
+
 /** Reads from disk; falls back to defaults when the file is missing or
     malformed. Cached in-process so the hot paths (selectAnalyzer, sidecar
     URL resolution) don't re-parse JSON on every request.
@@ -1069,9 +1086,9 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
 export async function readUserSettings(): Promise<UserSettings> {
   // If another read is already in flight, await it instead of racing
   if (inFlightRead) return inFlightRead;
-  /* `!readUnverified`: after a read hiccup the cache is unverified, and
-     cacheMatchesDisk() calls an ABSENT file "unchanged" — so without this a
-     file that then vanished never got re-read and every writer stayed refused. */
+  /* `!readUnverified`: after a read hiccup the cache is unverified, but the
+     stamp of an unchanged file still matches it — so without this the cache
+     was never re-verified and every writer stayed refused. */
   if (cached && !readUnverified && cacheMatchesDisk()) {
     /* #3084 P25 — a failed append left entries unarchived: retry it on this read. The
        stamp check is unchanged; this only adds the retry to the warm path. */
@@ -1093,6 +1110,10 @@ export async function readUserSettings(): Promise<UserSettings> {
 /** Everything the read path derives from disk, committed to the module
     globals in ONE synchronous step (see commitRead) so no `await` can sit
     between a partially-updated cache and its stamp/flag/key-set. */
+/** Bumped by every writer as it assigns `cached` (stampCacheAfterWrite), so a
+    read can tell whether a write completed while it was on disk (I1). */
+let writeGeneration = 0;
+
 type ReadOutcome = {
   settings: UserSettings;
   explicitKeys: Set<string>;
@@ -1100,7 +1121,11 @@ type ReadOutcome = {
   stamp: FileStamp | null;
 };
 
-function commitRead(outcome: ReadOutcome): UserSettings {
+function commitRead(generation: number, outcome: ReadOutcome): UserSettings {
+  /* I1: a write completed while this read was on disk. What the read saw can
+     be older than that write (a backup read in the write's rename window), so
+     the write's cache stands; its stamp makes the next read re-verify. */
+  if (cached && generation !== writeGeneration) return cached;
   cached = outcome.settings;
   explicitlySetKeys = outcome.explicitKeys;
   settingsFileCorrupt = outcome.corrupt;
@@ -1112,6 +1137,7 @@ function commitRead(outcome: ReadOutcome): UserSettings {
 /** The disk read proper. Touches no module global until commitRead — every
     `await` in here runs with the previous `cached` still fully in place. */
 async function performUserSettingsRead(): Promise<UserSettings> {
+  const generation = writeGeneration;
   await migrateLegacyUserSettings({
     from: LEGACY_USER_SETTINGS_PATH,
     to: USER_SETTINGS_PATH,
@@ -1126,14 +1152,20 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP, recoverMissing });
   let raw: unknown;
   let stranded = false;
+  /* The stamp of the file this read actually parsed, taken BEFORE the read (a
+     change after it makes the next read re-verify, never the reverse); `null`
+     for a backup recovered while main is absent. Never a stat at commit time. */
+  let readStamp = statFileStamp();
   try {
     raw = await readFromDisk(false);
     if (!raw) {
       const marker = hasWriteInFlightMarker(USER_SETTINGS_PATH);
       if (existsSync(USER_SETTINGS_PATH)) {
+        readStamp = statFileStamp();
         raw = await readFromDisk(false); // a rename-in landed after our read
       } else if (marker) {
         stranded = true;
+        readStamp = null;
         raw = await readFromDisk(true);
       }
     }
@@ -1171,11 +1203,11 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       `[user-settings] ${USER_SETTINGS_PATH} and its backups are all unreadable (${(err as Error).message}); ` +
         'using in-memory defaults.',
     );
-    return commitRead({
+    return commitRead(generation, {
       settings: { ...DEFAULT_USER_SETTINGS },
       explicitKeys: new Set(),
       corrupt: true,
-      stamp: statFileStamp(),
+      stamp: readStamp,
     });
   }
   if (!raw && stranded) {
@@ -1191,7 +1223,7 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       return cached;
     }
     console.warn(`[user-settings] ${USER_SETTINGS_PATH} is absent and its backups are unreadable; using in-memory defaults.`);
-    return commitRead({
+    return commitRead(generation, {
       settings: { ...DEFAULT_USER_SETTINGS },
       explicitKeys: new Set(),
       corrupt: true,
@@ -1214,7 +1246,7 @@ async function performUserSettingsRead(): Promise<UserSettings> {
         }
       }
     }
-    return commitRead({
+    return commitRead(generation, {
       settings: { ...DEFAULT_USER_SETTINGS },
       explicitKeys: new Set(),
       corrupt: false,
@@ -1247,11 +1279,11 @@ async function performUserSettingsRead(): Promise<UserSettings> {
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
   // A successful read or backup recovery means the corruption episode, if any, is over.
-  return commitRead({
+  return commitRead(generation, {
     settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS },
     explicitKeys,
     corrupt: false,
-    stamp: statFileStamp(),
+    stamp: readStamp,
   });
 }
 
@@ -1328,6 +1360,7 @@ const STAMP_FORCE_REREAD: FileStamp = { mtimeMs: -1, size: -1 };
     read self-heals from disk exactly as it would have with no stamp at
     all. */
 function stampCacheAfterWrite(written: object): void {
+  writeGeneration += 1;
   const now = statFileStamp();
   const expectedSize = Buffer.byteLength(JSON.stringify(written, null, 2), 'utf8');
   cachedFileStamp = now !== null && now.size === expectedSize ? now : STAMP_FORCE_REREAD;
