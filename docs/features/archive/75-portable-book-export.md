@@ -100,8 +100,9 @@ For any fixture book exported via `buildPortableBundle` and re-imported via `imp
 - state.json (modulo title/bookId edits in the `rename` branch)
 - manuscript.<ext>
 - every `audio/<slug>.<ext>`
-- cover.<ext>, when present
 - change-log.json, when present
+
+ The cover is the one exception: it is re-encoded to a clean JPEG (quality 85) on import and stored as `cover.jpg`, so it is visually the same image but not byte-identical (#3535).
 
 Pinned by `server/src/import/scan-import-folder.test.ts` "round-trip" case. The MANIFEST `exportedAt` field is the one expected non-deterministic field; everything else in MANIFEST is hash-derived and stable.
 
@@ -132,7 +133,7 @@ Run with the real server + `npm run dev` (mock mode also works end-to-end on the
 2. Click Download on the Portable bundle tile. The browser saves a `<slug>.portable.zip` file. Open it with any zip viewer and confirm MANIFEST.json is the first entry.
 3. Navigate to the Library view. A pill button "Import portable bundle" sits to the left of "Start a new book".
 4. Click Import portable bundle, select the zip from step 2. A toast surfaces "Imported: <book-title>"; the library refreshes and the imported book appears (with " (imported)" appended to the title if the source book was still present in the workspace).
-5. Open the imported book — every chapter has audio, the manuscript matches, and the cover is identical.
+5. Open the imported book — every chapter has audio, the manuscript matches, and the cover matches (it is re-encoded to JPEG on import, so compare visually, not byte-for-byte).
 
 ## Out of scope
 

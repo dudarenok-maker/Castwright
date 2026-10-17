@@ -417,6 +417,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         slug: slugStr,
         body: c.body,
         excluded: isExcluded || undefined,
+        titleSynthesized: c.titleSynthesized || undefined,
       };
     });
     const state: BookStateJsonWrite = {
@@ -434,6 +435,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         title: c.title,
         slug: c.slug,
         excluded: c.excluded,
+        titleSynthesized: c.titleSynthesized,
       })),
       coverGradient: deterministicGradient(bookId),
       createdAt: now,
@@ -467,6 +469,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         title: c.title,
         body: c.body,
         excluded: c.excluded,
+        titleSynthesized: c.titleSynthesized,
       })) as ChapterHint[],
       bookId,
       bookDir,

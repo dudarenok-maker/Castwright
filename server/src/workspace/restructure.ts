@@ -355,6 +355,13 @@ function buildNewStateChapters(
     );
     if (anySourceHeld) base.held = true;
 
+    // The title source follows the primary old chapter regardless of
+    // `contentChanged`: `hint.title` is that chapter's title (merge without
+    // an explicit title takes its first member's), so an app-made title
+    // stays app-made and a manuscript heading stays a manuscript heading.
+    // The second half of a split has no primary old chapter → no flag.
+    if (oldChapter?.titleSynthesized) base.titleSynthesized = true;
+
     const contentChanged = fate?.contentChanged ?? true;
     if (!contentChanged && oldChapter) {
       // Preserve audio metadata — file will be renamed, content valid
@@ -422,21 +429,53 @@ function buildAudioOps(
 
 /* -- post-process passes ------------------------------------------ */
 
-/* Detector for auto-generated "Chapter N" titles (bare or with subtitle).
-   These were assigned by the parser when no real heading was present; they
-   must re-derive against the chapter's new id after structural changes so
-   the visible list doesn't drift from the underlying sequence. Captures
-   the optional subtitle in group 2 for round-tripping. User-customised
-   titles (anything not matching this shape) are preserved verbatim. */
-const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
+/* Shape of a "Chapter N" title (bare or with subtitle). Only chapters the
+   app itself titled (`titleSynthesized: true`) are ever renumbered; the
+   regex is the second gate, extracting the optional subtitle in group 2
+   for round-tripping. A chapter without the flag — a manuscript heading,
+   a user title, or any legacy chapter — is preserved verbatim even when
+   its title looks generic. */
+export const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
 
+/** A user-supplied title is never app-made: mark it overridden and drop
+    `titleSynthesized` so no later restructure renumbers it. */
+function withExplicitTitle(
+  c: BookStateJson['chapters'][number],
+): BookStateJson['chapters'][number] {
+  const { titleSynthesized: _drop, ...rest } = c;
+  return { ...rest, titleOverridden: true };
+}
+
+/** Backfill `titleSynthesized` on chapters of a book imported before the flag
+    existed (#3628). A chapter with NO `titleSynthesized` key is flagged only
+    when the book's chapter count equals the current parse's, its stored title
+    equals the parse's title at the same position, the parse marks that
+    position app-made, and it is not `titleOverridden`. A chapter that already
+    has the key (including `false`) is never touched. Returns `state` itself
+    when nothing changes. */
+export function backfillTitleSynthesized(
+  state: BookStateJson,
+  parsedTitles: readonly string[],
+  parsedTitleSynthesized: readonly boolean[],
+): BookStateJson {
+  if (parsedTitles.length !== state.chapters.length) return state;
+  let changed = false;
+  const chapters = state.chapters.map((c, i) => {
+    if (Object.hasOwn(c, 'titleSynthesized') || c.titleOverridden) return c;
+    if (c.title !== parsedTitles[i] || parsedTitleSynthesized[i] !== true) return c;
+    changed = true;
+    return { ...c, titleSynthesized: true };
+  });
+  return changed ? { ...state, chapters } : state;
+}
 function renumberGenericTitlesInChapters(
   chapters: BookStateJson['chapters'],
 ): { chapters: BookStateJson['chapters']; renumbered: number } {
   let renumbered = 0;
   const next = chapters.map((ch) => {
+    if (ch.titleSynthesized !== true) return ch; // manuscript/user title — preserve
     const match = GENERIC_TITLE_RE.exec(ch.title.trim());
-    if (!match) return ch; // user-custom title — preserve
+    if (!match) return ch;
     const subtitle = match[2]?.trim();
     const newTitle = subtitle ? `Chapter ${ch.id} — ${subtitle}` : `Chapter ${ch.id}`;
     if (newTitle === ch.title) return ch;
@@ -543,14 +582,16 @@ function pruneEmptyChaptersInResult(result: RestructureResult): {
   };
 }
 
-/* Combined post-process: prune empties → renumber generic titles.
-   Order matters: pruning may shift ids, after which generic titles must
+/* Combined post-process: prune empties → renumber app-made generic titles.
+   Order matters: pruning may shift ids, after which app-made titles must
    re-derive against the new ids. Renumbering also recomputes slugs for
    any title that changed.
 
    The audio ops are re-derived from the FINAL slugs after both passes
    (#3400): a chapter whose slug moved only in a pass has no op from the
-   caller, yet its files must follow it. */
+   caller, yet its files must follow it. Only chapters flagged
+   `titleSynthesized` are renumbered — an explicit title (rename, merge
+   `mergedTitle`) clears the flag — so a user-chosen title is never rewritten. */
 function postProcessRestructure(result: RestructureResult): RestructureResult {
   const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
@@ -611,7 +652,12 @@ function postProcessRestructure(result: RestructureResult): RestructureResult {
 
   return {
     state: { ...pruned.state, chapters: titled.chapters },
-    hints: pruned.hints,
+    // Hints get the renumbered titles too, so the in-memory manuscript record
+    // agrees with state.json (same shape as applyRefreshTitles).
+    hints: pruned.hints.map((h) => {
+      const ch = finalById.get(h.id);
+      return ch ? { ...h, title: ch.title } : h;
+    }),
     sentences: pruned.sentences,
     remap: pruned.remap,
     audioOps: adjustedAudioOps,
@@ -711,7 +757,7 @@ export function applyMerge(
   // refresh-titles passes leave it alone.
   const newStateChapters = mergedTitleSupplied
     ? newStateChaptersRaw.map((c) =>
-        c.id === mergedNewId ? { ...c, titleOverridden: true } : c,
+        c.id === mergedNewId ? withExplicitTitle(c) : c,
       )
     : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
@@ -874,7 +920,7 @@ export function applySplit(
   // refresh-titles passes leave it alone.
   const newStateChapters = newTitleSupplied
     ? newStateChaptersRaw.map((c) =>
-        c.id === secondHalfNewId ? { ...c, titleOverridden: true } : c,
+        c.id === secondHalfNewId ? withExplicitTitle(c) : c,
       )
     : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
@@ -932,6 +978,10 @@ export interface RefreshTitlesOptions {
       length) → skip the parser-aligned rewrite and only run the
       first-line promotion pass below. */
   parsedTitles: readonly string[];
+  /** Parallel to `parsedTitles`: true where the parser made that title up
+      (no heading in the manuscript). A replaced chapter carries
+      `titleSynthesized: true` only when its parsed title is flagged. */
+  parsedTitleSynthesized?: readonly boolean[];
   /** When true, opportunistically promote a chapter's first non-dialogue
       sentence to its title if the chapter's current title still matches
       the generic auto-generated pattern. Skipped per-chapter when the
@@ -963,24 +1013,31 @@ export function applyRefreshTitles(
   }
 
   // First pass: parser-aligned rewrite (when chapter counts match).
-  // Only fires for chapters whose current title still matches the
-  // generic auto-generated pattern OR equals the parsed title for the
-  // same parser order — user-customised titles ("The Verdict") are
+  // Only fires for chapters the app itself titled (titleSynthesized) whose
+  // current title still matches the generic auto-generated pattern —
+  // manuscript headings and user-customised titles ("The Verdict") are
   // never clobbered by re-parsing.
   let parserAligned = 0;
   let stagedChapters = state.chapters.map((c, i) => {
     if (!parsedAligned) return c;
     // Hard gate: the user has manually renamed this chapter, so the
     // heuristic title-refresh MUST leave it alone regardless of what
-    // the source manuscript currently parses to. GENERIC_TITLE_RE
-    // below is the legacy backup gate (catches chapters that pre-date
-    // the override flag).
+    // the source manuscript currently parses to.
     if (c.titleOverridden) return c;
+    // Only an app-made title may be replaced; an unflagged chapter holds a
+    // manuscript heading (or a legacy title) and is left alone.
+    if (c.titleSynthesized !== true) return c;
     const candidate = opts.parsedTitles[i];
     if (!candidate || candidate === c.title) return c;
     if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
     parserAligned++;
-    return { ...c, title: candidate, slug: chapterSlug(c.id, candidate) };
+    const { titleSynthesized: _drop, ...rest } = c;
+    return {
+      ...rest,
+      title: candidate,
+      slug: chapterSlug(c.id, candidate),
+      ...(opts.parsedTitleSynthesized?.[i] === true ? { titleSynthesized: true } : {}),
+    };
   });
   if (parserAligned > 0) {
     warnings.push(
@@ -988,10 +1045,9 @@ export function applyRefreshTitles(
     );
   }
 
-  // Second pass: first-line promotion for any chapter whose title still
-  // matches the generic pattern. Uses the GENERIC_TITLE_RE detector to
-  // gate "is this title auto-generated and therefore eligible for
-  // replacement?" — user-customised titles are skipped.
+  // Second pass: first-line promotion for any app-made chapter title
+  // (titleSynthesized) that still matches the generic pattern.
+  // Manuscript headings and user-customised titles are skipped.
   let firstLinePromoted = 0;
   if (opts.useFirstLine) {
     // Build per-chapter sentence map once.
@@ -1009,6 +1065,7 @@ export function applyRefreshTitles(
     stagedChapters = stagedChapters.map((c) => {
       // Same hard override gate as the parser-aligned pass above.
       if (c.titleOverridden) return c;
+      if (c.titleSynthesized !== true) return c;
       if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
       const chapterSentences = sentencesByChapter.get(c.id);
       const firstSentence = chapterSentences?.[0]?.text?.trim();
@@ -1018,8 +1075,10 @@ export function applyRefreshTitles(
       if (/[.!]$/.test(firstSentence)) return c;
       if (!opts.looksLikeTitle(firstSentence)) return c;
       firstLinePromoted++;
+      // The first line comes from the manuscript, so the title is no longer app-made.
+      const { titleSynthesized: _drop, ...rest } = c;
       return {
-        ...c,
+        ...rest,
         title: firstSentence,
         slug: chapterSlug(c.id, firstSentence),
       };
@@ -1215,10 +1274,9 @@ export function applyRename(
   }
 
   const newChapter = {
-    ...oldChapter,
+    ...withExplicitTitle(oldChapter),
     title: cleanTitle,
     slug: newSlug,
-    titleOverridden: true,
   };
   const newStateChapters = state.chapters.map((c, i) => (i === idx ? newChapter : c));
 

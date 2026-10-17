@@ -1,7 +1,9 @@
 /* Cover byte download + state.json provenance patching. Source-agnostic:
    downloadCover fetches any candidate URL (always re-derived server-side
    via findCandidateById — never a client-supplied URL, preserving the
-   no-SSRF property), validates it is an image within caps, and writes
+   no-SSRF property), checks it against the size caps, re-encodes it to a
+   clean sharp-written JPEG (so every provider body — GIF, WebP, PNG, JPEG
+   with trailing junk — lands as a decodable cover.jpg), and writes
    atomically. backgroundFetchCover is the fire-and-forget import hook. */
 
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
@@ -12,6 +14,7 @@ import { coverImagePath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
 import type { CoverCandidate } from './sources/types.js';
 import { firstAvailableCover } from './search.js';
+import { reencodeToJpeg } from './reencode.js';
 
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const MAX_COVER_BYTES = 5 * 1024 * 1024;
@@ -62,9 +65,22 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
     throw new CoverDownloadError('too_large', `Cover exceeds ${MAX_COVER_BYTES} bytes (got ${buffer.length}).`);
   }
 
+  /* #3535 (operator decision, option a): normalise every provider body to a
+     clean sharp-written JPEG before it lands as cover.jpg — a GIF/WebP stored
+     verbatim fails the m4b export's content probing, and a JPEG with trailing
+     bytes defeats it the same way. Tolerant: a provider JPEG that is merely
+     damaged (e.g. missing its EOI) still decodes, so it is kept; a body
+     sharp cannot decode at all is an invalid cover. */
+  let reencoded: Buffer;
+  try {
+    reencoded = await reencodeToJpeg(buffer, { tolerant: true });
+  } catch (e) {
+    throw new CoverDownloadError('invalid', `Cover is not a decodable image: ${(e as Error).message}`);
+  }
+
   await mkdir(dirname(destPath), { recursive: true });
   const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, buffer);
+  await writeFile(tmp, reencoded);
   try {
     await renameWithRetry(tmp, destPath);
   } catch (e) {
@@ -73,7 +89,7 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
     });
     throw e;
   }
-  return { bytes: buffer.length };
+  return { bytes: reencoded.length };
 }
 
 /** Record provenance of the just-downloaded cover onto state.json so a

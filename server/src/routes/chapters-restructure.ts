@@ -31,6 +31,8 @@ import {
   applySplit,
   applyReorder,
   applyExclude,
+  backfillTitleSynthesized,
+  GENERIC_TITLE_RE,
   applyRefreshTitles,
   applyRename,
   touchedChapterIds,
@@ -65,6 +67,42 @@ import { join } from 'node:path';
 
 export const chaptersRestructureRouter = Router();
 
+/* Best-effort: any parse failure leaves the state untouched. Skips the parse
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title. */
+async function backfillLegacyTitleFlags(
+  state: Parameters<typeof backfillTitleSynthesized>[0],
+  bookDir: string,
+): Promise<Parameters<typeof backfillTitleSynthesized>[0]> {
+  /* Only a keyless, non-overridden chapter whose title looks generic can be
+     flagged (renumbering and both refresh passes act on that shape alone), so
+     a book without one never needs the parse. */
+  if (
+    !state.chapters.some(
+      (c) =>
+        !Object.hasOwn(c, 'titleSynthesized') &&
+        !c.titleOverridden &&
+        GENERIC_TITLE_RE.test(c.title.trim()),
+    )
+  ) {
+    return state;
+  }
+  const manuscriptPath = join(bookDir, state.manuscriptFile);
+  if (!existsSync(manuscriptPath)) return state;
+  try {
+    const parsed = await parseManuscript({
+      buffer: await readFile(manuscriptPath),
+      fileName: state.manuscriptFile,
+      sourcePath: manuscriptPath,
+    });
+    return backfillTitleSynthesized(
+      state,
+      parsed.chapters.map((c) => c.title),
+      parsed.chapters.map((c) => c.titleSynthesized === true),
+    );
+  } catch {
+    return state;
+  }
+}
 /** Shared "load → transform → write" prologue. Returns the new result and
     side-effects: writes state.json + manuscript-edits.json, mutates the
     in-memory ManuscriptRecord.chapterHints, applies audio ops, clears the
@@ -83,7 +121,8 @@ async function applyRestructure(
   const located = await findBookByBookId(bookId);
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
-  const { bookDir, state } = located;
+  const { bookDir } = located;
+  let { state } = located;
   if (!state.manuscriptId) {
     return {
       status: 400,
@@ -100,6 +139,10 @@ async function applyRestructure(
     };
   }
 
+  // Legacy book: chapters imported before titleSynthesized existed carry no
+  // flag. Recognise the app-made ones against a fresh parse (#3628) so every
+  // operation below renumbers them like a freshly imported book's.
+  state = await backfillLegacyTitleFlags(state, bookDir);
   // Align hint titles with state.json's user-facing chapter titles.
   // The parser-derived hint titles can diverge (e.g. when state.json
   // captures a more refined title from a later parser-version refresh,
@@ -266,6 +309,7 @@ chaptersRestructureRouter.post(
       // error) downgrade gracefully — we still run the first-line
       // promotion pass on the in-memory state.
       let parsedTitles: string[] = [];
+      let parsedTitleSynthesized: boolean[] = [];
       const manuscriptPath = join(bookDir, state.manuscriptFile);
       if (existsSync(manuscriptPath)) {
         try {
@@ -276,6 +320,7 @@ chaptersRestructureRouter.post(
             sourcePath: manuscriptPath,
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
+          parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);
         } catch (parseErr) {
           console.warn(
             `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
@@ -288,6 +333,7 @@ chaptersRestructureRouter.post(
         applyRestructure(req.params.bookId, (s, hints, sentences) =>
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles,
+            parsedTitleSynthesized,
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

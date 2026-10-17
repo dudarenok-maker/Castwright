@@ -99,17 +99,22 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
         "Chapter 1 — The Berth at Liverpool".
 
     Shared by the epub2 primary path and the raw-zip fallback so both title
-    chapters identically. */
-function mergeChapterTitle(
+    chapters identically. `synthesized` is true only for the made-up
+    "Chapter N" fallback; every other branch is read from the manuscript. */
+export function mergeChapterTitle(
   ncxTitle: string,
   bodyHeading: string | null,
   oneBasedIndex: number,
-): string {
-  if (!ncxTitle) return bodyHeading || `Chapter ${oneBasedIndex}`;
-  if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
-    return `${ncxTitle} — ${bodyHeading}`;
+): { title: string; synthesized: boolean } {
+  if (!ncxTitle) {
+    return bodyHeading
+      ? { title: bodyHeading, synthesized: false }
+      : { title: `Chapter ${oneBasedIndex}`, synthesized: true };
   }
-  return ncxTitle;
+  if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
+    return { title: `${ncxTitle} — ${bodyHeading}`, synthesized: false };
+  }
+  return { title: ncxTitle, synthesized: false };
 }
 
 /** epub2 primary path. Returns null (rather than throwing) when epub2 can't
@@ -146,7 +151,7 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
       });
       // Title from the epub2-supplied NCX/spine label, merged with the body
       // heading via the shared resolver (see {@link mergeChapterTitle}).
-      const chTitle = mergeChapterTitle(
+      const { title: chTitle, synthesized } = mergeChapterTitle(
         entry.title?.trim() ?? '',
         extractFirstHeading(html),
         chapters.length + 1,
@@ -157,7 +162,12 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
         tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle)))),
       );
       if (!body) continue;
-      chapters.push({ id: chapters.length + 1, title: chTitle, body });
+      chapters.push({
+        id: chapters.length + 1,
+        title: chTitle,
+        body,
+        ...(synthesized ? { titleSynthesized: true } : {}),
+      });
     }
 
     if (chapters.length === 0) return null;
@@ -256,14 +266,23 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
         /* malformed %-escape — keep the empty NCX title */
       }
     }
-    const chTitle = mergeChapterTitle(ncxTitle, extractFirstHeading(bodyHtml), chapters.length + 1);
+    const { title: chTitle, synthesized } = mergeChapterTitle(
+      ncxTitle,
+      extractFirstHeading(bodyHtml),
+      chapters.length + 1,
+    );
     // Drop the leading title heading so it isn't spoken twice — see
     // {@link stripTitleHeading}.
     const body = tagHesitantDialog(
       tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(bodyHtml, chTitle)))),
     );
     if (!body) continue;
-    chapters.push({ id: chapters.length + 1, title: chTitle, body });
+    chapters.push({
+      id: chapters.length + 1,
+      title: chTitle,
+      body,
+      ...(synthesized ? { titleSynthesized: true } : {}),
+    });
   }
 
   /* 6. Still nothing → classify why so the user gets an actionable message. */

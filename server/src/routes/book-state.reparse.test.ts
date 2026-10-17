@@ -410,6 +410,30 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(existsSync(carryoverPath())).toBe(false);
   });
 
+  it('persists titleSynthesized on the made-up leading chapter only (#3628)', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      'Opening words before any heading.\n\n## Prologue\n\nThe prologue body has a few sentences of narrative content in it.\n\n## Chapter 1\n\nFirst body.\n',
+    );
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+      expect(res.status).toBe(200);
+
+      const after = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')) as {
+        chapters: Array<{ title: string; titleSynthesized?: boolean }>;
+      };
+      const [lead, ...headed] = after.chapters;
+      expect(lead.title).toBe('Chapter 1');
+      expect(lead.titleSynthesized).toBe(true);
+      expect(headed.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1']);
+      for (const ch of headed) {
+        expect('titleSynthesized' in ch).toBe(false);
+      }
+    } finally {
+      writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    }
+  });
+
   it('preserves the excluded flag across reparse (id match — typical case)', async () => {
     /* Re-parsing the same manuscript usually produces the same id-to-
        chapter map. Seed ch1 as excluded, re-parse, expect the same id

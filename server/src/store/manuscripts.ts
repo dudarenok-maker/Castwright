@@ -23,6 +23,12 @@ export interface ChapterHint {
       same field on BookStateJson.chapters[] and is rehydrated from there
       after a server restart. */
   excluded?: boolean;
+  /** `true` only when the app itself made the title up (the fallback
+      `Chapter N` for a chapter with no heading). Absent means the title came
+      from the manuscript (heading, EPUB NCX / MOBI TOC label, PDF outline) or
+      from the user. Never persisted as `false`: write `true` or omit the key.
+      Server-only; not in openapi.yaml or the frontend types. */
+  titleSynthesized?: boolean;
 }
 
 export interface ManuscriptRecord {
@@ -94,13 +100,29 @@ export async function getOrHydrateManuscript(
   for (const c of book.state.chapters) {
     if (c.excluded) excludedById.set(c.id, true);
   }
-  const chapterHints: ChapterHint[] = parsed.chapters.map((c) => ({
-    ...c,
+  /* A fresh parse also loses titles state.json has since moved on (a restructure
+     renumbered app-made "Chapter N" titles). Align them by id, only while the
+     chapter counts agree — after a merge/split the parse's ids no longer line
+     up with state's, and an id match would graft a title onto the wrong body. */
+  const stateById = new Map(book.state.chapters.map((c) => [c.id, c]));
+  const aligned = book.state.chapters.length === parsed.chapters.length;
+  const chapterHints: ChapterHint[] = parsed.chapters.map((p) => {
     /* User's prior exclusions win; otherwise fall back to the parser's
        front/back-matter default so re-parse doesn't silently re-admit
-       Acknowledgments/Copyright/CONTENTS to the queue (plan 148). */
-    excluded: excludedById.get(c.id) || isLikelyFrontMatterTitle(c.title) || undefined,
-  }));
+       Acknowledgments/Copyright/CONTENTS to the queue (plan 148). The default
+       reads the PARSE title: a chapter the user renamed to "Introduction" and
+       kept included must not come back excluded after a restart. */
+    const excluded = excludedById.get(p.id) || isLikelyFrontMatterTitle(p.title) || undefined;
+    const sc = aligned ? stateById.get(p.id) : undefined;
+    if (!sc) return { ...p, excluded };
+    const { titleSynthesized: _drop, ...rest } = p;
+    return {
+      ...rest,
+      title: sc.title,
+      ...(sc.titleSynthesized === true ? { titleSynthesized: true } : {}),
+      excluded,
+    };
+  });
 
   const record: ManuscriptRecord = {
     manuscriptId,

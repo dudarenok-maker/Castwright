@@ -1137,7 +1137,8 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
     renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
     const el = document.querySelector('audio') as HTMLAudioElement;
     Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
-    await screen.findByLabelText(/Next issue/);
+    await screen.findByLabelText(/Next issue/, undefined, { timeout: 5000 });
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     fireEvent.click(screen.getByLabelText(/Next issue/));
     expect(el.currentTime).toBe(8);
   });
@@ -1164,6 +1165,7 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
        wins. */
     await screen.findByLabelText(/Next issue/);
     await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     await act(async () => { fireEvent.loadedMetadata(el); });
     expect(el.currentTime).toBe(8); // first issue seekSec, NOT the 25s resume
   });
@@ -1178,6 +1180,7 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
        loadedMetadata so pendingSeekRef carries the 25 s resume point. */
     await screen.findByLabelText(/Next issue/);
     await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     await act(async () => { fireEvent.loadedMetadata(el); });
     expect(el.currentTime).toBe(25); // resume bookmark wins
   });

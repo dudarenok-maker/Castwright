@@ -17,9 +17,12 @@ import {
   applyReorder,
   applyRename,
   applyExclude,
+  applyRefreshTitles,
+  backfillTitleSynthesized,
   computeBodySplitIndex,
   touchedChapterIds,
   carryMergedAwayKeys,
+  type RefreshTitlesOptions,
   type RestructureSentence,
   type AudioOp,
 } from './restructure.js';
@@ -35,6 +38,7 @@ function makeState(
     audioModelKey?: string;
     audioRenderedAt?: string;
     uuid?: string;
+    titleSynthesized?: boolean;
   }>,
 ): BookStateJson {
   return {
@@ -56,6 +60,7 @@ function makeState(
       ...(c.audioModelKey ? { audioModelKey: c.audioModelKey } : {}),
       ...(c.audioRenderedAt ? { audioRenderedAt: c.audioRenderedAt } : {}),
       ...(c.uuid ? { uuid: c.uuid } : {}),
+      ...(c.titleSynthesized ? { titleSynthesized: true } : {}),
     })),
     coverGradient: ['#000', '#fff'],
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -606,9 +611,11 @@ describe('touchedChapterIds', () => {
 
 describe('post-process passes move audio with the slug (#3400)', () => {
   const T = '2026-01-01T00:00:00.000Z';
+  // Only app-made ("Chapter N", flagged titleSynthesized) titles are renumbered (#3628).
   const rendered = (id: number, title: string) => ({
     id,
     title,
+    ...(/^Chapter \d+$/.test(title) ? { titleSynthesized: true } : {}),
     audioModelKey: 'kokoro-v1',
     audioRenderedAt: T,
   });
@@ -690,5 +697,233 @@ describe('carryMergedAwayKeys (#3400)', () => {
 
   it('drops a chapter that shares its new chapter with another (merge)', () => {
     expect(carryMergedAwayKeys(['1:3', '2:3'], [r(1, 1, 1, 1), r(2, 1, 1, 2)])).toEqual([]);
+  });
+});
+
+/* -- title source (#3628): only app-made titles are renumbered ------ */
+
+describe('renumbering honours titleSynthesized (#3628)', () => {
+  const titles = ['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 3'];
+  const book = (synth: boolean) =>
+    makeState(
+      titles.map((title, i) => ({
+        id: i + 1,
+        title,
+        ...(synth && i > 0 ? { titleSynthesized: true } : {}),
+      })),
+    );
+  const bookHints = () =>
+    makeHints(titles.map((title, i) => ({ id: i + 1, title, body: `b${i + 1}` })));
+  const bookSentences = () => titles.map((_, i) => s(1, i + 1, 'narr', `One ${i + 1}.`));
+
+  it('(A) leaves manuscript headings without the flag untouched', () => {
+    const result = applyExclude(book(false), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    expect(result.state.chapters.map((c) => c.title)).toEqual(titles);
+  });
+
+  it('(B) renumbers chapters flagged titleSynthesized', () => {
+    const result = applyExclude(book(true), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    expect(result.state.chapters.map((c) => c.title)).toEqual([
+      'Prologue',
+      'Chapter 2',
+      'Chapter 3',
+      'Chapter 4',
+    ]);
+  });
+
+  it('(B2) keeps hint titles in step with renumbered state titles', () => {
+    const result = applyExclude(book(true), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    const stateTitles = result.state.chapters.map((c) => c.title);
+    expect(stateTitles).not.toEqual(titles); // renumbering really happened
+    for (const c of result.state.chapters) {
+      expect(result.hints.find((h) => h.id === c.id)?.title).toBe(c.title);
+    }
+  });
+
+  it('(C) reorder and title-less merge carry the flag to the new chapter', () => {
+    const reordered = applyReorder(book(true), bookHints(), bookSentences(), {
+      order: [1, 3, 2, 4],
+    });
+    expect(reordered.state.chapters.map((c) => c.titleSynthesized)).toEqual([
+      undefined,
+      true,
+      true,
+      true,
+    ]);
+
+    // Merge 2+3: no explicit title → first member's title and flag.
+    const merged = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [2, 3],
+    });
+    expect(merged.state.chapters[1].titleSynthesized).toBe(true);
+    // A merge led by an unflagged member stays unflagged.
+    const mergedHeading = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [1, 2],
+    });
+    expect(mergedHeading.state.chapters[0].titleSynthesized).toBeUndefined();
+  });
+
+  it('(D) rename and merge mergedTitle drop the flag for good', () => {
+    const renamed = applyRename(book(true), bookHints(), bookSentences(), {
+      chapterId: 3,
+      title: 'Chapter 9',
+    });
+    const mergedExplicit = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [2, 3],
+      mergedTitle: 'Chapter 9',
+    });
+
+    const cases: Array<[string, ReturnType<typeof applyRename>, number]> = [
+      ['rename', renamed, 3],
+      ['merge', mergedExplicit, 2],
+    ];
+    for (const [label, result, id] of cases) {
+      const ch = result.state.chapters.find((c) => c.id === id)!;
+      expect(ch.title, label).toBe('Chapter 9');
+      expect('titleSynthesized' in ch, label).toBe(false);
+      // A later restructure must not renumber the explicit title.
+      const later = applyExclude(result.state, result.hints, result.sentences, {
+        chapterIds: [1],
+        excluded: true,
+      });
+      expect(later.state.chapters.find((c) => c.id === id)!.title, label).toBe('Chapter 9');
+    }
+  });
+
+  it('(E) split keeps the flag on the first half and never gives it to the second', () => {
+    const split = applySplit(
+      makeState([
+        { id: 1, title: 'Prologue' },
+        { id: 2, title: 'Chapter 1', titleSynthesized: true },
+      ]),
+      makeHints([
+        { id: 1, title: 'Prologue', body: 'p' },
+        { id: 2, title: 'Chapter 1', body: 'Alpha one. Beta two.' },
+      ]),
+      [s(1, 1, 'narr', 'P.'), s(1, 2, 'narr', 'Alpha one.'), s(2, 2, 'narr', 'Beta two.')],
+      { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' },
+    );
+    expect(split.state.chapters[1].titleSynthesized).toBe(true);
+    expect('titleSynthesized' in split.state.chapters[2]).toBe(false);
+  });
+});
+/* -- title source (#3628): the title-refresh passes honour the flag -- */
+
+describe('applyRefreshTitles honours titleSynthesized (#3628)', () => {
+  const opts = (over: Partial<RefreshTitlesOptions> = {}): RefreshTitlesOptions => ({
+    parsedTitles: [],
+    useFirstLine: false,
+    looksLikeTitle: () => true,
+    maxLen: 80,
+    ...over,
+  });
+  const oneChapter = (synth: boolean) => ({
+    state: makeState([{ id: 1, title: 'Chapter 1', ...(synth ? { titleSynthesized: true } : {}) }]),
+    hints: makeHints([{ id: 1, title: 'Chapter 1', body: 'The Long Road Home' }]),
+    sentences: [s(1, 1, 'narr', 'The Long Road Home')],
+  });
+
+  it('first-line promotion leaves an unflagged "Chapter 1" heading alone', () => {
+    const { state, hints, sentences } = oneChapter(false);
+    const result = applyRefreshTitles(state, hints, sentences, opts({ useFirstLine: true }));
+    expect(result.state.chapters[0].title).toBe('Chapter 1');
+  });
+
+  it('first-line promotion replaces a flagged title and drops the flag', () => {
+    const { state, hints, sentences } = oneChapter(true);
+    const result = applyRefreshTitles(state, hints, sentences, opts({ useFirstLine: true }));
+    const ch = result.state.chapters[0];
+    expect(ch.title).toBe('The Long Road Home');
+    expect('titleSynthesized' in ch).toBe(false);
+  });
+
+  it('parser-aligned pass does not replace an unflagged generic title', () => {
+    const { state, hints, sentences } = oneChapter(false);
+    const result = applyRefreshTitles(
+      state,
+      hints,
+      sentences,
+      opts({ parsedTitles: ['Opening'], parsedTitleSynthesized: [false] }),
+    );
+    expect(result.state.chapters[0].title).toBe('Chapter 1');
+  });
+
+  it('parser-aligned pass replaces a flagged title; the flag follows the parsed title', () => {
+    const synthesizedParse = oneChapter(true);
+    const kept = applyRefreshTitles(
+      synthesizedParse.state,
+      synthesizedParse.hints,
+      synthesizedParse.sentences,
+      opts({ parsedTitles: ['Chapter 7'], parsedTitleSynthesized: [true] }),
+    );
+    expect(kept.state.chapters[0].title).toBe('Chapter 7');
+    expect(kept.state.chapters[0].titleSynthesized).toBe(true);
+
+    const headingParse = oneChapter(true);
+    const cleared = applyRefreshTitles(
+      headingParse.state,
+      headingParse.hints,
+      headingParse.sentences,
+      opts({ parsedTitles: ['Opening'], parsedTitleSynthesized: [false] }),
+    );
+    expect(cleared.state.chapters[0].title).toBe('Opening');
+    expect('titleSynthesized' in cleared.state.chapters[0]).toBe(false);
+  });
+});
+
+/* -- title source (#3628): backfilling the flag on legacy chapters --- */
+
+describe('backfillTitleSynthesized (#3628)', () => {
+  const parsedTitles = ['Chapter 1', 'Prologue', 'Chapter 3'];
+  const parsedSynth = [true, false, true];
+
+  it('flags a keyless chapter whose title matches an app-made parse position', () => {
+    const out = backfillTitleSynthesized(
+      makeState([
+        { id: 1, title: 'Chapter 1' },
+        { id: 2, title: 'Prologue' },
+        { id: 3, title: 'Chapter 3' },
+      ]),
+      parsedTitles,
+      parsedSynth,
+    );
+    expect(out.chapters.map((c) => c.titleSynthesized)).toEqual([true, undefined, true]);
+  });
+
+  it('does not backfill an edited title, a titleOverridden chapter, or a position the parse took from a heading', () => {
+    const state = makeState([
+      { id: 1, title: 'Chapter 1 — Mine' },
+      { id: 2, title: 'Prologue' },
+      { id: 3, title: 'Chapter 3' },
+    ]);
+    state.chapters[2].titleOverridden = true;
+    const out = backfillTitleSynthesized(state, parsedTitles, parsedSynth);
+    expect(out.chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  it('does nothing when the chapter counts differ', () => {
+    const state = makeState([{ id: 1, title: 'Chapter 1' }]);
+    expect(backfillTitleSynthesized(state, parsedTitles, parsedSynth)).toBe(state);
+  });
+
+  it('never touches a chapter that already has the key, including false', () => {
+    const state = makeState([
+      { id: 1, title: 'Chapter 1' },
+      { id: 2, title: 'Prologue' },
+      { id: 3, title: 'Chapter 3' },
+    ]);
+    state.chapters[0].titleSynthesized = false; // makeState only writes the key when true
+    const out = backfillTitleSynthesized(state, parsedTitles, parsedSynth);
+    expect(out.chapters[0].titleSynthesized).toBe(false);
+    expect(out.chapters[2].titleSynthesized).toBe(true);
   });
 });

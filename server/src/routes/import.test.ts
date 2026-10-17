@@ -930,3 +930,44 @@ describe('POST /api/import — CJK-aware word count (fs-59 W2)', () => {
     expect(ch1.wordCount).toBe(4);
   });
 });
+
+describe('POST /api/books — titleSynthesized persistence (#3628)', () => {
+  it('writes titleSynthesized: true on the made-up leading chapter only', async () => {
+    const md = [
+      'Some opening words that come before any heading at all.',
+      '',
+      '## Prologue',
+      '',
+      'The prologue body has a few sentences of narrative content in it.',
+      '',
+      '## Chapter 1',
+      '',
+      'The first real chapter carries on with some more narrative content.',
+    ].join('\n');
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'synth.md' });
+    expect(importRes.status).toBe(200);
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Synth Author',
+      title: 'Synth Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    ) as { chapters: Array<{ title: string; titleSynthesized?: boolean }> };
+
+    const [lead, ...headed] = stateJson.chapters;
+    expect(lead.title).toBe('Chapter 1');
+    expect(lead.titleSynthesized).toBe(true);
+    expect(headed.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1']);
+    for (const ch of headed) {
+      expect('titleSynthesized' in ch).toBe(false);
+    }
+  });
+});

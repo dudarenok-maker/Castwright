@@ -118,6 +118,14 @@ export interface BookStateJson {
         land. Round-trips through `state.json` and through the portable
         book bundle (plan 75). */
     titleOverridden?: boolean;
+    /** `true` ONLY when the app itself made the title up (the fallback
+        "Chapter N" for a chapter with no heading). Absent means the title
+        came from the manuscript or the user - including every legacy chapter
+        written before this field existed, which is therefore never
+        renumbered. Never persisted as `false`. Server-only (not in
+        `openapi.yaml`); carried across `PUT /state` by chapter id like
+        `uuid`. */
+    titleSynthesized?: boolean;
     /** Durable record of the LAST synthesis FAILURE for this chapter.
         Only `'failed'` is ever persisted — "done" is derived from the
         audio file on disk (`completedSlugs`) and "queued" is the absence
