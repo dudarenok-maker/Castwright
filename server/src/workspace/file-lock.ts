@@ -310,3 +310,24 @@ export async function withKeyLock<T>(
 export function __chainsSizeForTest(): number {
   return chains.size;
 }
+
+/** #3700 — serialise a read-modify-write of one book's `.audiobook/state.json`
+ *  across concurrent chapter renders. A LEAF lock (outside the design ->
+ *  library-voice -> cast order): hold it only across the single
+ *  read-through-write, never while taking another lock. Without it two sibling
+ *  chapters finalizing together both read the same snapshot and the second
+ *  write clobbered the first chapter's stamp (and on Windows the read could land
+ *  in the rename-over window and throw ENOENT). An expired acquisition is
+ *  re-thrown as the curated request error so the lock key (which embeds the
+ *  absolute workspace path) never reaches a client-facing failure body. */
+export async function withStateJsonLock<T>(statePath: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await withKeyLock(`state-json:${statePath}`, fn);
+  } catch (err) {
+    if (isLockAcquisitionTimeout(err)) {
+      console.warn('[state-json-lock]', err);
+      throw new Error(LOCK_CONTENTION_REQUEST_ERROR);
+    }
+    throw err;
+  }
+}
