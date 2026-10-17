@@ -21,6 +21,10 @@ const hooks = vi.hoisted(() => ({
   onSegmentsRead: undefined as undefined | ((path: string) => Promise<void>),
   segmentsSeen: false,
   afterStateReread: undefined as undefined | (() => Promise<void>),
+  /* Fires once, right after the FIRST state.json read of the book under `dir`
+     — i.e. between the scan's/locator's read and whatever it writes next. */
+  afterFirstStateRead: undefined as undefined | { dir: string; fn: () => Promise<void> },
+  norm: (p: string) => p.replace(/\\/g, '/'),
 }));
 
 vi.mock('./state-io.js', async (importOriginal) => {
@@ -32,7 +36,15 @@ vi.mock('./state-io.js', async (importOriginal) => {
         hooks.segmentsSeen = true;
         await hooks.onSegmentsRead?.(path);
       }
-      return (orig.readJson as (...a: unknown[]) => unknown)(path, ...rest);
+      const out = await (orig.readJson as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+      /* scanBook reads state.json with readJson (the locator uses
+         readStateJsonWithRecovery, hooked below). */
+      const first = hooks.afterFirstStateRead;
+      if (first && path.endsWith('state.json') && hooks.norm(path).startsWith(hooks.norm(first.dir))) {
+        hooks.afterFirstStateRead = undefined;
+        await first.fn();
+      }
+      return out;
     }) as typeof orig.readJson,
   };
 });
@@ -46,6 +58,12 @@ vi.mock('./state-migrate.js', async (importOriginal) => {
     ...orig,
     readStateJsonWithRecovery: (async (path: string) => {
       const out = await orig.readStateJsonWithRecovery(path);
+      const first = hooks.afterFirstStateRead;
+      const norm = (p: string) => p.replace(/\\/g, '/');
+      if (first && norm(path).startsWith(norm(first.dir))) {
+        hooks.afterFirstStateRead = undefined;
+        await first.fn();
+      }
       const fire = hooks.segmentsSeen ? hooks.afterStateReread : undefined;
       if (fire) {
         hooks.afterStateReread = undefined;
@@ -234,6 +252,40 @@ describe('segments backfill (findBookByBookId) merges under the book lock', () =
     expect(existsSync(bookDir)).toBe(false);
   });
 
+  it('fill-only: a field a concurrent writer already set is never overwritten by the heal (pass-7 2)', async () => {
+    const { bookId, bookDir, statePath } = seedBook(2);
+    hooks.onSegmentsRead = armOnce(bookDir, () =>
+      lock.withBookLock(bookId, async () => {
+        const cur = readState(statePath);
+        cur.chapters[0].audioModelKey = 'set-by-a-render';
+        writeFileSync(statePath, JSON.stringify(cur));
+      }),
+    );
+    await scan.findBookByBookId(bookId);
+    const s = readState(statePath);
+    expect(s.chapters[0].audioModelKey).toBe('set-by-a-render');
+    expect(s.chapters[1].audioModelKey).toBe('xtts_v2');
+  });
+
+  it('skips a chapter with the same id and slug but a different uuid (the renumber case) (pass-7 2)', async () => {
+    const { bookId, bookDir, statePath } = seedBook(1);
+    const seeded = readState(statePath);
+    seeded.chapters[0].uuid = 'uuid-old';
+    writeFileSync(statePath, JSON.stringify(seeded));
+    hooks.onSegmentsRead = armOnce(bookDir, () =>
+      lock.withBookLock(bookId, async () => {
+        const cur = readState(statePath);
+        /* a restructure re-minted what is now a DIFFERENT chapter at id 1 */
+        cur.chapters[0] = { id: 1, title: 'Other', slug: 'hc-1', uuid: 'uuid-new' };
+        writeFileSync(statePath, JSON.stringify(cur));
+      }),
+    );
+    await scan.findBookByBookId(bookId);
+    const s = readState(statePath);
+    expect(s.chapters[0].uuid).toBe('uuid-new');
+    expect(s.chapters[0].audioModelKey).toBeUndefined();
+  });
+
   it('skips a chapter whose slug changed under it', async () => {
     const { bookId, bookDir, statePath } = seedBook(1);
     hooks.onSegmentsRead = armOnce(bookDir, () =>
@@ -267,6 +319,34 @@ describe('scanLibrary uuid mint + backfill merge under the book lock', () => {
       const { bookId, bookDir, statePath } = seedBook(6);
       hooks.onSegmentsRead = armOnce(bookDir, () => restructureAddChapter(bookId, statePath));
       await scan.scanLibrary();
+      const s = readState(statePath);
+      expect(s.chapters.map((c: { id: number }) => c.id), `iteration ${k}`).toContain(99);
+      expect(s.chapters.find((c: { id: number }) => c.id === 1).uuid).toBeTruthy();
+    }
+  });
+
+  it('the uuid mint is a locked merge, not a whole-file write (pass-7 2)', async () => {
+    for (let k = 0; k < 3; k++) {
+      const { bookId, bookDir, statePath } = seedBook(3);
+      /* The restructure lands BETWEEN the scan's read and its mint — not on the
+         segments read, which comes after the mint and so cannot tell the two
+         apart. */
+      /* Chained off a gate made HERE, in the test's own async context: started
+         from inside the hook it could inherit a held book lock (re-entrant per
+         context) and run inline, which is not a second request. */
+      let open!: () => void;
+      const gate = new Promise<void>((r) => (open = r));
+      const writer = gate.then(() => restructureAddChapter(bookId, statePath));
+      hooks.afterFirstStateRead = {
+        dir: bookDir,
+        fn: async () => {
+          open();
+          await tick(30);
+        },
+      };
+      await scan.scanLibrary();
+      await writer;
+      hooks.afterFirstStateRead = undefined;
       const s = readState(statePath);
       expect(s.chapters.map((c: { id: number }) => c.id), `iteration ${k}`).toContain(99);
       expect(s.chapters.find((c: { id: number }) => c.id === 1).uuid).toBeTruthy();
