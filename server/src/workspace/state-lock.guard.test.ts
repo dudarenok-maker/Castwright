@@ -26,7 +26,7 @@
 
    BLIND SPOTS (the guard stays green when it should not):
      - Call-graph blind: a write inside a helper that is only ever CALLED under
-       the lock (`refreshChapterTitles`, `applySlice`, `writeRestructure`) is
+       the lock (`refreshChapterTitles`, `applySlice`, `applyRestructureClaimed`) is
        reported as unlocked and sits on the allowlist with a human-verified
        reason; a NEW unlocked caller of such a helper adds no occurrence text and
        passes.
@@ -77,7 +77,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   },
   'routes/chapters-restructure.ts': {
     count: 1,
-    why: 'writeRestructure is only called inside withBookLock (all six restructure routes).',
+    why: 'applyRestructureClaimed is only reached through applyRestructure, which every restructure route calls inside withBookLock (all six).',
   },
   'routes/import.ts': {
     count: 1,

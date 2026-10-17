@@ -1236,7 +1236,10 @@ describe.each(['main', 'subset'] as const)(
       }
     }, 60_000);
 
-    it('a lock-acquisition timeout at the state.json step still ends the job with the curated lock-contention error', async () => {
+    /* Pins the DEFENSIVE wrap only: the real book lock has no acquisition bound
+       and never throws this error, so the throw is injected at the step. If the
+       lock ever gains a bound, this is the shape the job must end in. */
+    it('defensive wrap -- an injected lock-acquisition timeout at the state.json step ends the job with the curated lock-contention error', async () => {
       stateStep.toThrow = new LockAcquisitionTimeoutError('book:/w/book', 10_000);
       const run = await runJob(`${kind}-state-timeout`, kind);
       try {

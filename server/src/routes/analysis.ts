@@ -4565,8 +4565,9 @@ export async function runMainAnalyzerJob(
                -> `book`, never held together). The decision (is it confirmed?)
                is made from the read under the lock, so a restructure or a
                concurrent state write is not reverted by a pre-lock snapshot.
-               A lock timeout here is outside the persist blocks and reaches the
-               job's top-level catch, which classifies it. */
+               The book lock has no acquisition bound (workspace/book-lock.ts), so
+               it cannot time out; a failure here is outside the persist blocks
+               and reaches the job's top-level catch, which classifies it. */
             await updateStateAtDir(freshBookDir, (freshState) =>
               freshState.castConfirmed
                 ? { ...freshState, castConfirmed: false, updatedAt: new Date().toISOString() }
@@ -7026,8 +7027,10 @@ export async function runMainAnalyzerJob(
              swallowing, deliberately), so parking from there would escalate a
              best-effort lineage write into a failed run. The state.json write
              further down is authoritative too, and (#3400 pass 8) now takes
-             the book lock through `updateStateAtDir`, so it CAN produce this
-             class: it has its own wrapper, parked into the same slot.
+             the book lock through `updateStateAtDir`. That lock has no
+             acquisition bound, so today it cannot produce this class; the write
+             keeps its own wrapper as defence, parked into the same slot, so a
+             bound added to the lock later cannot turn into a silent success.
 
              Rethrown immediately, not deferred: unlike the identity block
              below there is nothing left to finish here — cast.json did NOT
@@ -7191,10 +7194,11 @@ export async function runMainAnalyzerJob(
              restructure swaps them under the same lock), falling back to this
              job's own record when it has been evicted.
 
-             A lock-acquisition timeout is parked, like the authoritative
-             cast.json write's above, and rethrown after this persist's
-             try/catch: the write did not land, so the job must end as an error
-             rather than report success over an unwritten state.json. */
+             The book lock has no acquisition bound today, so this wrap is
+             defensive: should it gain one, a timeout is parked, like the
+             authoritative cast.json write's above, and rethrown after this
+             persist's try/catch: the write did not land, so the job must end as
+             an error rather than report success over an unwritten state.json. */
           try {
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
               await assertWriteTargetStable(job, writeDir);
@@ -9153,10 +9157,11 @@ export async function runSubsetAnalyzerJob(
              restructure swaps them under the same lock), falling back to this
              job's own record when it has been evicted.
 
-             A lock-acquisition timeout is parked, like the authoritative
-             cast.json write's above, and rethrown after this persist's
-             try/catch: the write did not land, so the job must end as an error
-             rather than report success over an unwritten state.json. */
+             The book lock has no acquisition bound today, so this wrap is
+             defensive: should it gain one, a timeout is parked, like the
+             authoritative cast.json write's above, and rethrown after this
+             persist's try/catch: the write did not land, so the job must end as
+             an error rather than report success over an unwritten state.json. */
           try {
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
               await assertWriteTargetStable(job, writeDir);

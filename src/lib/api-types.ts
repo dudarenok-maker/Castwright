@@ -793,9 +793,11 @@ export interface paths {
          * Re-derive chapter titles from the source manuscript
          * @description Re-parses the source manuscript for authoritative titles and, unless
          *     `useFirstLine` is false, promotes the first non-dialogue sentence of
-         *     any chapter still carrying a generic "Chapter N" title. Chapters with
-         *     `titleOverridden` are left alone. A failed re-parse downgrades to the
-         *     first-line pass only.
+         *     any chapter whose title the app made up (`titleSynthesized`). Both
+         *     passes act only on those chapters: a heading the manuscript itself
+         *     carries, even "Chapter 3", is left alone, as are chapters with
+         *     `titleOverridden`. A failed re-parse downgrades to the first-line pass
+         *     only.
          */
         post: operations["refreshChapterTitles"];
         delete?: never;
