@@ -804,12 +804,12 @@ export async function scoreBook(
         currentVoice !== undefined && !matchedCurrentVoice.has(charId) && snap.resolvedVoiceName === currentVoice;
       if (
         (!voiceInfoByChar.has(charId) || isCurrentVoiceMatch) &&
-        snap.voiceEngine &&
+        (snap.renderedEngine ?? snap.voiceEngine) &&
         snap.resolvedVoiceName &&
-        STOCHASTIC_ENGINES.has(snap.voiceEngine)
+        STOCHASTIC_ENGINES.has((snap.renderedEngine ?? snap.voiceEngine)!)
       ) {
         if (isCurrentVoiceMatch) matchedCurrentVoice.add(charId);
-        const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
+        const engine = (snap.renderedEngine ?? snap.voiceEngine) as import('../../tts/model-keys.js').TtsEngine;
         // Render the Option-B audition under the SAME tier this character ACTUALLY
         // rendered in — NOT a hardcoded 0.6B. canonicalModelKeyForEngine returns a
         // Qwen request key VERBATIM, so the old 'qwen3-tts-0.6b' placeholder forced
@@ -820,7 +820,7 @@ export async function scoreBook(
         // buildCharacterSnapshots) so an elevated Qwen char in a non-Qwen-default book
         // isn't under-tiered by the chapter run-default; fall back to the chapter-level
         // modelKey, then 0.6B for legacy segments with neither stamp.
-        const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
+        const renderKey: TtsModelKey = snap.renderedModelKey ?? snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
         const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         const castChar = castResolver.resolve(charId)?.character;
         voiceInfoByChar.set(charId, {

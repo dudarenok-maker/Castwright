@@ -303,6 +303,65 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     expect(ch2.find((r) => r.sentenceIds[0] === 112)).toBeDefined();
   });
 
+  it("a too-thin single-chapter Qwen hero with one line Fixed on Kokoro keeps her saved audition reference and stays checked (C2: the audition source reads the frozen engine)", async () => {
+    const ONE = [CHAPTERS[0]!];
+    const segs = Array.from({ length: 3 }, (_, i) => ({ groupIndex: i, characterId: 'hero', sentenceIds: [i], startSec: i * 0.1, endSec: i * 0.1 + 0.1, voiceName: 'qwen-hq' }));
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(0.3), sampleRate: SR, durationSec: 0.3,
+      segments: segs, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-0.6b',
+      audioFormat: 'mp3', resynthesizedIndices: 'all',
+      embeddings: [0, 1, 2].map((i) => ({ characterId: 'hero', sentenceIds: [i], vec: vec(0, i) })),
+    });
+    await scoreBook(bookDir, ONE);
+    expect((await readCentroids(bookDir))!['hero'].referenceKind).toBe('audition');
+    await wait(30);
+    const back = readSegs('ch1');
+    back.segments[0] = { ...back.segments[0], voiceName: 'af_heart' };
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(0.3), sampleRate: SR, durationSec: 0.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'kokoro', modelKey: 'kokoro-v1',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [0], vec: vec(0, 1) }],
+    });
+    expect(readSegs('ch1').characterSnapshots.hero.voiceEngine).toBe('kokoro');
+    await scoreBook(bookDir, ONE);
+    expect((await readCentroids(bookDir))!['hero'].referenceKind).toBe('audition');
+    const rows = (await readVerdicts(join(bookDir, 'audio', 'ch1.render-integrity.json')))!;
+    expect(rows.filter((r) => r.verdict === 'voice-match').length).toBeGreaterThan(0);
+  });
+
+  it("a LEGACY book (no per-character modelKey) rendered at 0.6B keeps auditioning at 0.6B after a Fix at 1.7B (L2: the file-level key seeds the freeze)", async () => {
+    const ONE = [CHAPTERS[0]!];
+    const segs = Array.from({ length: 3 }, (_, i) => ({ groupIndex: i, characterId: 'hero', sentenceIds: [i], startSec: i * 0.1, endSec: i * 0.1 + 0.1, voiceName: 'qwen-hq' }));
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(0.3), sampleRate: SR, durationSec: 0.3,
+      segments: segs, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-0.6b',
+      audioFormat: 'mp3', resynthesizedIndices: 'all',
+      embeddings: [0, 1, 2].map((i) => ({ characterId: 'hero', sentenceIds: [i], vec: vec(0, i) })),
+    });
+    // pre-f4bfddd7: no frozen fields and no per-character modelKey; the file-level key remains
+    stripFrozenFields('ch1');
+    const f = readSegs('ch1');
+    for (const s of Object.values(f.characterSnapshots) as Record<string, unknown>[]) delete s.modelKey;
+    expect(f.modelKey).toBe('qwen3-tts-0.6b');
+    writeFileSync(join(bookDir, 'audio', 'ch1.segments.json'), JSON.stringify(f));
+    await scoreBook(bookDir, ONE);
+    expect(auditionSpy.mock.calls.map((c) => (c as unknown as [{ modelKey: string }])[0].modelKey)).toEqual(['qwen3-tts-0.6b']);
+    await wait(30);
+    const back = readSegs('ch1');
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(0.3), sampleRate: SR, durationSec: 0.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-1.7b',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [0], vec: vec(0, 1) }],
+    });
+    expect(readSegs('ch1').characterSnapshots.hero.renderedModelKey).toBe('qwen3-tts-0.6b');
+    auditionSpy.mockClear();
+    await scoreBook(bookDir, ONE);
+    expect((await readCentroids(bookDir))!['hero'].referenceKind).toBe('audition');
+    expect(auditionSpy.mock.calls.map((c) => (c as unknown as [{ modelKey: string }])[0].modelKey)).not.toContain('qwen3-tts-1.7b');
+  });
+
   it("a too-thin hero rendered on 1.7B still auditions at 1.7B after a Coqui Fix in that chapter (M2: the tier is frozen too)", async () => {
     await renderBothChapters();
     await wait(30);
