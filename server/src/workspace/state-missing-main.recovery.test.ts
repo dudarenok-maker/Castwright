@@ -105,6 +105,26 @@ describe('state.json absent, good .bak.1 present', () => {
   });
 });
 
+describe('state.json absent, the only .bak.1 is torn (state files exist, none parse)', () => {
+  const find = async () => {
+    const { scanLibrary } = await import('./scan.js');
+    const lib = await scanLibrary();
+    return lib.authors.flatMap((a) => a.series.flatMap((s) => s.books)).find((x) => x.title === TITLE);
+  };
+  beforeEach(() => {
+    writeFileSync(`${statePath}.bak.1`, '{ torn');
+  });
+
+  it('with a manuscript: unreadable, not a complete 0-chapter book', async () => {
+    expect((await find())?.status).toBe('unreadable');
+  });
+
+  it('without a manuscript: unreadable, not an orphaned row', async () => {
+    rmSync(join(bookDir, 'manuscript.txt'), { force: true });
+    expect((await find())?.status).toBe('unreadable');
+  });
+});
+
 describe('state.json absent and no backups (a genuinely new book)', () => {
   it('readStateJsonWithRecovery still returns null', async () => {
     const { readStateJsonWithRecovery } = await import('./state-migrate.js');

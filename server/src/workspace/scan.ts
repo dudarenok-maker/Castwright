@@ -703,6 +703,9 @@ async function scanBook(
     } catch {
       unreadable = true;
     }
+    /* State files exist but none parsed (a stranded book whose backups are all
+       torn): the same total loss as a torn main, so it reads the same. */
+    if (!state) unreadable = true;
   }
 
   const bookId = state?.bookId ?? makeBookId(author, series, title);
