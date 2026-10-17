@@ -736,7 +736,24 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-16 (#3587), 64 → 64.** Allocate-once IDs assigned to the
+> **Last change: 2026-10-16 (#3524), 64 → 64.** Row **A112**'s text corrected, no
+> row added or removed and the owed count unchanged: the audition-voice
+> precondition now says `scoreBook` takes it from a chapter rendered in the
+> character's current cast voice (not the first chapter in book order), and
+> the closing "Known limit" is replaced — an in-book centroid recorded from a
+> voice the character no longer has is now dropped too (a legacy in-book row
+> with no recorded voice is still kept). A character reassigned but not yet
+> re-rendered now gets a marker row from the scoring pass (it leaves the QA
+> card's "pending" state), and the "current voice" engine is the engine actually rendered (the
+> character's own engine, else the scoring run's model key — only for a
+> character that run rendered lines for — else the engine stamped on its most
+> recently rendered lines). The Reassign step now says not to
+> run Resume scoring before the repair (a scoring pass rewrites the character's
+> rows `inconclusive`, leaving nothing to observe) and checks the marker row as a
+> separate step afterwards. Behaviour proven by mocked unit
+> tests; A112 still owns the real-ECAPA hardware check.
+>
+> **Prior change: 2026-10-16 (#3587), 64 → 64.** Allocate-once IDs assigned to the
 > Blocked rows (**BLK101**–**BLK106**) and the Unconfirmed bullets (**UNC101**–**UNC102**),
 > with a `next-id` marker under each section heading (BLK107, UNC103). IDs allocated
 > once (#3587); no row added or removed. Owed count unchanged at 64; Blocked stays 6,
@@ -5991,12 +6008,14 @@ embedder. Neither test touches a real sidecar or a real ECAPA model.
   that character carrying a `voice-mismatch` / `fixable: true` row in its
   `<slug>.render-integrity.json`;
 - the character's `auditionVoice.voiceName` in that same centroids row equals
-  the character's snapshot voice in **both** X and Y. `scoreBook` takes the
-  audition voice from the character's FIRST chapter in book order
-  (`aggregate.ts`), so after an earlier partial re-render (or a voice change)
-  the two can differ — and the control then correctly drops the reference,
-  which would misread as a Fail. If they differ, re-render so they match
-  before starting;
+  the character's snapshot voice in **both** X and Y, and that voice is the
+  character's **current** cast voice. `scoreBook` takes the audition voice from
+  a chapter rendered in the character's current cast voice (`aggregate.ts`,
+  #3524), so after a voice change the row only matches once such a chapter
+  exists; lines still in an older voice are written `inconclusive`, not scored.
+  If the row's `voiceName` is not the character's current voice, re-render so
+  they match before starting, or the control will correctly drop the reference
+  and misread as a Fail;
 - **Render-integrity QA (voice match)** (`qa.speaker.enabled`, env
   `SEG_SPK_ENABLED`) switched **on** *before the chapters are rendered* — it
   defaults off, and it is what makes `scoreBook` run at all, writing the
@@ -6067,9 +6086,21 @@ Network tab (that request → EventStream/Response) when the button was used.
   **Pass:** that line (`acousticOnly: true` in `qa_scan`) gets **no**
   `progress` frame and appears in `qa_repair_complete`'s `stillSuspect` — the
   stale `audition` centroid was dropped, not reused. An inconclusive verdict
-  here is the designed outcome, not a regression. Known limit: an in-book
-  centroid is still judged against the old voice (#3517) — do not expect it to
-  switch.
+  here is the designed outcome, not a regression. After #3524 an
+  in-book centroid row that recorded a voice the character no longer has is
+  dropped too, just like an audition one; a legacy in-book row with no
+  recorded voice is still kept until a line is re-rendered in the new voice and
+  a scoring pass rebuilds it, so do not expect that one to switch. Do
+  NOT run Resume scoring, or render anything, between the reassign and this
+  repair: a scoring pass in this state rewrites every row of the character
+  `inconclusive`, so Y's line would no longer be `fixable` and `qa_scan`
+  would flag nothing to observe.
+- **Marker row, after the repair.** Only now run **Resume scoring** from the QA
+  card (still no re-render). **Pass:** the character's row in
+  `render-integrity.centroids.json` has `noCurrentVoiceReference: true`, every
+  one of its lines is `inconclusive` in the `<slug>.render-integrity.json`
+  files, and the QA card no longer counts the character as pending (no Resume
+  scoring button for it). The repair treats that row as no centroid.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch

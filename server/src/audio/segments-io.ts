@@ -49,6 +49,19 @@ export interface CharacterSnapshot {
   renderedFallbackEngine?: string;
   /** Attribute list captured at synthesis time, sorted by generation.ts. */
   attributes?: string[];
+  /** ISO time this character was last FULLY rendered (#3524). Only a full chapter
+      render (generation) stamps a fresh time; qa-repair, splice / Fix audio,
+      refinalize, gain remix and A/B reject keep the character's existing stamp, even
+      for lines they re-record — so render-integrity orders a character's renders by
+      when they happened, which a file mtime cannot (any partial write rewrites the
+      whole file). Absent on legacy snapshots (they sort oldest, book order breaks ties). */
+  renderedAt?: string;
+  /** Engine + model key of that same full render (#3524), frozen WITH `renderedAt`: a partial
+      write rebuilds `voiceEngine` / `modelKey` from the write's own engine (drift detection
+      needs that), so render-integrity reads these two for "the engine this character
+      actually rendered in". Absent on legacy snapshots (it falls back to `voiceEngine` / `modelKey`). */
+  renderedEngine?: string;
+  renderedModelKey?: TtsModelKey;
 }
 
 export interface SegmentsFile {

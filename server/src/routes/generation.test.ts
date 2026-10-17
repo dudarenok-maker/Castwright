@@ -2330,6 +2330,34 @@ describe('triggerScoring (srv-36 hardening)', () => {
     }
   });
 });
+describe('POST /api/books/:bookId/generation — run key reaches the score pass (#3524)', () => {
+  it("hands scoreBook the chapter just finalized and the run's own model key", async () => {
+    // Only the speaker-QA gate is forced on: the real finalize (loudnorm etc.)
+    // reads other config keys and must keep their real values.
+    const realConfigValue = configModule.configValue;
+    const configSpy = vi
+      .spyOn(configModule, 'configValue')
+      .mockImplementation(((key: string) =>
+        key === 'qa.speaker.enabled' ? true : realConfigValue(key as never)) as typeof realConfigValue);
+    const scoreBookSpy = vi.spyOn(aggregateModule, 'scoreBook');
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+      expect(res.status).toBe(200);
+      // afterChapterFinalized is not awaited by the route (#1029).
+      await vi.waitFor(() => expect(scoreBookSpy).toHaveBeenCalled());
+      const args = scoreBookSpy.mock.calls[0];
+      expect(args[2]).toEqual(['01-chapter-one']);
+      expect(args[3]).toMatchObject({ runModelKey: 'gemini-2.5-flash' });
+      await __awaitScoringSettled(bookId);
+    } finally {
+      configSpy.mockRestore();
+      scoreBookSpy.mockRestore();
+    }
+  });
+});
+
 /* ── Task 3 (#2515) — the requireBookStateLanguage catch must emit a
    classified, chapter-scoped failure tick (errorCode 'language-unset' + idle)
    instead of a bare errorReason, matching the pattern Task 2 applied to the

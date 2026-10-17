@@ -45,7 +45,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { writeAttempted } from '../audio/render-integrity/verdicts-io.js';
 import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
-import { afterChapterFinalized } from './generation.js';
+import { afterChapterFinalized, triggerScoring } from './generation.js';
 import * as cfg from '../config/resolver.js';
 
 const NO_QWEN = { keep06: false, keep17: false };
@@ -158,5 +158,32 @@ describe('afterChapterFinalized', () => {
     // Let the score-pass tail run; the reconcile must NOT fire for a no-Qwen run.
     await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
     expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+  });
+});
+
+describe('afterChapterFinalized — forwards the run model key to scoring (#3524 pass 2 A(ii))', () => {
+  beforeEach(() => {
+    vi.mocked(scoreBook).mockClear();
+  });
+
+  it("passes the run's model key through to scoreBook as runModelKey", async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    await afterChapterFinalized({
+      bookId: 'b-key',
+      bookDir: '/b-key',
+      chapters: [CH1],
+      justFinalized: CH1,
+      keep: NO_QWEN,
+      runModelKey: 'coqui-xtts-v2',
+    });
+    await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(scoreBook).mock.calls[0][3]).toMatchObject({ runModelKey: 'coqui-xtts-v2' });
+  });
+
+  it('Resume scoring (triggerScoring with no run key) passes none', async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    await triggerScoring({ bookId: 'b-resume', bookDir: '/b-resume', chapters: [CH1], justFinalizedSlugs: [] });
+    await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(scoreBook).mock.calls[0][3]?.runModelKey).toBeUndefined();
   });
 });
