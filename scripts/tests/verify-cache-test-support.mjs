@@ -112,7 +112,7 @@ process.exit(0);
 // records its pid so a survivor is named as such instead of as a slow kill.
 // The production-side gap (a /T survivor holding the pipe holds the step past
 // its budget) is closed by runStepProcess's timeout re-sweep (#3695); the tests
-// after this block cover it.
+// in verify-cache.run-step.test.mjs cover it.
 // The self-exit must still outlive the bound, or a kill that never lands is
 // rescued by the fixture's own exit inside the bound and it can no longer fail.
 export const KILL_PATH_BOUND_MS = 120_000;

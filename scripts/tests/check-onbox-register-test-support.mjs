@@ -61,7 +61,7 @@ ${item('UNC101', 'maybe')}${item('—', 'legacy unconfirmed')}</section>
 
 
 // A minimal single-group register/live-view pair, parameterised by letter and
-// row numbers — reused for all four #2199 scenarios below so each test only
+// row numbers — reused for all four #2199 scenarios (in check-onbox-register.test.mjs) so each test only
 // states the one thing that differs (working rows vs. baseline rows vs.
 // live-page rows).
 export function buildSingleGroupRegister(letter, rowNumbers, nextId = 101) {
@@ -103,7 +103,7 @@ ${body}
 // the real committed register against the real committed live view produces
 // a mismatch for nearly every row even in a healthy state (this was checked
 // against this repo's own files while building this check, and is why the
-// end-to-end CLI tests further down, which read both real files, would
+// end-to-end CLI tests in the sibling check-onbox-register.*.test.mjs files, which read both real files, would
 // otherwise turn permanently red). The tracked live view and a snapshot of
 // what's actually live, by contrast, ARE supposed to carry the same row
 // content whenever nothing has changed — see `parseLiveViewRowBodies`'s own

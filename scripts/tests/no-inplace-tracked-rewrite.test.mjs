@@ -56,7 +56,7 @@ test('the register-citation CLI tests do not rewrite tracked files in place (sta
   });
   assert.ok(
     !run.error,
-    `child test run (${TARGET_TESTS.map((f) => f.split(/[\\/]/).pop()).join(', ')}) did not finish: ${run.error?.message} -- hung or exceeded the 300 s bound (spawnSync kills only the direct child, so check for orphaned node processes)`,
+    `child test run (${TARGET_TESTS.map((f) => f.split(/[\\/]/).pop()).join(', ')}) did not finish: ${run.error?.message} -- hung or exceeded the 300 s bound (spawnSync kills only the direct child, so check for orphaned node processes)\npartial stdout tail:\n${String(run.stdout ?? '').slice(-4000)}\npartial stderr tail:\n${String(run.stderr ?? '').slice(-4000)}`,
   );
   assert.equal(run.status, 0, `child test run must pass:\n${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /^ℹ tests [1-9]\d*$/m, 'child run must actually execute tests');

@@ -783,7 +783,7 @@ function gitAt(cwd, args) {
     // Strip every GIT_* var, not just the four scrubGitEnv() drops: an
     // inherited GIT_DIR / GIT_INDEX_FILE would point these fixture commands
     // at the REAL repository. Same helper and rationale as
-    // scripts/tests/verify-cache.test.mjs's own cleanGitEnv().
+    // scripts/tests/verify-cache-test-support.mjs's cleanGitEnv().
     env: scrubGitEnvForThrowawayRepo(),
   });
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);

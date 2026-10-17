@@ -69,16 +69,21 @@ function makeSandbox() {
 
 // Positive control for the sandbox mutation tests: run the UNMUTATED CLI copy
 // inside the scratch repo and require it to report the real tree's citation
-// count. A zero-file scan also prints "0 citation(s)", so without this a
+// and file count (the `OK -- N citation(s) across M file(s)` summary line, not
+// the first `N citation(s)` in the output, which is the annotated-discharge
+// note header). A zero-file scan also prints "0 citation(s)", so without this a
 // sandbox that indexed nothing would satisfy every mutant's expectation.
 function assertSandboxScansTheRealTree(sandbox, baselineStdout) {
   const control = runCli([], sandbox.cli);
-  const count = (stdout) => Number(stdout.match(/(\d+) citation\(s\)/)?.[1] ?? 0);
-  const controlCount = count(control.stdout);
-  const baselineCount = count(baselineStdout);
+  const summary = (stdout) => {
+    const m = stdout.match(/OK -- (\d+) citation\(s\) across (\d+) file\(s\)/);
+    return m ? `${m[1]} citation(s) across ${m[2]} file(s)` : 'no OK summary line';
+  };
+  const controlSummary = summary(control.stdout);
+  const baselineSummary = summary(baselineStdout);
   assert.ok(
-    controlCount > 0 && controlCount === baselineCount,
-    `the scratch-repo sandbox must scan the same corpus as the real tree (control ran ${controlCount} citation(s), real tree ${baselineCount}) in:\n${control.stdout}${control.stderr}`,
+    controlSummary !== 'no OK summary line' && controlSummary === baselineSummary,
+    `the scratch-repo sandbox must scan the same corpus as the real tree (control: ${controlSummary}; real tree: ${baselineSummary}) in:\n${control.stdout}${control.stderr}`,
   );
 }
 
