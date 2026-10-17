@@ -6992,9 +6992,10 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          /* #2295 — the AUTHORITATIVE cast.json write, and the only write
-             reaching `catch (persistErr)` below that takes a lock at all
-             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85).
+          /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
+             writes reaching `catch (persistErr)` below that take a lock at all
+             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
+             the other is the state.json write, #3700).
              A concurrent `performCastMerge` holding `cast:<bookDir>` made this
              throw a `LockAcquisitionTimeoutError`, which `catch (persistErr)`
              swallowed: cast.json AND state.json unwritten, `result` emitted
@@ -7007,9 +7008,9 @@ export async function runMainAnalyzerJob(
              fold/dedup/suggestions journals (their own handlers above keep
              swallowing, deliberately), so parking from there would escalate a
              best-effort lineage write into a failed run. The state.json write
-             further down is authoritative too, but it is a bare
-             `writeJsonAtomic` with no lock of its own, so it cannot produce
-             this class and needs no wrapper.
+             further down is authoritative too and (#3700) takes the per-book
+             `withStateJsonLock`, so it parks its own timeout at its own call
+             the same way.
 
              Rethrown immediately, not deferred: unlike the identity block
              below there is nothing left to finish here — cast.json did NOT
@@ -7229,6 +7230,13 @@ export async function runMainAnalyzerJob(
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             wroteStateJson = true;
           }
+          }).catch((stateWriteErr: unknown) => {
+            /* #3700 review — the AUTHORITATIVE state.json write, now behind a
+               lock, so it can produce the timeout class. Park it for the
+               deferred rethrow below; swallowing it here reported `result`
+               with state.json unwritten. Keyed on WHICH WRITE timed out. */
+            if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
+            throw stateWriteErr;
           });
         }
       } catch (persistErr) {
@@ -9170,6 +9178,13 @@ export async function runSubsetAnalyzerJob(
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             wroteStateJson = true;
           }
+          }).catch((stateWriteErr: unknown) => {
+            /* #3700 review — the AUTHORITATIVE state.json write, now behind a
+               lock, so it can produce the timeout class. Park it for the
+               deferred rethrow below; swallowing it here reported `result`
+               with state.json unwritten. Keyed on WHICH WRITE timed out. */
+            if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
+            throw stateWriteErr;
           });
         }
       } catch (persistErr) {

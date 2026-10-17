@@ -60,8 +60,9 @@ lock (`withStateJsonLock`, workspace/file-lock.ts). Regression:
 `server/src/audio/finalize-chapter-write-concurrent-state.test.ts` FORCES the
 interleaving (parks the first state.json read until a second read is issued),
 red before the fix (chapter stamp lost), green after. The original generation
-test is unchanged and stays as the route-level check. Other unlocked state.json
-read-modify-write sites remain (see the PR body) - not covered by this fix. -->
+test is unchanged and stays as the route-level check. Every other state.json
+read-modify-write site now takes the same lock too (`state-json-lock.guard.test.ts`
+fails the build on a new unlocked one). -->
 
 <!-- Graduated 2026-08-12: `server/src/routes/script-review.test.ts` ::
 "cancel immediately removes the job from the registry, so a same-scope retry

@@ -282,7 +282,7 @@ function countRawStateWrites(
    subset route began reading castConfirmed at load for its result gate —
    a read, not a write; #3700 wrapped each state.json writer in
    withStateJsonLock, which re-spells `stateJsonPath(bookDir)` as the lock key
-   — book-state.ts +2, chapters-restructure.ts +2, import.ts +1, samples.ts +1,
+   — book-state.ts +3 (the rename PUT also keys the new path), chapters-restructure.ts +2, import.ts +1, samples.ts +1,
    auto-backup.ts +1 — not new write sites). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
@@ -292,7 +292,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'cover/upload.ts': 2,
   'import/scan-import-folder.ts': 1,
   'routes/analysis.ts': 4,
-  'routes/book-state.ts': 11,
+  'routes/book-state.ts': 12,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,

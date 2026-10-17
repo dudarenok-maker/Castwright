@@ -1102,7 +1102,7 @@ export async function backfillAudioModelKeysFromSegments(
   const next: BookStateJson['chapters'] = [...state.chapters];
   /* The fields each chapter gained, so the persist below can apply just those
      onto a FRESH read (#3700) instead of writing this call's stale snapshot. */
-  const patches = new Map<number, Partial<BookStateJson['chapters'][number]>>();
+  const patches = new Map<number, { slug: string; patch: Partial<BookStateJson['chapters'][number]> }>();
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
     if (ch.excluded) continue;
@@ -1147,7 +1147,7 @@ export async function backfillAudioModelKeysFromSegments(
           ...(needsEngines ? { audioEngines: breakdown } : {}),
         };
         next[i] = { ...ch, ...patch };
-        patches.set(ch.id, patch);
+        patches.set(ch.id, { slug: ch.slug, patch });
         backfillNeeded = true;
       }
     } catch {
@@ -1163,8 +1163,12 @@ export async function backfillAudioModelKeysFromSegments(
       await updateStateJsonLocked(stateJsonPath(bookDir), upgraded, (fresh) => {
         let changed = false;
         const chapters = fresh.chapters.map((c) => {
-          const p = patches.get(c.id);
-          if (!p) return c;
+          const entry = patches.get(c.id);
+          /* The patch was derived from `audio/<slug>.segments.json`; a restructure
+             that renumbered/renamed this id since would otherwise stamp another
+             chapter's duration/model onto it. Same id, different slug => skip. */
+          if (!entry || entry.slug !== c.slug) return c;
+          const p = entry.patch;
           const add: Partial<BookStateJson['chapters'][number]> = {};
           if (p.audioModelKey && !c.audioModelKey) add.audioModelKey = p.audioModelKey;
           if (p.audioRenderedAt && !c.audioRenderedAt) add.audioRenderedAt = p.audioRenderedAt;

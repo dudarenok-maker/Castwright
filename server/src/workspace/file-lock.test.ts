@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   withKeyLock,
+  withStateJsonLock,
   __chainsSizeForTest,
   LockAcquisitionTimeoutError,
   LOCK_ACQUISITION_TIMEOUT_CODE,
@@ -378,5 +379,20 @@ describe('requestFailureMessage (#2260 final round)', () => {
     expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('cast.json');
     expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('rule');
     expect(LOCK_CONTENTION_REQUEST_ERROR).toContain('contention');
+  });
+});
+
+/* #3700 review pass 1 -- `withStateJsonLock` curates the message (the key embeds
+   the absolute workspace path) but must keep the lock-timeout CLASS, or the
+   fail-loud sites (analysis persist, `classifyAnalysisFailure`) swallow it as a
+   disk fault. */
+describe('withStateJsonLock timeout keeps the lock-timeout class (#3700)', { retry: 0 }, () => {
+  it('rethrows the curated message with the timeout code, never the key', async () => {
+    const statePath = '/w/state-json-class/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    const err = await withStateJsonLock(statePath, async () => 'ran', 50).catch((e: unknown) => e);
+    expect(isLockAcquisitionTimeout(err)).toBe(true);
+    expect((err as Error).message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect((err as Error).message).not.toContain(statePath);
   });
 });

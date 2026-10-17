@@ -320,13 +320,24 @@ export function __chainsSizeForTest(): number {
  *  in the rename-over window and throw ENOENT). An expired acquisition is
  *  re-thrown as the curated request error so the lock key (which embeds the
  *  absolute workspace path) never reaches a client-facing failure body. */
-export async function withStateJsonLock<T>(statePath: string, fn: () => Promise<T>): Promise<T> {
+export async function withStateJsonLock<T>(
+  statePath: string,
+  fn: () => Promise<T>,
+  /** Test-only override for the acquisition budget -- no production caller passes this. */
+  timeoutMs?: number,
+): Promise<T> {
   try {
-    return await withKeyLock(`state-json:${statePath}`, fn);
+    return await withKeyLock(`state-json:${statePath}`, fn, timeoutMs);
   } catch (err) {
     if (isLockAcquisitionTimeout(err)) {
       console.warn('[state-json-lock]', err);
-      throw new Error(LOCK_CONTENTION_REQUEST_ERROR);
+      /* Curated message, SAME class: the `code` is what the fail-loud sites
+         (analysis persist, `classifyAnalysisFailure`, `requestFailureMessage`)
+         discriminate on, so a plain `Error` here would be swallowed as a disk
+         fault and reported as `unknown`. */
+      throw Object.assign(new Error(LOCK_CONTENTION_REQUEST_ERROR), {
+        code: LOCK_ACQUISITION_TIMEOUT_CODE,
+      });
     }
     throw err;
   }

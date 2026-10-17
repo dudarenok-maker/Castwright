@@ -1163,27 +1163,38 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           }
           /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
              (atomic-rename.ts). Any other failure surfaces immediately. */
-          await renameWithRetry(bookDir, newDir);
-          /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
-             generation requests find the manuscript file at the new path.
-             Direct mutation is safe — the store holds the record by
-             reference. */
-          if (state.manuscriptId) {
-            const rec = getManuscript(state.manuscriptId);
-            if (rec) {
-              rec.bookDir = newDir;
-              putManuscript(rec);
+          /* #3700 review — the moved file is addressed by a DIFFERENT lock key
+             (`state-json:<newDir>/state.json`) from the one this span holds
+             (the old path), so a toggle that resolves the book after the rename
+             would read the moved, not-yet-rewritten file and interleave with
+             the write below. Take the new path's key too, around the rename +
+             the write to it, so any writer of either path serialises with this
+             one. Old-held-then-new is the only nesting any caller does (every
+             other state-json caller holds exactly one key), so there is no
+             cycle; a collision on `newDir` was refused above. */
+          await withStateJsonLock(stateJsonPath(newDir), async () => {
+            await renameWithRetry(bookDir, newDir);
+            /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
+               generation requests find the manuscript file at the new path.
+               Direct mutation is safe — the store holds the record by
+               reference. */
+            if (state.manuscriptId) {
+              const rec = getManuscript(state.manuscriptId);
+              if (rec) {
+                rec.bookDir = newDir;
+                putManuscript(rec);
+              }
             }
-          }
-          /* Write the new state.json to the post-rename location BEFORE
-             trying to clean up empty parents — writeJsonAtomic creates the
-             tmp file then renames into place, and we want the destination
-             stable on disk before we start removing sibling parent dirs.
-             Empty-parent cleanup is best-effort: rmdir refuses on non-
-             empty directories so it naturally leaves siblings alone, and
-             errors are swallowed (orphan empty dirs are cosmetic, not a
-             correctness problem). */
-          await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
+            /* Write the new state.json to the post-rename location BEFORE
+               trying to clean up empty parents — writeJsonAtomic creates the
+               tmp file then renames into place, and we want the destination
+               stable on disk before we start removing sibling parent dirs.
+               Empty-parent cleanup is best-effort: rmdir refuses on non-
+               empty directories so it naturally leaves siblings alone, and
+               errors are swallowed (orphan empty dirs are cosmetic, not a
+               correctness problem). */
+            await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
+          });
           const oldSeriesDir = dirname(bookDir);
           const oldAuthorDir = dirname(oldSeriesDir);
           await rmdir(oldSeriesDir).catch(() => {

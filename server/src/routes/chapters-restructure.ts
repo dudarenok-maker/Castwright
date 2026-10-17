@@ -99,11 +99,14 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
 }
 
 /* Best-effort: any parse failure leaves the state untouched. Skips the parse
-   unless some keyless, non-user-titled chapter has a generic "Chapter N" title. */
-async function backfillLegacyTitleFlags(
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title.
+   Returns the parsed title/flag lists (or null) WITHOUT touching state: the parse
+   is slow, so it runs outside the state-json lock (#3700) and the caller applies
+   `backfillTitleSynthesized` to the fresh read inside it. */
+async function parseForLegacyTitleFlags(
   state: Parameters<typeof backfillTitleSynthesized>[0],
   bookDir: string,
-): Promise<Parameters<typeof backfillTitleSynthesized>[0]> {
+): Promise<{ titles: string[]; flags: boolean[] } | null> {
   /* Only a keyless, non-overridden chapter whose title looks generic can be
      flagged (renumbering and both refresh passes act on that shape alone), so
      a book without one never needs the parse. */
@@ -115,23 +118,22 @@ async function backfillLegacyTitleFlags(
         GENERIC_TITLE_RE.test(c.title.trim()),
     )
   ) {
-    return state;
+    return null;
   }
   const manuscriptPath = join(bookDir, state.manuscriptFile);
-  if (!existsSync(manuscriptPath)) return state;
+  if (!existsSync(manuscriptPath)) return null;
   try {
     const parsed = await parseManuscript({
       buffer: await readFile(manuscriptPath),
       fileName: state.manuscriptFile,
       sourcePath: manuscriptPath,
     });
-    return backfillTitleSynthesized(
-      state,
-      parsed.chapters.map((c) => c.title),
-      parsed.chapters.map((c) => c.titleSynthesized === true),
-    );
+    return {
+      titles: parsed.chapters.map((c) => c.title),
+      flags: parsed.chapters.map((c) => c.titleSynthesized === true),
+    };
   } catch {
-    return state;
+    return null;
   }
 }
 /** Shared "load → transform → write" prologue. Returns the new result and
@@ -170,6 +172,11 @@ async function applyRestructure(
     };
   }
 
+  /* #3628/#3700 — the legacy-title parse is slow (a full manuscript parse), so
+     it runs BEFORE the lock, off the `located.state` snapshot; only the cheap
+     `backfillTitleSynthesized` application happens inside, on the fresh read. */
+  const legacyParse = await parseForLegacyTitleFlags(state, bookDir);
+
   /* #3700 — state.json is read, transformed and rewritten as one span under
      the per-book state-json lock (leaf: nothing inside takes another lock), and
      the read is FRESH from disk rather than the `located.state` snapshot, so a
@@ -178,10 +185,10 @@ async function applyRestructure(
     // Legacy book: chapters imported before titleSynthesized existed carry no
     // flag. Recognise the app-made ones against a fresh parse (#3628) so every
     // operation below renumbers them like a freshly imported book's.
-    state = await backfillLegacyTitleFlags(
-      (await readStateJsonWithRecovery(stateJsonPath(bookDir))) ?? state,
-      bookDir,
-    );
+    const freshState = (await readStateJsonWithRecovery(stateJsonPath(bookDir))) ?? state;
+    state = legacyParse
+      ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
+      : freshState;
     // Align hint titles with state.json's user-facing chapter titles.
     // The parser-derived hint titles can diverge (e.g. when state.json
     // captures a more refined title from a later parser-version refresh,
