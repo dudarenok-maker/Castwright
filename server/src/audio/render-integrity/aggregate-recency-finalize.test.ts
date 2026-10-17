@@ -31,7 +31,7 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
 }));
 
 import { finalizeChapterAudioWrite } from '../finalize-chapter-write.js';
-import { scoreBook } from './aggregate.js';
+import { resolveConfiguredEngineByChar, scoreBook } from './aggregate.js';
 import { readCentroids } from './centroids-io.js';
 import { readVerdicts } from './verdicts-io.js';
 import { castJsonPath, makeBookId } from '../../workspace/paths.js';
@@ -266,5 +266,40 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     const { hero, ch2 } = await resume();
     expect(hero.inBookVoiceName).toBe('qwen-hq');
     expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
+  });
+
+  it("a Fix on KOKORO in hero's first chapter does not turn her scoring off (C: the stochastic classification reads the frozen engine)", async () => {
+    await renderBothChapters();
+    // hero renders on Qwen in BOTH chapters
+    await wait(30);
+    const ch1 = readSegs('ch1');
+    const qwenSegs = ch1.segments.map((s: Record<string, unknown>) => (s.characterId === 'hero' ? { ...s, voiceName: 'qwen-hq' } : s));
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: qwenSegs, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-0.6b',
+      audioFormat: 'mp3', resynthesizedIndices: 'all',
+      embeddings: [
+        ...Array.from({ length: 12 }, (_, i) => ({ characterId: 'hero', sentenceIds: [i], vec: vec(0, i + 20) })),
+        { characterId: 'side', sentenceIds: [12], vec: vec(6, 0) },
+      ],
+    });
+    expect((await resume()).ch2.length).toBeGreaterThan(0);
+    await wait(30);
+    const back = readSegs('ch1');
+    back.segments[0] = { ...back.segments[0], voiceName: 'af_heart' };
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'kokoro', modelKey: 'kokoro-v1',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [0], vec: vec(0, 1) }],
+    });
+    expect(readSegs('ch1').characterSnapshots.hero.voiceEngine).toBe('kokoro');
+    rmSync(join(bookDir, 'audio', 'ch2.render-integrity.json'), { force: true });
+    const { hero, ch2 } = await resume();
+    expect(hero).toBeDefined();
+    // the helper qa-report.ts builds its stochastic roster from (shared with scoreBook)
+    expect(resolveConfiguredEngineByChar([readSegs('ch1'), readSegs('ch2')]).get('hero')).toBe('qwen');
+    expect(ch2.length).toBe(13); // ch2 got a verdict file: hero is still scored
+    expect(ch2.find((r) => r.sentenceIds[0] === 112)).toBeDefined();
   });
 });

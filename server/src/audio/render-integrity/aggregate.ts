@@ -119,7 +119,7 @@ export const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
  *  readers across the codebase (both `scoreBook`'s internal `ChapterData`
  *  and `qa-report.ts`'s `SegmentsFile`) to satisfy it without adapting. */
 export interface EngineClassificationSource {
-  characterSnapshots?: Record<string, { voiceEngine?: string }>;
+  characterSnapshots?: Record<string, { voiceEngine?: string; renderedEngine?: string }>;
 }
 
 /**
@@ -162,8 +162,12 @@ export function resolveConfiguredEngineByChar(
   const configuredEngineByChar = new Map<string, string>();
   for (const source of orderedSources) {
     for (const [charId, snap] of Object.entries(source.characterSnapshots ?? {})) {
-      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
-        configuredEngineByChar.set(charId, snap.voiceEngine);
+      /* #3524 — the FROZEN engine of the last full render: a partial write rebuilds `voiceEngine`
+         from its own engine, so a Fix on Kokoro in the first chapter would otherwise reclassify
+         the character as `kokoro` and drop it from scoring (and from the QA card's roster). */
+      const engine = snap.renderedEngine ?? snap.voiceEngine;
+      if (!configuredEngineByChar.has(charId) && engine) {
+        configuredEngineByChar.set(charId, engine);
       }
     }
   }
