@@ -8158,6 +8158,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     renameChapter: {
@@ -8207,6 +8214,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     mergeChapters: {
@@ -8247,6 +8261,13 @@ export interface operations {
             };
             /** @description Book or chapter not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8298,6 +8319,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     reorderChapters: {
@@ -8336,6 +8364,13 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

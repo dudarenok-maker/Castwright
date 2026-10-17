@@ -117,6 +117,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
+import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -3061,12 +3062,29 @@ const MAIN_DRAINING_MESSAGE =
   'The analysis on this book is still stopping. Try again in a moment.';
 const SUBSET_RUNNING_MESSAGE =
   'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.';
+/* A start is refused, not queued: the restructure holds the book for a moment
+   and the user retries. Checked synchronously with the registration, so a job
+   can never start under a restructure (restructure-gate.ts). */
+const RESTRUCTURING_MESSAGE =
+  'The chapters of this book are being changed. Try again in a moment.';
+
+/* The restructure routes refuse while any job is registered for the book: a
+   live main or subset run, or a main run still draining. */
+registerAnalysisBusyProbe((manuscriptId) => isAnalysisJobRunning(manuscriptId) || mainWriterState(manuscriptId) !== null);
+
+/** Test seams for the restructure gate's job-start side. */
+export const mainStartRefusalForTest = (manuscriptId: string) => mainStartRefusal(manuscriptId, false);
+export const subsetRefusalForTest = (manuscriptId: string) => subsetRefusal(manuscriptId);
 
 /* #3435 decision A — why a subset POST is refused, or null. Any main writer,
    live or draining. */
 function subsetRefusal(
   manuscriptId: string,
-): { error: 'main_analysis_running'; draining: boolean; message: string } | null {
+):
+  | { error: 'main_analysis_running'; draining: boolean; message: string }
+  | { error: 'chapters_restructuring'; message: string }
+  | null {
+  if (isRestructuring(manuscriptId)) return { error: 'chapters_restructuring', message: RESTRUCTURING_MESSAGE };
   const state = mainWriterState(manuscriptId);
   if (!state) return null;
   const draining = state === 'draining';
@@ -3083,7 +3101,9 @@ function mainStartRefusal(
 ):
   | { error: 'subset_analysis_running'; message: string }
   | { error: 'main_analysis_running'; draining: true; message: string }
+  | { error: 'chapters_restructuring'; message: string }
   | null {
+  if (isRestructuring(manuscriptId)) return { error: 'chapters_restructuring', message: RESTRUCTURING_MESSAGE };
   if (inFlightSubsetByManuscript.has(manuscriptId)) {
     return { error: 'subset_analysis_running', message: SUBSET_RUNNING_MESSAGE };
   }

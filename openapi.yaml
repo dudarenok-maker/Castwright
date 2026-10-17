@@ -996,6 +996,8 @@ paths:
                   excluded: { type: boolean }
         '404':
           description: Book or chapter not found
+        '409':
+          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.'
 
   /api/books/{bookId}/chapters/{chapterId}/rename:
     post:
@@ -1042,6 +1044,8 @@ paths:
           description: 'Bad request (empty / whitespace-only / oversized title)'
         '404':
           description: Book or chapter not found
+        '409':
+          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.'
 
   /api/books/{bookId}/chapters/merge:
     post:
@@ -1084,6 +1088,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. non-contiguous ids, fewer than 2 ids)' }
         '404': { description: Book or chapter not found }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
 
   /api/books/{bookId}/chapters/split:
     post:
@@ -1124,6 +1129,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. split after last sentence)' }
         '404': { description: Book, chapter, or sentence not found }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
 
   /api/books/{bookId}/chapters/reorder:
     post:
@@ -1157,6 +1163,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
         '404': { description: Book not found }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
 
   /api/books/{bookId}/cover/candidates:
     get:

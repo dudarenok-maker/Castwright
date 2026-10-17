@@ -46,6 +46,7 @@ import {
   type RestructureSentence,
 } from '../workspace/restructure.js';
 import { withBookLock } from '../workspace/book-lock.js';
+import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
 import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
@@ -121,17 +122,52 @@ async function applyRestructure(
   const located = await findBookByBookId(bookId);
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
-  const { bookDir } = located;
-  let { state } = located;
-  if (!state.manuscriptId) {
+  const manuscriptId = located.state.manuscriptId;
+  if (!manuscriptId) {
     return {
       status: 400,
       body: { error: 'Book has no manuscript id — cannot restructure.' },
     };
   }
 
+  /* An analysis job's terminal persist rewrites manuscript-edits.json from
+     the chapter structure it analysed, which would undo this remap — so a
+     restructure is refused while one is registered for the book. Claimed
+     synchronously with the check, inside the book lock, and held to the end so
+     a job cannot start under it (workspace/restructure-gate.ts). */
+  if (!beginRestructure(manuscriptId)) {
+    return {
+      status: 409,
+      body: {
+        error: 'Analysis is running on this book. Pause it or wait for it to finish, then change the chapters.',
+        code: 'analysis_running',
+      },
+    };
+  }
+  try {
+    return await applyRestructureClaimed(located, manuscriptId, transform);
+  } finally {
+    endRestructure(manuscriptId);
+  }
+}
+
+async function applyRestructureClaimed(
+  located: NonNullable<Awaited<ReturnType<typeof findBookByBookId>>>,
+  manuscriptId: string,
+  transform: (
+    state: Parameters<typeof applyMerge>[0],
+    hints: Parameters<typeof applyMerge>[1],
+    sentences: Parameters<typeof applyMerge>[2],
+  ) => RestructureResult,
+): Promise<{
+  status: number;
+  body: unknown;
+}> {
+  const { bookDir } = located;
+  let { state } = located;
+
   // Hydrate manuscript record so we have current ChapterHint[]
-  const record = await getOrHydrateManuscript(state.manuscriptId);
+  const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
     return {
       status: 404,
@@ -224,7 +260,7 @@ async function applyRestructure(
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
   // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
-  await rebuildCacheFromEdits(state.manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
+  await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 

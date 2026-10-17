@@ -2259,3 +2259,94 @@ describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before
     expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
   });
 });
+
+/* -- analysis running (restructure refused) ------------------------- */
+
+describe('restructure while an analysis job runs', () => {
+  async function registerJob(kind: 'main' | 'subset') {
+    const { __testRegisterJobForTest } = await import('./analysis.js');
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: MANUSCRIPT_ID,
+      kind,
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as import('./analysis.js').AnalysisJob;
+    __testRegisterJobForTest(job);
+    return job;
+  }
+
+  async function finish(job: import('./analysis.js').AnalysisJob) {
+    const { endJob } = await import('./analysis.js');
+    endJob(job, { kind: 'result' });
+  }
+
+  // The scan that locates the book may heal derived fields (uuid, duration); a restructure would change id/title/slug.
+  const stateBefore = () => JSON.stringify(readState().chapters.map((c) => ({ id: c.id, title: c.title, slug: c.slug })));
+  const editsBefore = () => readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8');
+
+  const ROUTES: Array<[string, string, unknown]> = [
+    ['merge', 'chapters/merge', { chapterIds: [2, 3] }],
+    ['split', 'chapters/split', { chapterId: 2, afterSentenceId: 1 }],
+    ['reorder', 'chapters/reorder', { order: [3, 1, 2] }],
+    ['exclude', 'chapters/exclude', { chapterIds: [2], excluded: true }],
+    ['rename', 'chapters/2/rename', { title: 'Renamed' }],
+    ['refresh-titles', 'chapters/refresh-titles', {}],
+  ];
+
+  for (const kind of ['main', 'subset'] as const) {
+    it.each(ROUTES)(`409s %s while a ${kind} job runs and touches nothing`, async (_n, path, body) => {
+      const job = await registerJob(kind);
+      try {
+        const s = stateBefore();
+        const e = editsBefore();
+        const res = await request(app).post(`/api/books/${bookId}/${path}`).send(body as object);
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('analysis_running');
+        expect(res.body.error).toMatch(/analysis/i);
+        expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+        expect(stateBefore()).toBe(s);
+        expect(editsBefore()).toBe(e);
+      } finally {
+        await finish(job);
+      }
+    });
+  }
+
+  it('succeeds once the job has ended', async () => {
+    const job = await registerJob('main');
+    const refused = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(refused.status).toBe(409);
+    await finish(job);
+    const ok = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(ok.status).toBe(200);
+  });
+
+  it('refuses an analysis start while a restructure holds the book', async () => {
+    const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+    const { mainStartRefusalForTest, subsetRefusalForTest } = await import('./analysis.js');
+    expect(beginRestructure(MANUSCRIPT_ID)).toBe(true);
+    try {
+      expect(mainStartRefusalForTest(MANUSCRIPT_ID)?.error).toBe('chapters_restructuring');
+      expect(subsetRefusalForTest(MANUSCRIPT_ID)?.error).toBe('chapters_restructuring');
+    } finally {
+      endRestructure(MANUSCRIPT_ID);
+    }
+    expect(mainStartRefusalForTest(MANUSCRIPT_ID)).toBeNull();
+  });
+});
