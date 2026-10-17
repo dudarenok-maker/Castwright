@@ -586,7 +586,11 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
+  other lock is taken while it is held. The per-book `state-json` lock
+  (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is likewise a **leaf**
+  around every `.audiobook/state.json` read-modify-write — the read goes inside
+  it, and `workspace/state-json-lock.guard.test.ts` fails the build on an
+  unlocked `writeStateJsonAtomic`. Accept/reject (and the legacy
   `…/audio/previous` routes) additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`

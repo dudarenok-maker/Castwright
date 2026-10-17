@@ -17,7 +17,7 @@ import { gzipSync } from 'node:zlib';
 import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { updateStateJsonLocked } from '../workspace/state-migrate.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
@@ -55,10 +55,21 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
       /* srv-35 — guarantee a stable uuid on every chapter (and persist the
          migration) so the manifest keys are durable. Idempotent. */
       if (ensureChapterUuids(state)) {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null }).catch(() => {
-          /* best-effort migration write; the in-memory state already has
-             the uuids for this response. */
-        });
+        /* #3700 — persisted under the per-book state-json lock against a fresh
+           read; the uuids that reached disk are adopted below. */
+        await updateStateJsonLocked(stateJsonPath(bookDir), state, (fresh) =>
+          ensureChapterUuids(fresh) ? fresh : null,
+        )
+          .then((persisted) => {
+            for (const ch of state.chapters) {
+              const onDisk = persisted.chapters.find((c) => c.id === ch.id);
+              if (onDisk?.uuid) ch.uuid = onDisk.uuid;
+            }
+          })
+          .catch(() => {
+            /* best-effort migration write; the in-memory state already has
+               the uuids for this response. */
+          });
       }
       const audioRoot = audioDir(bookDir);
       const audioByChapterId = new Map<number, ChapterAudioFact>();

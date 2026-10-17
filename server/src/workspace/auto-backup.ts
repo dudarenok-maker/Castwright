@@ -22,6 +22,7 @@ import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-pa
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
 import { writeStateJsonAtomic } from './state-migrate.js';
+import { withStateJsonLock } from './file-lock.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
@@ -229,10 +230,14 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
      prior local override of 5). Three slots cover the realistic recovery
      window: the last completed write, the one before it, and one earlier. */
   const parsed = value as BookStateJson;
-  await writeStateJsonAtomic(stateJsonPath(bookDir), {
-    ...parsed,
-    language: parsed.language ?? null,
-  });
+  /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+     per-book state-json lock so it can't interleave with a render's stamp. */
+  await withStateJsonLock(stateJsonPath(bookDir), () =>
+    writeStateJsonAtomic(stateJsonPath(bookDir), {
+      ...parsed,
+      language: parsed.language ?? null,
+    }),
+  );
 }
 
 /* ── Scheduler ──────────────────────────────────────────────────────────── */

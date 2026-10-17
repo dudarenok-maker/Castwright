@@ -10,6 +10,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { readJson } from '../workspace/state-io.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
@@ -101,26 +102,31 @@ export async function patchStateCover(
   candidate: Pick<CoverCandidate, 'id' | 'source' | 'coverUrl'>,
 ): Promise<void> {
   const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  state.coverImage = {
-    source: candidate.source,
-    candidateId: candidate.id,
-    originalUrl: candidate.coverUrl,
-    fetchedAt: new Date().toISOString(),
-  };
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  /* #3700 — read-modify-write under the per-book state-json lock. */
+  await withStateJsonLock(path, async () => {
+    const state = await readJson<BookStateJson>(path);
+    if (!state) return;
+    state.coverImage = {
+      source: candidate.source,
+      candidateId: candidate.id,
+      originalUrl: candidate.coverUrl,
+      fetchedAt: new Date().toISOString(),
+    };
+    state.updatedAt = new Date().toISOString();
+    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  });
 }
 
 /** Inverse of patchStateCover — DELETE reverts to the procedural gradient. */
 export async function clearStateCover(bookDir: string): Promise<void> {
   const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  delete state.coverImage;
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  await withStateJsonLock(path, async () => {
+    const state = await readJson<BookStateJson>(path);
+    if (!state) return;
+    delete state.coverImage;
+    state.updatedAt = new Date().toISOString();
+    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  });
 }
 
 /** Fire-and-forget import hook. Priority-order first hit across all

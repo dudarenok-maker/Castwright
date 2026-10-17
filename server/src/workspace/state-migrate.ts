@@ -29,6 +29,7 @@
 
 import type { BookStateJson } from './scan.js';
 import { writeJsonAtomic, readJsonWithRecovery } from './state-io.js';
+import { withStateJsonLock } from './file-lock.js';
 
 /** The shape writeStateJsonAtomic accepts. Identical to BookStateJson except
  *  `language` is REQUIRED and explicitly nullable: a writer must state the
@@ -133,6 +134,29 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJsonWri
       rotate: { keep: STATE_BACKUP_KEEP },
     },
   );
+}
+
+/** #3700 — the ONE locked read-modify-write of state.json for call sites that
+ *  patch a field or two onto whatever is on disk. Takes the per-book
+ *  `state-json` leaf lock, re-reads state.json INSIDE it (never the caller's
+ *  earlier snapshot, which a sibling chapter render may have stamped past),
+ *  hands that fresh document to `mutate`, and writes the result. `mutate`
+ *  returning `null` means "nothing to change" and skips the write. `fallback`
+ *  stands in only when the file is absent. Leaf lock: `mutate` must not take
+ *  another lock or call something that does. Returns the document that is on
+ *  disk afterwards (the mutated one, or the fresh read when `mutate` declined). */
+export async function updateStateJsonLocked(
+  path: string,
+  fallback: BookStateJson,
+  mutate: (fresh: BookStateJson) => BookStateJson | null,
+): Promise<BookStateJson> {
+  return withStateJsonLock(path, async () => {
+    const fresh = (await readStateJsonWithRecovery(path)) ?? fallback;
+    const next = mutate(fresh);
+    if (!next) return fresh;
+    await writeStateJsonAtomic(path, { ...next, language: next.language ?? null });
+    return next;
+  });
 }
 
 /** Read state.json with backup recovery. On a torn / corrupt main

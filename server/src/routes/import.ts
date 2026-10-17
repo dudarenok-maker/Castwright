@@ -35,6 +35,7 @@ import {
   slug,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -443,7 +444,11 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       language,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    /* #3700 — every state.json write goes through the per-book lock, a fresh
+       create included, so it can never interleave with a sibling writer. */
+    await withStateJsonLock(stateJsonPath(bookDir), () =>
+      writeStateJsonAtomic(stateJsonPath(bookDir), state),
+    );
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be

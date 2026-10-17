@@ -42,9 +42,23 @@ export interface WriteJsonOpts {
   rotate?: { keep: number };
 }
 
+/** True for the error a read raises when the file is not there. */
+function isEnoent(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+}
+
 export async function readJson<T>(path: string): Promise<T | null> {
   if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf8');
+  /* #3700 — a concurrent writer can rename a file over/away between the
+     existence check above and this read (Windows rename-over window). That is
+     "missing", the same answer the check gives, not a failure. */
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (err) {
+    if (isEnoent(err)) return null;
+    throw err;
+  }
   /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
      when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
      invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a
@@ -73,7 +87,15 @@ export async function readJsonWithRecovery<T>(
 ): Promise<T | null> {
   if (!existsSync(path)) return null;
   try {
-    const raw = await readFile(path, 'utf8');
+    let raw: string;
+    try {
+      raw = await readFile(path, 'utf8');
+    } catch (err) {
+      /* #3700 — vanished between the check and the read: "missing", like the
+         check above, not a corrupt file to recover from a backup. */
+      if (isEnoent(err)) return null;
+      throw err;
+    }
     /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
        when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
        invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a

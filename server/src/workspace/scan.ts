@@ -17,7 +17,7 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson } from './state-io.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
 import {
   analysisCompleteFor,
@@ -772,7 +772,17 @@ async function scanBook(
        even if the segments pass finds nothing to write. */
     if (ensureChapterUuids(state)) {
       try {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+        /* #3700 — mint + persist against a fresh read inside the per-book
+           state-json lock (ensureChapterUuids is idempotent and mutates in
+           place), then adopt the uuids that reached disk so this caller's
+           in-memory state matches it. */
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), state, (fresh) =>
+          ensureChapterUuids(fresh) ? fresh : null,
+        );
+        for (const ch of state.chapters) {
+          const onDisk = persisted.chapters.find((c) => c.id === ch.id);
+          if (onDisk?.uuid) ch.uuid = onDisk.uuid;
+        }
       } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
@@ -1090,6 +1100,9 @@ export async function backfillAudioModelKeysFromSegments(
   let totalSec = 0;
   let backfillNeeded = false;
   const next: BookStateJson['chapters'] = [...state.chapters];
+  /* The fields each chapter gained, so the persist below can apply just those
+     onto a FRESH read (#3700) instead of writing this call's stale snapshot. */
+  const patches = new Map<number, Partial<BookStateJson['chapters'][number]>>();
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
     if (ch.excluded) continue;
@@ -1127,13 +1140,14 @@ export async function backfillAudioModelKeysFromSegments(
         : {};
       const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
       if (needsModelKey || needsRenderedAt || needsDuration || needsEngines) {
-        next[i] = {
-          ...ch,
+        const patch = {
           ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
           ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
           ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
           ...(needsEngines ? { audioEngines: breakdown } : {}),
         };
+        next[i] = { ...ch, ...patch };
+        patches.set(ch.id, patch);
         backfillNeeded = true;
       }
     } catch {
@@ -1143,7 +1157,25 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...upgraded, language: upgraded.language ?? null });
+      /* #3700 — read-modify-write under the per-book state-json lock: re-read,
+         then fill in each backfilled field only where the fresh chapter still
+         lacks it (a render that landed meanwhile has stamped its own). */
+      await updateStateJsonLocked(stateJsonPath(bookDir), upgraded, (fresh) => {
+        let changed = false;
+        const chapters = fresh.chapters.map((c) => {
+          const p = patches.get(c.id);
+          if (!p) return c;
+          const add: Partial<BookStateJson['chapters'][number]> = {};
+          if (p.audioModelKey && !c.audioModelKey) add.audioModelKey = p.audioModelKey;
+          if (p.audioRenderedAt && !c.audioRenderedAt) add.audioRenderedAt = p.audioRenderedAt;
+          if (p.duration && (!c.duration || c.duration === '00:00')) add.duration = p.duration;
+          if (p.audioEngines && !c.audioEngines) add.audioEngines = p.audioEngines;
+          if (Object.keys(add).length === 0) return c;
+          changed = true;
+          return { ...c, ...add };
+        });
+        return changed ? { ...fresh, chapters } : null;
+      });
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call

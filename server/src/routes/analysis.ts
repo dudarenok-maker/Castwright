@@ -120,7 +120,7 @@ import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, withStateJsonLock } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
   describeFingerprintForLog,
@@ -4540,16 +4540,20 @@ export async function runMainAnalyzerJob(
                #2196 — through the identity-verified LIVE book dir in mode:'drop':
                a stale path (moved book, or one now holding another book) is
                never written. */
+            /* #3700 — read-modify-write under the per-book state-json lock
+               (a leaf; nothing inside it takes another lock). */
             const freshStatePath = stateJsonPath(freshBookDir);
-            const freshState = await readJson<BookStateJson>(freshStatePath);
-            if (freshState?.castConfirmed) {
-              await writeStateJsonAtomic(freshStatePath, {
-                ...freshState,
-                castConfirmed: false,
-                updatedAt: new Date().toISOString(),
-                language: freshState.language ?? null,
-              });
-            }
+            await withStateJsonLock(freshStatePath, async () => {
+              const freshState = await readJson<BookStateJson>(freshStatePath);
+              if (freshState?.castConfirmed) {
+                await writeStateJsonAtomic(freshStatePath, {
+                  ...freshState,
+                  castConfirmed: false,
+                  updatedAt: new Date().toISOString(),
+                  language: freshState.language ?? null,
+                });
+              }
+            });
           },
         );
       }
@@ -7160,6 +7164,10 @@ export async function runMainAnalyzerJob(
              terminal record.) */
           await assertWriteTargetStable(job, writeDir);
           const statePath = stateJsonPath(writeDir);
+          /* #3700 — the read and every decision derived from it sit inside the
+             per-book state-json lock with the write (a sibling chapter render
+             stamps this same file). Leaf lock: nothing inside takes another. */
+          await withStateJsonLock(statePath, async () => {
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
             /* Preserve the user-owned flags — analysis owns chapter titles/
@@ -7221,6 +7229,7 @@ export async function runMainAnalyzerJob(
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             wroteStateJson = true;
           }
+          });
         }
       } catch (persistErr) {
         /* #2196 — a MID-BLOCK guard failure (TOCTOU move landing after the
@@ -9105,6 +9114,10 @@ export async function runSubsetAnalyzerJob(
              write target immediately before the terminal state.json record. */
           await assertWriteTargetStable(job, writeDir);
           const statePath = stateJsonPath(writeDir);
+          /* #3700 — the read and every decision derived from it sit inside the
+             per-book state-json lock with the write (a sibling chapter render
+             stamps this same file). Leaf lock: nothing inside takes another. */
+          await withStateJsonLock(statePath, async () => {
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
             /* Preserve the user-owned `excluded` + `held` flags across the
@@ -9157,6 +9170,7 @@ export async function runSubsetAnalyzerJob(
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             wroteStateJson = true;
           }
+          });
         }
       } catch (persistErr) {
         /* #2196 — mirror the main job's mid-block stale-dir detection: park
