@@ -1116,6 +1116,9 @@ type ChapterHealPatch = {
   /** The chapter's uuid when the heal read it (undefined before a mint). */
   uuid?: string;
   set: Partial<BookStateJson['chapters'][number]>;
+  /** `set` was derived from the chapter's segments file: re-derive it under
+   *  the lock instead of trusting the copy computed before the wait. */
+  fromSegments?: boolean;
 };
 
 /** Persist self-heal fills as a locked, fresh-read merge (#3400). A heal reads
@@ -1140,26 +1143,91 @@ async function persistHealPatches(
        writer we queued behind) — the caller must re-locate. */
     if (!fresh) return { merged: null, gone: true };
     let changed = false;
-    const chapters = fresh.chapters.map((ch) => {
+    const chapters: BookStateJson['chapters'] = [];
+    for (const ch of fresh.chapters) {
       const patch = patches.find(
         (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
       );
-      if (!patch) return ch;
+      if (!patch) {
+        chapters.push(ch);
+        continue;
+      }
+      /* The identity match above is id + slug + uuid, which a merge that keeps
+         the primary chapter's three leaves intact while it drops its audio.
+         So a segments-derived fill is re-derived from the file as it is NOW,
+         under the lock: one read before the wait would stamp the old take's
+         model / render date onto a chapter whose audio was just deleted. */
+      let source = patch.set;
+      if (patch.fromSegments) {
+        source = (await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.set ?? {};
+      }
       const fill: Partial<typeof ch> = {};
       for (const key of HEALED_KEYS) {
-        if (patch.set[key] === undefined) continue;
+        if (source[key] === undefined) continue;
         const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
-        if (unset) Object.assign(fill, { [key]: patch.set[key] });
+        if (unset) Object.assign(fill, { [key]: source[key] });
       }
-      if (Object.keys(fill).length === 0) return ch;
+      if (Object.keys(fill).length === 0) {
+        chapters.push(ch);
+        continue;
+      }
       changed = true;
-      return { ...ch, ...fill };
-    });
+      chapters.push({ ...ch, ...fill });
+    }
     if (!changed) return { merged: fresh, gone: false };
     const merged: BookStateJson = { ...fresh, chapters };
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...merged, language: merged.language ?? null });
     return { merged, gone: false };
   });
+}
+
+/** What `ch`'s segments file says the chapter's state.json fields should be, as
+ *  a fill-only patch, plus the file's measured seconds. Null when there is no
+ *  segments file. Takes no lock: the caller decides where it reads (the locked
+ *  merge in `persistHealPatches` re-reads it). */
+async function deriveSegmentsHeal(
+  bookDir: string,
+  ch: BookStateJson['chapters'][number],
+): Promise<{ durationSec: number; set: Partial<BookStateJson['chapters'][number]> } | null> {
+  const meta = await readJson<SegmentsJsonForScan>(
+    join(audioDir(bookDir), `${ch.slug}.segments.json`),
+  );
+  if (!meta) return null;
+  const durationSec =
+    typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec) ? meta.durationSec : 0;
+  const needsModelKey =
+    !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
+  const needsRenderedAt =
+    !ch.audioRenderedAt && typeof meta.synthesizedAt === 'string' && meta.synthesizedAt.length > 0;
+  /* Duration backfill: legacy chapters and chapters rendered via code
+     paths that pre-date generation.ts's state.json update block sit at
+     the analysis-seeded '00:00' even after their MP3 is on disk. The
+     segments file always carries the real PCM-measured durationSec, so
+     the same loop that backfills modelKey + renderedAt can repair
+     duration without an extra read. Treat empty + '00:00' as equally
+     unset - both come from `hydrateFromBookState`'s `c.duration ??
+     '00:00'` fallback and the analysis seed. */
+  const needsDuration =
+    (!ch.duration || ch.duration === '00:00') &&
+    typeof meta.durationSec === 'number' &&
+    Number.isFinite(meta.durationSec) &&
+    meta.durationSec > 0;
+  /* Engine breakdown backfill (false-drift fix). Recompute from the render
+     snapshots so a legacy chapter gains the mixed-engine detail. New field,
+     so a simple presence gate - never overwrites an existing breakdown. */
+  const breakdown = meta.characterSnapshots
+    ? engineBreakdownFromSnapshots(meta.characterSnapshots)
+    : {};
+  const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
+  return {
+    durationSec,
+    set: {
+      ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
+      ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
+      ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
+      ...(needsEngines ? { audioEngines: breakdown } : {}),
+    },
+  };
 }
 
 /** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
@@ -1185,47 +1253,12 @@ export async function backfillAudioModelKeysFromSegments(
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
     if (ch.excluded) continue;
-    const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
     try {
-      const meta = await readJson<SegmentsJsonForScan>(segPath);
-      if (!meta) continue;
-      if (typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
-        totalSec += meta.durationSec;
-      }
-      const needsModelKey =
-        !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
-      const needsRenderedAt =
-        !ch.audioRenderedAt &&
-        typeof meta.synthesizedAt === 'string' &&
-        meta.synthesizedAt.length > 0;
-      /* Duration backfill: legacy chapters and chapters rendered via code
-         paths that pre-date generation.ts's state.json update block sit at
-         the analysis-seeded '00:00' even after their MP3 is on disk. The
-         segments file always carries the real PCM-measured durationSec, so
-         the same loop that backfills modelKey + renderedAt can repair
-         duration without an extra read. Treat empty + '00:00' as equally
-         unset — both come from `hydrateFromBookState`'s `c.duration ??
-         '00:00'` fallback and the analysis seed. */
-      const needsDuration =
-        (!ch.duration || ch.duration === '00:00') &&
-        typeof meta.durationSec === 'number' &&
-        Number.isFinite(meta.durationSec) &&
-        meta.durationSec > 0;
-      /* Engine breakdown backfill (false-drift fix). Recompute from the render
-         snapshots so a legacy chapter gains the mixed-engine detail. New field,
-         so a simple presence gate — never overwrites an existing breakdown. */
-      const breakdown = meta.characterSnapshots
-        ? engineBreakdownFromSnapshots(meta.characterSnapshots)
-        : {};
-      const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
-      if (needsModelKey || needsRenderedAt || needsDuration || needsEngines) {
-        next[i] = {
-          ...ch,
-          ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
-          ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
-          ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
-          ...(needsEngines ? { audioEngines: breakdown } : {}),
-        };
+      const heal = await deriveSegmentsHeal(bookDir, ch);
+      if (!heal) continue;
+      totalSec += heal.durationSec;
+      if (Object.keys(heal.set).length > 0) {
+        next[i] = { ...ch, ...heal.set };
         backfillNeeded = true;
       }
     } catch {
@@ -1246,7 +1279,13 @@ export async function backfillAudioModelKeysFromSegments(
         for (const key of HEALED_KEYS) {
           if (next[i][key] !== state.chapters[i][key]) Object.assign(set, { [key]: next[i][key] });
         }
-        patches.push({ id: state.chapters[i].id, slug: state.chapters[i].slug, uuid: state.chapters[i].uuid, set });
+        patches.push({
+          id: state.chapters[i].id,
+          slug: state.chapters[i].slug,
+          uuid: state.chapters[i].uuid,
+          set,
+          fromSegments: true,
+        });
       }
       const { merged, gone } = await persistHealPatches(bookDir, state.bookId ?? bookDir, patches);
       /* The state merged under the lock, not `upgraded`: a caller that waited
