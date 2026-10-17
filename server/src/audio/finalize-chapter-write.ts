@@ -533,7 +533,7 @@ export async function finalizeChapterAudioWrite(
          best record of what it rendered under, so seed the freeze from it (a repair never moves
          the reference). Still no `renderedAt` — it keeps sorting oldest. */
       const frozenEngine = prior?.renderedEngine ?? prior?.voiceEngine;
-      const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey;
+      const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey ?? priorFile?.modelKey;
       if (frozenEngine) snapshot.renderedEngine = frozenEngine;
       if (frozenModelKey) snapshot.renderedModelKey = frozenModelKey;
     }
