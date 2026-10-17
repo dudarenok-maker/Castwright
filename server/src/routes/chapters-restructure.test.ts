@@ -2350,3 +2350,104 @@ describe('restructure while an analysis job runs', () => {
     expect(mainStartRefusalForTest(MANUSCRIPT_ID)).toBeNull();
   });
 });
+
+/* #3400 pass 8 -- the gate claim `applyRestructure` takes is released on EVERY
+   exit path. A leaked claim would refuse every analysis start for the book
+   until a restart, and nothing else would clear it. */
+describe('the restructure claim is released on every exit path (#3400)', () => {
+  it('releases after a successful restructure', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+  });
+
+  it('releases after a transform refusal (400)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [98, 99] });
+    expect(res.status).toBe(400);
+    expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+  });
+
+  it('releases when the manuscript is not on disk (404)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const manuscript = join(bookDir, 'manuscript.md');
+    rmSync(manuscript, { force: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(404);
+      expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+    } finally {
+      writeFileSync(manuscript, MANUSCRIPT_BODY);
+    }
+  });
+
+  it('releases when a write throws (500)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    rmSync(editsPath, { force: true });
+    mkdirSync(editsPath); // a directory where the file belongs: the read / write throws
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(500);
+      expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+    } finally {
+      err.mockRestore();
+      rmSync(editsPath, { recursive: true, force: true });
+    }
+  });
+});
+
+/* #3400 pass 8 -- the `manuscript` slice of the book-state PUT is taken under
+   the book lock. The race tests above accept both serial outcomes and their
+   offsets never produce the interleaving the lock prevents, so pin it
+   deterministically: a holder owns the lock, the PUT must not have written
+   while it does. */
+describe('the manuscript slice of the state PUT waits for the book lock (#3400)', () => {
+  it('writes nothing while a restructure-style holder owns the lock, then lands', async () => {
+    const { withBookLock } = await import('../workspace/book-lock.js');
+    /* Locate once first so the scan's own self-heal writes (uuid mint), which
+       take this lock themselves, are already done: otherwise a mutant that
+       locates OUTSIDE the lock would still be held back by the heal. */
+    const { findBookByBookId } = await import('../workspace/scan.js');
+    await findBookByBookId(bookId);
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const before = readFileSync(editsPath, 'utf8');
+    const sentences = readEdits().sentences.map((s) =>
+      s.chapterId === 1 && s.id === 1 ? { ...s, text: 'Edited while held.' } : s,
+    );
+
+    let release!: () => void;
+    let entered!: () => void;
+    const holderIn = new Promise<void>((r) => (entered = r));
+    const holder = withBookLock(bookId, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await holderIn;
+
+    const put = request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences } })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(editsPath, 'utf8')).toBe(before);
+
+    release();
+    await holder;
+    const res = await put;
+    expect(res.status).toBe(204);
+    expect(readEdits().sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe(
+      'Edited while held.',
+    );
+  });
+});
