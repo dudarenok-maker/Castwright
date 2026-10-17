@@ -1927,11 +1927,15 @@ test('runStepProcess re-sweep: pre-kill snapshot failed + a live row under the r
 // A step root that exits ON ITS OWN while a detached descendant keeps the piped
 // stderr open: Node fires 'exit' (and releases the root's pid for reuse) but
 // never 'close', so the budget timer still fires. The holder pid is written to
-// leak.pid so the test can clean it up.
+// leak.pid so the test can clean it up. leak.start records a moment the root
+// provably lived through (after the spawn, before the root's exit): the root
+// can exit within ~100ms of spawn on Linux CI but ~550ms on Windows, so a genuine
+// child's start must come from this, not from a fixed offset past spawn.
 function writeLeakFixture(dir) {
   writeFileSync(
     join(dir, 'leak.mjs'),
     "import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\n" +
+      "writeFileSync('leak.start', String(Date.now()));\n" +
       "const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'ignore', 'inherit'], detached: true, windowsHide: true });\n" +
       "writeFileSync('leak.pid', String(c.pid));\nc.unref();\nprocess.exit(0);\n",
     'utf8',
@@ -1941,6 +1945,13 @@ function writeLeakFixture(dir) {
     JSON.stringify({ name: 'leak-fixture', private: true, scripts: { leak: 'node leak.mjs' } }),
     'utf8',
   );
+}
+// null until leak.mjs has written a real timestamp.
+function readLeakStart(dir) {
+  const file = join(dir, 'leak.start');
+  if (!existsSync(file)) return null;
+  const t = Number(readFileSync(file, 'utf8'));
+  return Number.isInteger(t) && t > 0 ? t : null;
 }
 function killLeakHolder(dir) {
   const pidFile = join(dir, 'leak.pid');
@@ -1960,8 +1971,8 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
   const dir = mkTmp();
   writeLeakFixture(dir);
   const K = 2147480060; // X's own child
-  const L = 2147480061; // the real root's child, started long before the root exited
-  const t0 = Date.now();
+  const L = 2147480061; // the real root's child, started while the root lived (leak.start)
+  let lStart = null;
   let xStart = null;
   let killCalls = 0;
   const swept = [];
@@ -1977,7 +1988,10 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
       },
       snapshotFn: (root) => {
         xStart ??= Date.now(); // X took the pid after the root's exit
-        return [row(root, 1, xStart), row(K, root, xStart + 1), row(L, root, t0 + 100)];
+        lStart ??= readLeakStart(dir);
+        const rows = [row(root, 1, xStart), row(K, root, xStart + 1)];
+        if (lStart !== null) rows.push(row(L, root, lStart));
+        return rows;
       },
       censusFn: NO_CENSUS,
       logFn: () => {},
@@ -1988,6 +2002,7 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
     });
     assert.equal(result.timedOut, true);
     assert.equal(killCalls, 0, 'the by-pid kill must be skipped once the root has exited: that pid is now X');
+    assert.ok(lStart !== null, 'leak.start was never written: the fixture did not run before the snapshot');
     assert.ok(swept.includes(L), `the root's genuine child is swept: ${JSON.stringify(swept)}`);
     assert.equal(swept.length, 1, `only the genuine child — never X (the pid's new holder) or X's child: ${JSON.stringify(swept)}`);
   } finally {
@@ -1999,8 +2014,8 @@ test('runStepProcess re-sweep: pre-kill snapshot failed + short budget + root pi
   const dir = mkTmp();
   writeLeakFixture(dir);
   const HK = 2147480040; // the holder's child
-  const G = 2147480041; // the real root's child
-  const t0 = Date.now();
+  const G = 2147480041; // the real root's child, started while the root lived (leak.start)
+  let gStart = null;
   let calls = 0;
   const swept = [];
   try {
@@ -2016,7 +2031,10 @@ test('runStepProcess re-sweep: pre-kill snapshot failed + short budget + root pi
         calls += 1;
         if (calls === 1) throw new Error('snapshot failed');
         const now = Date.now();
-        return [row(root, 1, now - 50), row(HK, root, now - 40), row(G, root, t0 + 100)];
+        gStart ??= readLeakStart(dir);
+        const rows = [row(root, 1, now - 50), row(HK, root, now - 40)];
+        if (gStart !== null) rows.push(row(G, root, gStart));
+        return rows;
       },
       censusFn: NO_CENSUS,
       logFn: () => {},
@@ -2025,6 +2043,7 @@ test('runStepProcess re-sweep: pre-kill snapshot failed + short budget + root pi
       resweepMax: 1,
       sweepKillFn: (pid) => swept.push(pid),
     });
+    assert.ok(gStart !== null, 'leak.start was never written: the fixture did not run before the re-sweep');
     assert.deepEqual(swept, [G], `only the genuine child; the pid's post-exit holder and its child are never the step's: ${JSON.stringify(swept)}`);
   } finally {
     killLeakHolder(dir);
