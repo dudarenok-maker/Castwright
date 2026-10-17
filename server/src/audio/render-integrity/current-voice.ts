@@ -4,8 +4,9 @@
  *
  * The two callers share the derivation, but not the input: qa-repair passes the engine its
  * request re-records in; `scoreBook` resolves "the engine actually rendered" — the
- * character's own `ttsEngine`, else the scoring run's model key, else (Resume scoring, no
- * run) the engine stamped on its most recently rendered lines. They agree whenever the
+ * character's own `ttsEngine`, else the scoring run's model key (only for a character that
+ * run rendered lines for), else the engine stamped on its most recently rendered lines (what
+ * Resume scoring uses, and what every character the run did not render keeps). They agree whenever the
  * book was last rendered on the engine the repair request names, and may differ otherwise
  * (a default switched after the last render): qa-repair then gates against the voice it is
  * about to produce, and scoring against the voice already on disk.

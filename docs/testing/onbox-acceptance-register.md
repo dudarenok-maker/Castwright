@@ -745,8 +745,9 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > with no recorded voice is still kept). A character reassigned but not yet
 > re-rendered now gets a marker row from the scoring pass (it leaves the QA
 > card's "pending" state), and the "current voice" engine is the engine actually rendered (the
-> character's own engine, else the scoring run's model key, else the engine
-> stamped on its most recently rendered lines). The Reassign step now says not to
+> character's own engine, else the scoring run's model key — only for a
+> character that run rendered lines for — else the engine stamped on its most
+> recently rendered lines). The Reassign step now says not to
 > run Resume scoring before the repair (a scoring pass rewrites the character's
 > rows `inconclusive`, leaving nothing to observe) and checks the marker row as a
 > separate step afterwards. Behaviour proven by mocked unit
