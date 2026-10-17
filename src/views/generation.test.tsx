@@ -2358,6 +2358,27 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     vi.unstubAllGlobals();
   });
 
+  it('#3400 pass 7 — Rename is disabled (with the reason) on both row variants while the book restructures', () => {
+    const store = makeIncludeStore();
+    renderInclude(store);
+    // Chapter 1 (done): Rename sits in the action row; chapter 2 (queued): in the expanded panel.
+    const doneRename = screen.getByTestId('chapter-row-1-rename');
+    expect(doneRename).toBeEnabled();
+    fireEvent.click(screen.getByText('Chapter 2'));
+    const queuedRename = screen.getByTestId('chapter-row-2-rename');
+    expect(queuedRename).toBeEnabled();
+
+    act(() => {
+      store.dispatch(uiSlice.actions.setRestructuringBook('b1'));
+    });
+    for (const b of [doneRename, queuedRename]) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute('title', RESTRUCTURING_REASON);
+      fireEvent.click(b);
+    }
+    expect(screen.queryByTestId('edit-chapter-title-input')).toBeNull();
+  });
+
   it('#3084 a non-story overflow warning on the Re-analyse subset call surfaces as a warn toast', async () => {
     const store = makeIncludeStore();
     runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));

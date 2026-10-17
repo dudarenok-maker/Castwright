@@ -2187,7 +2187,9 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={restructuring}
+            title={restructuring ? RESTRUCTURING_REASON : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
@@ -2255,7 +2257,9 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={restructuring}
+            title={restructuring ? RESTRUCTURING_REASON : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
