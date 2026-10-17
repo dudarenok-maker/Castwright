@@ -7082,8 +7082,8 @@ exists. *Criteria:* spec §On-box acceptance
 `runStepProcess`'s timeout path is unit-tested against a real (but tiny and fast)
 process tree: a fixture npm script that never exits is killed via
 `taskkill /PID <pid> /T /F` and classified `timedOut: true`, never retried as a
-crash (`scripts/tests/verify-cache.test.mjs`'s `runStepProcess`/`runPipeline`
-timeout mutation tests). What no unit test can prove is the thing the design
+crash (`scripts/tests/verify-cache.run-step.test.mjs`'s `runStepProcess` and
+`scripts/tests/verify-cache.pipeline.test.mjs`'s `runPipeline` timeout tests). What no unit test can prove is the thing the design
 doc calls out as **load-bearing**: `taskkill /T` walks *live* parent-PID links
 at the moment it runs, so a fork whose parent already died before that walk
 reaches it is invisible to `/T` — exactly the shape of the two 390-minute
