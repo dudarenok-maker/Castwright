@@ -302,4 +302,30 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     expect(ch2.length).toBe(13); // ch2 got a verdict file: hero is still scored
     expect(ch2.find((r) => r.sentenceIds[0] === 112)).toBeDefined();
   });
+
+  it("a too-thin hero rendered on 1.7B still auditions at 1.7B after a Coqui Fix in that chapter (M2: the tier is frozen too)", async () => {
+    await renderBothChapters();
+    await wait(30);
+    const segs2 = [0, 1].map((i) => ({ groupIndex: i, characterId: 'hero', sentenceIds: [100 + i], startSec: i * 0.1, endSec: i * 0.1 + 0.1, voiceName: 'qwen-hq' }));
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 2, slug: 'ch2', title: 'C2' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: segs2, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-1.7b',
+      audioFormat: 'mp3', resynthesizedIndices: 'all',
+      embeddings: [0, 1].map((i) => ({ characterId: 'hero', sentenceIds: [100 + i], vec: vec(0, i) })),
+    });
+    await wait(30);
+    const back = readSegs('ch2');
+    back.segments[0] = { ...back.segments[0], voiceName: 'Ana Florence' };
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 2, slug: 'ch2', title: 'C2' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'coqui', modelKey: 'coqui-xtts-v2',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [100], vec: vec(0, 1) }],
+    });
+    auditionSpy.mockClear();
+    await scoreBook(bookDir, CHAPTERS);
+    const tiers = auditionSpy.mock.calls.map((c) => (c as unknown as [{ modelKey: string }])[0].modelKey);
+    // hero (too thin, rendered on 1.7B) is auditioned at 1.7B; side's own audition is unrelated
+    expect(tiers).toContain('qwen3-tts-1.7b');
+  });
 });
