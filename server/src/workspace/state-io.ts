@@ -21,7 +21,7 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
-import { renameWithRetry } from './atomic-rename.js';
+import { renameWithRetry, copyFileWithRetry } from './atomic-rename.js';
 
 /* Monotonic in-process counter so two `writeJsonAtomic` calls that arrive
    in the same millisecond (same `Date.now()`, same `process.pid`) don't
@@ -35,7 +35,8 @@ let tmpSeq = 0;
 export interface WriteJsonOpts {
   /** Rotate `path` -> `path.bak.1`, shift `path.bak.{i}` -> `path.bak.{i+1}`,
    *  keep the newest `keep` backups (oldest is dropped). Skipped on first
-   *  write (no existing file to rotate). Each rename uses `renameWithRetry`,
+   *  write (no existing file to rotate). Each shift uses `renameWithRetry`
+   *  (the final `path` → `bak.1` step is a copy, so `path` is never absent),
    *  so the rotation chain is self-healing across OneDrive/AV races —
    *  see the rotation tests in `state-io.test.ts` for the partial-failure
    *  resume contract. */
@@ -182,10 +183,11 @@ export async function enqueuePathOp(path: string, op: () => Promise<void>): Prom
 /** Shift the backup chain up by one slot before a new write lands.
  *  `path.bak.{keep-1}` → `path.bak.{keep}` first (drops what was in
  *  `bak.{keep}`), then `bak.{keep-2}` → `bak.{keep-1}`, …, finally
- *  `path` → `path.bak.1`. Walking top-down means each destination is
- *  vacant by the time we rename to it.
+ *  `path` → `path.bak.1` (a COPY, so `path` is never absent — the caller's
+ *  tmp → path rename-over replaces it atomically). Walking top-down means
+ *  each destination is vacant by the time we rename to it.
  *
- *  Each step is `renameWithRetry`, so a partial failure (e.g. EPERM mid-
+ *  Each shift is `renameWithRetry` (the final copy, `copyFileWithRetry`), so a partial failure (e.g. EPERM mid-
  *  rotation) aborts but leaves the chain in a state the next call can
  *  resume: the `existsSync` gates skip already-moved slots, and the next
  *  rotation completes the chain. No data loss path — every previous
@@ -200,5 +202,8 @@ async function rotateBackups(path: string, keep: number): Promise<void> {
       await renameWithRetry(src, dest);
     }
   }
-  await renameWithRetry(path, `${path}.bak.1`);
+  /* #3700 — COPY, not rename: `path` must stay present until the caller's
+     tmp -> path rename-over replaces it atomically. Renaming it away left a
+     window where an unlocked reader (or a crash) saw no file at all. */
+  await copyFileWithRetry(path, `${path}.bak.1`);
 }
