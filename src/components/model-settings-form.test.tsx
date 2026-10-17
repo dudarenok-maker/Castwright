@@ -7,6 +7,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
+import { uiSlice } from '../store/ui-slice';
 import { ModelSettingsForm } from './model-settings-form';
 import { api, type SetupReadiness, type BlockerDiagnosis } from '../lib/api';
 
@@ -44,7 +45,7 @@ function readinessWith(analyzer: BlockerDiagnosis): SetupReadiness {
 }
 
 function renderForm() {
-  const store = configureStore({ reducer: { account: accountSlice.reducer } });
+  const store = configureStore({ reducer: { account: accountSlice.reducer, ui: uiSlice.reducer } });
   return render(
     <Provider store={store}>
       <ModelSettingsForm embedded />

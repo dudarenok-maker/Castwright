@@ -140,6 +140,18 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     await waitFor(() => expect(api.putAnalyzerEndpointKey).toHaveBeenCalledWith('lab', 'sk-new'));
   });
 
+  it('a changed host with no saved key needed saves without re-entering a key (noKey escape)', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([{ ...LAB, baseUrl: 'http://10.0.0.5:8080/v1' }]));
+    vi.mocked(api.putAnalyzerEndpointKey).mockResolvedValue(settingsWith([LAB]));
+    renderSection({ endpoints: [LAB], keyStatus: { lab: 'set' } });
+    fireEvent.click(screen.getByTestId('endpoint-edit-lab'));
+    fireEvent.change(screen.getByTestId('endpoint-base-url'), { target: { value: 'http://10.0.0.5:8080/v1' } });
+    fireEvent.click(screen.getByTestId('endpoint-no-key'));
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledWith('lab', expect.objectContaining({ baseUrl: 'http://10.0.0.5:8080/v1' })));
+    expect(api.putAnalyzerEndpointKey).toHaveBeenCalledWith('lab', null);
+  });
+
   it('refuses an unload URL on another origin', async () => {
     renderSection();
     fireEvent.click(screen.getByTestId('add-endpoint'));

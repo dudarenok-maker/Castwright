@@ -50,9 +50,13 @@ describe('PUT /api/config — phase-model overrides (#3084 PR 3d)', () => {
     expect((await settings.readUserSettings()).configOverrides['analyzer.ollama.model']).toBeUndefined();
   });
 
+  /* 3d.4a row 7 (#3707): the tag goes through the one PERMANENTLY refused knob —
+     a plain Ollama tag is not an endpoint id, so it still saves; a broadened
+     isEndpointId (v.includes(':')) refuses it here and this case goes red. */
   it('still saves an Ollama tag that starts with openai:', async () => {
-    const res = await request(app).put('/api/config').send({ 'analyzer.phase0.model': 'openai:latest' });
+    const res = await request(app).put('/api/config').send({ 'analyzer.ollama.model': 'openai:latest' });
     expect(res.status).toBe(200);
-    expect(res.body.applied).toEqual(['analyzer.phase0.model']);
+    expect(res.body.applied).toEqual(['analyzer.ollama.model']);
+    expect((await settings.readUserSettings()).configOverrides['analyzer.ollama.model']).toBe('openai:latest');
   });
 });
