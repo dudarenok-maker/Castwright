@@ -12,6 +12,7 @@ import { castSlice } from '../store/cast-slice';
 import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { persistenceMiddleware } from '../store/persistence-middleware';
+import { restructureGuardMiddleware } from '../store/restructure-guard-middleware';
 
 const { holder, apiMock } = vi.hoisted(() => ({
   holder: { store: null as null | { getState: () => unknown } },
@@ -25,8 +26,14 @@ vi.mock('../store', async () => {
 
 import { RestructureView } from './restructure';
 
-function makeStore() {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer } });
+/* `guard` installs the real restructure guard (first in the chain, as in the app store):
+   a user edit made mid-request is refused. Without it the store models a writer that
+   bypasses the guard (a non-UI writer, or a write queued before the flag went up). */
+function makeStore(guard = false) {
+  const store = configureStore({
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer },
+    middleware: (g) => (guard ? g().prepend(restructureGuardMiddleware) : g()),
+  });
   holder.store = store;
   store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
   return store;
@@ -202,7 +209,20 @@ describe('RestructureView — #3400 cross-book slices', () => {
   const keys = (store: ReturnType<typeof makeStore>) =>
     store.getState().manuscript.sentences.map((x) => `${x.chapterId}:${x.id}:${x.text}:${x.emotion ?? ''}`);
 
-  it('still applies the remap when a same-book write (emotion detection) replaced the sentences array mid-request', async () => {
+  it('refuses a user edit made mid-request, visibly, and the remap lands on the untouched sentences (the real guard)', async () => {
+    const store = makeStore(true);
+    const resolve = await startMerge23(store);
+    store.dispatch(
+      manuscriptSlice.actions.setSentenceEmotion({ chapterId: 4, sentenceId: 1, emotion: 'sad' } as never),
+    );
+    expect(keys(store)).toEqual(['1:1:one:', '2:1:two:', '3:1:three:', '4:1:four:']);
+    expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('restructuring-edit-refused');
+    resolve();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(keys(store)).toEqual(['1:1:one:', '2:1:two:', '2:2:three:', '3:1:four:']);
+  });
+
+  it('still applies the remap when a write that bypasses the guard (a non-UI writer: emotion detection) replaced the sentences array mid-request', async () => {
     const store = makeStore();
     const resolve = await startMerge23(store);
     store.dispatch(
@@ -270,7 +290,7 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
   let disk: string[];
   let resolveRestructure: () => void;
 
-  async function setup() {
+  async function setup(guard = false) {
     disk = [];
     apiMock.putBookState.mockReset().mockImplementation(async (_id: string, w: { slice: string; patch: { sentences?: Array<{ chapterId: number; id: number; text: string }> } }) => {
       if (w.slice === 'manuscript') disk = w.patch.sentences!.map((x) => `${x.chapterId}:${x.id}:${x.text}`);
@@ -285,7 +305,7 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
     const store = configureStore({
       reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
       preloadedState: { settings: { ...settingsSlice.getInitialState(), autosaveDebounceMs: 40 } },
-      middleware: () => new Tuple(persistenceMiddleware),
+      middleware: () => (guard ? new Tuple(restructureGuardMiddleware, persistenceMiddleware) : new Tuple(persistenceMiddleware)),
     });
     holder.store = store;
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
@@ -351,7 +371,21 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
     expect(disk).toEqual(REMAPPED);
   });
 
-  it('a write made mid-request, still queued when the answer arrives, does not outlive the remap', async () => {
+  it('a user edit made mid-request is refused by the guard: no save is queued and the remap is what ends up on disk', async () => {
+    const { store, confirm } = await setup(true);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    edit(store);
+    await settle();
+    expect(apiMock.putBookState).not.toHaveBeenCalled();
+    expect(disk).toEqual(REMAPPED);
+    resolveRestructure();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await settle();
+    expect(disk).toEqual(REMAPPED);
+  });
+
+  it('a write that bypasses the guard (queued, not yet sent) when the answer arrives does not outlive the remap', async () => {
     const { store, confirm } = await setup();
     fireEvent.click(confirm);
     await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
@@ -362,7 +396,7 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
     expect(disk).toEqual(REMAPPED);
   });
 
-  it('a write made mid-request and already sent before the answer arrives is overwritten by the remap', async () => {
+  it('a write that bypasses the guard and was already sent before the answer arrives is overwritten by the remap', async () => {
     const { store, confirm } = await setup();
     fireEvent.click(confirm);
     await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
