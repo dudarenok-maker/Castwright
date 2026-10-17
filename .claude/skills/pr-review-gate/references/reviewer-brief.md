@@ -386,6 +386,20 @@ recite:
     a dropped dispatch must be visible to the caller or checked before the
     caller's side writes. Test against the real store with the guard on, and
     assert that nothing was resolved, logged, or closed.
+36. **A write moved later to fix an ordering race strands the side effects that
+    ran before it when a step in between fails** -- `server/src/routes/
+    book-state.ts` (replace-manuscript), PR #3594 gate pass 8: 39bfe13f moved
+    the `state.json` record behind the cast / audio / revisions work so it could
+    be taken under the book lock, but the route had already written the new
+    manuscript file and unlinked the old one. A rejection from any of those arms
+    now left `state.json` naming the deleted file, so the book could not be
+    hydrated after a restart, while the 500 suggested nothing had happened.
+    Fixed in 858e37d4 (the old file is unlinked only after the record lands, and
+    the new one is removed if it never did). Checkable: when a diff moves a
+    write later, list every side effect that now runs before it (file writes,
+    deletes, renames, cache wipes) and ask what is left on disk if each step in
+    between throws; test with a rejecting step and assert that what
+    `state.json` names exists. The same shape applies to moving a write earlier.
 
 ### Keeping the catalogue current
 
