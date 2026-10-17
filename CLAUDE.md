@@ -606,10 +606,13 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  cover an authoritative write and a best-effort one at once). TEN sites fail
   loud *by rethrowing into their job's or request's terminal outcome*: the six
   best-effort `catch` blocks around identity writes, plus the two
-  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
+  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks
+  and the two terminal `state.json` writes there (`updateStateAtDir`, taken
+  after the cast work — `withBookLock` does not bound its wait today, so that
+  wrap is defensive, but it keeps the write from ever being the silent kind),
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort. Swallowing at an
@@ -632,7 +635,7 @@ Design rationale:
   server-recorded entry carries the chapter's `uuid` and `audioRenderedAt`
   and `revisions-store.ts` refuses it when the chapter at its id no longer
   matches (`entryMatchesChapter`, #3400). A legacy client-written entry
-  has no stamps and is not covered. A NINTH site fails loud in a
+  has no stamps and is not covered. An ELEVENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
