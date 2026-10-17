@@ -33,7 +33,7 @@ owner: null
 - **Invariants preserved.**
   - Soft-hide invariant on `Chapter.excluded` (audio preserved, ids unchanged, generation queue skips per `src/views/generation.tsx:360`).
   - Sticky toolbar uses `bg-canvas/95 backdrop-blur-sm` — design tokens via CSS custom properties, no hex literals (CLAUDE.md token rule).
-  - User-customised chapter titles preserved through the refresh-titles parser-aligned pass — the existing `GENERIC_TITLE_RE` detector gates rewrites, so anything non-generic stays put. (Plan 78 added an explicit sticky `titleOverridden: boolean` flag that runs BEFORE the regex gate, so user renames stick even when the new title happens to look generic. The regex stays as backup for legacy chapters without the flag — see [78-chapter-rename.md](../78-chapter-rename.md).)
+  - User-customised chapter titles preserved through the refresh-titles parser-aligned pass — the server-only `titleSynthesized` flag (#3628) gates rewrites, so a manuscript heading or user title stays put even when it looks generic; `GENERIC_TITLE_RE` is only the shape check on a flagged title. (Plan 78 added an explicit sticky `titleOverridden: boolean` flag that runs BEFORE that gate, so user renames stick. A legacy chapter with no `titleSynthesized` key is left alone unless backfilled — see [78-chapter-rename.md](../78-chapter-rename.md).)
   - `data-testid="open-restructure"` preserved across the button extraction so plan-51 / plan-60 selectors still resolve.
 - **Migration story.** None. New endpoints are additive; existing books work unchanged.
 - **Reversibility.** Pure frontend / route additions. Revert is a single git revert of the diff.
@@ -41,7 +41,7 @@ owner: null
 ## Invariants to preserve
 
 1. `<RestructureChaptersButton />` carries `data-testid="open-restructure"`. Cited at `src/components/restructure-chapters-button.tsx`.
-2. Refresh-titles parser-aligned pass only fires when the current title matches `GENERIC_TITLE_RE` from plan 70a. Cited at the `if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;` guard in `applyRefreshTitles`.
+2. Refresh-titles parser-aligned pass only fires when the current title matches `GENERIC_TITLE_RE` from plan 70a AND the chapter is flagged `titleSynthesized` (#3628). Cited at the `if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;` guard in `applyRefreshTitles`.
 3. First-line promotion rejection rules (in this order): chapter has no first sentence → skip; first sentence starts with `"`, `'`, `"`, `"`, `'`, `'`, `—`, or `–` → reject (dialogue); length > 80 → reject; ends with `.` or `!` → reject; doesn't pass `looksLikeTitle` → reject. Cited at `applyRefreshTitles` first-line block.
 4. `applyExclude` and `applyRefreshTitles` both flow through `postProcessRestructure`. Sticky audit: any new structural op should do the same.
 5. Excluded chapters cannot be merge-selected — the checkbox is `disabled` when `chapter.excluded === true`. Cited at `restructure-chapters-panel.tsx` `<input type="checkbox" disabled={busy || !selectable || isExcluded}>`.
@@ -69,7 +69,7 @@ owner: null
 4. **Click Exclude** on chapter 3 → row gets `opacity-60` + `line-through`; sentence-count line gains "· excluded"; merge checkbox dims out. Toast: empty (operation was clean).
 5. **Click Include** on the same chapter → row returns to normal.
 6. **Mid-list merge** of chapters 2 + 3 on a book with auto-titles → merge happens; toast surfaces "Renumbered N auto-generated chapter title(s)" if any of the subsequent chapters had generic titles.
-7. **Click Refresh chapter names** → confirm dialog → Apply. Any chapter with a generic title gets re-derived (parser-aligned or first-line promotion). Toast: "Re-derived N chapter titles from the source manuscript." or "Promoted N first-sentence candidate(s) to chapter titles."
+7. **Click Refresh chapter names** → confirm dialog → Apply. Any app-made chapter title (`titleSynthesized`) gets re-derived (parser-aligned or first-line promotion). Toast: "Re-derived N chapter titles from the source manuscript." or "Promoted N first-sentence candidate(s) to chapter titles."
 
 ## Out of scope
 

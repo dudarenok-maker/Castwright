@@ -86,6 +86,8 @@ function writeState(opts: {
     uuid?: string;
     excluded?: boolean;
     audioRenderedAt?: string;
+    titleOverridden?: boolean;
+    titleSynthesized?: boolean;
   }>;
   parserVersion?: number;
 }) {
@@ -288,5 +290,36 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(res.body.state.chapters[0].title).toBe('Chapter 1');
+  });
+});
+
+describe('GET /:bookId/state — titleSynthesized through the title refresh (#3628)', () => {
+  it('gains the flag on a made-up title, drops a stale one, and leaves a titleOverridden chapter alone', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      'Opening words before any heading.\n\n## Prologue\n\nThe prologue body has a few sentences of narrative content in it.\n\n## Chapter 1\n\nFirst body.\n',
+    );
+    writeState({
+      chapters: [
+        { id: 1, title: 'Old lead', slug: '01-old-lead' },
+        { id: 2, title: 'Stale', slug: '02-stale', titleSynthesized: true },
+        { id: 3, title: 'My Sticky Name', slug: '03-sticky', titleOverridden: true, titleSynthesized: true },
+      ],
+      parserVersion: 1,
+    });
+
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+
+    const onDisk = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      chapters: Array<{ title: string; titleOverridden?: boolean; titleSynthesized?: boolean }>;
+    };
+    expect(onDisk.chapters[0].title).toBe('Chapter 1');
+    expect(onDisk.chapters[0].titleSynthesized).toBe(true);
+    expect(onDisk.chapters[1].title).toBe('Prologue');
+    expect('titleSynthesized' in onDisk.chapters[1]).toBe(false);
+    expect(onDisk.chapters[2].title).toBe('My Sticky Name');
+    expect(onDisk.chapters[2].titleOverridden).toBe(true);
+    expect(onDisk.chapters[2].titleSynthesized).toBe(true);
   });
 });

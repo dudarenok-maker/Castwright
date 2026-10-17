@@ -77,6 +77,25 @@ function buildTocLabelMap(toc: TocItem[]): Map<string, string> {
   return map;
 }
 
+/** Resolve a MOBI chapter title from its TOC label and the body's first
+    heading (rules mirror the EPUB parser's mergeChapterTitle). `synthesized`
+    is true only for the made-up "Chapter N" fallback. */
+export function resolveMobiChapterTitle(
+  tocTitle: string,
+  bodyHeading: string | null,
+  oneBasedIndex: number,
+): { title: string; synthesized: boolean } {
+  if (!tocTitle) {
+    return bodyHeading
+      ? { title: bodyHeading, synthesized: false }
+      : { title: `Chapter ${oneBasedIndex}`, synthesized: true };
+  }
+  if (GENERIC_NCX_RE.test(tocTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
+    return { title: `${tocTitle} — ${bodyHeading}`, synthesized: false };
+  }
+  return { title: tocTitle, synthesized: false };
+}
+
 interface MobiLikeParser {
   getMetadata(): {
     title?: string;
@@ -148,25 +167,23 @@ export async function parseMobi(
          - Both descriptive or both generic → keep TOC label as-is. */
       const tocTitle = tocLabels.get(entry.id)?.trim() ?? '';
       const bodyHeading = extractFirstHeading(html);
-      let chTitle: string;
-      if (!tocTitle) {
-        chTitle = bodyHeading || `Chapter ${chapters.length + 1}`;
-      } else if (
-        GENERIC_NCX_RE.test(tocTitle) &&
-        bodyHeading &&
-        !GENERIC_NCX_RE.test(bodyHeading)
-      ) {
-        chTitle = `${tocTitle} — ${bodyHeading}`;
-      } else {
-        chTitle = tocTitle;
-      }
+      const { title: chTitle, synthesized } = resolveMobiChapterTitle(
+        tocTitle,
+        bodyHeading,
+        chapters.length + 1,
+      );
       // Drop the leading title heading so it isn't spoken twice (title beat +
       // body opening line) — see {@link stripTitleHeading}.
       const body = tagHesitantDialog(
         tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle)))),
       );
       if (!body) continue;
-      chapters.push({ id: chapters.length + 1, title: chTitle, body });
+      chapters.push({
+        id: chapters.length + 1,
+        title: chTitle,
+        body,
+        ...(synthesized ? { titleSynthesized: true } : {}),
+      });
     }
 
     if (chapters.length === 0) {

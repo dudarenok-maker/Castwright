@@ -608,3 +608,21 @@ describe('book-state PUT cast — notLinkedTo is server-owned', () => {
     expect(mairin.name).toBe('Mairin Renamed');
   });
 });
+
+describe('book-state PUT state — titleSynthesized survives the chapters replace (#3628)', () => {
+  it('keeps the server-only flag when the client sends chapters without it', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const onDisk = JSON.parse(readFileSync(statePath, 'utf8'));
+    onDisk.chapters = [{ id: 1, title: 'Chapter 1', slug: 'chapter-one', titleSynthesized: true }];
+    writeFileSync(statePath, JSON.stringify(onDisk));
+
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-one' }] } });
+    expect(res.status).toBe(204);
+
+    const after = JSON.parse(readFileSync(statePath, 'utf8'));
+    expect(after.chapters[0].titleSynthesized).toBe(true);
+  });
+});

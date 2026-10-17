@@ -118,6 +118,7 @@ import {
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
+import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
@@ -6631,10 +6632,13 @@ export async function runMainAnalyzerJob(
     }
 
     /* ── Compose the AnalyseResponse. */
-    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
+    /* The hint title is authoritative (kept in step with state.json by the
+       restructure route, and by hydration only when the chapter counts match
+       and the ids line up); the cached stage1 chapter list is only a snapshot
+       keyed by pre-restructure ids (#3681). */
     const chapters = record.chapterHints.map((h) => ({
       id: h.id,
-      title: chapterTitleById.get(h.id) ?? h.title,
+      title: h.title,
       duration: durationPlaceholder(),
       state: 'queued' as const,
       progress: 0,
@@ -7189,22 +7193,33 @@ export async function runMainAnalyzerJob(
                    rebuild below would otherwise drop it and the next scan would
                    mint a fresh random uuid for every chapter. */
                 const prevUuidById = new Map<number, string>();
+                const prevOverriddenById = new Map<number, string>();
                 for (const c of prev.chapters) {
                   if (c.excluded) prevExcludedById.set(c.id, true);
                   if (c.held) prevHeldById.set(c.id, true);
                   if (c.uuid) prevUuidById.set(c.id, c.uuid);
+                  if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
                 }
                 const next: BookStateJson = {
                   ...prev,
-                  chapters: chapters.map((c) => ({
-                    id: c.id,
-                    title: c.title,
-                    slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                    duration: c.duration,
-                    excluded: prevExcludedById.get(c.id) || undefined,
-                    held: prevHeldById.get(c.id) || undefined,
-                    uuid: prevUuidById.get(c.id),
-                  })),
+                  /* #3628 — the title-source flags are not re-derivable here, so
+                     carry them from prev (both only while the title is unchanged,
+                     so a mis-aligned parse cannot move a flag onto another heading)
+                     or a re-analysis would strip them and a later restructure
+                     would misjudge the title. */
+                  chapters: carryTitleSynthesized(
+                    chapters.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                      duration: c.duration,
+                      excluded: prevExcludedById.get(c.id) || undefined,
+                      held: prevHeldById.get(c.id) || undefined,
+                      uuid: prevUuidById.get(c.id),
+                      titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
+                    })),
+                    prev.chapters,
+                  ),
                   /* srv-59 Task 11 — record which analyzer produced this cast/
                      sentence set and, when the dialogue-structure engine ran,
                      the aggregated run report. Additive + schema-tolerant: no
@@ -8899,10 +8914,9 @@ export async function runSubsetAnalyzerJob(
       folded.sentences.length,
     );
 
-    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
     const chaptersOut = record.chapterHints.map((h) => ({
       id: h.id,
-      title: chapterTitleById.get(h.id) ?? h.title,
+      title: h.title,
       duration: durationPlaceholder(),
       state: 'queued' as const,
       progress: 0,
@@ -9143,22 +9157,33 @@ export async function runSubsetAnalyzerJob(
                    rebuild below would otherwise drop it and the next scan would
                    mint a fresh random uuid for every chapter. */
                 const prevUuidById = new Map<number, string>();
+                const prevOverriddenById = new Map<number, string>();
                 for (const c of prev.chapters) {
                   if (c.excluded) prevExcludedById.set(c.id, true);
                   if (c.held) prevHeldById.set(c.id, true);
                   if (c.uuid) prevUuidById.set(c.id, c.uuid);
+                  if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
                 }
                 const next: BookStateJson = {
                   ...prev,
-                  chapters: chaptersOut.map((c) => ({
-                    id: c.id,
-                    title: c.title,
-                    slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                    duration: c.duration,
-                    excluded: prevExcludedById.get(c.id) || undefined,
-                    held: prevHeldById.get(c.id) || undefined,
-                    uuid: prevUuidById.get(c.id),
-                  })),
+                  /* #3628 — the title-source flags are not re-derivable here, so
+                     carry them from prev (both only while the title is unchanged,
+                     so a mis-aligned parse cannot move a flag onto another heading)
+                     or a re-analysis would strip them and a later restructure
+                     would misjudge the title. */
+                  chapters: carryTitleSynthesized(
+                    chaptersOut.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                      duration: c.duration,
+                      excluded: prevExcludedById.get(c.id) || undefined,
+                      held: prevHeldById.get(c.id) || undefined,
+                      uuid: prevUuidById.get(c.id),
+                      titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
+                    })),
+                    prev.chapters,
+                  ),
                   /* srv-59 Task 11 — a subset retry supersedes whatever
                      provenance the last full run left, so this REWRITES the
                      block wholesale (fresh `at` + a report recomputed from just

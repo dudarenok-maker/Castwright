@@ -203,3 +203,25 @@ describe('parsePdf — outline-based chapter title replacement', () => {
     expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1']);
   });
 });
+
+describe('parsePdf — titleSynthesized', () => {
+  it('drops the flag from chapters whose titles are replaced by outline entries', async () => {
+    setPdf({
+      text: 'Opening words with no heading.\n\nChapter 2\nbody two',
+      info: {},
+      outline: [{ title: 'The Berth at Liverpool' }, { title: 'A Manifest Two Names Short' }],
+    });
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters.map((c) => c.title)).toEqual([
+      'The Berth at Liverpool',
+      'A Manifest Two Names Short',
+    ]);
+    expect(out.chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  it('keeps the flag when the outline does not apply', async () => {
+    setPdf({ text: 'Opening words with no heading.\n\nChapter 2\nbody two', info: {} });
+    const out = await parsePdf(Buffer.from(''), { fileName: 'x.pdf' });
+    expect(out.chapters[0].titleSynthesized).toBe(true);
+  });
+});
