@@ -315,6 +315,7 @@ export function BooksRoute() {
           title: 'Manuscript re-parsed',
           body,
           primaryLabel: 'Analyse now',
+          restructureBookId: b.bookId,
           onPrimary: async () => {
             /* Apply any deltas the user made vs the server's preserved
                set, then navigate. Fired in parallel so a handful of

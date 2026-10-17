@@ -861,12 +861,14 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     // "Analyse now" — the dialog's primary action (the dialog itself lives in Layout).
     const bodyUi = render(<Provider store={store}>{dialog.body}</Provider>);
     await dialog.onPrimary();
-    return { store, bodyUi };
+    return { store, bodyUi, dialog };
   }
 
   it('#3400 pass 7: "Analyse now" sends the exclude deltas when the book is not restructuring (control)', async () => {
-    await reparseThenAnalyseNow(false);
+    const { dialog } = await reparseThenAnalyseNow(false);
     expect(setChapterExcludedMock).toHaveBeenCalledWith('b1', 1, true);
+    /* #3400 pass 8 - the dialog names its book so Layout disables "Analyse now" while it restructures. */
+    expect((dialog as unknown as { restructureBookId?: string }).restructureBookId).toBe('b1');
   });
 
   it('#3400 pass 7: "Analyse now" sends no exclude deltas while the book restructures, and the dialog chapter toggles are disabled', async () => {

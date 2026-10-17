@@ -16,7 +16,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore, type Middleware } from '@reduxjs/toolkit';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useOutletContext } from 'react-router';
+import { useEffect } from 'react';
 
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
@@ -192,7 +193,7 @@ vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
 
-import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests } from './layout';
+import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests, type LayoutContext } from './layout';
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
@@ -2653,5 +2654,47 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
     seedBookBInSlices(store);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     await assertMatchWaitsForBookA(store);
+  });
+});
+
+describe('Layout - showInfo primary action while the named book restructures (#3400 pass 8)', () => {
+  function InfoProbe() {
+    const ctx = useOutletContext<LayoutContext>();
+    useEffect(() => {
+      ctx.showInfo({
+        title: 'Manuscript re-parsed',
+        body: 'body',
+        primaryLabel: 'Analyse now',
+        onPrimary: () => undefined,
+        restructureBookId: 'b1',
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return null;
+  }
+
+  it('disables the dialog primary button while that book restructures and re-enables it after', async () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="*" element={<InfoProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    const btn = await screen.findByRole('button', { name: /Analyse now/i });
+    expect(btn).not.toBeDisabled();
+    act(() => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    expect(screen.getByRole('button', { name: /Analyse now/i })).toBeDisabled();
+    act(() => {
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
+    });
+    expect(screen.getByRole('button', { name: /Analyse now/i })).not.toBeDisabled();
   });
 });

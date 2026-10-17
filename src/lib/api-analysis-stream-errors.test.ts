@@ -223,4 +223,49 @@ describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
       expect((err as Error).message).toBe(body.message);
     }
   });
+
+  /* #3400 pass 8 - the server refuses an analysis start while the book is being
+     restructured. Same quiet "try again" outcome as the #3435 refusals, on every
+     reader and both wire forms; never a generic `stream_failed`. */
+  describe('chapters_restructuring', () => {
+    const RESTRUCTURING = {
+      error: 'chapters_restructuring',
+      message: 'The chapters of this book are being changed. Try again in a moment.',
+    };
+    const frame = JSON.stringify({ kind: 'error', code: RESTRUCTURING.error, message: RESTRUCTURING.message });
+
+    it('maps the 409 body on the main and the subset reader', async () => {
+      const { api, AnalysisError } = await import('./api');
+      for (const call of [
+        () => api.analyseManuscript('mns-1', {}),
+        () => api.runAnalysisForChapters('mns-1', [4], {}),
+      ]) {
+        fetchMock.mockResolvedValueOnce(refusedResponse(RESTRUCTURING));
+        const err = await call().then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(AnalysisError);
+        expect((err as InstanceType<typeof AnalysisError>).code).toBe('chapters_restructuring');
+        expect((err as Error).message).toBe(RESTRUCTURING.message);
+      }
+    });
+
+    it('maps the late SSE error frame on the main and the subset reader', async () => {
+      const { api, AnalysisError } = await import('./api');
+      for (const call of [
+        () => api.analyseManuscript('mns-1', {}),
+        () => api.runAnalysisForChapters('mns-1', [4], {}),
+      ]) {
+        fetchMock.mockResolvedValueOnce(sseResponse([frame]));
+        const err = await call().then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(AnalysisError);
+        expect((err as InstanceType<typeof AnalysisError>).code).toBe('chapters_restructuring');
+        expect((err as Error).message).toBe(RESTRUCTURING.message);
+      }
+    });
+  });
 });

@@ -623,7 +623,10 @@ export function GenerationView({
          because the book's main analysis run is live or still stopping; it
          is handled the same way (restore, message on the row). */
       const isSubsetInProgress =
-        e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running');
+        e instanceof AnalysisError &&
+        (e.code === 'subset_in_progress' ||
+          e.code === 'main_analysis_running' ||
+          e.code === 'chapters_restructuring');
       /* #3435 — `resume_required`: the server attributed the chapter (an
          Include target is attributed whenever the roster is final), but the
          book is not finished, so nothing was persisted as final. No rollback;
@@ -896,7 +899,10 @@ export function GenerationView({
          server's message instead of the generic fallback text. */
       /* #3435 — `main_analysis_running` (the main run is live or finishing)
          never started a job either: same handling. */
-      if (e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running')) {
+      if (
+        e instanceof AnalysisError &&
+        (e.code === 'subset_in_progress' || e.code === 'main_analysis_running' || e.code === 'chapters_restructuring')
+      ) {
         if (ownsSnapshot()) {
           if (priorSnapshot) {
             dispatch(analysisActions.setActiveStream(priorSnapshot));

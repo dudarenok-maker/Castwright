@@ -2550,11 +2550,13 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
   });
 
-  it('a 409 on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async () => {
+  it.each([
+    ['main_analysis_running', 'The analysis on this book is still stopping. Try again in a moment.'],
+    ['chapters_restructuring', 'The chapters of this book are being changed. Try again in a moment.'],
+  ])('a 409 %s on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async (code, message) => {
     /* The paused main run is still stopping (the server's draining 409): the
        refusal restores the prior snapshot, as subset_in_progress does, rather
        than clearing it. */
-    const message = 'The analysis on this book is still stopping. Try again in a moment.';
     const pausedMain: AnalysisStreamSnapshot = {
       bookId: 'b1',
       manuscriptId: 'm1',
@@ -2569,7 +2571,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     /* Include. */
     const store = makeIncludeStore();
     store.dispatch(analysisActions.setActiveStream(pausedMain));
-    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, code));
     const { unmount } = renderInclude(store);
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
     expect(await screen.findByText(message)).toBeInTheDocument();
@@ -2579,7 +2581,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     /* Re-analyse. */
     const store2 = makeIncludeStore();
     store2.dispatch(analysisActions.setActiveStream(pausedMain));
-    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, code));
     renderInclude(store2);
     fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));

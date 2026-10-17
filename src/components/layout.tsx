@@ -27,6 +27,7 @@ import {
 import { dismissDriftOp, acceptRevisionOp, rejectRevisionOp } from '../store/revisions-thunks';
 import { startPreviewRegen, approvePreviewSideEffects, restoreUnrecordedPreview } from '../store/preview-thunks';
 import { selectActivePreviewStub } from '../store/ui-slice';
+import { selectBookEditsLocked } from '../store/restructure-lock';
 import { selectChapterRendering } from '../store/splice-slice';
 import { flushBookPersistence } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
@@ -139,6 +140,8 @@ export interface LayoutContext {
     eyebrow?: string;
     primaryLabel?: string;
     onPrimary?: () => void;
+    /** The book the primary action acts on: the button disables while it restructures. */
+    restructureBookId?: string;
   }) => void;
   showError: (title: string, body: ReactNode, eyebrow?: string) => void;
   /* Plan 48: transient toast surface for stream / network errors.
@@ -500,6 +503,7 @@ export function Layout() {
     body: ReactNode;
     primaryLabel?: string;
     onPrimary?: () => void;
+    restructureBookId?: string;
   } | null>(null);
   /* Reassign Lines modal state — populated by the ProfileDrawer's
      unlink-alias callback after the server returns its `impactedChapters`
@@ -522,6 +526,7 @@ export function Layout() {
     chapterId: number;
     segmentIndices: number[];
   } | null>(null);
+  const resultDialogLocked = useAppSelector((s) => selectBookEditsLocked(s, resultDialog?.restructureBookId));
   const showInfo: LayoutContext['showInfo'] = (args) =>
     setResultDialog({ open: true, kind: 'info', ...args });
   const showError: LayoutContext['showError'] = (title, body, eyebrow) =>
@@ -2876,6 +2881,7 @@ export function Layout() {
           body={resultDialog.body}
           primaryLabel={resultDialog.kind === 'info' ? resultDialog.primaryLabel : undefined}
           onPrimaryAction={resultDialog.kind === 'info' ? resultDialog.onPrimary : undefined}
+          primaryDisabled={resultDialogLocked}
           onClose={() => setResultDialog(null)}
         />
       )}

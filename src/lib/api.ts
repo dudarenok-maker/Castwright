@@ -3054,7 +3054,11 @@ async function realAnalyseManuscript(
     }
     /* #3435 — a start refused because a chapter retry is running, or because
        the previous run is still stopping. */
-    const refusal = analysisRefusalFromBody(res.status, body, ['subset_analysis_running', 'main_analysis_running']);
+    const refusal = analysisRefusalFromBody(res.status, body, [
+      'subset_analysis_running',
+      'main_analysis_running',
+      'chapters_restructuring',
+    ]);
     if (refusal) throw refusal;
     throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
@@ -5777,7 +5781,7 @@ async function realRunAnalysisForChapters(
     /* #3435 — refused while the book has a main analysis run, live or still
        stopping; the server's message goes on the row. */
     const body = await res.text().catch(() => '');
-    const refusal = analysisRefusalFromBody(res.status, body, ['main_analysis_running']);
+    const refusal = analysisRefusalFromBody(res.status, body, ['main_analysis_running', 'chapters_restructuring']);
     if (refusal) throw refusal;
     throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
   }
