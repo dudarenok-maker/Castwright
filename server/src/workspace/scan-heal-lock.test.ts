@@ -5,7 +5,15 @@
    lock and fill only the missing fields of chapters that still exist. */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -188,6 +196,42 @@ describe('segments backfill (findBookByBookId) merges under the book lock', () =
     const s = readState(statePath);
     expect(s.chapters.map((c: { id: number }) => c.id)).toContain(99);
     expect(s.chapters.filter((c: { audioModelKey?: string }) => c.audioModelKey)).toHaveLength(4);
+  });
+
+  it('hands the caller the state it merged under the lock, not the pre-wait snapshot (pass-7 1)', async () => {
+    for (let k = 0; k < 3; k++) {
+      const { bookId, bookDir, statePath } = seedBook(4);
+      /* A restructure already HOLDING the lock when the heal queues: started,
+         not awaited, so the heal waits behind it. */
+      hooks.onSegmentsRead = armOnce(bookDir, async () => {
+        void restructureAddChapter(bookId, statePath);
+      });
+      const located = await scan.findBookByBookId(bookId);
+      expect(located?.state.chapters.map((c) => c.id), `iteration ${k}`).toContain(99);
+      expect(located?.state.chapters).toHaveLength(5);
+    }
+  });
+
+  it('re-locates when the heal finds the book folder moved under it (pass-7 1)', async () => {
+    const { bookId, bookDir } = seedBook(2);
+    const moved = bookDir.replace(/Heal Book (\d+)$/, 'Moved Heal Book $1');
+    hooks.onSegmentsRead = armOnce(bookDir, async () => {
+      void lock.withBookLock(bookId, async () => {
+        /* Windows refuses to rename a folder the heal is mid-read in; retry. */
+        for (let i = 0; i < 100; i++) {
+          await tick(2);
+          try {
+            renameSync(bookDir, moved);
+            return;
+          } catch {
+            /* still being read */
+          }
+        }
+      });
+    });
+    const located = await scan.findBookByBookId(bookId);
+    expect(located?.bookDir).toBe(moved);
+    expect(existsSync(bookDir)).toBe(false);
   });
 
   it('skips a chapter whose slug changed under it', async () => {
