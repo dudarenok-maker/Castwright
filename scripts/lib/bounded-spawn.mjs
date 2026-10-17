@@ -21,18 +21,25 @@ import { spawn, spawnSync } from 'node:child_process';
 const isWindows = process.platform === 'win32';
 
 /** Kill the whole tree rooted at `pid`. Best-effort: the child may already be
- *  gone, and a failed kill must not mask the timeout error being raised. */
+ *  gone, and a failed kill must not mask the timeout error being raised.
+ *  Returns whether the kill actually reached something (taskkill exit 0 /
+ *  SIGKILL delivered), so callers report what happened, not what they hoped. */
 function killTree(pid) {
   try {
     if (isWindows) {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    } else {
-      process.kill(-pid, 'SIGKILL');
+      return spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;
     }
+    return process.kill(-pid, 'SIGKILL');
   } catch {
-    // Already exited.
+    return false; // Already exited (ESRCH).
   }
 }
+
+// A child that exits before draining `input` fails the stdin write with EPIPE
+// (POSIX) / EOF (Windows). spawnSync reports that via r.error and still returns
+// the child's own status; here the exit status speaks and the write error is
+// dropped. Any other stdin failure is real and rejects.
+const BENIGN_STDIN_ERRORS = new Set(['EPIPE', 'EOF', 'ERR_STREAM_DESTROYED']);
 
 /** Run `command args` and resolve `{ status, stdout, stderr }`.
  *
@@ -63,21 +70,39 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, ...option
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
-    if (input !== undefined) child.stdin.end(input);
+    if (input !== undefined) {
+      child.stdin.on('error', (err) => {
+        if (BENIGN_STDIN_ERRORS.has(err.code) || settled) return;
+        settled = true;
+        clearTimeout(timer);
+        killTree(child.pid);
+        reject(err);
+      });
+      child.stdin.end(input);
+    }
 
     child.on('exit', () => { rootExited = true; });
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      // POSIX: the group id outlives the root while any member does, so the
-      // group kill is safe either way. Windows: a dead root's pid may be reused.
+      // Windows: a dead root's pid may be reused, so it is never signalled.
+      // POSIX: the pgid outlives the root only while a member does; once the
+      // group is empty it is free for reuse, so the kill is attempted but its
+      // outcome — not an assumption — is what the message reports.
       const canKill = !rootExited || !isWindows;
-      if (canKill) killTree(child.pid);
+      const killed = canKill && killTree(child.pid);
       const what = rootExited
         ? 'the root exited, but its output pipes stayed open — a descendant escaped'
-          + (canKill ? ' (its process group was killed)' : ' and could NOT be killed')
+          + (killed ? ' (its process group was killed)'
+            : canKill ? ' (its process group was already empty — nothing was killed)'
+              : ' and could NOT be killed')
         : 'its process tree was killed';
+      // Release the parent's pipe ends so the host can exit while an escaped
+      // descendant still holds the far ends.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.stdin?.destroy();
       reject(new Error(
         `HUNG: "${label}" did not exit within ${timeoutMs}ms — ${what}.\n`
           + `stdout so far:\n${stdout}\nstderr so far:\n${stderr}`,

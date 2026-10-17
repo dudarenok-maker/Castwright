@@ -104,9 +104,57 @@ test('boundedSpawn: root exited but a descendant holds the pipes open — says s
         assert.match(err.message, /root exited, but its output pipes stayed open/);
         assert.doesNotMatch(err.message, /process tree was killed/);
         assert.match(err.message, /root-output/);
+        // The tail reports what the kill actually did. Windows never signals a
+        // dead root's pid (it may be reused); a taskkill on it would fail and
+        // read differently. POSIX: the detached grandchild left the root's
+        // group, so the group is empty and the message must NOT claim a kill.
+        if (process.platform === 'win32') {
+          assert.match(err.message, /and could NOT be killed/);
+        } else {
+          assert.match(err.message, /already empty — nothing was killed/);
+          assert.doesNotMatch(err.message, /process group was killed/);
+        }
         return true;
       },
     );
+  } finally {
+    reapPidFile(pidFile);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('boundedSpawn: a child that exits without draining a large input resolves with its own status (no unhandled stdin error)', async () => {
+  const r = await boundedSpawn('case: undrained stdin', process.execPath, ['-e', 'process.exit(3)'], {
+    timeoutMs: 20_000,
+    input: 'x'.repeat(2_000_000),
+  });
+  assert.equal(r.status, 3);
+});
+
+test('boundedSpawn: after a HUNG rejection the host can exit (parent pipe ends released)', async () => {
+  // Run in a fresh node process: the escaped descendant lives ~30s, the host
+  // must exit well before that rather than wait on the pipes it still holds.
+  const dir = mkdtempSync(join(tmpdir(), 'bounded-spawn-'));
+  const pidFile = join(dir, 'escaped.pid');
+  const libUrl = new URL('../lib/bounded-spawn.mjs', import.meta.url).href;
+  const host = `
+    import { boundedSpawn } from ${JSON.stringify(libUrl)};
+    const root = \`
+      const { spawn } = require('node:child_process');
+      spawn(process.execPath, ['-e',
+        "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 30000)",
+        \${JSON.stringify(${JSON.stringify(pidFile)})}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();
+    \`;
+    await boundedSpawn('host', process.execPath, ['-e', root], { timeoutMs: 1000 }).catch(() => {});
+  `;
+  try {
+    const started = Date.now();
+    const r = await boundedSpawn('case: host exit', process.execPath, ['--input-type=module', '-e', host], {
+      timeoutMs: 20_000,
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(elapsed < 15_000, `host lingered ${elapsed}ms on the escaped descendant's pipes`);
   } finally {
     reapPidFile(pidFile);
     rmSync(dir, { recursive: true, force: true });
