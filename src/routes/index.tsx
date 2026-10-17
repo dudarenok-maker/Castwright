@@ -16,6 +16,7 @@ import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import type { RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from '../store/restructure-lock';
 import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
@@ -299,6 +300,7 @@ export function BooksRoute() {
 
         const body = (
           <ReparseResultBody
+            bookId={b.bookId}
             bookTitle={b.title}
             chapters={dialogChapters}
             initialExcludedSlugs={initialExcludedSlugs}
@@ -320,12 +322,17 @@ export function BooksRoute() {
                logged but don't block navigation — the worst case is a
                chapter that should have been excluded gets analyzed and
                the user can re-toggle from the Generate view. */
-            void applyExcludedDeltas(
-              b.bookId,
-              dialogChapters,
-              initialExcludedSlugs,
-              pendingBox.current,
-            );
+            /* #3400 pass 7 — the deltas are keyed by chapter id, which a restructure
+               of this book renumbers: skip them (toast) rather than land on the
+               wrong chapters. The dialog's toggles are disabled for the same book. */
+            if (!refuseIfEditsLocked(reduxStore.getState, dispatch, b.bookId)) {
+              void applyExcludedDeltas(
+                b.bookId,
+                dialogChapters,
+                initialExcludedSlugs,
+                pendingBox.current,
+              );
+            }
             /* Await the background library rescan only at navigation time.
                In practice the user spends >300ms reading the dialog, so
                this is almost always already resolved by the time they
@@ -1053,17 +1060,20 @@ interface ReparseDialogChapter {
    (onChangeExcludedSlugs) so the dialog's onPrimary can apply deltas
    without coupling to dialog state. */
 function ReparseResultBody({
+  bookId,
   bookTitle,
   chapters,
   initialExcludedSlugs,
   onChangeExcludedSlugs,
 }: {
+  bookId: string;
   bookTitle: string;
   chapters: ReparseDialogChapter[];
   initialExcludedSlugs: Set<string>;
   onChangeExcludedSlugs: (s: Set<string>) => void;
 }): ReactNode {
   const dispatch = useAppDispatch();
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   /* Dynamic curated ∪ live-Ollama-tag union for the "Analyse with" picker, so
      a pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels
@@ -1124,9 +1134,10 @@ function ReparseResultBody({
         onResetSuggestions={() => setExcludedSlugs(new Set(suggestedExcludedSlugs))}
         expanded={showChapterList}
         onToggleExpanded={() => setShowChapterList((v) => !v)}
-        disabled={false}
+        disabled={restructuring}
         heading="Chapters to analyze"
       />
+      {restructuring && <p className="text-xs text-ink/60">{RESTRUCTURING_REASON}</p>}
 
       <label className="flex items-center justify-between gap-3 rounded-2xl bg-canvas border border-ink/10 px-3 py-2.5">
         <span className="text-sm font-medium text-ink">Analyse with</span>

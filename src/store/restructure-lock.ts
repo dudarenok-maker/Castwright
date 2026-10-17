@@ -26,13 +26,22 @@ export const selectEditsLocked = (s: RootState): boolean => {
   return !!((manuscriptBook && r[manuscriptBook]) || (stageBook && r[stageBook]));
 };
 
+/** True while `bookId` specifically is being restructured — for surfaces that
+    name their book (a queue entry, the Generate view's `bookId` prop) rather
+    than acting on the one in scope. */
+export const selectBookEditsLocked = (s: RootState, bookId: string | null | undefined): boolean =>
+  !!bookId && !!s.ui?.restructuringBooks?.[bookId];
+
 /** Caller-side check for use BEFORE any side write. Toasts and returns true
-    when the book is restructuring (the caller must then do nothing). */
+    when the book is restructuring (the caller must then do nothing). Pass
+    `bookId` when the surface acts on a named book rather than the one in scope. */
 export function refuseIfEditsLocked(
   getState: () => RootState,
   dispatch: (a: ReturnType<typeof notificationsActions.pushToast>) => unknown,
+  bookId?: string | null,
 ): boolean {
-  if (!selectEditsLocked(getState())) return false;
+  const state = getState();
+  if (!(bookId ? selectBookEditsLocked(state, bookId) : selectEditsLocked(state))) return false;
   dispatch(
     notificationsActions.pushToast({
       kind: 'warn',

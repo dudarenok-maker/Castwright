@@ -9,6 +9,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { notificationsSlice } from './notifications-slice';
 import { chaptersSlice } from './chapters-slice';
+import { uiSlice, uiActions } from './ui-slice';
 import { api } from '../lib/api';
 import type { Chapter } from '../lib/types';
 import {
@@ -326,6 +327,7 @@ describe('cancelQueueEntry — "Not queued" (held) wiring (Bug 1)', () => {
         queue: queueSlice.reducer,
         notifications: notificationsSlice.reducer,
         chapters: chaptersSlice.reducer,
+        ui: uiSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
@@ -360,6 +362,21 @@ describe('cancelQueueEntry — "Not queued" (held) wiring (Bug 1)', () => {
     await store.dispatch(cancelQueueEntry('e1'));
     expect(store.getState().chapters.chapters[0].held).toBe(true);
     expect(persist).toHaveBeenCalledWith('book-A', 1, true);
+    persist.mockRestore();
+  });
+
+  it('#3400 pass 7: cancelling still drops the entry but writes no hold while the book restructures (the chapter id is about to be renumbered)', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const persist = vi.spyOn(api, 'setChapterHeld');
+    const store = makeHeldStore(
+      { id: 1, state: 'queued' },
+      sampleEntry({ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }),
+    );
+    (store.dispatch as unknown as (a: unknown) => void)(uiActions.setRestructuringBook('book-A'));
+    await store.dispatch(cancelQueueEntry('e1'));
+    expect(persist).not.toHaveBeenCalled();
+    expect(store.getState().chapters.chapters[0].held).toBeUndefined();
+    expect(store.getState().queue.entries).toHaveLength(0);
     persist.mockRestore();
   });
 

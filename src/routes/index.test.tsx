@@ -824,6 +824,59 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     expect(store.getState().manuscript.title).toBeNull();
   });
 
+  /* #3400 pass 7 — the dialog's exclude toggles (and the front-matter
+     auto-suggestions it applies on "Analyse now") are keyed by chapter id,
+     which a restructure of that book renumbers. */
+  async function reparseThenAnalyseNow(restructuring: boolean) {
+    const store = makePopulatedStore();
+    reparseBookMock.mockResolvedValue({
+      state: { chapters: [] },
+      chapterCount: 2,
+      chapterTitles: ['Dedication', 'Chapter One'],
+      chapters: [
+        { id: 1, title: 'Dedication', slug: '01-dedication', wordCount: 3, excluded: false },
+        { id: 2, title: 'Chapter One', slug: '02-chapter-one', wordCount: 5000, excluded: false },
+      ],
+    });
+    getLibraryMock.mockResolvedValue({
+      authors: [
+        {
+          name: 'Della Renwick',
+          series: [
+            { name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] },
+          ],
+        },
+      ],
+    });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    setChapterExcludedMock.mockResolvedValue({ id: 1, excluded: true });
+    const { showInfo } = renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+    const reparseButtons = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+    fireEvent.click(reparseButtons[reparseButtons.length - 1]);
+    await waitFor(() => expect(showInfo).toHaveBeenCalled());
+    const dialog = showInfo.mock.calls[0][0] as { body: React.ReactNode; onPrimary: () => Promise<void> };
+    if (restructuring) store.dispatch(uiActions.setRestructuringBook('b1'));
+    // "Analyse now" — the dialog's primary action (the dialog itself lives in Layout).
+    const bodyUi = render(<Provider store={store}>{dialog.body}</Provider>);
+    await dialog.onPrimary();
+    return { store, bodyUi };
+  }
+
+  it('#3400 pass 7: "Analyse now" sends the exclude deltas when the book is not restructuring (control)', async () => {
+    await reparseThenAnalyseNow(false);
+    expect(setChapterExcludedMock).toHaveBeenCalledWith('b1', 1, true);
+  });
+
+  it('#3400 pass 7: "Analyse now" sends no exclude deltas while the book restructures, and the dialog chapter toggles are disabled', async () => {
+    const { bodyUi } = await reparseThenAnalyseNow(true);
+    expect(setChapterExcludedMock).not.toHaveBeenCalled();
+    // ChapterExclusionList's `disabled` locks its header toggle and every control in it.
+    expect(bodyUi.getByRole('button', { name: /Chapters to analyze/i })).toBeDisabled();
+    expect(bodyUi.getByText('Unavailable while the chapters are being restructured.')).toBeInTheDocument();
+  });
+
   /* #3376 — the redux reset is a hydrate-style mirror of a wipe the server
      already did, not a user edit. The RPC is async, so by the time it
      resolves the user may have opened ANOTHER book (ui.stage now names it);
