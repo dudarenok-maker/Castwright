@@ -964,6 +964,25 @@ export async function findBookByBookId(bookId: string): Promise<{
   return findBookBy((state) => state.bookId === bookId);
 }
 
+/** Locate the folder of an `unreadable` book (state files exist and none parse)
+    by its bookId. Such a row's id is derived from its folder path, not from state,
+    so `findBookByBookId` (which matches parseable state) can never find it. Walks
+    the SAME real directory listing the scan does and only compares the derived id
+    with the caller's, so the caller's string never becomes a path segment. */
+export async function findUnreadableBookDirByBookId(bookId: string): Promise<string | null> {
+  ensureWorkspace();
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        if (makeBookId(authorName, seriesName, titleName) !== bookId) continue;
+        const book = await scanBook(authorName, seriesName, titleName);
+        if (book?.status === 'unreadable') return join(BOOKS_ROOT, authorName, seriesName, titleName);
+      }
+    }
+  }
+  return null;
+}
+
 /** Locate a book by its manuscriptId — used to re-hydrate the in-memory
     manuscript record after a server restart so the analysis route can
     resume from cache. */
