@@ -102,6 +102,51 @@ describe('samples router', () => {
     expect(JSON.parse(readFileSync(`${statePath}.bak.1`, 'utf8')).manuscriptId).toBe(manuscriptId);
     expect(existsSync(statePath)).toBe(false);
   });
+
+  /* #3625 review 2: a torn copy with nothing to recover is NOT ours to clobber, but an
+     error that says nothing about the file (EACCES / EISDIR) must surface instead
+     of claiming "loaded" with nothing there. */
+  describe('a copy whose state cannot be read', () => {
+    const paths = () => {
+      const d = join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+      return { statePath: join(d, '.audiobook', 'state.json'), castPath: join(d, '.audiobook', 'cast.json') };
+    };
+    const seed = async () => {
+      const { statePath, castPath } = paths();
+      rmSync(statePath, { recursive: true, force: true });
+      for (const n of [1, 2, 3]) rmSync(`${statePath}.bak.${n}`, { force: true });
+      const first = await request(app).post(`/api/samples/${SLUG}/load`);
+      expect(first.status).toBe(200);
+      const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+      cast.userEdited = 'keep me';
+      writeFileSync(castPath, JSON.stringify(cast));
+      return { statePath, castPath };
+    };
+
+    it('torn state with no backup: reports alreadyLoaded and overwrites nothing', async () => {
+      if (!bundleReady()) return;
+      const { statePath, castPath } = await seed();
+      writeFileSync(statePath, '{ torn');
+      const res = await request(app).post(`/api/samples/${SLUG}/load`);
+      expect(res.status).toBe(200);
+      expect(res.body.alreadyLoaded).toBe(true);
+      expect(readFileSync(statePath, 'utf8')).toBe('{ torn');
+      expect(JSON.parse(readFileSync(castPath, 'utf8')).userEdited).toBe('keep me');
+    });
+
+    it('a non-parse read error (EISDIR) fails the load with a 500 instead of claiming loaded', async () => {
+      if (!bundleReady()) return;
+      const { statePath, castPath } = await seed();
+      rmSync(statePath, { force: true });
+      mkdirSync(statePath);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await request(app).post(`/api/samples/${SLUG}/load`);
+      expect(res.status).toBe(500);
+      expect(res.body.alreadyLoaded).toBeUndefined();
+      expect(JSON.parse(readFileSync(castPath, 'utf8')).userEdited).toBe('keep me');
+      rmSync(statePath, { recursive: true, force: true });
+    });
+  });
 });
 
 describe('samples router — no-language bundle normalisation', () => {

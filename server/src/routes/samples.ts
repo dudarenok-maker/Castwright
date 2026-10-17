@@ -101,11 +101,14 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       // Idempotent: already present → no-op (never clobber a user's edited copy).
       /* "Present" is the recovering reader's verdict, not main's existence: a
          stranded copy (main missing, a good .bak.N) is present too, and a
-         read that throws (torn, nothing to recover from) is not ours to clobber. */
+         TORN one (a parse failure, nothing to recover from) is not ours to
+         clobber. Any other read error (EACCES / EISDIR) says nothing about the
+         file: it fails the load rather than claiming a copy that may not exist. */
       try {
         if (await readStateJsonWithRecovery(stateJsonPath(bookDir))) return true;
-      } catch {
-        return true;
+      } catch (readErr) {
+        if (readErr instanceof SyntaxError) return true;
+        throw readErr;
       }
 
       await mkdir(dotAudiobook(bookDir), { recursive: true });

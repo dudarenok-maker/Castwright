@@ -1297,8 +1297,13 @@ async function snapshotCorruptBytesBeforeWrite(): Promise<void> {
         'so writing would replace it with unverified settings. Retry.',
     );
   }
-  if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
-    await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
+  if (settingsFileCorrupt) {
+    /* The damaged bytes are main's - or, when a stranded write left main absent, the
+       newest backup's (the banner promises this snapshot either way). */
+    const damaged = [USER_SETTINGS_PATH, ...Array.from({ length: USER_SETTINGS_BACKUP_KEEP }, (_, i) => `${USER_SETTINGS_PATH}.bak.${i + 1}`)].find(
+      (p) => existsSync(p),
+    );
+    if (damaged) await copyFile(damaged, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
   }
 }
 

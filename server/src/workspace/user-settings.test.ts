@@ -1880,6 +1880,25 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     expect(mod.isUserSettingsFileCorrupt()).toBe(true);
   });
 
+  /* The corrupt banner promises a `.corrupt-<timestamp>` snapshot of the damaged file
+     on the next save. With main ABSENT the damaged bytes are the newest backup's. */
+  it('the next save after a stranded total loss snapshots the damaged backup as .corrupt-<ts> and clears the flag', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    await mod.writeUserSettings({ displayName: 'After' });
+
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const snaps = readdirSync(dir).filter((n) => n.startsWith(`${basename(mod.USER_SETTINGS_PATH)}.corrupt-`));
+    expect(snaps).toHaveLength(1);
+    expect(readFileSync(join(dir, snaps[0]), 'utf8')).toBe('{ torn');
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
   /* The operator's decision: deleting user-settings.json still RESETS settings. */
   it('a user who deletes the file (warm) gets first-run defaults, the stale backups are removed, and a new save works and sticks', async () => {
     seedHealthy();
