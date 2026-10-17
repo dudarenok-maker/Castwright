@@ -587,12 +587,24 @@ Design rationale:
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
   other lock is taken while it is held. The per-book `book` lock
-  (`workspace/book-lock.ts`, #3400) sits between them — the full order is
-  **`design` → `library-voice` → `cast` → `book` → `revisions`**: it may be taken
+  (`workspace/book-lock.ts`, #3400) sits between them, and the per-book
+  `state-json` lock (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is
+  the innermost **leaf** — the full order is
+  **`design` → `library-voice` → `cast` → `book` → `state-json`**, with `revisions`
+  a separate leaf beside it (never nested with `state-json`). `book` may be taken
   while holding `cast` (the cast merge's `manuscript-edits.json` rewrite), but no
-  holder of it may take `cast`, `design` or `library-voice`; every `state.json`
-  read-modify-write goes through it (`workspace/book-state-update.ts`, enforced
-  by `workspace/state-lock.guard.test.ts`). Accept/reject and `restore-unrecorded`
+  holder of it may take `cast`, `design` or `library-voice`; it is the
+  operation-level lock a chapter restructure holds across its read -> multi-file
+  write, and every `state.json` read-modify-write that derives from a read goes
+  through it (`workspace/book-state-update.ts`, enforced by
+  `workspace/state-lock.guard.test.ts`). `state-json` is taken INSIDE `book`
+  (or alone, by the render finalize / stamp paths, which hold no `book`), only
+  around the fresh re-read + write (`updateStateJsonLocked`, `state-migrate.ts`);
+  nothing else is taken while it is held — the one nesting is the folder-renaming
+  PUT, which also keys the destination path's `state-json`. The read goes inside
+  it, an absent `state.json` answers 404 and writes nothing, and
+  `workspace/state-json-lock.guard.test.ts` fails the build on an unlocked
+  `writeStateJsonAtomic`. Accept/reject and `restore-unrecorded`
   additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
@@ -611,9 +623,9 @@ Design rationale:
   best-effort `catch` blocks around identity writes, plus the two
   AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks
   and the two terminal `state.json` writes there (`updateStateAtDir`, taken
-  after the cast work — `withBookLock` does not bound its wait today, so that
-  wrap is defensive, but it keeps the write from ever being the silent kind),
-  each wrapped at its own call rather than at the enclosing
+  after the cast work — the `book` lock does not bound its wait, but the
+  `state-json` leaf lock inside it does, so that wrap is live and keeps the
+  write from ever being the silent kind), each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort. Swallowing at an
   identity site would report success with `cast.json` written and the
@@ -652,7 +664,7 @@ Design rationale:
   timeout's own message** — not an escalating body, not a per-item reason, and
   not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  HTTPS. Three route-level curation seams, all in `workspace/file-lock.ts`, and a route
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
@@ -667,10 +679,14 @@ Design rationale:
   plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
+  leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
+  so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round). See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` alone, which already
+  curates its own message. See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

@@ -19,7 +19,7 @@ function imageResponse(bytes: Uint8Array, contentType = 'image/jpeg'): Response 
   return new Response(bytes, { status: 200, headers: { 'Content-Type': contentType } });
 }
 
-/* #3640 / #3535: downloadCover now re-encodes every fetched body before it
+/* #3640 / #3535: the cover download now re-encodes every fetched body before it
    lands as cover.jpg, so the fixture must be a real decodable image. The old
    six-byte JPEG-header stub (ff d8 ff e0 00 10) was never decodable and is
    gone. */
@@ -54,6 +54,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+/* The production callers compose fetchCoverJpeg + writeCoverFile (the write
+   happens inside patchStateCover's lock); the tests below pin that
+   composition's on-disk result. */
+async function downloadCover(url: string, destPath: string): Promise<{ bytes: number }> {
+  const { fetchCoverJpeg, writeCoverFile } = await import('./store.js');
+  const jpeg = await fetchCoverJpeg(url);
+  await writeCoverFile(destPath, jpeg);
+  return { bytes: jpeg.length };
+}
+
 describe('backgroundFetchCover', () => {
   it('downloads the first-available candidate and patches state.json with candidateId + source', async () => {
     vi.doMock('./search.js', () => ({
@@ -85,12 +95,12 @@ describe('backgroundFetchCover', () => {
   });
 });
 
-describe('downloadCover containment', () => {
-  it('rejects a destPath outside the workspace before any fetch', async () => {
-    const { downloadCover } = await import('./store.js');
-    await expect(
-      downloadCover('https://x/evil.jpg', join(workspaceRoot, '..', '..', 'evil.jpg')),
-    ).rejects.toThrow();
+describe('writeCoverFile containment', () => {
+  it('rejects a destPath outside the workspace and writes nothing', async () => {
+    const { writeCoverFile } = await import('./store.js');
+    const evil = join(workspaceRoot, '..', 'evil-cover-dir', 'evil.jpg');
+    await expect(writeCoverFile(evil, Buffer.from(SAMPLE_JPEG))).rejects.toThrow();
+    expect(existsSync(join(workspaceRoot, '..', 'evil-cover-dir'))).toBe(false);
   });
 });
 
@@ -99,7 +109,7 @@ describe('downloadCover containment', () => {
    cover.jpg — a GIF/WebP stored verbatim breaks the m4b export, and a JPEG
    with trailing junk defeats ffmpeg's content probing. All fixtures are
    generated in-test with sharp; no committed binaries. */
-describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
+describe('fetchCoverJpeg + writeCoverFile re-encode provider bodies to JPEG (#3640)', () => {
   const fixtureDir = (name: string) => join(bookDir, 'covers', name);
   const destPath = (name: string) => join(fixtureDir(name), 'cover.jpg');
   const tmpFiles = (name: string) => {
@@ -126,7 +136,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
 
   it('stores a sharp-written JPEG when the provider serves a GIF', async () => {
     fetchMock.mockResolvedValue(imageResponse(await makeFixture('gif'), 'image/gif'));
-    const { downloadCover } = await import('./store.js');
 
     const { bytes } = await downloadCover('https://x/cover.gif', destPath('gif'));
 
@@ -137,7 +146,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
 
   it('stores a sharp-written JPEG when the provider serves a WebP', async () => {
     fetchMock.mockResolvedValue(imageResponse(await makeFixture('webp'), 'image/webp'));
-    const { downloadCover } = await import('./store.js');
 
     const { bytes } = await downloadCover('https://x/cover.webp', destPath('webp'));
 
@@ -148,7 +156,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
 
   it('stores a sharp-written JPEG when the provider serves a PNG', async () => {
     fetchMock.mockResolvedValue(imageResponse(await makeFixture('png'), 'image/png'));
-    const { downloadCover } = await import('./store.js');
 
     const { bytes } = await downloadCover('https://x/cover.png', destPath('png'));
 
@@ -166,7 +173,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
       .toBuffer();
     const junk = Buffer.concat([jpeg, Buffer.from([0x47]), Buffer.alloc(16)]);
     fetchMock.mockResolvedValue(imageResponse(junk));
-    const { downloadCover } = await import('./store.js');
 
     const { bytes } = await downloadCover('https://x/cover.jpg', destPath('junk'));
 
@@ -186,7 +192,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
     expect([...jpeg.subarray(jpeg.length - 2)]).toEqual([0xff, 0xd9]);
     const noEoi = jpeg.subarray(0, jpeg.length - 2);
     fetchMock.mockResolvedValue(imageResponse(noEoi));
-    const { downloadCover } = await import('./store.js');
 
     const { bytes } = await downloadCover('https://x/cover.jpg', destPath('noeoi'));
 
@@ -198,7 +203,6 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
 
   it('still rejects a bare JPEG SOI header, even in tolerant mode', async () => {
     fetchMock.mockResolvedValue(imageResponse(Buffer.from([0xff, 0xd8, 0xff])));
-    const { downloadCover } = await import('./store.js');
     await expect(downloadCover('https://x/cover.jpg', destPath('bare'))).rejects.toMatchObject({
       kind: 'invalid',
     });
@@ -207,7 +211,7 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
 
   it('rejects a non-decodable body with kind invalid and leaves nothing at destPath', async () => {
     fetchMock.mockResolvedValue(imageResponse(Buffer.from('<html>'), 'image/png'));
-    const { downloadCover, CoverDownloadError } = await import('./store.js');
+    const { CoverDownloadError } = await import('./store.js');
 
     const dest = destPath('invalid');
     let caught: unknown;

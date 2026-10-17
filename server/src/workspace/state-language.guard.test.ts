@@ -293,28 +293,36 @@ function countRawStateWrites(
    joined with 3 when #3400 moved the cover patches onto its locked
    `updateStateAtDir`; analysis.ts dropped from 4 to 1 when #3400 pass 8 moved
    its Start-fresh un-confirm and both terminal persists onto `updateStateAtDir`
-   too, leaving only the castConfirmed read at load). Asserted BOTH
+   too, leaving only the castConfirmed read at load; #3700 wrapped each
+   remaining state.json writer in withStateJsonLock, which re-spells
+   `stateJsonPath(bookDir)` as the lock key -- book-state.ts, chapters-restructure.ts,
+   import.ts, samples.ts and auto-backup.ts gained sites, and the pass-3 absent-state
+   refusals (DELETE's lock key + presence check, restore's presence check) added
+   more -- reads and lock keys, not new write sites; book-state-update.ts then
+   dropped 3 -> 1 and scan.ts 4 -> 3 when the layered `updateStateAtDir` /
+   `persistHealPatches` began reading and writing through `updateStateJsonLocked`
+   rather than spelling the path themselves). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'import/scan-import-folder.ts': 1,
   'routes/analysis.ts': 1,
-  'routes/book-state.ts': 9,
-  'routes/chapters-restructure.ts': 1,
+  'routes/book-state.ts': 14,
+  'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
-  'routes/import.ts': 1,
+  'routes/import.ts': 2,
   'routes/library-sync-manifest.ts': 1,
-  'routes/samples.ts': 2,
+  'routes/samples.ts': 3,
   'routes/voices.ts': 4,
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
-  'workspace/auto-backup.ts': 3,
-  'workspace/book-state-update.ts': 3,
+  'workspace/auto-backup.ts': 5,
+  'workspace/book-state-update.ts': 1,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
   'workspace/revisions-store.ts': 1,
-  'workspace/scan.ts': 4,
+  'workspace/scan.ts': 3,
   'workspace/series-cast-scan.ts': 2,
   'workspace/series-full-cast-scan.ts': 1,
   'workspace/series-reuse-link.ts': 1,

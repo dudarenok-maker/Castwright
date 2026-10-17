@@ -51,9 +51,13 @@ test('the register-citation CLI tests do not rewrite tracked files in place (sta
     cwd: REPO,
     env: childEnv,
     encoding: 'utf8',
-    timeout: 900000, // the targets spawn the full-corpus CLI a dozen-plus times (~2-3 min)
+    timeout: 300000, // healthy ~30-40 s (the targets spawn the full-corpus CLI a dozen-plus times); ~8x headroom, well under the CI job cap
     windowsHide: true,
   });
+  assert.ok(
+    !run.error,
+    `child test run (${TARGET_TESTS.map((f) => f.split(/[\\/]/).pop()).join(', ')}) did not finish: ${run.error?.message} -- hung or exceeded the 300 s bound (spawnSync kills only the direct child, so check for orphaned node processes)\npartial stdout tail:\n${String(run.stdout ?? '').slice(-4000)}\npartial stderr tail:\n${String(run.stderr ?? '').slice(-4000)}`,
+  );
   assert.equal(run.status, 0, `child test run must pass:\n${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /^ℹ tests [1-9]\d*$/m, 'child run must actually execute tests');
 

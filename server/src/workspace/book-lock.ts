@@ -3,17 +3,23 @@
    take it without closing an import cycle.
 
    Lock order (global): `design` -> `library-voice` -> `cast` -> `book` ->
-   `revisions` (a leaf). This is the INNERMOST lock before the revisions leaf:
-   it is taken while holding `cast` (the cast merge's manuscript-edits.json
-   rewrite, and the scan heal reached from a cast-lock holder) and NEVER the
-   other way round — no holder of this lock may take `cast`, `design` or
-   `library-voice` (the chapter restructure, the state PUT's `state` /
-   `manuscript` slices and every `book-state-update.ts` writer take nothing
-   but `revisions` beneath it). Never acquire it while holding `revisions`, and
-   never call a function that takes it from inside `fn` from a DIFFERENT async
-   context — but see "held-lock awareness" below.
-   Every `state.json` read-modify-write goes through it (`book-state-update.ts`,
-   enforced by `state-lock.guard.test.ts`).
+   `state-json` (a leaf), with `revisions` a separate leaf beside it. `book` is
+   taken while holding `cast` (the cast merge's manuscript-edits.json rewrite,
+   and the scan heal reached from a cast-lock holder) and NEVER the other way
+   round -- no holder of this lock may take `cast`, `design` or `library-voice`
+   (the chapter restructure, the state PUT's `state` / `manuscript` slices and
+   every `book-state-update.ts` writer take nothing but `state-json` /
+   `revisions` beneath it). Never acquire it while holding `state-json` or
+   `revisions`, and never call a function that takes it from inside `fn` from a
+   DIFFERENT async context -- but see "held-lock awareness" below.
+   `state-json` is `withStateJsonLock` (file-lock.ts, #3700): the leaf around the
+   fresh re-read + write of one `state.json`, taken INSIDE this lock (or alone by
+   the render-finalize paths, which hold no `book`). This lock is the
+   operation-level outer one -- it serialises a whole read -> multi-file write
+   against a restructure; `state-json` is the bounded (10s) inner one that keeps
+   a sibling render's stamp from being reverted.
+   Every `state.json` read-modify-write goes through both (`book-state-update.ts`,
+   enforced by `state-lock.guard.test.ts` and `state-json-lock.guard.test.ts`).
 
    Held-lock awareness (scan self-heal): the workspace scan's self-heal writes
    (`backfillAudioModelKeysFromSegments`, the uuid mint) take this lock too, and

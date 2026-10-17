@@ -179,37 +179,68 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
 
 /* #3400 pass 8 — seams on the persist's `state.json` step.
 
-   `beforeWrite` runs once, immediately before the next `writeStateJsonAtomic`
-   (armed from the persist window above, so it is the persist's own write): the
-   point where a stale-derived whole-file write is already decided and about to
-   land. `toThrow` makes `updateStateAtDir` — the locked step the persist now
-   goes through — fail the way a lock-acquisition timeout / disk fault would. */
+   `beforeWrite` runs once, inside `updateStateAtDir`'s `beforeWrite` slot
+   (armed from the persist window above, so it is the persist's own write):
+   under both the book lock and the state-json leaf lock, immediately before the
+   write lands -- the point where a stale-derived whole-file write is already
+   decided and about to land. (It used to wrap the `writeStateJsonAtomic`
+   export; `updateStateJsonLocked` calls its sibling directly, so a module mock
+   of the export can no longer see the persist's write.) `toThrow` makes
+   `updateStateAtDir` -- the locked step the persist now goes through -- fail
+   the way a lock-acquisition timeout / disk fault would. */
 const stateStep = vi.hoisted(() => ({
   toThrow: null as unknown,
   beforeWrite: null as null | (() => Promise<void>),
   calls: 0,
 }));
 
-vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/state-migrate.js')>();
-  return {
-    ...actual,
-    writeStateJsonAtomic: async (...args: Parameters<typeof actual.writeStateJsonAtomic>) => {
-      const hook = stateStep.beforeWrite;
-      stateStep.beforeWrite = null;
-      if (hook) await hook();
-      return actual.writeStateJsonAtomic(...args);
-    },
-  };
-});
 vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-state-update.js')>();
   return {
     ...actual,
-    updateStateAtDir: async (...args: Parameters<typeof actual.updateStateAtDir>) => {
+    updateStateAtDir: async (
+      dir: Parameters<typeof actual.updateStateAtDir>[0],
+      mutate: Parameters<typeof actual.updateStateAtDir>[1],
+      opts: NonNullable<Parameters<typeof actual.updateStateAtDir>[2]> = {},
+    ) => {
       stateStep.calls += 1;
       if (stateStep.toThrow) throw stateStep.toThrow;
-      return actual.updateStateAtDir(...args);
+      return actual.updateStateAtDir(dir, mutate, {
+        ...opts,
+        beforeWrite: async () => {
+          const hook = stateStep.beforeWrite;
+          stateStep.beforeWrite = null;
+          if (hook) await hook();
+          await opts.beforeWrite?.();
+        },
+      });
+    },
+  };
+});
+
+/* #3700 review — a seam on the per-book state.json lock. When armed, the NEXT
+   `withStateJsonLock` call is made to time out for real: a holder is queued
+   on the same key and the call runs with a 50 ms budget (the real class and
+   curated message come from the real `withStateJsonLock`). Disarms itself
+   after one hit so only the persist's terminal state.json write is affected. */
+const stateLockSeam = vi.hoisted(() => ({ armed: false, hits: 0 }));
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return {
+    ...actual,
+    withStateJsonLock: async <T,>(statePath: string, fn: () => Promise<T>, timeoutMs?: number) => {
+      if (!stateLockSeam.armed) return actual.withStateJsonLock(statePath, fn, timeoutMs);
+      stateLockSeam.armed = false;
+      stateLockSeam.hits += 1;
+      const holder = actual.withKeyLock(
+        `state-json:${statePath}`,
+        () => new Promise<void>((r) => setTimeout(r, 400)),
+      );
+      try {
+        return await actual.withStateJsonLock(statePath, fn, 50);
+      } finally {
+        await holder;
+      }
     },
   };
 });
@@ -1236,10 +1267,11 @@ describe.each(['main', 'subset'] as const)(
       }
     }, 60_000);
 
-    /* Pins the DEFENSIVE wrap only: the real book lock has no acquisition bound
-       and never throws this error, so the throw is injected at the step. If the
-       lock ever gains a bound, this is the shape the job must end in. */
-    it('defensive wrap -- an injected lock-acquisition timeout at the state.json step ends the job with the curated lock-contention error', async () => {
+    /* Pins the wrap at the `updateStateAtDir` step with an INJECTED timeout
+       naming the book lock (which has no bound of its own). The REAL timeout --
+       the state-json leaf lock's, which this step also takes -- is pinned by the
+       "AUTHORITATIVE state.json write lock timeout (#3700)" describe below. */
+    it('an injected lock-acquisition timeout at the state.json step ends the job with the curated lock-contention error', async () => {
       stateStep.toThrow = new LockAcquisitionTimeoutError('book:/w/book', 10_000);
       const run = await runJob(`${kind}-state-timeout`, kind);
       try {
@@ -1272,3 +1304,37 @@ describe.each(['main', 'subset'] as const)(
     }, 60_000);
   },
 );
+
+/* #3700 review pass 1 (🟠) — the terminal state.json write is authoritative and
+   now takes a lock, so its timeout must end the job in `error` /
+   `lock-contention`, not be swallowed as "Non-fatal" into a `result` with
+   state.json unwritten. */
+describe('persist block — the AUTHORITATIVE state.json write lock timeout (#3700)', () => {
+  afterEach(() => {
+    stateLockSeam.armed = false;
+    stateLockSeam.hits = 0;
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  for (const kind of ['main', 'subset'] as const) {
+    it(
+      `${kind}: a state-json lock timeout at the terminal write ends the job as lock-contention, not a result`,
+      async () => {
+        stateLockSeam.armed = true;
+        const run = await runJob(`state-lock-${kind}`, kind);
+        try {
+          expect(stateLockSeam.hits).toBe(1);
+          const terminal = run.events[run.events.length - 1];
+          expect(terminal?.kind).toBe('error');
+          expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+          expectCuratedContentionTerminal(terminal, 'state-json:');
+          // cast.json (written before the state.json step) still landed.
+          expect(run.cast.characters.map((c) => c.id)).toContain('nova');
+        } finally {
+          await run.cleanup();
+        }
+      },
+      60_000,
+    );
+  }
+});

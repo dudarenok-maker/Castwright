@@ -15,6 +15,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
@@ -456,7 +457,10 @@ export async function finalizeChapterAudioWrite(
      fresh: an untouched segment (needs its own prior stamp/snapshot carried
      forward, below) or C1's gap (needs the prior voiceName). Absent on a
      genuine first render, where neither condition holds. */
-  const needsPriorFile = untouchedIndices.length > 0 || voiceNameByChar.size < speakingIds.size;
+  const needsPriorFile =
+    untouchedIndices.length > 0 ||
+    voiceNameByChar.size < speakingIds.size ||
+    input.resynthesizedIndices !== 'all'; // a partial write keeps each character's prior renderedAt / renderedEngine / renderedModelKey
   const priorFile = needsPriorFile ? await readJson<ChapterSegmentsFile>(segPath).catch(() => null) : null;
 
   /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
@@ -507,6 +511,36 @@ export async function finalizeChapterAudioWrite(
     modelKey,
     voiceNameByChar,
   );
+  /* #3524 — stamp WHEN each character was last FULLY rendered, and the engine + model key it
+     rendered under (frozen together: a partial write rebuilds `voiceEngine` / `modelKey` from
+     its own engine, so the recency stamp alone would still flip the reference). Only a full chapter
+     render (`resynthesizedIndices: 'all'`, the generation path) stamps a fresh time;
+     every partial write (qa-repair, splice / Fix audio, refinalize, gain remix) keeps
+     the character's existing stamp, even for the lines it re-records, and a character
+     with no prior stamp keeps none (a legacy snapshot sorts oldest). The carry-forward
+     below keeps an untouched character's old entry (and so its stamp) verbatim as well.
+     render-integrity orders a character's renders by this, never by the file's mtime
+     (any partial write refreshes that). */
+  if (input.resynthesizedIndices === 'all') {
+    const renderedAt = new Date().toISOString();
+    for (const snapshot of Object.values(characterSnapshots)) {
+      snapshot.renderedAt = renderedAt;
+      snapshot.renderedEngine = snapshot.voiceEngine;
+      if (snapshot.modelKey) snapshot.renderedModelKey = snapshot.modelKey;
+    }
+  } else {
+    for (const [id, snapshot] of Object.entries(characterSnapshots)) {
+      const prior = priorSnapshotsByCanonicalId.get(id);
+      if (prior?.renderedAt) snapshot.renderedAt = prior.renderedAt;
+      /* A pre-upgrade snapshot has no frozen fields: its own `voiceEngine` / `modelKey` is the
+         best record of what it rendered under, so seed the freeze from it (a repair never moves
+         the reference). Still no `renderedAt` — it keeps sorting oldest. */
+      const frozenEngine = prior?.renderedEngine ?? prior?.voiceEngine;
+      const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey ?? priorFile?.modelKey;
+      if (frozenEngine) snapshot.renderedEngine = frozenEngine;
+      if (frozenModelKey) snapshot.renderedModelKey = frozenModelKey;
+    }
+  }
 
   /* #3362 pass-5 fix (🟠E, owner design (i)) — a character that speaks ONLY
      in untouched segments this write (never in the resynthesized set) gets
@@ -723,34 +757,40 @@ export async function finalizeChapterAudioWrite(
     console.warn(`[splice] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`);
   }
 
-  /* Stamp duration / model / QA into state.json (read-modify-write, keyed by
-     chapter id so concurrent sibling writes can't clobber each other). */
+  /* Stamp duration / model / QA into state.json. A read-modify-write keyed by
+     chapter id is NOT enough on its own: two sibling chapters finalizing
+     together both read the same snapshot and the later write dropped the
+     earlier chapter's stamp (#3700), so the whole read-through-write runs under
+     the per-book state.json lock. */
   const statePath = stateJsonPath(bookDir);
-  const prev = await readJson<BookStateJson>(statePath);
-  if (prev) {
-    const formatted = formatDuration(durationSec);
-    const next: BookStateJson = {
-      ...prev,
-      chapters: prev.chapters.map((c) =>
-        c.id === chapter.id
-          ? {
-              ...c,
-              duration: formatted,
-              audioModelKey: effectiveModelKey,
-              audioEngines,
-              audioRenderedAt: segmentsFile.synthesizedAt,
-              audioQa,
-              generationState: undefined,
-              generationError: undefined,
-              generationErrorCode: undefined,
-              generationRemediation: undefined,
-            }
-          : c,
-      ),
-      updatedAt: new Date().toISOString(),
-    };
-    await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-  }
+  const prev = await withStateJsonLock(statePath, async () => {
+    const onDisk = await readJson<BookStateJson>(statePath);
+    if (onDisk) {
+      const formatted = formatDuration(durationSec);
+      const next: BookStateJson = {
+        ...onDisk,
+        chapters: onDisk.chapters.map((c) =>
+          c.id === chapter.id
+            ? {
+                ...c,
+                duration: formatted,
+                audioModelKey: effectiveModelKey,
+                audioEngines,
+                audioRenderedAt: segmentsFile.synthesizedAt,
+                audioQa,
+                generationState: undefined,
+                generationError: undefined,
+                generationErrorCode: undefined,
+                generationRemediation: undefined,
+              }
+            : c,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+    }
+    return onDisk;
+  });
 
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a

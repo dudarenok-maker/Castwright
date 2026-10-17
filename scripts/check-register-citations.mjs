@@ -323,7 +323,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scrubGitEnv } from './git-env.mjs';
-import { readNormalized } from './lib/read-normalized.mjs';
+import { normalizeEol, readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const REPO_ROOT = new URL('..', import.meta.url);
@@ -2390,7 +2390,12 @@ function readRepoFile(relPath) {
 const BINARY_SNIFF_BYTES = 8000;
 
 export function isLikelyBinaryFile(absPath) {
-  const buf = readFileSync(absPath);
+  return isLikelyBinaryBuffer(readFileSync(absPath));
+}
+
+// The same sniff on bytes already in hand, so the tree scan reads each file
+// once instead of once to sniff and again to decode (#3701).
+function isLikelyBinaryBuffer(buf) {
   const scanLen = Math.min(buf.length, BINARY_SNIFF_BYTES);
   return buf.subarray(0, scanLen).includes(0);
 }
@@ -2460,11 +2465,12 @@ export function runCheckRegisterCitationsCli(options = {}) {
       // `readFileSync(path, 'utf8')` never throws on binary content, so the
       // binary case has to be detected explicitly, before decoding — not
       // discovered via a catch that can never fire for it.
-      if (isLikelyBinaryFile(absPath)) {
+      const bytes = readFileSync(absPath);
+      if (isLikelyBinaryBuffer(bytes)) {
         unreadableCount++;
         continue;
       }
-      text = readNormalized(absPath);
+      text = normalizeEol(bytes.toString('utf8'));
     } catch {
       unreadableCount++; // genuine I/O error — nothing to cite here
       continue;

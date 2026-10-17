@@ -289,7 +289,24 @@ recite:
     timeout or deadline, find the call it is meant to bound and confirm that
     call yields to the event loop; a bound around a `*Sync` call is decorative
     unless it is the call's own `timeout` option.
-29. **An op list computed before a later pass changes its keys, then patched
+29. **A lock keyed by a path resolved BEFORE acquisition** — PR #3706 pass 2
+    (#3700): `state-json:<book dir>/state.json` was keyed by the folder a
+    request had resolved before it queued. Once the holder moves or deletes
+    that folder (a folder-renaming PUT, a DELETE), every waiter acquires a key
+    naming a path that is no longer the book, and queuing makes that certain
+    rather than a race. Waiters then either wrote their stale snapshot back
+    (resurrecting a deleted book, or leaving two folders with one bookId) or
+    answered 200 for a write that never happened (a reparse wiping the moved
+    book's analysis cache by manuscript id). Checkable: for every lock whose
+    key is derived from a path or id resolved earlier, ask what the holder may
+    move or delete while you wait, and what each waiter does when the thing it
+    re-reads is absent; test by holding the key, moving or deleting the
+    target, then releasing, and assert a refusal with nothing written.
+    The same hazard runs the other way, for the lock HOLDER: its steps after
+    the lock is released, against a path it resolved before it (a change-log
+    write, a cast delete, a slug rewrite), land in a folder a queued
+    folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
+30. **An op list computed before a later pass changes its keys, then patched
     only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
     PR #3594 gate pass 3: the audio rename ops were computed from the first
     slug transform, then the prune renumber and the generic-title retitle
@@ -300,7 +317,7 @@ recite:
     Checkable: list every later pass that changes a key the op list is keyed
     on, and for each ask whether an entry renamed ONLY by that pass gets an
     op; test with a fixture where the later pass is the sole renamer.
-30. **A reference-identity check used to mean "unchanged since X" in a store
+31. **A reference-identity check used to mean "unchanged since X" in a store
     where every write replaces the reference** — `src/views/restructure.tsx`
     (`applyResponse`), PR #3594 gate pass 4: the sentence remap skipped when
     the book's sentences were no longer the same array as at click time, but
@@ -311,7 +328,7 @@ recite:
     `Object.is` guard on store state, ask what ELSE replaces that reference;
     then ask whether the work the guard drops is retried. Test by making an
     unrelated write between capture and use.
-31. **A debounced save that captures its payload when the action fires, racing
+32. **A debounced save that captures its payload when the action fires, racing
     a server-side rewrite of the same file, where the client's in-memory
     correction is never itself saved** — `src/views/restructure.tsx` and the
     persistence middleware, PR #3594 gate pass 5: a manuscript edit queued
@@ -325,7 +342,7 @@ recite:
     save queued before the rewrite does when it lands after it, and whether the
     client re-saves its corrected state. Test with a slow or debounced PUT
     queued around the rewrite and assert on the final disk state.
-32. **A cancellation that sends a cleanup write at the same moment as the
+33. **A cancellation that sends a cleanup write at the same moment as the
     operation that caused it, through a route whose read-modify-write of the
     same file is not under the operation's lock** —
     `src/components/detect-emotions-button.tsx` (`markUnfinished`), PR #3594
@@ -342,7 +359,7 @@ recite:
     write it can overlap and whether both routes take the same lock. Test with
     both requests against the real routes, started in the same tick, and assert
     on the files.
-33. **A read path that "heals" by rewriting a whole file from an unlocked
+34. **A read path that "heals" by rewriting a whole file from an unlocked
     earlier read, so every reader is a potential writer** —
     `server/src/workspace/scan.ts` (segments backfill, srv-35 uuid mint), PR
     #3594 gate pass 6: `findBookByBookId` and `scanLibrary` read `state.json`,
@@ -356,7 +373,7 @@ recite:
     write, and whether it writes back its own earlier snapshot or a fresh one
     merged field by field. Test by landing a locked writer between the re-read
     and the write, and assert it survives.
-34. **A lock added to a read path's write makes the caller wait, but the caller
+35. **A lock added to a read path's write makes the caller wait, but the caller
     keeps its pre-wait snapshot, so its own later write is guaranteed to land
     last** — `server/src/workspace/scan.ts` (`backfillAudioModelKeysFromSegments`
     returning `{ state: upgraded }`), PR #3594 gate pass 7: 27c1297c made the
@@ -371,7 +388,7 @@ recite:
     to a function that returns state, ask which snapshot it returns, and whether
     a caller that waited on the lock starts from the post-wait file. Test with
     the caller's own write after the wait, and assert on the end state.
-35. **A refusal the caller cannot see, so the writes that go with it record an
+36. **A refusal the caller cannot see, so the writes that go with it record an
     edit that never happened** — `src/store/restructure-guard-middleware.ts`
     (returned `undefined` for a refused action), PR #3594 gate pass 7: Script
     Review Apply marked ops resolved in the server ledger that were never
@@ -386,7 +403,7 @@ recite:
     a dropped dispatch must be visible to the caller or checked before the
     caller's side writes. Test against the real store with the guard on, and
     assert that nothing was resolved, logged, or closed.
-36. **A write moved later to fix an ordering race strands the side effects that
+37. **A write moved later to fix an ordering race strands the side effects that
     ran before it when a step in between fails** -- `server/src/routes/
     book-state.ts` (replace-manuscript), PR #3594 gate pass 8: 39bfe13f moved
     the `state.json` record behind the cast / audio / revisions work so it could

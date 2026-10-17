@@ -22,7 +22,7 @@
    count (did we RENDER a new audition, or reuse the persisted row?) plus the
    persisted `auditionVoice` identity that Task 1 records. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -227,6 +227,86 @@ describe("scoreBook — audition centroid reuse is gated on the character's curr
     await scoreBook(dir, CHAPTERS);
     expect(auditionSpy).toHaveBeenCalledTimes(2);
     expect((await readCentroids(dir))!['thurid'].auditionVoice?.language).toBe('de');
+  });
+});
+
+/* #3676 — a persisted 'too-short' row must record the voice it was computed under, and
+   is reused verbatim only while that voice is still current. Cast-less fixtures are
+   used (no cast.json): #3650's current-voice rule then keeps today's behaviour, which
+   is fine for these cases. */
+describe('scoreBook — a too-short row records its voice and re-auditions after a reassignment (#3676)', () => {
+  const okImpl = async () => ({
+    centroid: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]),
+    embeddings: [Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0])],
+    kind: 'audition' as const,
+  });
+  beforeEach(() => auditionSpy.mockClear());
+  afterEach(() => auditionSpy.mockImplementation(okImpl as never));
+
+  it('records the voice on a too-short row, re-auditions under a new voice, and does not loop', async () => {
+    auditionSpy.mockImplementation((async () => ({ kind: 'too-short' as const })) as never);
+    const dir = mkdtempSync(join(tmpdir(), 'spk-ts-reassign-'));
+    await writeThuridBook(dir, { resolvedVoiceName: 'voice-a' });
+
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    let c = (await readCentroids(dir))!['thurid'];
+    expect(c.referenceKind).toBe('too-short');
+    expect(c.auditionVoice?.voiceName).toBe('voice-a');
+
+    await writeThuridBook(dir, { resolvedVoiceName: 'voice-b' });
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(2);
+    expect((auditionSpy.mock.calls[1] as unknown[])[0]).toMatchObject({ voiceName: 'voice-b' });
+    c = (await readCentroids(dir))!['thurid'];
+    expect(c.referenceKind).toBe('too-short');
+    expect(c.auditionVoice?.voiceName).toBe('voice-b');
+
+    // Pass 3, still voice B: the recorded voice matches → reused verbatim, no re-audition loop.
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-audition a too-short row on later passes while the voice is unchanged (no loop)', async () => {
+    auditionSpy.mockImplementation((async () => ({ kind: 'too-short' as const })) as never);
+    const dir = mkdtempSync(join(tmpdir(), 'spk-ts-noloop-'));
+    await writeThuridBook(dir, { resolvedVoiceName: 'voice-a' });
+
+    await scoreBook(dir, CHAPTERS);
+    await scoreBook(dir, CHAPTERS);
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-auditions a legacy too-short row that records no voice once voice info exists', async () => {
+    auditionSpy.mockImplementation((async () => ({ kind: 'too-short' as const })) as never);
+    const dir = mkdtempSync(join(tmpdir(), 'spk-ts-legacy-'));
+    await writeThuridBook(dir, { resolvedVoiceName: 'voice-a' });
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(dir, 'audio', 'render-integrity.centroids.json'),
+      JSON.stringify({
+        thurid: { characterId: 'thurid', centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' },
+      }),
+    );
+
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    const c = (await readCentroids(dir))!['thurid'];
+    expect(c.referenceKind).toBe('too-short');
+    expect(c.auditionVoice?.voiceName).toBe('voice-a');
+  });
+
+  it('writes the voice on the too-short row left by an exhausted transient-failure cap', async () => {
+    auditionSpy.mockImplementation((async () => null) as never);
+    const dir = mkdtempSync(join(tmpdir(), 'spk-ts-transient-'));
+    await writeThuridBook(dir, { resolvedVoiceName: 'voice-a' });
+
+    for (let i = 0; i < 3; i++) await scoreBook(dir, CHAPTERS); // MAX_PENDING_ATTEMPTS = 3
+    expect(auditionSpy).toHaveBeenCalledTimes(3);
+    const c = (await readCentroids(dir))!['thurid'];
+    expect(c.referenceKind).toBe('too-short');
+    expect(c.auditionVoice?.voiceName).toBe('voice-a');
   });
 });
 

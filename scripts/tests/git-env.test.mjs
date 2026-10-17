@@ -1,8 +1,8 @@
 // Unit tests for scripts/git-env.mjs's shared GIT_* env helpers.
 // scrubGitEnv() itself already has coverage in bump-version.test.mjs, which
 // pins its case-insensitivity and GIT_INDEX_FILE preservation behavior.
-// release-body.test.mjs and verify-cache.test.mjs now test only
-// scrubGitEnvForThrowawayRepo() (#2865), the broader sibling those two test
+// release-body.test.mjs and verify-cache-test-support.mjs now test only
+// scrubGitEnvForThrowawayRepo() (#2865), the broader sibling those two
 // files delegate their local cleanGitEnv() to instead of each hand-rolling
 // the strip loop. This file is for scrubGitEnvForThrowawayRepo().
 

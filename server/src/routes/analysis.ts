@@ -4565,9 +4565,12 @@ export async function runMainAnalyzerJob(
                -> `book`, never held together). The decision (is it confirmed?)
                is made from the read under the lock, so a restructure or a
                concurrent state write is not reverted by a pre-lock snapshot.
-               The book lock has no acquisition bound (workspace/book-lock.ts), so
-               it cannot time out; a failure here is outside the persist blocks
-               and reaches the job's top-level catch, which classifies it. */
+               #3700 — inside it the read -> write is also a fresh re-read under
+               the per-book `state-json` leaf lock. That lock HAS an acquisition
+               bound (the book lock does not), so a timeout can surface here as
+               the curated lock-contention error; this site is outside the
+               persist blocks, so it reaches the job's top-level catch, which
+               classifies it (`classifyAnalysisFailure`). */
             await updateStateAtDir(freshBookDir, (freshState) =>
               freshState.castConfirmed
                 ? { ...freshState, castConfirmed: false, updatedAt: new Date().toISOString() }
@@ -7011,9 +7014,10 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          /* #2295 — the AUTHORITATIVE cast.json write, and the only write
-             reaching `catch (persistErr)` below that takes a lock at all
-             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85).
+          /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
+             writes reaching `catch (persistErr)` below that take a lock at all
+             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
+             the other is the state.json write, #3700).
              A concurrent `performCastMerge` holding `cast:<bookDir>` made this
              throw a `LockAcquisitionTimeoutError`, which `catch (persistErr)`
              swallowed: cast.json AND state.json unwritten, `result` emitted
@@ -7026,11 +7030,11 @@ export async function runMainAnalyzerJob(
              fold/dedup/suggestions journals (their own handlers above keep
              swallowing, deliberately), so parking from there would escalate a
              best-effort lineage write into a failed run. The state.json write
-             further down is authoritative too, and (#3400 pass 8) now takes
-             the book lock through `updateStateAtDir`. That lock has no
-             acquisition bound, so today it cannot produce this class; the write
-             keeps its own wrapper as defence, parked into the same slot, so a
-             bound added to the lock later cannot turn into a silent success.
+             further down is authoritative too and (#3400 pass 8, #3700) takes
+             the book lock and then the per-book `state-json` leaf lock through
+             `updateStateAtDir`. The book lock has no acquisition bound, but the
+             leaf lock does, so that write CAN produce this class: it parks its
+             own timeout at its own call, in the same slot.
 
              Rethrown immediately, not deferred: unlike the identity block
              below there is nothing left to finish here — cast.json did NOT
@@ -7194,14 +7198,14 @@ export async function runMainAnalyzerJob(
              restructure swaps them under the same lock), falling back to this
              job's own record when it has been evicted.
 
-             The book lock has no acquisition bound today, so this wrap is
-             defensive: should it gain one, a timeout is parked, like the
-             authoritative cast.json write's above, and rethrown after this
-             persist's try/catch: the write did not land, so the job must end as
-             an error rather than report success over an unwritten state.json. */
+             The `state-json` leaf lock (taken inside `updateStateAtDir`, nested
+             in the book lock) has a 10s acquisition bound, so this wrap is live:
+             a timeout is parked, like the authoritative cast.json write's
+             above, and rethrown after this persist's try/catch: the write did
+             not land, so the job must end as an error rather than report
+             success over an unwritten state.json. */
           try {
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
-              await assertWriteTargetStable(job, writeDir);
               /* Preserve the user-owned flags — analysis owns chapter titles/
                  durations, the user owns `excluded` and `held`. Match on id so a
                  re-run after a re-parse picks up whichever ids the parser
@@ -7259,6 +7263,12 @@ export async function runMainAnalyzerJob(
                 updatedAt: new Date().toISOString(),
               };
               return next;
+            }, {
+              /* Re-verified inside the book lock (a rename holds it) but BEFORE
+                 the state-json leaf lock: the slow path of this check can
+                 re-hydrate the manuscript and scan the library, whose heals
+                 take that same leaf lock. */
+              underBookLock: () => assertWriteTargetStable(job, writeDir),
             });
           } catch (stateWriteErr) {
             if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
@@ -9157,14 +9167,14 @@ export async function runSubsetAnalyzerJob(
              restructure swaps them under the same lock), falling back to this
              job's own record when it has been evicted.
 
-             The book lock has no acquisition bound today, so this wrap is
-             defensive: should it gain one, a timeout is parked, like the
-             authoritative cast.json write's above, and rethrown after this
-             persist's try/catch: the write did not land, so the job must end as
-             an error rather than report success over an unwritten state.json. */
+             The `state-json` leaf lock (taken inside `updateStateAtDir`, nested
+             in the book lock) has a 10s acquisition bound, so this wrap is live:
+             a timeout is parked, like the authoritative cast.json write's
+             above, and rethrown after this persist's try/catch: the write did
+             not land, so the job must end as an error rather than report
+             success over an unwritten state.json. */
           try {
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
-              await assertWriteTargetStable(job, writeDir);
               /* Preserve the user-owned `excluded` + `held` flags across the
                  subset re-attribution — `held` (the "Not queued" intent) isn't
                  re-derivable from disk, so it must ride through here. */
@@ -9213,6 +9223,12 @@ export async function runSubsetAnalyzerJob(
                 updatedAt: new Date().toISOString(),
               };
               return next;
+            }, {
+              /* Re-verified inside the book lock (a rename holds it) but BEFORE
+                 the state-json leaf lock: the slow path of this check can
+                 re-hydrate the manuscript and scan the library, whose heals
+                 take that same leaf lock. */
+              underBookLock: () => assertWriteTargetStable(job, writeDir),
             });
           } catch (stateWriteErr) {
             if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;

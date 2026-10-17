@@ -17,7 +17,7 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson } from './state-io.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
 import { withBookLock } from './book-lock.js';
 import {
@@ -1138,46 +1138,48 @@ async function persistHealPatches(
 ): Promise<{ merged: BookStateJson | null; gone: boolean }> {
   if (patches.length === 0) return { merged: null, gone: false };
   return withBookLock(lockKey, async () => {
-    const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir)).catch(() => null);
-    /* Unreadable under the lock = the file is gone (the folder was moved by a
-       writer we queued behind) — the caller must re-locate. */
-    if (!fresh) return { merged: null, gone: true };
     let changed = false;
-    const chapters: BookStateJson['chapters'] = [];
-    for (const ch of fresh.chapters) {
-      const patch = patches.find(
-        (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
-      );
-      if (!patch) {
-        chapters.push(ch);
-        continue;
+    /* #3700 -- the fresh read + write sit inside the `state-json` leaf lock
+       (`updateStateJsonLocked`), nested inside the book lock taken above. The
+       callback only reads the segments file; it takes no lock. */
+    const result = await updateStateJsonLocked(stateJsonPath(bookDir), async (fresh) => {
+      const chapters: BookStateJson['chapters'] = [];
+      for (const ch of fresh.chapters) {
+        const patch = patches.find(
+          (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
+        );
+        if (!patch) {
+          chapters.push(ch);
+          continue;
+        }
+        /* The identity match above is id + slug + uuid, which a merge that keeps
+           the primary chapter's three leaves intact while it drops its audio.
+           So a segments-derived fill is re-derived from the file as it is NOW,
+           under the lock: one read before the wait would stamp the old take's
+           model / render date onto a chapter whose audio was just deleted. */
+        let source = patch.set;
+        if (patch.fromSegments) {
+          source = (await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.set ?? {};
+        }
+        const fill: Partial<typeof ch> = {};
+        for (const key of HEALED_KEYS) {
+          if (source[key] === undefined) continue;
+          const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
+          if (unset) Object.assign(fill, { [key]: source[key] });
+        }
+        if (Object.keys(fill).length === 0) {
+          chapters.push(ch);
+          continue;
+        }
+        changed = true;
+        chapters.push({ ...ch, ...fill });
       }
-      /* The identity match above is id + slug + uuid, which a merge that keeps
-         the primary chapter's three leaves intact while it drops its audio.
-         So a segments-derived fill is re-derived from the file as it is NOW,
-         under the lock: one read before the wait would stamp the old take's
-         model / render date onto a chapter whose audio was just deleted. */
-      let source = patch.set;
-      if (patch.fromSegments) {
-        source = (await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.set ?? {};
-      }
-      const fill: Partial<typeof ch> = {};
-      for (const key of HEALED_KEYS) {
-        if (source[key] === undefined) continue;
-        const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
-        if (unset) Object.assign(fill, { [key]: source[key] });
-      }
-      if (Object.keys(fill).length === 0) {
-        chapters.push(ch);
-        continue;
-      }
-      changed = true;
-      chapters.push({ ...ch, ...fill });
-    }
-    if (!changed) return { merged: fresh, gone: false };
-    const merged: BookStateJson = { ...fresh, chapters };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...merged, language: merged.language ?? null });
-    return { merged, gone: false };
+      return changed ? { ...fresh, chapters } : null;
+    });
+    /* Absent under the lock = the file is gone (the folder was moved by a
+       writer we queued behind) -- the caller must re-locate. */
+    if (!result) return { merged: null, gone: true };
+    return { merged: result, gone: false };
   });
 }
 

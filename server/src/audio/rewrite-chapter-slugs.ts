@@ -160,6 +160,30 @@ export async function rewriteChapterSlugs(
     staged.push({ op, tempSlug, stagedSuffixes });
   }
 
+  // Phase 1b: deletes. Run between the two rename passes: every rename source
+  // already sits at its temp slug (so a delete naming a slug that was renamed
+  // AWAY is a no-op), and no rename has landed on its target yet (so a delete
+  // can never hit a file a rename just moved INTO a deleted chapter's old slug
+  // — a merge's renumbering gives the surviving chapter that slug).
+  for (const op of deletes) {
+    for (const suffix of COMPANION_SUFFIXES) {
+      const path = suffixPath(audioRoot, op.from, suffix);
+      if (!existsSync(path)) continue;
+      try {
+        await rm(path, { force: true });
+        summary.deleted.push({ slug: op.from, suffix });
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code === 'ENOENT') continue;
+        summary.errors.push({
+          op,
+          message: `delete failed: ${(e as Error).message}`,
+          suffix,
+        });
+      }
+    }
+  }
+
   // Phase 2: finalise temp slugs to their target slugs.
   for (const { op, tempSlug, stagedSuffixes } of staged) {
     for (const suffix of stagedSuffixes) {

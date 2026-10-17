@@ -22,6 +22,7 @@ import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-pa
 import { withLocatedBook } from './book-state-update.js';
 import { writeJsonAtomic } from './state-io.js';
 import { writeStateJsonAtomic } from './state-migrate.js';
+import { withStateJsonLock } from './file-lock.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
@@ -231,9 +232,19 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
        prior local override of 5). Three slots cover the realistic recovery
        window: the last completed write, the one before it, and one earlier. */
     const parsed = value as BookStateJson;
-    await writeStateJsonAtomic(stateJsonPath(bookDir), {
-      ...parsed,
-      language: parsed.language ?? null,
+    /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+       per-book state-json leaf lock (inside the book lock) so it can't
+       interleave with a render's stamp. */
+    await withStateJsonLock(stateJsonPath(bookDir), async () => {
+      /* #3700 review pass 3 — the book may have been deleted or moved after
+         `bookDir` was resolved above. The write below would recreate the old
+         folder with the same bookId, so an absent state.json is "book not
+         found": write nothing. */
+      if (!existsSync(stateJsonPath(bookDir))) throw new BackupRestoreError('book not found');
+      await writeStateJsonAtomic(stateJsonPath(bookDir), {
+        ...parsed,
+        language: parsed.language ?? null,
+      });
     });
   });
   if (!located) throw new BackupRestoreError('book not found');

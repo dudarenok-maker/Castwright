@@ -10,7 +10,9 @@
 
    WHAT IT CHECKS: walks every non-test `.ts` file under `server/src`, parses it
    with the TypeScript parser, and for each CALL whose callee is
-     - `writeStateJsonAtomic(...)`, or
+     - `writeStateJsonAtomic(...)`, or `updateStateJsonLocked(...)` (state-migrate.ts's
+       leaf-locked read-modify-write -- it takes only the `state-json` lock, so
+       a caller must supply the book lock itself; #3700 layering), or
      - `writeJsonAtomic(...)` / `writeJsonAtomicOrdered(...)` whose FIRST
        ARGUMENT's source text contains `stateJsonPath(`,
    asserts that the call sits lexically inside the arguments of a call to
@@ -62,16 +64,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 
 const LOCK_CALLEES = new Set(['withBookLock', 'withLocatedBook', 'updateStateAtDir']);
-const PLAIN_WRITERS = new Set(['writeStateJsonAtomic']);
+const PLAIN_WRITERS = new Set(['writeStateJsonAtomic', 'updateStateJsonLocked']);
 const PATH_WRITERS = new Set(['writeJsonAtomic', 'writeJsonAtomicOrdered']);
 
 /** Pinned exceptions: file (relative to server/src, posix) -> expected number of
     lexically-unlocked state.json writes, with why each is acceptable. */
 const ALLOWED: Record<string, { count: number; why: string }> = {
+  'workspace/state-migrate.ts': {
+    count: 1,
+    why:
+      "updateStateJsonLocked's own write (inside withStateJsonLock): the shared leaf-locked " +
+      'primitive. Its callers are checked above (each call site is itself a tracked write).',
+  },
   'routes/book-state.ts': {
     count: 3,
     why:
-      'refreshChapterTitles (1) is only called from GET /state inside withLocatedBook; ' +
+      "refreshChapterTitles (1: its updateStateJsonLocked call) is only called from GET /state inside withLocatedBook; " +
       "applySlice's `state` slice (2: the rename-then-write pair) only runs inside withBookLock " +
       '(lockedSlice).',
   },
@@ -211,8 +219,10 @@ describe('state.json writes hold the per-book lock (#3400)', () => {
       // writeStateJsonAtomic(p, s) in a comment is not a call
       const str = 'writeStateJsonAtomic(p, s)';
       async function bad3() { await withBookLock(id, () => 1); await writeStateJsonAtomic(p, s); }
+      async function ok4() { await withLocatedBook(id, async () => { await updateStateJsonLocked(p, (f) => f); }); }
+      async function bad4() { await updateStateJsonLocked(p, (f) => f); }
     `;
     const hits = scanStateWrites(src);
-    expect(hits.map((h) => h.locked)).toEqual([true, true, false, false, false]);
+    expect(hits.map((h) => h.locked)).toEqual([true, true, false, false, false, true, false]);
   });
 });
