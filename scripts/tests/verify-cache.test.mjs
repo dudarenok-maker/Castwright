@@ -1972,6 +1972,8 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
   writeLeakFixture(dir);
   const K = 2147480060; // X's own child
   const L = 2147480061; // the real root's child, started while the root lived (leak.start)
+  const U = 2147480062; // unrelated: names the root pid as ppid but predates the spawn by an hour
+  const UK = 2147480063; // U's child
   let lStart = null;
   let xStart = null;
   let killCalls = 0;
@@ -1989,7 +1991,7 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
       snapshotFn: (root) => {
         xStart ??= Date.now(); // X took the pid after the root's exit
         lStart ??= readLeakStart(dir);
-        const rows = [row(root, 1, xStart), row(K, root, xStart + 1)];
+        const rows = [row(root, 1, xStart), row(K, root, xStart + 1), row(U, root, xStart - 3_600_000), row(UK, U, xStart - 3_599_000)];
         if (lStart !== null) rows.push(row(L, root, lStart));
         return rows;
       },
@@ -2004,7 +2006,50 @@ test('runStepProcess re-sweep: root exited on its own and its pid was recycled b
     assert.equal(killCalls, 0, 'the by-pid kill must be skipped once the root has exited: that pid is now X');
     assert.ok(lStart !== null, 'leak.start was never written: the fixture did not run before the snapshot');
     assert.ok(swept.includes(L), `the root's genuine child is swept: ${JSON.stringify(swept)}`);
-    assert.equal(swept.length, 1, `only the genuine child — never X (the pid's new holder) or X's child: ${JSON.stringify(swept)}`);
+    assert.equal(swept.length, 1, `only the genuine child — never X (the pid's new holder), X's child, or a pre-spawn process naming the root pid (U) and its child: ${JSON.stringify(swept)}`);
+  } finally {
+    killLeakHolder(dir);
+  }
+});
+
+// Sweeps 2 and 3 exist for a recorded survivor that itself spawns again; by then
+// the root has normally exited, so the exitedAt cap must bind the ROOT's edges
+// only, never a survivor's.
+test('runStepProcess re-sweep: a recorded survivor (not the root) that spawns a child after the root exited => that child is still swept (#3695)', { timeout: 60_000 }, async () => {
+  const dir = mkTmp();
+  writeLeakFixture(dir);
+  const M = 2147480064; // recorded survivor, started while the root lived (leak.start)
+  const C = 2147480065; // M's child, born after the root's exit
+  let mStart = null;
+  let xStart = null;
+  let calls = 0;
+  const swept = [];
+  try {
+    await runStepProcess('leak', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 6000,
+      killTreeFn: () => {},
+      snapshotFn: (root) => {
+        calls += 1;
+        xStart ??= Date.now();
+        mStart ??= readLeakStart(dir);
+        const rows = [row(root, 1, xStart)];
+        if (mStart !== null) rows.push(row(M, root, mStart));
+        // The re-sweep's snapshot runs after the root's exit: C starts "now".
+        if (mStart !== null && calls > 1) rows.push(row(C, M, Date.now()));
+        return rows;
+      },
+      censusFn: NO_CENSUS,
+      logFn: () => {},
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 1,
+      sweepKillFn: (pid) => swept.push(pid),
+    });
+    assert.ok(mStart !== null, 'leak.start was never written: the fixture did not run before the snapshot');
+    assert.deepEqual([...swept].sort(), [M, C].sort(), `the survivor and its post-exit child are both swept: ${JSON.stringify(swept)}`);
   } finally {
     killLeakHolder(dir);
   }
