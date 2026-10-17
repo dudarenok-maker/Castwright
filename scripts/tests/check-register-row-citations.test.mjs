@@ -21,7 +21,18 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-row-citations.mjs');
 
+// The real-tree run is a pure function of an unchanged checkout (these tests
+// never write a real tracked file; no-inplace-tracked-rewrite pins it), so
+// identical args share one spawn (#3701). Sandbox (mutated) runs are never cached.
+const realRunCache = new Map();
 function runCli(args, cliPath = CLI_PATH) {
+  if (cliPath !== CLI_PATH) return spawnCli(args, cliPath);
+  const key = args.join('\0');
+  if (!realRunCache.has(key)) realRunCache.set(key, spawnCli(args, cliPath));
+  return realRunCache.get(key);
+}
+
+function spawnCli(args, cliPath) {
   // The real CLI scans the real repo (ambient git env honoured); any other
   // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
   // the real index.
@@ -54,6 +65,26 @@ function makeSandbox() {
     ],
   });
   return { cli: join(root, 'scripts', 'check-register-row-citations.mjs'), dispose };
+}
+
+// Positive control for the sandbox mutation tests: run the UNMUTATED CLI copy
+// inside the scratch repo and require it to report the real tree's citation
+// and file count (the `OK -- N citation(s) across M file(s)` summary line, not
+// the first `N citation(s)` in the output, which is the annotated-discharge
+// note header). A zero-file scan also prints "0 citation(s)", so without this a
+// sandbox that indexed nothing would satisfy every mutant's expectation.
+function assertSandboxScansTheRealTree(sandbox, baselineStdout) {
+  const control = runCli([], sandbox.cli);
+  const summary = (stdout) => {
+    const m = stdout.match(/OK -- (\d+) citation\(s\) across (\d+) file\(s\)/);
+    return m ? `${m[1]} citation(s) across ${m[2]} file(s)` : 'no OK summary line';
+  };
+  const controlSummary = summary(control.stdout);
+  const baselineSummary = summary(baselineStdout);
+  assert.ok(
+    controlSummary !== 'no OK summary line' && controlSummary === baselineSummary,
+    `the scratch-repo sandbox must scan the same corpus as the real tree (control: ${controlSummary}; real tree: ${baselineSummary}) in:\n${control.stdout}${control.stderr}`,
+  );
 }
 
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
@@ -681,6 +712,7 @@ test('CLI mutation: if scannedFiles() returns empty, the check would find zero c
 
   const sandbox = makeSandbox();
   try {
+    assertSandboxScansTheRealTree(sandbox, baseline.stdout);
     writeFileSync(sandbox.cli, mutated);
     const mutantResult = runCli([], sandbox.cli);
     // With zero files scanned, we should get zero citations reported
@@ -718,6 +750,7 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
 
   const sandbox = makeSandbox();
   try {
+    assertSandboxScansTheRealTree(sandbox, baseline.stdout);
     writeFileSync(sandbox.cli, mutated);
     const mutantResult = runCli([], sandbox.cli);
     // With docs/features/** excluded, the scan should find fewer citations.
