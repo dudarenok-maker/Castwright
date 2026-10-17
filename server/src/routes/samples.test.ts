@@ -139,12 +139,16 @@ describe('samples router', () => {
       const { statePath, castPath } = await seed();
       rmSync(statePath, { force: true });
       mkdirSync(statePath);
-      vi.spyOn(console, 'error').mockImplementation(() => {});
-      const res = await request(app).post(`/api/samples/${SLUG}/load`);
-      expect(res.status).toBe(500);
-      expect(res.body.alreadyLoaded).toBeUndefined();
-      expect(JSON.parse(readFileSync(castPath, 'utf8')).userEdited).toBe('keep me');
-      rmSync(statePath, { recursive: true, force: true });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await request(app).post(`/api/samples/${SLUG}/load`);
+        expect(res.status).toBe(500);
+        expect(res.body.alreadyLoaded).toBeUndefined();
+        expect(JSON.parse(readFileSync(castPath, 'utf8')).userEdited).toBe('keep me');
+      } finally {
+        errSpy.mockRestore();
+        rmSync(statePath, { recursive: true, force: true });
+      }
     });
   });
 });

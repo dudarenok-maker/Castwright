@@ -1944,6 +1944,17 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
   });
 
+  /* #3625 delta review 3 (M5): the null read and the presence check are two
+     steps; a rename-in landing between them must be RE-READ, never committed
+     as unflagged first-run defaults. */
+  it('re-reads when main reappears after a null read (a rename-in landed in between)', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(async () => null); // main "absent" at read time
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+  });
+
   /* #3625 pass 4 (4b): a persistent error shows defaults with no explanation, so
      it is surfaced as its own flag (rendered by the settings banner). */
   it('isUserSettingsFileUnreadable is true while reads keep failing, at boot and warm, and clears on a good read', async () => {
