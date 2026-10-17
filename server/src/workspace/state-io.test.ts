@@ -13,8 +13,9 @@ import { join } from 'node:path';
    intercept is a module-scoped swap so each test can install its own
    failure pattern via setRenameImpl(). */
 let renameImpl: ((src: string, dest: string) => Promise<void>) | null = null;
-/* tmp files whose handle was fsync'd — see the fsync test below. */
+/* tmp files written with flush: true (fsync'd) — see the fsync test below. */
 const syncedTmp: string[] = [];
+const reopenedTmp: string[] = [];
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -22,16 +23,20 @@ vi.mock('node:fs/promises', async () => {
     ...actual,
     /* Default: pass-through. Tests override via setRenameImpl(). */
     rename: (src: string, dest: string): Promise<void> => (renameImpl ?? actual.rename)(src, dest),
-    open: (async (...args: Parameters<typeof actual.open>) => {
-      const fh = await actual.open(...args);
-      if (String(args[0]).includes('.tmp-')) {
-        const sync = fh.sync.bind(fh);
-        fh.sync = async () => {
-          syncedTmp.push(String(args[0]));
-          return sync();
-        };
+    /* The write goes through ONE handle: `writeFile` with `flush: true` fsyncs
+       before it closes (#3625 pass 4: the old reopen-and-sync added an
+       unretried EBUSY point on Windows). Record which tmp files asked for it. */
+    writeFile: ((...args: Parameters<typeof actual.writeFile>) => {
+      const opts = args[2];
+      if (String(args[0]).includes('.tmp-') && typeof opts === 'object' && opts?.flush === true) {
+        syncedTmp.push(String(args[0]));
       }
-      return fh;
+      return actual.writeFile(...args);
+    }) as typeof actual.writeFile,
+    /* Any open() of a tmp file means a second handle was taken. */
+    open: (async (...args: Parameters<typeof actual.open>) => {
+      if (String(args[0]).includes('.tmp-')) reopenedTmp.push(String(args[0]));
+      return actual.open(...args);
     }) as typeof actual.open,
   };
 });
@@ -247,8 +252,11 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
 
   it('fsyncs the tmp file before the rename (the header contract)', async () => {
     syncedTmp.length = 0;
+    reopenedTmp.length = 0;
     await writeJsonAtomic(join(workdir, 'state.json'), { v: 1 });
     expect(syncedTmp).toHaveLength(1);
+    /* One handle: no second open of the tmp file (an unretried EBUSY point). */
+    expect(reopenedTmp).toEqual([]);
   });
 
   it('writes while another handle holds main open for write (no copy of a locked file, #3625 review)', async () => {

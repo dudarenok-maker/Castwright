@@ -919,7 +919,12 @@ describe('writers, draining and busy release (#3435 decision A)', () => {
     const abortedSignal = seed.job.controller.signal;
     vi.advanceTimersByTime(30_000);
     /* Let endJob's own paused snapshot land, then remove it so a /pause write would show. */
-    for (let i = 0; i < 200 && !existsSync(statePath); i++) await ioTicks(5);
+    /* Bounded by REAL time, not a tick count: the snapshot's write fsyncs, and a
+       slow runner disk (the required Windows leg, #3694) can outlast any fixed
+       number of setImmediate turns while setTimeout is faked. Date stays real. */
+    for (const deadline = Date.now() + 15_000; Date.now() < deadline && !existsSync(statePath); ) {
+      await ioTicks(5);
+    }
     expect(existsSync(statePath)).toBe(true);
     await ioTicks(20);
     rmSync(statePath, { force: true });

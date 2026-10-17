@@ -17,7 +17,7 @@
    (cast.json, revisions.json, ...) keep the single-file atomic write —
    they're cheaper to re-derive on loss and not worth the disk-multiplier. */
 
-import { mkdir, open, readFile, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -135,16 +135,11 @@ export async function writeJsonAtomic(
      vacant name instead of replacing a held file. */
   let rotated = false;
   try {
-    await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
-    /* fsync before the rename: the header's durability claim. Reopened rather
-       than written through a handle so the `writeFile` call stays the one seam
-       the failure-injection tests across the suite hook. */
-    const fh = await open(tmp, 'r+');
-    try {
-      await fh.sync();
-    } finally {
-      await fh.close();
-    }
+    /* `flush: true` fsyncs through the SAME handle before it closes — the
+       header's durability claim without a reopen (a second open of a fresh tmp
+       is an unretried EBUSY point on Windows and adds a scan-on-close). It also
+       keeps `writeFile` the one seam the failure-injection tests hook. */
+    await writeFile(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', flush: true });
     if (opts?.rotate && existsSync(path)) {
       rotated = await rotateBackups(path, opts.rotate.keep);
     }
