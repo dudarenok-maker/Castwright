@@ -23,6 +23,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId, bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
   canonicalModelKeyForEngine,
@@ -909,7 +910,8 @@ chapterQaRepairRouter.post(
       });
       res.end();
     } catch (err) {
-      fail(`Audio-QA repair failed: ${(err as Error).message}`);
+      console.error('[qa-repair] failed:', err);
+      fail(requestFailureMessage(err, `Audio-QA repair failed: ${(err as Error).message}`));
     } finally {
       releaseSlot?.();
     }

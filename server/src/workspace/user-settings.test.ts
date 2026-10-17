@@ -3,7 +3,7 @@
    and legacy-file back-compat. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 
@@ -1733,5 +1733,244 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
     // Next read MUST detect the file changed and pick up the new value
     const read2 = await mod.readUserSettings();
     expect(read2.analysisEngine).toBe('local');
+  });
+});
+
+describe('readUserSettings — a transient read error is never corruption (#3625 review)', () => {
+  const ebusy = async () => {
+    throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  };
+  let mod: typeof import('./user-settings.js');
+  const seedHealthy = () => {
+    for (const n of [1, 2, 3]) rmSync(`${mod.USER_SETTINGS_PATH}.bak.${n}`, { force: true });
+    rmSync(`${mod.USER_SETTINGS_PATH}.writing-999-1`, { force: true });
+    const healthy = JSON.stringify({
+      ...DEFAULT_USER_SETTINGS,
+      displayName: 'Mine',
+      allowCloudFallback: false,
+    });
+    writeFileSync(mod.USER_SETTINGS_PATH, healthy);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, healthy);
+    mod._resetUserSettingsCache();
+  };
+
+  beforeEach(async () => {
+    mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+  });
+
+  it('does not flag corruption, re-reads the healthy file next time, and a writer keeps allowCloudFallback:false', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+
+    // Same hiccup, then a writer: it must re-read, never persist boot-fallback defaults.
+    mod._resetUserSettingsCache();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    await mod.writeUpgradeMeta({ showWhatsNew: false });
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.allowCloudFallback).toBe(false);
+    expect(onDisk.displayName).toBe('Mine');
+  });
+
+  it('a writer whose own re-read also fails refuses instead of persisting defaults', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy).mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).rejects.toThrow();
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.allowCloudFallback).toBe(false);
+    expect(onDisk.displayName).toBe('Mine');
+  });
+
+  it('keeps the warm cache when a later re-read hits the hiccup', async () => {
+    seedHealthy();
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    // out-of-band change forces a re-read; that re-read hits EBUSY
+    const changed = JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false });
+    writeFileSync(mod.USER_SETTINGS_PATH, changed);
+    diskRead.spy.mockImplementationOnce(ebusy);
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine');
+    expect(during.allowCloudFallback).toBe(false);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  /* #3625 pass 4 (4a): the refusal flag must not outlive the hiccup just because
+     the file then goes absent — cacheMatchesDisk() calls an absent file
+     "unchanged", so nothing re-read and every writer stayed refused until a
+     restart. A successful read of ANY outcome (ENOENT = "no file") clears it. */
+  it('a later read clears the refusal when the file is then absent (first run / no file)', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    for (const p of [mod.USER_SETTINGS_PATH, ...[1, 2, 3].map((n) => `${mod.USER_SETTINGS_PATH}.bak.${n}`)]) {
+      rmSync(p, { force: true }); // first run: main AND every backup absent
+    }
+
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
+  });
+
+  /* #3625 delta review (3) + review 2: an absent main with a `.bak.N` is a
+     STRANDED file only when a rotating write left its in-flight marker
+     (`<file>.writing-*`, created before the rename-away, removed after the
+     rename-in). A bare absent main is the user deleting the file: a reset. */
+  const markWriteInFlight = () => writeFileSync(`${mod.USER_SETTINGS_PATH}.writing-999-1`, '');
+
+  it('a read during a sibling rotation gap (marker + main absent + a backup) recovers the newest backup, never defaults', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`); // the gap
+    markWriteInFlight();
+
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine2');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+  });
+
+  it('a warm cache is kept (still refusing writers) when the gap has a marker, main absent and NO backup parses', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
+
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).rejects.toThrow();
+    expect(existsSync(mod.USER_SETTINGS_PATH)).toBe(false);
+  });
+
+  it('a cold boot with a marker, main absent and a good backup recovers from the backup, not defaults', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.2`);
+    markWriteInFlight();
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+  });
+
+  it('a cold boot with a marker, main absent and every backup torn is total loss: defaults flagged corrupt', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+  });
+
+  /* The corrupt banner promises a `.corrupt-<timestamp>` snapshot of the damaged file
+     on the next save. With main ABSENT the damaged bytes are the newest backup's. */
+  it('the next save after a stranded total loss snapshots the damaged backup as .corrupt-<ts> and clears the flag', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    await mod.writeUserSettings({ displayName: 'After' });
+
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const snaps = readdirSync(dir).filter((n) => n.startsWith(`${basename(mod.USER_SETTINGS_PATH)}.corrupt-`));
+    expect(snaps).toHaveLength(1);
+    expect(readFileSync(join(dir, snaps[0]), 'utf8')).toBe('{ torn');
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  /* The operator's decision: deleting user-settings.json still RESETS settings. */
+  it('a user who deletes the file (warm) gets first-run defaults, the stale backups are removed, and a new save works and sticks', async () => {
+    seedHealthy();
+    expect((await mod.readUserSettings()).displayName).toBe('Mine'); // warm
+    rmSync(mod.USER_SETTINGS_PATH);
+
+    const after = await mod.readUserSettings();
+    expect(after.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    for (const n of [1, 2, 3]) expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.${n}`)).toBe(false);
+
+    await mod.writeUserSettings({ displayName: 'Fresh' });
+    mod._resetUserSettingsCache();
+    expect((await mod.readUserSettings()).displayName).toBe('Fresh');
+  });
+
+  it('a user who deleted the file before a restart (cold) gets defaults, not the stale backup', async () => {
+    seedHealthy();
+    rmSync(mod.USER_SETTINGS_PATH);
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(false);
+  });
+
+  /* Probe A (delta review 2): one hiccup, then main stays absent in a real gap —
+     the warm path used to return the cache forever and refuse every writer. */
+  it('after a hiccup, a later read clears the refusal and a write succeeds while a backup is still on disk', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup -> readUnverified
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    markWriteInFlight();
+
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+  });
+
+  /* #3625 pass 4 (4b): a persistent error shows defaults with no explanation, so
+     it is surfaced as its own flag (rendered by the settings banner). */
+  it('isUserSettingsFileUnreadable is true while reads keep failing, at boot and warm, and clears on a good read', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // boot: nothing cached
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // still failing on the retry
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    await mod.readUserSettings(); // the file reads again
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+  });
+
+  /* #3625 pass 4 (4c): the boot defaults were ASSIGNED to `cached`, so the
+     ANALYZER_ALLOW_CLOUD_FALLBACK=0 pre-cache under-ride stopped applying until
+     the next read. They are returned without being cached. */
+  it('the cloud-fallback env under-ride still applies after a boot read error', async () => {
+    seedHealthy();
+    process.env.ANALYZER_ALLOW_CLOUD_FALLBACK = '0';
+    try {
+      diskRead.spy.mockImplementationOnce(ebusy);
+      await mod.readUserSettings();
+      expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    } finally {
+      delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
+    }
   });
 });

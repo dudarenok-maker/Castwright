@@ -35,6 +35,8 @@ import {
   slug,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
+import { withStateLock } from '../workspace/state-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -369,10 +371,6 @@ importRouter.post('/books', async (req: Request, res: Response) => {
 
     ensureWorkspace();
     const bookDir = bookDirByDisplay(author, series, title);
-    if (existsSync(bookDir)) {
-      const suggestedTitle = `${title} (2)`;
-      return res.status(409).json({ error: 'slug_collision', suggestedTitle });
-    }
 
     const manuscriptId = 'mns_' + nanoid(10);
     const bookId = makeBookId(author, series, title);
@@ -385,17 +383,6 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       entry.format === 'mobi' && originalExt === 'azw3' ? 'azw3' : EXT_BY_FORMAT[entry.format];
     const manuscriptFile = `manuscript.${manuscriptExt}`;
     const manuscriptPath = join(bookDir, manuscriptFile);
-
-    await mkdir(bookDir, { recursive: true });
-    await mkdir(dotAudiobook(bookDir), { recursive: true });
-    await mkdir(join(bookDir, 'audio'), { recursive: true });
-    /* Persist the ORIGINAL uploaded bytes verbatim — re-parse later
-       needs the unmodified input. Earlier versions wrote sourceText
-       (the *extracted* text), which broke EPUB re-parse outright (plain
-       text isn't a valid ZIP) and silently corrupted markdown re-parse
-       too (parseText strips headings + injects audio tags, so re-parsing
-       the already-stripped-and-tagged text produces wrong chapters). */
-    await writeFile(manuscriptPath, entry.originalBuffer);
 
     const now = new Date().toISOString();
     const excludedSet = new Set<string>(
@@ -443,7 +430,29 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       language,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    /* #3625 — the existing-book 409 check, the folder creation and the
+       state.json write are ONE span: two concurrent confirms of one title
+       would otherwise both pass the check and the second state.json (with its
+       own manuscriptId) would overwrite the first. */
+    const collided = await withStateLock(bookDir, async () => {
+      if (existsSync(bookDir)) return true;
+      await mkdir(bookDir, { recursive: true });
+      await mkdir(dotAudiobook(bookDir), { recursive: true });
+      await mkdir(join(bookDir, 'audio'), { recursive: true });
+      /* Persist the ORIGINAL uploaded bytes verbatim — re-parse later
+         needs the unmodified input. Earlier versions wrote sourceText
+         (the *extracted* text), which broke EPUB re-parse outright (plain
+         text isn't a valid ZIP) and silently corrupted markdown re-parse
+         too (parseText strips headings + injects audio tags, so re-parsing
+         the already-stripped-and-tagged text produces wrong chapters). */
+      await writeFile(manuscriptPath, entry.originalBuffer);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+      return false;
+    });
+    if (collided) {
+      const suggestedTitle = `${title} (2)`;
+      return res.status(409).json({ error: 'slug_collision', suggestedTitle });
+    }
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be
@@ -499,6 +508,8 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[import] confirm failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Confirm failed.' });
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Confirm failed.'),
+    });
   }
 });

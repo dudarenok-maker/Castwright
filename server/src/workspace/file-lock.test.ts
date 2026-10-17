@@ -255,6 +255,10 @@ describe('withKeyLock typed timeout error (#2260 round 2)', { retry: 0 }, () => 
        but a maintainer still meets this string first. */
     expect((err as Error).message).toContain('withKeyLock: timed out after 20ms');
     expect((err as Error).message).toContain(`"${key}"`);
+    /* #3625: the rule-4 clause names the whole lock order, `state` included. */
+    expect((err as Error).message).toContain('design -> library-voice -> cast');
+    expect((err as Error).message).toContain('revision-op -> state -> revisions');
+    expect((err as Error).message).toContain('library-voice -> state');
   });
 
   it('isLockAcquisitionTimeout accepts the expiry and rejects everything a swallow site must keep swallowing', () => {

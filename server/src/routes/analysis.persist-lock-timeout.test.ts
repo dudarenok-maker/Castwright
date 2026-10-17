@@ -170,6 +170,38 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   };
 });
 
+/* #3625 child 5 — a seam on `withStateLock` itself, aimed at the persist
+   block's terminal state.json read-modify-write. `timeout` makes the lock
+   acquire reject with the real error class; `diskFault` runs the REAL lock but
+   throws from inside its callback (so the lock is released and the error
+   propagates exactly as a failed write would). Both fire only for the
+   fixture's own book dir (runJob's mkdtemp prefix below), and every other
+   call passes straight through to the real lock. */
+const stateLockStep = vi.hoisted(() => ({
+  timeout: null as unknown,
+  diskFault: null as unknown,
+  calls: 0,
+}));
+
+vi.mock('../workspace/state-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-lock.js')>();
+  return {
+    ...actual,
+    withStateLock: async <T,>(bookDir: string, fn: () => Promise<T>): Promise<T> => {
+      if (bookDir.includes('audiobook-persist-lock-timeout-')) {
+        stateLockStep.calls += 1;
+        if (stateLockStep.timeout) throw stateLockStep.timeout;
+        if (stateLockStep.diskFault) {
+          return actual.withStateLock(bookDir, async () => {
+            throw stateLockStep.diskFault;
+          });
+        }
+      }
+      return actual.withStateLock(bookDir, fn);
+    },
+  };
+});
+
 /* Same three environment mocks the sibling runMainAnalyzerJob fixture files
    use to keep the job off a real Ollama / real GPU-cost state and to let the
    test inject the Phase-1 analyzer selection. */
@@ -315,7 +347,7 @@ function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
 }
 
 interface StateJsonOnDisk {
-  chapters: Array<{ id: number; title: string; duration?: number }>;
+  chapters: Array<{ id: number; title: string; duration?: number; uuid?: string }>;
   analysisProvenance?: { engine?: string; model?: string; at?: string };
   updatedAt?: string;
 }
@@ -327,6 +359,8 @@ interface StateJsonOnDisk {
 async function runJob(
   label: string,
   kind: 'main' | 'subset' = 'main',
+  seedUuids = false,
+  tornState = false,
 ): Promise<{
   events: Array<{ kind?: string; code?: string; message?: string }>;
   state: StateJsonOnDisk;
@@ -355,15 +389,22 @@ async function runJob(
       manuscriptFile: 'manuscript.md',
       castConfirmed: false,
       chapters: [
-        { id: 1, title: STALE_CHAPTER_TITLE, slug: '01-stale' },
-        { id: 2, title: STALE_CHAPTER_TITLE, slug: '02-stale' },
-        { id: 3, title: STALE_CHAPTER_TITLE, slug: '03-stale' },
+        { id: 1, title: STALE_CHAPTER_TITLE, slug: '01-stale', ...(seedUuids ? { uuid: 'seed-uuid-1' } : {}) },
+        { id: 2, title: STALE_CHAPTER_TITLE, slug: '02-stale', ...(seedUuids ? { uuid: 'seed-uuid-2' } : {}) },
+        { id: 3, title: STALE_CHAPTER_TITLE, slug: '03-stale', ...(seedUuids ? { uuid: 'seed-uuid-3' } : {}) },
       ],
       coverGradient: ['#000', '#fff'],
       createdAt: STALE_UPDATED_AT,
       updatedAt: STALE_UPDATED_AT,
     }),
   );
+
+  if (tornState) {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const full = readFileSync(statePath, 'utf8');
+    writeFileSync(`${statePath}.bak.1`, full);
+    writeFileSync(statePath, full.slice(0, 40));
+  }
 
   const chapterHints: ChapterHint[] = [
     { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
@@ -1057,6 +1098,141 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
         expect(
           run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
         ).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+
+/* #3625 child 5 — the terminal state.json read-modify-write is the persist
+ * block's AUTHORITATIVE state write (CLAUDE.md: WHICH WRITE the timeout came
+ * out of decides the outcome, #2295). A state-lock timeout there must fail the
+ * job as `lock-contention`; a disk fault out of the same locked span keeps
+ * today's swallow. Both jobs, both directions.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block — the terminal state.json write is locked (#3625)', (_name, kind) => {
+  afterEach(() => {
+    stateLockStep.timeout = null;
+    stateLockStep.diskFault = null;
+    stateLockStep.calls = 0;
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'a state-lock timeout ends the job with a lock-contention ERROR, not a result',
+    async () => {
+      stateLockStep.timeout = new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000);
+
+      const run = await runJob(`state-timeout-${kind}`, kind);
+      try {
+        // The seam fired: the write really goes through withStateLock.
+        expect(stateLockStep.calls).toBeGreaterThan(0);
+
+        // The earlier persist writes completed; state.json is the one that did not.
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedContentionTerminal(terminal, '/abs/secret/path');
+        expect(JSON.stringify(run.events)).not.toContain('/abs/secret/path');
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'an EPERM disk fault inside the locked span is still swallowed — the job ends with a result',
+    async () => {
+      stateLockStep.diskFault = Object.assign(
+        new Error("EPERM: operation not permitted, rename 'state.json'"),
+        { code: 'EPERM' },
+      );
+
+      const run = await runJob(`state-eperm-${kind}`, kind);
+      try {
+        expect(stateLockStep.calls).toBeGreaterThan(0);
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('result');
+        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+/* #3625 pass-1 review — both persist blocks rebuild the chapter list from
+ * scratch; a chapter's stable `uuid` (srv-35, invariant 1: no path regenerates
+ * an existing one) must ride through by id like `excluded` / `held` do, or the
+ * next scan mints a new random uuid for every chapter.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block — chapter uuids survive (#3625)', (_name, kind) => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'a seeded uuid is carried across the rewrite by chapter id',
+    async () => {
+      const run = await runJob(`uuid-${kind}`, kind, true);
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual([
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
+        ]);
+        expect(run.state.chapters.map((c) => c.uuid)).toEqual([
+          'seed-uuid-1',
+          'seed-uuid-2',
+          'seed-uuid-3',
+        ]);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+/* #3625 sweep - both persist blocks read state.json INSIDE the lock; that read
+ * must recover a torn main file from .bak.1, or the persist's state.json write
+ * is lost (swallowed as a disk fault) and the file stays corrupt.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block - a torn state.json is recovered (#3625)', (_name, kind) => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'the persist lands and the main file is whole again',
+    async () => {
+      const run = await runJob(`torn-${kind}`, kind, false, true);
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual([
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
+        ]);
       } finally {
         await run.cleanup();
       }

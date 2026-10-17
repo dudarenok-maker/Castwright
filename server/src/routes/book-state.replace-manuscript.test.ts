@@ -176,3 +176,58 @@ describe('replace-manuscript handler', () => {
     expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(true);
   });
 });
+
+describe('#3625 — replace-manuscript waits on the state lock', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  async function hold() {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('does not write state.json while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await hold();
+    try {
+      const p = request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md')
+        .then((r) => r);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(readFileSync(statePath(), 'utf8')).toBe(before);
+      release();
+      const [res] = await Promise.all([p, held]);
+      expect(res.status).toBe(200);
+      expect(JSON.parse(readFileSync(statePath(), 'utf8')).chapters).toHaveLength(2);
+    } finally {
+      release();
+      await held;
+    }
+  });
+
+  it('still persists the new manuscriptFile carried from the caller snapshot', async () => {
+    const { release, held } = await hold();
+    try {
+      const p = request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt')
+        .then((r) => r);
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await Promise.all([p, held]);
+      expect(JSON.parse(readFileSync(statePath(), 'utf8')).manuscriptFile).toBe('manuscript.txt');
+    } finally {
+      release();
+      await held;
+    }
+  });
+
+});

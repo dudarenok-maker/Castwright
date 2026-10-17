@@ -18,10 +18,9 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import { stateJsonPath } from '../workspace/paths.js';
-import type { BookStateJson } from '../workspace/scan.js';
 import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
@@ -121,15 +120,17 @@ export async function patchStateLocalCover(
   originalFilename: string | null,
 ): Promise<void> {
   const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  state.coverImage = {
-    source: 'local',
-    originalFilename,
-    uploadedAt: new Date().toISOString(),
-  };
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  await withStateLock(bookDir, async () => {
+    const state = await readStateJsonWithRecovery(path);
+    if (!state) return;
+    state.coverImage = {
+      source: 'local',
+      originalFilename,
+      uploadedAt: new Date().toISOString(),
+    };
+    state.updatedAt = new Date().toISOString();
+    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  });
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -142,13 +143,15 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
   const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return false;
-  if (!state.coverImage) return false;
-  state.coverImage.framing = clampFraming(framing);
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-  return true;
+  return withStateLock(bookDir, async () => {
+    const state = await readStateJsonWithRecovery(path);
+    if (!state) return false;
+    if (!state.coverImage) return false;
+    state.coverImage.framing = clampFraming(framing);
+    state.updatedAt = new Date().toISOString();
+    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+    return true;
+  });
 }
 
 function clamp(n: number, min: number, max: number): number {

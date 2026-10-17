@@ -94,6 +94,54 @@ describe('downloadCover containment', () => {
   });
 });
 
+describe('cover state.json helpers wait on the state lock (#3625)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  const readState = () => JSON.parse(readFileSync(statePath(), 'utf8'));
+
+  async function holdLock(): Promise<{ release: () => void; held: Promise<void> }> {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('patchStateCover does not write while the lock is held, then lands', async () => {
+    const { patchStateCover } = await import('./store.js');
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await holdLock();
+    const p = patchStateCover(bookDir, {
+      id: 'apple:1',
+      source: 'apple',
+      coverUrl: 'https://x/1.jpg',
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    release();
+    await Promise.all([held, p]);
+    expect(readState().coverImage.candidateId).toBe('apple:1');
+  });
+
+  it('clearStateCover does not write while the lock is held, then lands', async () => {
+    const { patchStateCover, clearStateCover } = await import('./store.js');
+    await patchStateCover(bookDir, { id: 'apple:2', source: 'apple', coverUrl: 'https://x/2.jpg' });
+    expect(readState().coverImage).toBeDefined();
+    const { release, held } = await holdLock();
+    const p = clearStateCover(bookDir);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readState().coverImage).toBeDefined();
+    release();
+    await Promise.all([held, p]);
+    expect(readState().coverImage).toBeUndefined();
+  });
+});
+
 /* #3640 / #3535: every provider body is normalised through the shared
    re-encode helper (server/src/cover/reencode.ts) before it lands as
    cover.jpg — a GIF/WebP stored verbatim breaks the m4b export, and a JPEG

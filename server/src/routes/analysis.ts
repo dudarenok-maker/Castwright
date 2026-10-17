@@ -120,6 +120,7 @@ import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
@@ -154,7 +155,7 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
@@ -4541,15 +4542,21 @@ export async function runMainAnalyzerJob(
                a stale path (moved book, or one now holding another book) is
                never written. */
             const freshStatePath = stateJsonPath(freshBookDir);
-            const freshState = await readJson<BookStateJson>(freshStatePath);
-            if (freshState?.castConfirmed) {
-              await writeStateJsonAtomic(freshStatePath, {
-                ...freshState,
-                castConfirmed: false,
-                updatedAt: new Date().toISOString(),
-                language: freshState.language ?? null,
-              });
-            }
+            /* #3625 — read-through-write under the per-book state lock (after the
+               cast hold above has closed; never nested in it). Fail loud: a lock
+               timeout propagates to the run's top-level catch, which classifies
+               it as `lock-contention` via classifyAnalysisFailure. */
+            await withStateLock(freshBookDir, async () => {
+              const freshState = await readStateJsonWithRecovery(freshStatePath);
+              if (freshState?.castConfirmed) {
+                await writeStateJsonAtomic(freshStatePath, {
+                  ...freshState,
+                  castConfirmed: false,
+                  updatedAt: new Date().toISOString(),
+                  language: freshState.language ?? null,
+                });
+              }
+            });
           },
         );
       }
@@ -7159,67 +7166,90 @@ export async function runMainAnalyzerJob(
              best-effort by design; this is the loud guard at the authoritative
              terminal record.) */
           await assertWriteTargetStable(job, writeDir);
-          const statePath = stateJsonPath(writeDir);
-          const prev = await readJson<BookStateJson>(statePath);
-          if (prev) {
-            /* Preserve the user-owned flags — analysis owns chapter titles/
-               durations, the user owns `excluded` and `held`. Match on id so a
-               re-run after a re-parse picks up whichever ids the parser
-               produced. `held` (the "Not queued" intent) can't be re-derived
-               from disk like the audio metadata can, so dropping it here would
-               silently lose the user's choice — see the chapter `held` doc in
-               workspace/scan.ts. */
-            const prevExcludedById = new Map<number, boolean>();
-            const prevHeldById = new Map<number, boolean>();
-            const prevOverriddenById = new Map<number, string>();
-            for (const c of prev.chapters) {
-              if (c.excluded) prevExcludedById.set(c.id, true);
-              if (c.held) prevHeldById.set(c.id, true);
-              if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
-            }
-            const next: BookStateJson = {
-              ...prev,
-              /* #3628 — the title-source flags are not re-derivable here, so
-                 carry them from prev (both only while the title is unchanged,
-                 so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                 strip them and a later restructure would misjudge the title. */
-              chapters: carryTitleSynthesized(
-                chapters.map((c) => ({
-                  id: c.id,
-                  title: c.title,
-                  slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                  duration: c.duration,
-                  excluded: prevExcludedById.get(c.id) || undefined,
-                  held: prevHeldById.get(c.id) || undefined,
-                  titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
-                })),
-                prev.chapters,
-              ),
-              /* srv-59 Task 11 — record which analyzer produced this cast/
-                 sentence set and, when the dialogue-structure engine ran,
-                 the aggregated run report. Additive + schema-tolerant: no
-                 reader may require this block (see BookStateJson). */
-              analysisProvenance: {
-                engine: phase1Selection.engine,
-                model: phase1Selection.model,
-                at: new Date().toISOString(),
-                structureEngineVersion: 1,
-                report: aggregateStructureReports(structureReports),
-                scope: 'book',
-                chaptersCovered: chapters.length,
-                /* #2267/#2275 C3 — a SIBLING of `report`, computed
-                   independently: `aggregateStructureReports` returns
-                   `undefined` for an empty `structureReports` (engine off, or
-                   every chapter this pass served from cache), but this
-                   reading needs neither an EngineReport nor the engine having
-                   run — see design of record §4 and the field's own doc
-                   comment on BookStateJson.analysisProvenance. */
-                maxMergedTurnsInParagraph: aggregateMaxMergedTurns(perChapterMaxMergedTurns),
-              },
-              updatedAt: new Date().toISOString(),
-            };
-            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-            wroteStateJson = true;
+          /* #3625 / #2295 — the terminal state.json read-modify-write runs under the
+             per-book state lock (the read is INSIDE it, so a sibling finalize's stamp
+             is never overwritten from a stale read). This is the authoritative write:
+             a lock timeout is parked in `persistLockTimeout` and rethrown after the
+             try/catch below (-> `lock-contention`), never swallowed into a false
+             success. It is the block's last write, so nothing after it needs to
+             complete before the deferred rethrow. Anything else (a disk fault) is
+             rethrown unchanged and stays swallowed by `catch (persistErr)`. */
+          try {
+            await withStateLock(writeDir, async () => {
+              const statePath = stateJsonPath(writeDir);
+              const prev = await readStateJsonWithRecovery(statePath);
+              if (prev) {
+                /* Preserve the user-owned flags — analysis owns chapter titles/
+                   durations, the user owns `excluded` and `held`. Match on id so a
+                   re-run after a re-parse picks up whichever ids the parser
+                   produced. `held` (the "Not queued" intent) can't be re-derived
+                   from disk like the audio metadata can, so dropping it here would
+                   silently lose the user's choice — see the chapter `held` doc in
+                   workspace/scan.ts. */
+                const prevExcludedById = new Map<number, boolean>();
+                const prevHeldById = new Map<number, boolean>();
+                /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+                   no path regenerates one), so it rides through by id too; the
+                   rebuild below would otherwise drop it and the next scan would
+                   mint a fresh random uuid for every chapter. */
+                const prevUuidById = new Map<number, string>();
+                const prevOverriddenById = new Map<number, string>();
+                for (const c of prev.chapters) {
+                  if (c.excluded) prevExcludedById.set(c.id, true);
+                  if (c.held) prevHeldById.set(c.id, true);
+                  if (c.uuid) prevUuidById.set(c.id, c.uuid);
+                  if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
+                }
+                const next: BookStateJson = {
+                  ...prev,
+                  /* #3628 — the title-source flags are not re-derivable here, so
+                     carry them from prev (both only while the title is unchanged,
+                     so a mis-aligned parse cannot move a flag onto another heading)
+                     or a re-analysis would strip them and a later restructure
+                     would misjudge the title. */
+                  chapters: carryTitleSynthesized(
+                    chapters.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                      duration: c.duration,
+                      excluded: prevExcludedById.get(c.id) || undefined,
+                      held: prevHeldById.get(c.id) || undefined,
+                      uuid: prevUuidById.get(c.id),
+                      titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
+                    })),
+                    prev.chapters,
+                  ),
+                  /* srv-59 Task 11 — record which analyzer produced this cast/
+                     sentence set and, when the dialogue-structure engine ran,
+                     the aggregated run report. Additive + schema-tolerant: no
+                     reader may require this block (see BookStateJson). */
+                  analysisProvenance: {
+                    engine: phase1Selection.engine,
+                    model: phase1Selection.model,
+                    at: new Date().toISOString(),
+                    structureEngineVersion: 1,
+                    report: aggregateStructureReports(structureReports),
+                    scope: 'book',
+                    chaptersCovered: chapters.length,
+                    /* #2267/#2275 C3 — a SIBLING of `report`, computed
+                       independently: `aggregateStructureReports` returns
+                       `undefined` for an empty `structureReports` (engine off, or
+                       every chapter this pass served from cache), but this
+                       reading needs neither an EngineReport nor the engine having
+                       run — see design of record §4 and the field's own doc
+                       comment on BookStateJson.analysisProvenance. */
+                    maxMergedTurnsInParagraph: aggregateMaxMergedTurns(perChapterMaxMergedTurns),
+                  },
+                  updatedAt: new Date().toISOString(),
+                };
+                await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+                wroteStateJson = true;
+              }
+            });
+          } catch (stateLockErr) {
+            if (isLockAcquisitionTimeout(stateLockErr)) persistLockTimeout = stateLockErr;
+            else throw stateLockErr;
           }
         }
       } catch (persistErr) {
@@ -9104,58 +9134,81 @@ export async function runSubsetAnalyzerJob(
           /* #2196 review (🟡 TOCTOU) — mirror the main persist's re-verify of the
              write target immediately before the terminal state.json record. */
           await assertWriteTargetStable(job, writeDir);
-          const statePath = stateJsonPath(writeDir);
-          const prev = await readJson<BookStateJson>(statePath);
-          if (prev) {
-            /* Preserve the user-owned `excluded` + `held` flags across the
-               subset re-attribution — `held` (the "Not queued" intent) isn't
-               re-derivable from disk, so it must ride through here. */
-            const prevExcludedById = new Map<number, boolean>();
-            const prevHeldById = new Map<number, boolean>();
-            const prevOverriddenById = new Map<number, string>();
-            for (const c of prev.chapters) {
-              if (c.excluded) prevExcludedById.set(c.id, true);
-              if (c.held) prevHeldById.set(c.id, true);
-              if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
-            }
-            const next: BookStateJson = {
-              ...prev,
-              /* #3628 — the title-source flags are not re-derivable here, so
-                 carry them from prev (both only while the title is unchanged,
-                 so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                 strip them and a later restructure would misjudge the title. */
-              chapters: carryTitleSynthesized(
-                chaptersOut.map((c) => ({
-                  id: c.id,
-                  title: c.title,
-                  slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                  duration: c.duration,
-                  excluded: prevExcludedById.get(c.id) || undefined,
-                  held: prevHeldById.get(c.id) || undefined,
-                  titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
-                })),
-                prev.chapters,
-              ),
-              /* srv-59 Task 11 — a subset retry supersedes whatever
-                 provenance the last full run left, so this REWRITES the
-                 block wholesale (fresh `at` + a report recomputed from just
-                 this pass's chapters) rather than merging with `prev`'s. */
-              analysisProvenance: {
-                engine: phase1Selection.engine,
-                model: phase1Selection.model,
-                at: new Date().toISOString(),
-                structureEngineVersion: 1,
-                report: aggregateStructureReports(subsetStructureReports),
-                scope: 'subset',
-                chaptersCovered: toRun.length,
-                /* #2267/#2275 C3 — see the matching comment at the main
-                   route's persist site above. */
-                maxMergedTurnsInParagraph: aggregateMaxMergedTurns(subsetPerChapterMaxMergedTurns),
-              },
-              updatedAt: new Date().toISOString(),
-            };
-            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-            wroteStateJson = true;
+          /* #3625 / #2295 — the terminal state.json read-modify-write runs under the
+             per-book state lock (the read is INSIDE it, so a sibling finalize's stamp
+             is never overwritten from a stale read). This is the authoritative write:
+             a lock timeout is parked in `persistLockTimeout` and rethrown after the
+             try/catch below (-> `lock-contention`), never swallowed into a false
+             success. It is the block's last write, so nothing after it needs to
+             complete before the deferred rethrow. Anything else (a disk fault) is
+             rethrown unchanged and stays swallowed by `catch (persistErr)`. */
+          try {
+            await withStateLock(writeDir, async () => {
+              const statePath = stateJsonPath(writeDir);
+              const prev = await readStateJsonWithRecovery(statePath);
+              if (prev) {
+                /* Preserve the user-owned `excluded` + `held` flags across the
+                   subset re-attribution — `held` (the "Not queued" intent) isn't
+                   re-derivable from disk, so it must ride through here. */
+                const prevExcludedById = new Map<number, boolean>();
+                const prevHeldById = new Map<number, boolean>();
+                /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+                   no path regenerates one), so it rides through by id too; the
+                   rebuild below would otherwise drop it and the next scan would
+                   mint a fresh random uuid for every chapter. */
+                const prevUuidById = new Map<number, string>();
+                const prevOverriddenById = new Map<number, string>();
+                for (const c of prev.chapters) {
+                  if (c.excluded) prevExcludedById.set(c.id, true);
+                  if (c.held) prevHeldById.set(c.id, true);
+                  if (c.uuid) prevUuidById.set(c.id, c.uuid);
+                  if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
+                }
+                const next: BookStateJson = {
+                  ...prev,
+                  /* #3628 — the title-source flags are not re-derivable here, so
+                     carry them from prev (both only while the title is unchanged,
+                     so a mis-aligned parse cannot move a flag onto another heading)
+                     or a re-analysis would strip them and a later restructure
+                     would misjudge the title. */
+                  chapters: carryTitleSynthesized(
+                    chaptersOut.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                      duration: c.duration,
+                      excluded: prevExcludedById.get(c.id) || undefined,
+                      held: prevHeldById.get(c.id) || undefined,
+                      uuid: prevUuidById.get(c.id),
+                      titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
+                    })),
+                    prev.chapters,
+                  ),
+                  /* srv-59 Task 11 — a subset retry supersedes whatever
+                     provenance the last full run left, so this REWRITES the
+                     block wholesale (fresh `at` + a report recomputed from just
+                     this pass's chapters) rather than merging with `prev`'s. */
+                  analysisProvenance: {
+                    engine: phase1Selection.engine,
+                    model: phase1Selection.model,
+                    at: new Date().toISOString(),
+                    structureEngineVersion: 1,
+                    report: aggregateStructureReports(subsetStructureReports),
+                    scope: 'subset',
+                    chaptersCovered: toRun.length,
+                    /* #2267/#2275 C3 — see the matching comment at the main
+                       route's persist site above. */
+                    maxMergedTurnsInParagraph: aggregateMaxMergedTurns(subsetPerChapterMaxMergedTurns),
+                  },
+                  updatedAt: new Date().toISOString(),
+                };
+                await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+                wroteStateJson = true;
+              }
+            });
+          } catch (stateLockErr) {
+            if (isLockAcquisitionTimeout(stateLockErr)) persistLockTimeout = stateLockErr;
+            else throw stateLockErr;
           }
         }
       } catch (persistErr) {

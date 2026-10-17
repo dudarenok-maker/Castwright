@@ -20,6 +20,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId, bookStateAudioFormat, type BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
   canonicalModelKeyForEngine,
@@ -570,7 +571,8 @@ chapterSpliceRouter.post(
       });
       res.end();
     } catch (err) {
-      fail(`Splice failed: ${(err as Error).message}`);
+      console.error('[splice] failed:', err);
+      fail(requestFailureMessage(err, `Splice failed: ${(err as Error).message}`));
     } finally {
       releaseSlot();
     }

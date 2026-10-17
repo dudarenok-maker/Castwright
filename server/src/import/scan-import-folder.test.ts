@@ -16,6 +16,24 @@ import {
   importPortableBundle,
 } from './scan-import-folder.js';
 import { ZipFile } from 'yazl';
+
+/* #3625 — widens the unlocked check-then-mkdir window so the concurrency tests
+   below race deterministically: the FIRST mkdir of `slowMkdir.path` stalls. A
+   pass-through for every other call. */
+const slowMkdir = vi.hoisted(() => ({ path: null as string | null, ms: 250 }));
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    mkdir: (async (p: string, ...rest: unknown[]) => {
+      if (slowMkdir.path !== null && p === slowMkdir.path) {
+        slowMkdir.path = null;
+        await new Promise((r) => setTimeout(r, slowMkdir.ms));
+      }
+      return (actual.mkdir as (...a: unknown[]) => Promise<unknown>)(p, ...rest);
+    }) as typeof actual.mkdir,
+  };
+});
 import sharp from 'sharp';
 import { audioDir, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -332,6 +350,48 @@ describe('importPortableBundle', () => {
     }
   });
 
+  /* #3625 — the conflict decision is made under the target's state lock, so two
+     concurrent imports of one title can't both see "free". */
+  it("two concurrent 'fail' imports of one title: one succeeds, one conflicts", async () => {
+    const state = fixtureState({ title: 'Concurrent Fail Test' });
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
+    const target = targetDirFor(state);
+    rmSync(target, { recursive: true, force: true });
+    slowMkdir.path = target;
+    try {
+      const results = await Promise.allSettled([
+        importPortableBundle(bundle, { onConflict: 'fail' }),
+        importPortableBundle(bundle, { onConflict: 'fail' }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(rejected.reason).toBeInstanceOf(BundleConflictError);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("two concurrent 'rename' imports of one title land in distinct dirs", async () => {
+    const state = fixtureState({ title: 'Concurrent Rename Test' });
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
+    const target = targetDirFor(state);
+    mkdirSync(target, { recursive: true });
+    const created: string[] = [];
+    slowMkdir.path = targetDirFor(state, 'Concurrent Rename Test (imported)');
+    try {
+      const [a, b] = await Promise.all([
+        importPortableBundle(bundle, { onConflict: 'rename' }),
+        importPortableBundle(bundle, { onConflict: 'rename' }),
+      ]);
+      created.push(a.targetPath, b.targetPath);
+      expect(a.targetPath).not.toBe(b.targetPath);
+      expect(a.bookId).not.toBe(b.bookId);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+      for (const c of created) rmSync(c, { recursive: true, force: true });
+    }
+  });
+
   it("'overwrite' strategy writes into the existing dir, preserving files not in the bundle", async () => {
     const state = fixtureState({ title: 'Overwrite Test' });
     const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
@@ -431,6 +491,38 @@ describe('importPortableBundle', () => {
       const onDisk = JSON.parse(readFileSync(stateJsonPath(target), 'utf8'));
       expect(onDisk.language).toBe('fr');
     } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("'overwrite' promotes state.json only after the state lock is released (#3625)", async () => {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    const state = fixtureState({ title: 'Overwrite Lock Test' });
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
+    const target = targetDirFor(state);
+    mkdirSync(dotAudiobook(target), { recursive: true });
+    const existing = JSON.stringify({ ...state, title: 'Existing Book' });
+    writeFileSync(stateJsonPath(target), existing);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(target, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    try {
+      const pending = importPortableBundle(bundle, { onConflict: 'overwrite' });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(readFileSync(stateJsonPath(target), 'utf8')).toBe(existing);
+      release();
+      await Promise.all([pending, held]);
+      expect(JSON.parse(readFileSync(stateJsonPath(target), 'utf8')).title).toBe(
+        'Overwrite Lock Test',
+      );
+    } finally {
+      release();
       rmSync(target, { recursive: true, force: true });
     }
   });

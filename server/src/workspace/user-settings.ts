@@ -12,9 +12,9 @@
 import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { appendFile, copyFile, mkdir } from 'node:fs/promises';
-import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
+import { hasWriteInFlightMarker, readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -535,6 +535,12 @@ export const USER_SETTINGS_BACKUP_KEEP = 3;
     (task 3 of #3175). */
 let settingsFileCorrupt = false;
 
+/** True after a read hit a non-parse error (#3625 review): what is cached was
+    not verified against the file. Cleared by the next successful commitRead.
+    snapshotCorruptBytesBeforeWrite — the chokepoint every writer passes before
+    writing — refuses while it is set. */
+let readUnverified = false;
+
 /** Identity of the on-disk file the cache was populated from: its mtime AND
     its byte size (#3175 P8 — mtime alone has a ~1 ms floor on NTFS, so a
     same-tick rewrite is invisible to it; a size pairing catches most of
@@ -568,14 +574,15 @@ function statFileStamp(): FileStamp | null {
     Compares the file's current stamp with the one recorded at population.
     Inequality (not `<=`) so a restore that copies an OLDER file back —
     which can carry an older mtime — still counts as a change. A file that
-    is absent NOW but existed at population is treated as unchanged: the
-    only known way for it to vanish out from under a warm cache is the
-    rotate-then-rename window of a sibling process's own atomic write, and
-    serving the last-known settings across that window beats resetting
-    every resolver to factory defaults for one read. */
+    is absent NOW but existed at population is a CHANGE: it is re-read, and the
+    read decides what the absence means - a sibling's rotating write in its
+    rename-away-then-rename-in window (marker present: the newest backup is
+    served, or the cache kept when none parses) or the user deleting the file
+    (no marker: a reset to defaults). A file absent at population and still
+    absent is unchanged. */
 function cacheMatchesDisk(): boolean {
   const now = statFileStamp();
-  if (now === null) return true;
+  if (now === null) return cachedFileStamp === null;
   return (
     cachedFileStamp !== null && now.mtimeMs === cachedFileStamp.mtimeMs && now.size === cachedFileStamp.size
   );
@@ -583,6 +590,15 @@ function cacheMatchesDisk(): boolean {
 
 export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
+}
+
+/** True while the last read failed with a NON-parse error (EPERM / EBUSY / EIO:
+    a locked or unreadable file whose content is unknown). Distinct from
+    corruption: nothing is reset, but writes are refused (see readUnverified)
+    and what the UI shows may be defaults. Drives the "can't be read right now"
+    banner (#3625 pass 4). */
+export function isUserSettingsFileUnreadable(): boolean {
+  return readUnverified;
 }
 
 /* #3084 P25 — endpoint entries are parsed one by one BEFORE the whole-file
@@ -1053,7 +1069,10 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
 export async function readUserSettings(): Promise<UserSettings> {
   // If another read is already in flight, await it instead of racing
   if (inFlightRead) return inFlightRead;
-  if (cached && cacheMatchesDisk()) {
+  /* `!readUnverified`: after a read hiccup the cache is unverified, and
+     cacheMatchesDisk() calls an ABSENT file "unchanged" — so without this a
+     file that then vanished never got re-read and every writer stayed refused. */
+  if (cached && !readUnverified && cacheMatchesDisk()) {
     /* #3084 P25 — a failed append left entries unarchived: retry it on this read. The
        stamp check is unchanged; this only adds the retry to the warm path. */
     if (unarchivedDrops.length > 0) await retryUnarchivedDrops();
@@ -1086,6 +1105,7 @@ function commitRead(outcome: ReadOutcome): UserSettings {
   explicitlySetKeys = outcome.explicitKeys;
   settingsFileCorrupt = outcome.corrupt;
   cachedFileStamp = outcome.stamp;
+  readUnverified = false;
   return cached;
 }
 
@@ -1097,10 +1117,50 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
+  /* An absent main is a RESET (the user deleted the file) unless a rotating write
+     left its in-flight marker, which makes it a STRANDED file: a sibling server
+     between its two renames, or a write that died there. The decision is taken
+     AFTER a null read, marker first and main second: a rename-in that lands in
+     between is then seen as a present main, never as a reset. */
+  const readFromDisk = (recoverMissing: boolean) =>
+    readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP, recoverMissing });
   let raw: unknown;
+  let stranded = false;
   try {
-    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP });
+    raw = await readFromDisk(false);
+    if (!raw) {
+      const marker = hasWriteInFlightMarker(USER_SETTINGS_PATH);
+      if (existsSync(USER_SETTINGS_PATH)) {
+        raw = await readFromDisk(false); // a rename-in landed after our read
+      } else if (marker) {
+        stranded = true;
+        raw = await readFromDisk(true);
+      }
+    }
   } catch (err) {
+    if (!(err instanceof SyntaxError)) {
+      /* #3625 review — a read error that is NOT a parse failure (EBUSY / EPERM /
+         EIO: a transient lock on a HEALTHY file) says nothing about the file's
+         content, so it is never corruption and is never cached against the
+         file's stamp. Keep whatever is cached; at boot, with nothing cached,
+         serve defaults WITHOUT `corrupt` and a stamp no file carries so the
+         next read re-reads. Either way `readUnverified` makes every writer
+         refuse until a read succeeds — persisting these defaults would
+         silently overwrite the user's file (re-enabling `allowCloudFallback`). */
+      console.warn(
+        `[user-settings] ${USER_SETTINGS_PATH} could not be read (${(err as Error).message}); ` +
+          'keeping the last-known settings and retrying on the next read.',
+      );
+      readUnverified = true;
+      if (cached) return cached;
+      /* Returned, NOT cached: assigning `cached` here made the sync resolvers
+         (and the ANALYZER_ALLOW_CLOUD_FALLBACK=0 pre-cache under-ride) see
+         factory defaults as if they were read from the file. A null cache
+         already forces the next read to go to disk. */
+      explicitlySetKeys = new Set();
+      settingsFileCorrupt = false;
+      return { ...DEFAULT_USER_SETTINGS };
+    }
     /* Main file AND every backup are unparseable (or no backup exists yet —
        the first corruption ever seen). readJsonWithRecovery already tried
        every candidate; only log here, once, for this terminal case — a
@@ -1118,11 +1178,42 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       stamp: statFileStamp(),
     });
   }
+  if (!raw && stranded) {
+    /* Stranded and no backup parses: the same total loss as a corrupt main. With a
+       warm cache, keep it (and stay unverified so writers refuse): swapping factory
+       defaults in would re-enable allowCloudFallback. */
+    if (cached) {
+      console.warn(
+        `[user-settings] ${USER_SETTINGS_PATH} is absent mid-write and its backups are unreadable; ` +
+          'keeping the last-known settings and retrying on the next read.',
+      );
+      readUnverified = true;
+      return cached;
+    }
+    console.warn(`[user-settings] ${USER_SETTINGS_PATH} is absent and its backups are unreadable; using in-memory defaults.`);
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: true,
+      stamp: null,
+    });
+  }
   if (!raw) {
-    /* No file on disk (readJsonWithRecovery returns null for an absent
-       path; nothing on the read path creates one). A `null` stamp records
-       exactly that, so the file appearing later — before this process has
-       written anything — is detected as a change (#3175 Q4). */
+    /* No file on disk and no write in flight: a first run, or the user deleted the
+       file to reset their settings. Either way it is defaults - and any `.bak.N`
+       left behind is dropped now so it can never resurrect the old settings later
+       (the next rotating save would otherwise carry them into the chain). A `null`
+       stamp records the absence, so the file appearing later - before this process
+       has written anything - is detected as a change (#3175 Q4). */
+    if (!existsSync(USER_SETTINGS_PATH)) {
+      for (let i = 1; i <= USER_SETTINGS_BACKUP_KEEP; i += 1) {
+        try {
+          unlinkSync(`${USER_SETTINGS_PATH}.bak.${i}`);
+        } catch {
+          /* Not there. */
+        }
+      }
+    }
     return commitRead({
       settings: { ...DEFAULT_USER_SETTINGS },
       explicitKeys: new Set(),
@@ -1200,8 +1291,19 @@ const patchSchema = userSettingsSchema.partial();
     hand-inspect/recover them later. Must be called BEFORE writeJsonAtomic
     so the snapshot captures the corrupt bytes, not the freshly-written data. */
 async function snapshotCorruptBytesBeforeWrite(): Promise<void> {
-  if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
-    await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
+  if (readUnverified) {
+    throw new Error(
+      `[user-settings] refusing to write ${USER_SETTINGS_PATH}: the file could not be read just now, ` +
+        'so writing would replace it with unverified settings. Retry.',
+    );
+  }
+  if (settingsFileCorrupt) {
+    /* The damaged bytes are main's - or, when a stranded write left main absent, the
+       newest backup's (the banner promises this snapshot either way). */
+    const damaged = [USER_SETTINGS_PATH, ...Array.from({ length: USER_SETTINGS_BACKUP_KEEP }, (_, i) => `${USER_SETTINGS_PATH}.bak.${i + 1}`)].find(
+      (p) => existsSync(p),
+    );
+    if (damaged) await copyFile(damaged, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
   }
 }
 
@@ -1291,6 +1393,7 @@ const FORBIDDEN_KEYS = new Set([
   'workspaceRoot',
   'workspaceSource',
   'corruptSettingsFile',
+  'settingsFileUnreadable',
   'geminiApiKey',
   'apiKey',
   'gemini_api_key',
@@ -1894,6 +1997,7 @@ export function _resetUserSettingsCache(): void {
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
   settingsFileCorrupt = false;
+  readUnverified = false;
   /* #3084 P25 — forget archived and unarchived drops and any in-flight archive retry,
      so a later test that reuses an entry archives it again. */
   archivedDrops.clear();

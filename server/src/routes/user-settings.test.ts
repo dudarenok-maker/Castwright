@@ -14,8 +14,10 @@ import {
   mkdtempSync,
   rmSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -209,6 +211,57 @@ describe('user-settings router', () => {
     expect(saved.body.corruptSettingsFile).toBe(false);
     const after = await request(app).get('/api/user/settings');
     expect(after.body.corruptSettingsFile).toBe(false);
+  });
+
+  /* #3625 pass 4 — a persistent non-parse read error (EPERM / EBUSY / EISDIR
+     here: the path is a directory, which fails the read the same way an ACL
+     denial does) is not corruption, but the UI would show defaults with no
+     explanation. GET surfaces it as its own flag. */
+  it('GET reports settingsFileUnreadable=true (and corruptSettingsFile=false) while the file cannot be read', async () => {
+    const dir = dirname(userSettingsPath);
+    const base = basename(userSettingsPath);
+    for (const name of readdirSync(dir)) {
+      if (name === base || name.startsWith(`${base}.bak.`)) rmSync(join(dir, name), { recursive: true, force: true });
+    }
+    mkdirSync(userSettingsPath);
+    resetCache();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await request(app).get('/api/user/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settingsFileUnreadable).toBe(true);
+      expect(res.body.corruptSettingsFile).toBe(false);
+    } finally {
+      rmSync(userSettingsPath, { recursive: true, force: true });
+      resetCache();
+    }
+    const after = await request(app).get('/api/user/settings');
+    expect(after.body.settingsFileUnreadable).toBe(false);
+  });
+
+  /* #3625 review 2 (🟠3): a whole-map editor (rate limits, keep-alive) seeded from the
+     boot defaults must not be able to save them over a file nobody could read. */
+  it('PUT of a whole map is refused (and writes nothing) while the file cannot be read', async () => {
+    const dir = dirname(userSettingsPath);
+    const base = basename(userSettingsPath);
+    for (const name of readdirSync(dir)) {
+      if (name === base || name.startsWith(`${base}.bak.`)) rmSync(join(dir, name), { recursive: true, force: true });
+    }
+    mkdirSync(userSettingsPath);
+    resetCache();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .put('/api/user/settings')
+        .send({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 3 } } });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to write user settings.');
+      expect(statSync(userSettingsPath).isDirectory()).toBe(true); // nothing replaced it
+    } finally {
+      rmSync(userSettingsPath, { recursive: true, force: true });
+      resetCache();
+    }
   });
 
   it('PUT ignores read-only fields submitted in the body', async () => {

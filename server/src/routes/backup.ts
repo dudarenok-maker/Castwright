@@ -9,6 +9,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { listBackups, backupBook, restoreBackup, BackupRestoreError } from '../workspace/auto-backup.js';
 import { getResolvedBackupConfig } from '../workspace/user-settings.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 
 export const backupRouter = Router();
 
@@ -49,6 +50,7 @@ backupRouter.post('/:bookId/backups/restore', async (req: Request, res: Response
             : 400;
       return res.status(status).json({ error: err.message });
     }
-    throw err;
+    console.error('[backup] restore failed', err);
+    return res.status(500).json({ error: requestFailureMessage(err, 'Backup restore failed.') });
   }
 });

@@ -473,6 +473,30 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
   });
 
+  it('#3625 — a state-lock timeout out of finalize streams the curated text, never the lock key or workspace path', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    vi.mocked(finalizeMod.finalizeChapterAudioWrite).mockRejectedValueOnce(
+      new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000),
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { bookId: id } = await scaffoldVerdictBook('Lock Timeout Story');
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+        .send({ dryRun: false, modelKey: 'kokoro-v1' });
+      const failed = parseSse(res.text).find((e) => e.type === 'chapter_failed');
+      expect(failed, res.text).toBeTruthy();
+      expect(failed!.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+      expect(res.text).not.toContain('/abs/secret/path');
+      expect(res.text).not.toContain('withKeyLock');
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
   it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto qa_repair_complete', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
@@ -1983,3 +2007,4 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attributi
     expect(segFile.segments[1].voiceName).toBeUndefined();
   });
 });
+

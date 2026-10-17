@@ -1429,3 +1429,28 @@ describe('POST /:bookId/chapters/:chapterId/splice — unset book language (Task
   });
 });
 
+
+
+describe('POST /:bookId/chapters/:chapterId/splice — state-lock timeout from finalize (#3625)', () => {
+  it('streams the curated lock-contention text, never the lock key or workspace path', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    vi.mocked(finalizeMod.finalizeChapterAudioWrite).mockRejectedValueOnce(
+      new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000),
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+        .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
+      const failed = parseSse(res.text).find((e) => e.type === 'chapter_failed');
+      expect(failed, res.text).toBeTruthy();
+      expect(failed!.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+      expect(res.text).not.toContain('/abs/secret/path');
+      expect(res.text).not.toContain('withKeyLock');
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+});

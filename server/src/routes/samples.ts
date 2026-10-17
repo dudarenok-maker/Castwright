@@ -21,7 +21,9 @@ import {
   makeBookId,
   stateJsonPath,
 } from '../workspace/paths.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateLock } from '../workspace/state-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -85,47 +87,65 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const bookDir = bookDirByDisplay(author, series, title);
     const bookId = makeBookId(author, series, title);
 
-    // Idempotent: already present → no-op (never clobber a user's edited copy).
-    if (existsSync(stateJsonPath(bookDir))) {
-      return res.json({ bookId, alreadyLoaded: true });
-    }
-
-    await mkdir(dotAudiobook(bookDir), { recursive: true });
-
-    // 1. Manuscript.
     const srcManuscript = join(src, safeManuscriptFile);
     const dstManuscript = join(bookDir, safeManuscriptFile);
     assertContained(src, srcManuscript);
     assertContained(bookDir, dstManuscript);
-    await copyFile(srcManuscript, dstManuscript);
-
-    // 2. .audiobook/{cast,manuscript-edits}.
-    for (const f of ['cast.json', 'manuscript-edits.json']) {
-      const srcAudiobookFile = join(src, '.audiobook', f);
-      assertContained(src, srcAudiobookFile);
-      if (existsSync(srcAudiobookFile)) {
-        const dstAudiobookFile = join(dotAudiobook(bookDir), f);
-        assertContained(bookDir, dstAudiobookFile);
-        await copyFile(srcAudiobookFile, dstAudiobookFile);
-      }
-    }
-
-    // 3. Fresh manuscriptId + state.json.
     const manuscriptId = `mns_${nanoid(10)}`;
     const now = new Date().toISOString();
-    const state = {
-      ...bundleState,
-      /* A bundle whose state.json omits `language` must land on disk as an
-         explicit `language: null` (key present) — never a missing key, and
-         never the 'en' guess that makes a surrender indistinguishable from a
-         decision. A bundle that does carry a language round-trips unchanged. */
-      language: bundleState.language ?? null,
-      bookId,
-      manuscriptId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+
+    /* The idempotency check and the state.json write are one atomic span: two
+       concurrent loads of the same sample would otherwise both pass the check
+       and both write (#3625). Only small local copies sit inside the lock. */
+    const alreadyLoaded = await withStateLock(bookDir, async () => {
+      // Idempotent: already present → no-op (never clobber a user's edited copy).
+      /* "Present" is the recovering reader's verdict, not main's existence: a
+         stranded copy (main missing, a good .bak.N) is present too, and a
+         TORN one (a parse failure, nothing to recover from) is not ours to
+         clobber. Any other read error (EACCES / EISDIR) says nothing about the
+         file: it fails the load rather than claiming a copy that may not exist. */
+      try {
+        if (await readStateJsonWithRecovery(stateJsonPath(bookDir))) return true;
+      } catch (readErr) {
+        if (readErr instanceof SyntaxError) return true;
+        throw readErr;
+      }
+
+      await mkdir(dotAudiobook(bookDir), { recursive: true });
+
+      // 1. Manuscript.
+      await copyFile(srcManuscript, dstManuscript);
+
+      // 2. .audiobook/{cast,manuscript-edits}.
+      for (const f of ['cast.json', 'manuscript-edits.json']) {
+        const srcAudiobookFile = join(src, '.audiobook', f);
+        assertContained(src, srcAudiobookFile);
+        if (existsSync(srcAudiobookFile)) {
+          const dstAudiobookFile = join(dotAudiobook(bookDir), f);
+          assertContained(bookDir, dstAudiobookFile);
+          await copyFile(srcAudiobookFile, dstAudiobookFile);
+        }
+      }
+
+      // 3. Fresh manuscriptId + state.json.
+      const state = {
+        ...bundleState,
+        /* A bundle whose state.json omits `language` must land on disk as an
+           explicit `language: null` (key present) — never a missing key, and
+           never the 'en' guess that makes a surrender indistinguishable from a
+           decision. A bundle that does carry a language round-trips unchanged. */
+        language: bundleState.language ?? null,
+        bookId,
+        manuscriptId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+      return false;
+    });
+    if (alreadyLoaded) {
+      return res.json({ bookId, alreadyLoaded: true });
+    }
 
     // 4. Merge bundle voices into workspace voices/qwen (no clobber).
     const srcVoices = join(src, 'voices', 'qwen');
@@ -168,6 +188,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     res.json({ bookId, manuscriptId, alreadyLoaded: false });
   } catch (e) {
     console.error('[samples] load failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to load sample.' });
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to load sample.'),
+    });
   }
 });

@@ -83,8 +83,10 @@ export class LockAcquisitionTimeoutError extends Error {
     super(
       `withKeyLock: timed out after ${timeoutMs}ms waiting to acquire "${key}" -- ` +
         'either a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
-        'same key) or rule 4 (lock-order cycle across design/library-voice/cast) ' +
-        'violation, OR ordinary contention behind a legitimately long holder on ' +
+        'same key) or rule 4 (lock-order cycle: design -> library-voice -> cast; ' +
+        'revision-op -> state -> revisions; library-voice -> state (state may be ' +
+        'taken after design, library-voice, cast or revision-op, never while ' +
+        'holding revisions)) violation, OR ordinary contention behind a legitimately long holder on ' +
         'this key (see the budget note above). Check for a long holder before ' +
         'hunting a rule violation -- both reach here',
     );

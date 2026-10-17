@@ -16,7 +16,7 @@
  * imports so paths.ts picks up WORKSPACE_DIR, supertest against the real
  * router. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -1516,6 +1516,73 @@ describe('merge/split propagate titleOverridden (plan 78)', () => {
     const sticky = after.chapters.find((c) => c.title === 'Sticky One');
     expect(sticky?.id).toBe(3);
     expect(sticky?.titleOverridden).toBe(true);
+  });
+});
+
+/* -- #3625: state.json writes wait on the per-book state lock ------------- */
+
+describe('POST /:bookId/chapters/merge — state lock (#3625)', () => {
+  const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+  const statePathNow = () => join(bookDir, '.audiobook', 'state.json');
+
+  /* Locks a failing assertion left held; released in afterEach so one red case
+     cannot starve the next one into a lock timeout. */
+  const openHolds: Array<() => void> = [];
+  afterEach(() => {
+    while (openHolds.length) openHolds.pop()!();
+  });
+
+  async function holdLock(): Promise<{ release: () => void; held: Promise<void> }> {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    openHolds.push(release);
+    return { release, held };
+  }
+
+  const sendMerge = (ids: number[]) =>
+    request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: ids })
+      .then((r) => r);
+
+  it('waits on the lock: state.json is unchanged while held, restructured after release', async () => {
+    const { release, held } = await holdLock();
+    const pending = sendMerge([2, 3]);
+    await settle(200);
+    // Compare the chapter list, not the bytes: findBookByBookId's own lazy
+    // migration may re-serialise the file before the restructure's lock wait.
+    expect(readState().chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    release();
+    await held;
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(readState().chapters.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it('derives the restructure from a read taken inside the lock (stale-snapshot)', async () => {
+    const { release, held } = await holdLock();
+    const pending = sendMerge([1, 2]);
+    await settle(200);
+    // A concurrent writer stamps the surviving chapter 3 while the merge waits.
+    const cur = readState();
+    cur.chapters[2].audioRenderedAt = '2026-09-09T09:09:09.000Z';
+    writeFileSync(statePathNow(), JSON.stringify(cur));
+    release();
+    await held;
+    const res = await pending;
+    expect(res.status).toBe(200);
+    const after = readState();
+    expect(after.chapters).toHaveLength(2);
+    expect(after.chapters[1].slug).toBe('02-chapter-three');
+    expect(after.chapters[1].audioRenderedAt).toBe('2026-09-09T09:09:09.000Z');
   });
 });
 

@@ -1981,6 +1981,92 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
     expect(state.chapters.find((c) => c.id === 2)!.generationState).toBeUndefined();
   });
 
+  /* #3625 — the failure stamp is reachable while state.json is torn:
+     `findBookByBookId` returns the recovered `.bak.1` state but leaves the main
+     file torn (it writes only for a segments backfill, and these chapters already
+     carry uuids). The in-lock read must recover too, or the stamp is lost. */
+  it('stamps generationState:"failed" through a torn state.json with a good .bak.1', async () => {
+    const fs = await import('node:fs');
+    const good = JSON.stringify({
+      bookId,
+      manuscriptId: MANUSCRIPT_ID,
+      title: TITLE,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-one', uuid: 'u-1' },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-two', uuid: 'u-2' },
+      ],
+      language: 'en',
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    fs.writeFileSync(`${statePath()}.bak.1`, good);
+    fs.writeFileSync(statePath(), good.slice(0, 40));
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"boom"}');
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+    expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+    fs.rmSync(`${statePath()}.bak.1`, { force: true });
+  });
+
+  /* #3625 — the failure stamp is a state.json read-modify-write, so it must
+     wait on the per-book state lock: held by the test, the stamp must not land;
+     released, it must. (No timeout-direction test: a lock timeout here is
+     swallowed by the persist catch exactly as a disk fault is — the failure was
+     already delivered over SSE.) */
+  it('waits on the state lock before stamping generationState:"failed"', async () => {
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"boom"}');
+    };
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let acquired!: () => void;
+    const acquiredSignal = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    const holder = withStateLock(bookDir, async () => {
+      acquired();
+      await held;
+    });
+    try {
+      await acquiredSignal;
+      const resPromise = request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+      resPromise.then(
+        () => {},
+        () => {},
+      );
+      /* Give the run a real chance to fail the chapter and attempt the stamp. */
+      await new Promise((r) => setTimeout(r, 400));
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).not.toBe(
+        'failed',
+      );
+
+      release();
+      await holder;
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+  }, 30_000);
+
   it('clears generationState + generationError on a subsequent successful render', async () => {
     /* First fail chapter 1 so the failure is persisted. */
     synthesiseImpl = async () => {
