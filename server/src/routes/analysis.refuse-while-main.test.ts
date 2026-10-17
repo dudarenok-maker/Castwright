@@ -1167,6 +1167,107 @@ describe('refusals (#3435 decision A)', () => {
     }
   });
 
+  describe('a restructure in flight refuses a job start (chapters_restructuring)', () => {
+    const MESSAGE = 'The chapters of this book are being changed. Try again in a moment.';
+
+    it('main POST: early check → 409, no job registered; after endRestructure the start proceeds', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const a = await app();
+      expect(beginRestructure('m_restructuring_main')).toBe(true);
+      try {
+        const res = await supertest(a).post('/api/manuscripts/m_restructuring_main/analysis').send({});
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'chapters_restructuring', message: MESSAGE });
+        expect(snapshotInFlightAnalysis('m_restructuring_main')).toBeNull();
+      } finally {
+        endRestructure('m_restructuring_main');
+      }
+      const after = await supertest(a).post('/api/manuscripts/m_restructuring_main/analysis').send({});
+      expect(after.status).toBe(200);
+      expect(sseErrors(after.text).map((e) => e.code)).toEqual(['unknown_manuscript']);
+    });
+
+    it('main POST: the late check (restructure claimed while the POST awaits hydrate) → SSE error frame, no job', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const seed = await seedBook('late-restructure-main', [1]);
+      g.__rwm_phase0_selection = buildSelection(stubAnalyzer({}), 'phase0-model');
+      const hydrate = gate();
+      const entered = gate();
+      g.__rwm_hydrate_gate = async () => {
+        entered.open();
+        await hydrate.promise;
+      };
+      try {
+        const pending = supertest(await app())
+          .post(`/api/manuscripts/${seed.manuscriptId}/analysis`)
+          .send({})
+          .then((x) => x);
+        await entered.promise;
+        expect(beginRestructure(seed.manuscriptId)).toBe(true);
+        hydrate.open();
+        const res = await pending;
+        expect(res.status).toBe(200);
+        expect(sseErrors(res.text)).toEqual([{ kind: 'error', code: 'chapters_restructuring', message: MESSAGE }]);
+        expect(snapshotInFlightAnalysis(seed.manuscriptId)).toBeNull();
+      } finally {
+        endRestructure(seed.manuscriptId);
+        delete g.__rwm_hydrate_gate;
+      }
+    });
+
+    it('subset POST: early check → 409; the late check → SSE error frame, no job; after endRestructure it proceeds', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const a = await app();
+      /* Early. */
+      expect(beginRestructure('m_restructuring_subset')).toBe(true);
+      try {
+        const res = await supertest(a)
+          .post('/api/manuscripts/m_restructuring_subset/analysis/chapters')
+          .send({ chapterIds: [1] });
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'chapters_restructuring', message: MESSAGE });
+      } finally {
+        endRestructure('m_restructuring_subset');
+      }
+      /* Late. */
+      const seed = await seedBook('late-restructure-subset', [1]);
+      const hydrate = gate();
+      const entered = gate();
+      g.__rwm_hydrate_gate = async () => {
+        entered.open();
+        await hydrate.promise;
+      };
+      try {
+        const pending = supertest(a)
+          .post(`/api/manuscripts/${seed.manuscriptId}/analysis/chapters`)
+          .send({ chapterIds: [1] })
+          .then((x) => x);
+        await entered.promise;
+        expect(beginRestructure(seed.manuscriptId)).toBe(true);
+        hydrate.open();
+        const res = await pending;
+        expect(res.status).toBe(200);
+        expect(sseErrors(res.text)).toEqual([{ kind: 'error', code: 'chapters_restructuring', message: MESSAGE }]);
+        expect(snapshotInFlightAnalysis(seed.manuscriptId)).toBeNull();
+      } finally {
+        endRestructure(seed.manuscriptId);
+        delete g.__rwm_hydrate_gate;
+      }
+      /* Released. */
+      const after = await supertest(a)
+        .post('/api/manuscripts/m_restructuring_subset/analysis/chapters')
+        .send({ chapterIds: [1] });
+      expect(after.status).toBe(200);
+      expect(sseErrors(after.text).map((e) => e.code)).toEqual(['unknown_manuscript']);
+    });
+  });
+
   it('control: a Retry when no main job exists runs exactly as today', async () => {
     const supertest = (await import('supertest')).default;
     const res = await supertest(await app())
