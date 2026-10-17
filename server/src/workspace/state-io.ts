@@ -5,9 +5,12 @@
    file, so the previous bytes survive until that rename completes. A rotating
    write (`{ rotate }`) first moves the old file to `.bak.1` and renames the tmp
    onto the vacated name: a kill between the two renames leaves main absent
-   (the previous state is in `.bak.1`, and `readJsonWithRecovery` with
-   `recoverMissing` reads it from there). Either way a kill mid-write never
-   leaves a partial main file.
+   (the previous state is in `.bak.1`). The rotating write drops a
+   `<file>.writing-<pid>-<n>` marker BEFORE the first rename and removes it after
+   the rename-in, so an absent main WITH a marker is a stranded write and an
+   absent main WITHOUT one is a deliberate delete (`hasWriteInFlightMarker`);
+   `readJsonWithRecovery` with `recoverMissing` reads the backup either way.
+   A kill mid-write never leaves a partial main file.
 
    Windows + OneDrive caveat: when the destination is in a OneDrive-synced
    folder, OneDrive briefly holds a read handle on the file as part of its
@@ -23,9 +26,9 @@
    they're cheaper to re-derive on loss and not worth the disk-multiplier. */
 
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
 
 /* Monotonic in-process counter so two `writeJsonAtomic` calls that arrive
@@ -36,6 +39,24 @@ import { renameWithRetry } from './atomic-rename.js';
    one renames the temp away, the other's `renameWithRetry(tmp, path)`
    then explodes because its tmp no longer exists. */
 let tmpSeq = 0;
+
+/* The write-in-flight marker (see the header): `<path>.writing-<pid>-<n>`. */
+function writeMarkerPrefix(path: string): string {
+  return `${basename(path)}.writing-`;
+}
+
+/** True when a rotating write to `path` has started and not finished - it is
+ *  between (or about to be between) its rename-away and rename-in, or it died
+ *  there. With `path` absent that is a STRANDED file, as opposed to a deliberate
+ *  delete, which leaves no marker. Synchronous so callers can decide after a read. */
+export function hasWriteInFlightMarker(path: string): boolean {
+  try {
+    const prefix = writeMarkerPrefix(path);
+    return readdirSync(dirname(path)).some((n) => n.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
 
 export interface WriteJsonOpts {
   /** Rename `path` -> `path.bak.1` (after the new bytes are safely in a tmp
@@ -73,10 +94,11 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *  When the main file is missing entirely (`existsSync === false`) we
  *  return `null` like `readJson` — recovery is only for "file exists
  *  but JSON.parse rejects it" — UNLESS the caller opts in with
- *  `recoverMissing` (state.json only: nothing deletes it on purpose, so an
- *  absent main with a parseable `.bak.N` is a stranded book), in which case
- *  the newest parseable backup is returned with a warning, and `null` only
- *  when there is none. When the main file is corrupt AND every
+ *  `recoverMissing` (state.json always - nothing deletes it on purpose, so an
+ *  absent main with a parseable `.bak.N` is a stranded book; user-settings.json
+ *  only once `hasWriteInFlightMarker` says a write died, since deleting that file
+ *  is how a user resets it), in which case the newest parseable backup is
+ *  returned with a warning, and `null` only when there is none. When the main file is corrupt AND every
  *  backup is corrupt / missing, the original parse error is re-thrown
  *  so the caller surfaces the same diagnostic it would have seen from
  *  `readJson` directly.
@@ -86,10 +108,11 @@ export async function readJsonWithRecovery<T>(
   path: string,
   opts: { keep: number; recoverMissing?: boolean },
 ): Promise<T | null> {
-  /* `recoverMissing` (state.json only): an absent main is a STRANDED one - a
-     crash between the rotation's renames, or a failed rename-in whose restore
-     also failed - so it falls back to the newest parseable backup instead of
-     reading as "no file". Callers where absence means "defaults" don't set it. */
+  /* `recoverMissing`: the caller has established that an absent main is a
+     STRANDED one - a crash between the rotation's renames, or a failed rename-in
+     whose restore also failed - so it falls back to the newest parseable backup
+     instead of reading as "no file". A caller where absence can mean a
+     deliberate delete (user-settings.json) sets it only on marker evidence. */
   if (!opts.recoverMissing && !existsSync(path)) return null;
   /* The read sits OUTSIDE the try: only a parse failure (or, opted in, a
      missing main) may fall back. */
@@ -131,14 +154,18 @@ async function readNewestBackup<T>(
   for (let i = 1; i <= keep; i += 1) {
     const backupPath = `${path}.bak.${i}`;
     if (!existsSync(backupPath)) continue;
+    /* The read is OUTSIDE the try: only a PARSE failure is corruption. A transient
+       error (EBUSY / EPERM / EIO) says nothing about the backup, and substituting
+       the next-older one would serve stale settings as if they were the latest. */
+    const raw = await readFile(backupPath, 'utf8');
     try {
-      const raw = await readFile(backupPath, 'utf8');
       /* Strip a leading UTF-8 BOM (U+FEFF) if present. */
       const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
       const value = JSON.parse(stripped) as T;
       console.warn(`[state-io] ${path} ${why}; recovered from ${backupPath}.`);
       return value;
-    } catch {
+    } catch (parseErr) {
+      if (!(parseErr instanceof SyntaxError)) throw parseErr;
       /* That backup is also corrupt - try the next one. */
     }
   }
@@ -169,6 +196,7 @@ export async function writeJsonAtomic(
      which an open handle does not block, so the final rename lands on a
      vacant name instead of replacing a held file. */
   let rotated = false;
+  let marker: string | null = null;
   try {
     /* `flush: true` fsyncs through the SAME handle before it closes — the
        header's durability claim without a reopen (a second open of a fresh tmp
@@ -176,9 +204,13 @@ export async function writeJsonAtomic(
        keeps `writeFile` the one seam the failure-injection tests hook. */
     await writeFile(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', flush: true });
     if (opts?.rotate && existsSync(path)) {
+      /* Sync create: no `writeFile` seam, no await between marker and rotation. */
+      marker = join(dirname(path), `${writeMarkerPrefix(path)}${process.pid}-${seq}`);
+      closeSync(openSync(marker, 'w'));
       rotated = await rotateBackups(path, opts.rotate.keep);
     }
     await renameWithRetry(tmp, path);
+    if (marker) removeMarker(marker);
   } catch (e) {
     /* Cleanup the temp file on terminal failure so we don't leak
        .tmp-<pid>-<ts> droppings into the workspace. */
@@ -187,17 +219,27 @@ export async function writeJsonAtomic(
        reader never finds the book without its main file. */
     if (rotated && !existsSync(path)) {
       await renameWithRetry(`${path}.bak.1`, path).catch((restoreErr) => {
-        /* Not swallowed silently: main is now absent. Only a reader that opts into
-           `recoverMissing` (state.json's) falls back to `.bak.1`; any other
-           rotating file (user-settings.json) reads as absent until repaired. */
+        /* Not swallowed silently: main is now absent. The marker stays (see
+           below), so readers that honour it recover from `.bak.1`. */
         console.warn(
           `[state-io] ${path}: the write failed after rotation and restoring ` +
             `${path}.bak.1 failed too (${(restoreErr as Error).message}); ` +
-            `only a reader that recovers a missing main (state.json's) will use the backup.`,
+            `the in-flight marker is kept so the next read recovers the backup.`,
         );
       });
     }
+    /* Main is back (or was never moved): the marker has nothing left to prove.
+       Main still absent: leave it - it is the evidence of a stranded write. */
+    if (marker && existsSync(path)) removeMarker(marker);
     throw e;
+  }
+}
+
+function removeMarker(marker: string): void {
+  try {
+    unlinkSync(marker);
+  } catch {
+    /* Already gone. */
   }
 }
 

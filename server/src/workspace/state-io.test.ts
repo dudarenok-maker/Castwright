@@ -4,7 +4,7 @@
    to the retry list; this file pins that contract. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, rm, stat, readdir, writeFile, open } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, readdir, writeFile, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -46,7 +46,7 @@ function setRenameImpl(fn: ((src: string, dest: string) => Promise<void>) | null
 }
 
 /* Import AFTER vi.mock so state-io.ts picks up the mocked rename. */
-const { writeJsonAtomic, readJson, readJsonWithRecovery } = await import('./state-io.js');
+const { writeJsonAtomic, readJson, readJsonWithRecovery, hasWriteInFlightMarker } = await import('./state-io.js');
 const { jitteredDelayMs } = await import('./atomic-rename.js');
 
 let workdir: string;
@@ -326,6 +326,64 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     const names = (await readdir(workdir)).filter((n) => n.startsWith('state.json')).sort();
     expect(names).toEqual(['state.json']);
   });
+
+  /* #3625 review 2: the in-flight marker is what distinguishes a STRANDED rotation
+     (main absent because a write died between its renames) from a deliberate
+     delete. It exists across the whole rename-away..rename-in window. */
+  it('leaves a write-in-flight marker across the rotation gap and removes it on success', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let duringGap: { main: boolean; marker: boolean } | null = null;
+    setRenameImpl(async (src: string, dest: string) => {
+      if (String(src).includes('.tmp-')) {
+        const { existsSync } = await import('node:fs');
+        duringGap = { main: existsSync(target), marker: hasWriteInFlightMarker(target) };
+      }
+      return actual.rename(src, dest);
+    });
+
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+
+    expect(duringGap).toEqual({ main: false, marker: true });
+    expect(hasWriteInFlightMarker(target)).toBe(false);
+    expect((await readdir(workdir)).filter((n) => n.includes('.writing-'))).toEqual([]);
+  });
+
+  it('drops the marker when the rename-in fails but the restore puts main back', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    setRenameImpl(async (src: string, dest: string) => {
+      if (String(src).includes('.tmp-')) throw Object.assign(new Error('EROFS: simulated'), { code: 'EROFS' });
+      return actual.rename(src, dest);
+    });
+    await expect(writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } })).rejects.toThrow(/EROFS/);
+    expect(hasWriteInFlightMarker(target)).toBe(false);
+  });
+
+  it('keeps the marker when the restore itself fails (main stays absent: evidence of a stranded file)', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    setRenameImpl(async (src: string, dest: string) => {
+      if (String(src).includes('.tmp-') || String(dest) === target) {
+        throw Object.assign(new Error('EROFS: simulated'), { code: 'EROFS' });
+      }
+      return actual.rename(src, dest);
+    });
+    await expect(writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } })).rejects.toThrow(/EROFS/);
+    expect(hasWriteInFlightMarker(target)).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('a non-rotating write never creates a marker', async () => {
+    const target = join(workdir, 'cast.json');
+    await writeJsonAtomic(target, { v: 1 });
+    await writeJsonAtomic(target, { v: 2 });
+    expect(hasWriteInFlightMarker(target)).toBe(false);
+  });
 });
 
 describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
@@ -398,6 +456,27 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
     await expect(readJsonWithRecovery<{ v: number }>(target, { keep: 3 })).rejects.toThrow(
       /json|expected|unexpected/i,
     );
+  });
+
+  /* #3625 review 2 (5): only a PARSE failure on a backup is corruption. A transient
+     error (EBUSY stood in for by EISDIR) on the newest backup must surface, not
+     silently serve the older .bak.2 as if it were the latest. */
+  it('recoverMissing rethrows a non-parse error on a backup instead of serving an older one', async () => {
+    const target = join(workdir, 'state.json');
+    await mkdir(`${target}.bak.1`); // reading a directory: EISDIR, not a SyntaxError
+    await writeFile(`${target}.bak.2`, JSON.stringify({ v: 'older' }), 'utf8');
+    await expect(readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).rejects.toMatchObject({
+      code: 'EISDIR',
+    });
+  });
+
+  it('recoverMissing still skips a torn (unparseable) backup for an older parseable one', async () => {
+    const target = join(workdir, 'state.json');
+    await writeFile(`${target}.bak.1`, '{ torn', 'utf8');
+    await writeFile(`${target}.bak.2`, JSON.stringify({ v: 'older' }), 'utf8');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 'older' });
+    warn.mockRestore();
   });
 
   it('readJson parses a normal (non-BOM) JSON file correctly', async () => {

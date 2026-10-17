@@ -1743,6 +1743,7 @@ describe('readUserSettings — a transient read error is never corruption (#3625
   let mod: typeof import('./user-settings.js');
   const seedHealthy = () => {
     for (const n of [1, 2, 3]) rmSync(`${mod.USER_SETTINGS_PATH}.bak.${n}`, { force: true });
+    rmSync(`${mod.USER_SETTINGS_PATH}.writing-999-1`, { force: true });
     const healthy = JSON.stringify({
       ...DEFAULT_USER_SETTINGS,
       displayName: 'Mine',
@@ -1821,11 +1822,13 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
   });
 
-  /* #3625 delta review (3): the same absent main, but a `.bak.N` still exists —
-     a sibling server's rotating write is between its two renames. That is NOT a
-     first run: serving factory defaults would re-enable allowCloudFallback and
-     let a writer persist them. Keep the warm cache and keep refusing writes. */
-  it('a read during a sibling rotation gap (main absent, a backup present) keeps the warm cache and refuses writers', async () => {
+  /* #3625 delta review (3) + review 2: an absent main with a `.bak.N` is a
+     STRANDED file only when a rotating write left its in-flight marker
+     (`<file>.writing-*`, created before the rename-away, removed after the
+     rename-in). A bare absent main is the user deleting the file: a reset. */
+  const markWriteInFlight = () => writeFileSync(`${mod.USER_SETTINGS_PATH}.writing-999-1`, '');
+
+  it('a read during a sibling rotation gap (marker + main absent + a backup) recovers the newest backup, never defaults', async () => {
     seedHealthy();
     await mod.readUserSettings(); // warm
     writeFileSync(
@@ -1835,6 +1838,20 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     diskRead.spy.mockImplementationOnce(ebusy);
     await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
     renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`); // the gap
+    markWriteInFlight();
+
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine2');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+  });
+
+  it('a warm cache is kept (still refusing writers) when the gap has a marker, main absent and NO backup parses', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
 
     const during = await mod.readUserSettings();
     expect(during.displayName).toBe('Mine');
@@ -1844,12 +1861,68 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     expect(existsSync(mod.USER_SETTINGS_PATH)).toBe(false);
   });
 
-  it('a cold boot with main absent and a good backup recovers from the backup, not defaults', async () => {
+  it('a cold boot with a marker, main absent and a good backup recovers from the backup, not defaults', async () => {
     seedHealthy();
     renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.2`);
+    markWriteInFlight();
     const s = await mod.readUserSettings();
     expect(s.displayName).toBe('Mine');
     expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+  });
+
+  it('a cold boot with a marker, main absent and every backup torn is total loss: defaults flagged corrupt', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, '{ torn');
+    markWriteInFlight();
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+  });
+
+  /* The operator's decision: deleting user-settings.json still RESETS settings. */
+  it('a user who deletes the file (warm) gets first-run defaults, the stale backups are removed, and a new save works and sticks', async () => {
+    seedHealthy();
+    expect((await mod.readUserSettings()).displayName).toBe('Mine'); // warm
+    rmSync(mod.USER_SETTINGS_PATH);
+
+    const after = await mod.readUserSettings();
+    expect(after.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    for (const n of [1, 2, 3]) expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.${n}`)).toBe(false);
+
+    await mod.writeUserSettings({ displayName: 'Fresh' });
+    mod._resetUserSettingsCache();
+    expect((await mod.readUserSettings()).displayName).toBe('Fresh');
+  });
+
+  it('a user who deleted the file before a restart (cold) gets defaults, not the stale backup', async () => {
+    seedHealthy();
+    rmSync(mod.USER_SETTINGS_PATH);
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(false);
+  });
+
+  /* Probe A (delta review 2): one hiccup, then main stays absent in a real gap —
+     the warm path used to return the cache forever and refuse every writer. */
+  it('after a hiccup, a later read clears the refusal and a write succeeds while a backup is still on disk', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup -> readUnverified
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`);
+    markWriteInFlight();
+
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
   });
 
   /* #3625 pass 4 (4b): a persistent error shows defaults with no explanation, so

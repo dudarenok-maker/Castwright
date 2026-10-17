@@ -12,9 +12,9 @@
 import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { appendFile, copyFile, mkdir } from 'node:fs/promises';
-import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
+import { hasWriteInFlightMarker, readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -574,16 +574,15 @@ function statFileStamp(): FileStamp | null {
     Compares the file's current stamp with the one recorded at population.
     Inequality (not `<=`) so a restore that copies an OLDER file back —
     which can carry an older mtime — still counts as a change. A file that
-    is absent NOW but existed at population is treated as unchanged: the
-    only known way for it to vanish out from under a warm cache is the
-    rename-away-then-rename-in window of a sibling process's own rotating
-    atomic write (writeJsonAtomic moves the old file to `.bak.1`, then renames
-    the already-written tmp onto the vacated name), and
-    serving the last-known settings across that window beats resetting
-    every resolver to factory defaults for one read. */
+    is absent NOW but existed at population is a CHANGE: it is re-read, and the
+    read decides what the absence means - a sibling's rotating write in its
+    rename-away-then-rename-in window (marker present: the newest backup is
+    served, or the cache kept when none parses) or the user deleting the file
+    (no marker: a reset to defaults). A file absent at population and still
+    absent is unchanged. */
 function cacheMatchesDisk(): boolean {
   const now = statFileStamp();
-  if (now === null) return true;
+  if (now === null) return cachedFileStamp === null;
   return (
     cachedFileStamp !== null && now.mtimeMs === cachedFileStamp.mtimeMs && now.size === cachedFileStamp.size
   );
@@ -1118,30 +1117,26 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
-  /* An absent main with a `.bak.N` beside it is NOT a first run: it is a sibling
-     server's rotating write between its two renames (or a stranded file). Only
-     main AND every backup absent means "no file". With a warm cache, keep it and
-     stay unverified (writers refuse) — swapping factory defaults in would re-enable
-     allowCloudFallback. Cold, recover from the newest parseable backup. */
-  const mainAbsentWithBackup =
-    !existsSync(USER_SETTINGS_PATH) &&
-    Array.from({ length: USER_SETTINGS_BACKUP_KEEP }, (_, i) => `${USER_SETTINGS_PATH}.bak.${i + 1}`).some(
-      (p) => existsSync(p),
-    );
-  if (mainAbsentWithBackup && cached) {
-    console.warn(
-      `[user-settings] ${USER_SETTINGS_PATH} is absent but a backup exists (a sibling's write in flight?); ` +
-        'keeping the last-known settings and retrying on the next read.',
-    );
-    readUnverified = true;
-    return cached;
-  }
+  /* An absent main is a RESET (the user deleted the file) unless a rotating write
+     left its in-flight marker, which makes it a STRANDED file: a sibling server
+     between its two renames, or a write that died there. The decision is taken
+     AFTER a null read, marker first and main second: a rename-in that lands in
+     between is then seen as a present main, never as a reset. */
+  const readFromDisk = (recoverMissing: boolean) =>
+    readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP, recoverMissing });
   let raw: unknown;
+  let stranded = false;
   try {
-    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, {
-      keep: USER_SETTINGS_BACKUP_KEEP,
-      recoverMissing: mainAbsentWithBackup,
-    });
+    raw = await readFromDisk(false);
+    if (!raw) {
+      const marker = hasWriteInFlightMarker(USER_SETTINGS_PATH);
+      if (existsSync(USER_SETTINGS_PATH)) {
+        raw = await readFromDisk(false); // a rename-in landed after our read
+      } else if (marker) {
+        stranded = true;
+        raw = await readFromDisk(true);
+      }
+    }
   } catch (err) {
     if (!(err instanceof SyntaxError)) {
       /* #3625 review — a read error that is NOT a parse failure (EBUSY / EPERM /
@@ -1183,8 +1178,18 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       stamp: statFileStamp(),
     });
   }
-  if (!raw && mainAbsentWithBackup) {
-    /* Main absent and no backup parses: the same total loss as a corrupt main. */
+  if (!raw && stranded) {
+    /* Stranded and no backup parses: the same total loss as a corrupt main. With a
+       warm cache, keep it (and stay unverified so writers refuse): swapping factory
+       defaults in would re-enable allowCloudFallback. */
+    if (cached) {
+      console.warn(
+        `[user-settings] ${USER_SETTINGS_PATH} is absent mid-write and its backups are unreadable; ` +
+          'keeping the last-known settings and retrying on the next read.',
+      );
+      readUnverified = true;
+      return cached;
+    }
     console.warn(`[user-settings] ${USER_SETTINGS_PATH} is absent and its backups are unreadable; using in-memory defaults.`);
     return commitRead({
       settings: { ...DEFAULT_USER_SETTINGS },
@@ -1194,10 +1199,21 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     });
   }
   if (!raw) {
-    /* No file on disk (readJsonWithRecovery returns null for an absent
-       path; nothing on the read path creates one). A `null` stamp records
-       exactly that, so the file appearing later — before this process has
-       written anything — is detected as a change (#3175 Q4). */
+    /* No file on disk and no write in flight: a first run, or the user deleted the
+       file to reset their settings. Either way it is defaults - and any `.bak.N`
+       left behind is dropped now so it can never resurrect the old settings later
+       (the next rotating save would otherwise carry them into the chain). A `null`
+       stamp records the absence, so the file appearing later - before this process
+       has written anything - is detected as a change (#3175 Q4). */
+    if (!existsSync(USER_SETTINGS_PATH)) {
+      for (let i = 1; i <= USER_SETTINGS_BACKUP_KEEP; i += 1) {
+        try {
+          unlinkSync(`${USER_SETTINGS_PATH}.bak.${i}`);
+        } catch {
+          /* Not there. */
+        }
+      }
+    }
     return commitRead({
       settings: { ...DEFAULT_USER_SETTINGS },
       explicitKeys: new Set(),
