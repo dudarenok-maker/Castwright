@@ -1,6 +1,6 @@
 /* Unit tests for the local-cover upload pipeline (plan 40). */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
   mkdtempSync,
   rmSync,
@@ -10,7 +10,6 @@ import {
   readdirSync,
   existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import {
@@ -20,9 +19,25 @@ import {
   clampFraming,
   patchStateFraming,
   patchStateLocalCover,
+  encodeUploadedCover,
   validateUpload,
-  writeUploadedCover,
+  type UploadMimeType,
 } from './upload.js';
+import { writeCoverFile } from './store.js';
+
+/* writeCoverFile asserts containment in WORKSPACE_ROOT (read once at import),
+   so the per-test book dirs must live under a root fixed before it loads. */
+const testRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'cover-upload-root-'));
+  process.env.WORKSPACE_DIR = root;
+  return root;
+});
+afterAll(() => {
+  rmSync(testRoot, { recursive: true, force: true });
+});
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -45,7 +60,7 @@ async function makePng(width = 10, height = 10): Promise<Buffer> {
 }
 
 beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'cover-upload-test-'));
+  workspaceRoot = mkdtempSync(join(testRoot, 'cover-upload-test-'));
   bookDir = join(workspaceRoot, 'books', 'Author', 'Series', TITLE);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
   writeFileSync(
@@ -179,7 +194,19 @@ describe('validateUpload', () => {
   });
 });
 
-describe('writeUploadedCover', () => {
+/* The production route composes these two (encode, then write under the
+   state-json lock); the tests below pin that composition's on-disk result. */
+async function writeUploadedCover(
+  buffer: Buffer,
+  mimeType: UploadMimeType,
+  destPath: string,
+): Promise<{ bytes: number }> {
+  const jpegBytes = await encodeUploadedCover(buffer, mimeType);
+  await writeCoverFile(destPath, jpegBytes);
+  return { bytes: jpegBytes.length };
+}
+
+describe('encodeUploadedCover + writeCoverFile', () => {
   /* #3535 regression: a tiny valid JPEG with an MPEG-TS-looking stream
      appended used to be stored verbatim, and ffmpeg's byte-probing then
      picked the mpegts demuxer over the JPEG one, breaking the m4b export.

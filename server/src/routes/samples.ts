@@ -22,6 +22,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -125,7 +126,11 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       createdAt: now,
       updatedAt: now,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    /* #3700 — every state.json write goes through the per-book lock, a fresh
+       create included. */
+    await withStateJsonLock(stateJsonPath(bookDir), () =>
+      writeStateJsonAtomic(stateJsonPath(bookDir), state),
+    );
 
     // 4. Merge bundle voices into workspace voices/qwen (no clobber).
     const srcVoices = join(src, 'voices', 'qwen');

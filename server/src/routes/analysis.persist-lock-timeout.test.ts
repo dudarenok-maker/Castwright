@@ -170,6 +170,33 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   };
 });
 
+/* #3700 review — a seam on the per-book state.json lock. When armed, the NEXT
+   `withStateJsonLock` call is made to time out for real: a holder is queued
+   on the same key and the call runs with a 50 ms budget (the real class and
+   curated message come from the real `withStateJsonLock`). Disarms itself
+   after one hit so only the persist's terminal state.json write is affected. */
+const stateLockSeam = vi.hoisted(() => ({ armed: false, hits: 0 }));
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return {
+    ...actual,
+    withStateJsonLock: async <T,>(statePath: string, fn: () => Promise<T>, timeoutMs?: number) => {
+      if (!stateLockSeam.armed) return actual.withStateJsonLock(statePath, fn, timeoutMs);
+      stateLockSeam.armed = false;
+      stateLockSeam.hits += 1;
+      const holder = actual.withKeyLock(
+        `state-json:${statePath}`,
+        () => new Promise<void>((r) => setTimeout(r, 400)),
+      );
+      try {
+        return await actual.withStateJsonLock(statePath, fn, 50);
+      } finally {
+        await holder;
+      }
+    },
+  };
+});
+
 /* Same three environment mocks the sibling runMainAnalyzerJob fixture files
    use to keep the job off a real Ollama / real GPU-cost state and to let the
    test inject the Phase-1 analyzer selection. */
@@ -1063,4 +1090,38 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
     },
     60_000,
   );
+});
+
+/* #3700 review pass 1 (🟠) — the terminal state.json write is authoritative and
+   now takes a lock, so its timeout must end the job in `error` /
+   `lock-contention`, not be swallowed as "Non-fatal" into a `result` with
+   state.json unwritten. */
+describe('persist block — the AUTHORITATIVE state.json write lock timeout (#3700)', () => {
+  afterEach(() => {
+    stateLockSeam.armed = false;
+    stateLockSeam.hits = 0;
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  for (const kind of ['main', 'subset'] as const) {
+    it(
+      `${kind}: a state-json lock timeout at the terminal write ends the job as lock-contention, not a result`,
+      async () => {
+        stateLockSeam.armed = true;
+        const run = await runJob(`state-lock-${kind}`, kind);
+        try {
+          expect(stateLockSeam.hits).toBe(1);
+          const terminal = run.events[run.events.length - 1];
+          expect(terminal?.kind).toBe('error');
+          expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+          expectCuratedContentionTerminal(terminal, 'state-json:');
+          // cast.json (written before the state.json step) still landed.
+          expect(run.cast.characters.map((c) => c.id)).toContain('nova');
+        } finally {
+          await run.cleanup();
+        }
+      },
+      60_000,
+    );
+  }
 });

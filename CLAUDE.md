@@ -586,7 +586,11 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
+  other lock is taken while it is held. The per-book `state-json` lock
+  (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is likewise a **leaf**
+  around every `.audiobook/state.json` read-modify-write — the read goes inside
+  it, and `workspace/state-json-lock.guard.test.ts` fails the build on an
+  unlocked `writeStateJsonAtomic`. Accept/reject (and the legacy
   `…/audio/previous` routes) additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
@@ -636,7 +640,7 @@ Design rationale:
   timeout's own message** — not an escalating body, not a per-item reason, and
   not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  HTTPS. Three route-level curation seams, all in `workspace/file-lock.ts`, and a route
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
@@ -650,10 +654,14 @@ Design rationale:
   `chapter-audio.ts` (`DELETE` and `…/restore`); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
+  leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
+  so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round). See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` alone, which already
+  curates its own message. See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

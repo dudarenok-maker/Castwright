@@ -1684,6 +1684,29 @@ describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before
     expect(backfillParses()).toBe(1);
   });
 
+  it('the legacy-title parse runs OUTSIDE the state-json lock (#3700)', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    let lockFreeDuringParse: boolean | undefined;
+    parseManuscriptSpy.mockClear();
+    const actualImpl = parseManuscriptSpy.getMockImplementation()!;
+    parseManuscriptSpy.mockImplementation(async (arg: { sourcePath?: string }) => {
+      if (arg.sourcePath) {
+        // A short-budget acquire: it times out iff the restructure still holds the lock.
+        lockFreeDuringParse = await withStateJsonLock(statePath, async () => true, 50).catch(() => false);
+      }
+      return actualImpl(arg);
+    });
+    try {
+      expect((await reorder()).status).toBe(200);
+    } finally {
+      parseManuscriptSpy.mockImplementation(actualImpl);
+    }
+    expect(lockFreeDuringParse, 'parse never ran').toBeDefined();
+    expect(lockFreeDuringParse).toBe(true);
+  });
+
   it('an explicit titleSynthesized: false is preserved', async () => {
     seedLegacy(['Chapter 1', 'Prologue', 'Epilogue'], { 1: { titleSynthesized: false } });
     expect((await reorder()).status).toBe(200);
