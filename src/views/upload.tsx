@@ -127,7 +127,7 @@ export function UploadView() {
      sufficient for the v1 acceptance criteria — surface what changed,
      commit on confirm. */
   function handleDiffApply() {
-    // #3400 pass 7 � applyReupload is refused while the book restructures; bail
+    // #3400 pass 7 — applyReupload is refused while the book restructures; bail
     // BEFORE clearing the title overrides or navigating away (the Cmd/Ctrl+Enter
     // shortcut reaches this handler even with the button disabled).
     if (refuseIfEditsLocked(store.getState, dispatch)) return;

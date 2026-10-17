@@ -254,7 +254,7 @@ async function resolveAppliedOps(
 
 export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
-  /* #3400 pass 7 — every manuscript action Apply dispatches is refused while
+  /* #3400 pass 7 â€” every manuscript action Apply dispatches is refused while
      the book restructures. Disable the control AND check the live flag before
      any side write (resolve ops, boundary_move), so a refused apply resolves
      nothing. `store` is read in handlers: a flag raised after render is seen. */

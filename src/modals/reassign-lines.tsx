@@ -52,7 +52,7 @@ interface Row {
 
 export function ReassignLinesModal({ source, onClose }: Props) {
   const dispatch = useAppDispatch();
-  // #3400 pass 7 — the bulk move is refused while the book restructures; gate
+  // #3400 pass 7 â€” the bulk move is refused while the book restructures; gate
   // the controls and re-check the live flag before ANY write (the boundary_move
   // log, the close), so a refused move is never recorded as done.
   const store = useStore<RootState>();
