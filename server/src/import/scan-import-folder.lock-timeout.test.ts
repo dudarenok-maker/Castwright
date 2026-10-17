@@ -73,13 +73,26 @@ describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
     mkdirSync(dotAudiobook(target), { recursive: true });
     const existing = JSON.stringify({ title: 'Existing Book' });
     writeFileSync(stateJsonPath(target), existing);
-    vi.mocked(withStateLock).mockRejectedValueOnce(
-      new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000),
+    const actual = await vi.importActual<typeof import('../workspace/state-lock.js')>(
+      '../workspace/state-lock.js',
     );
+    /* The FIRST call is the claim (conflict decision + mkdir): let it through
+       for real. Only the SECOND — the phase-2 promote, after phase 1 has staged
+       its tmp files — times out. Rejecting the first call would abort before
+       anything was staged and the empty-tmp assertion below could not fail. */
+    let stagedAtTimeout: string[] = [];
+    vi.mocked(withStateLock)
+      .mockImplementationOnce((d, fn) => actual.withStateLock(d, fn))
+      .mockImplementationOnce(async () => {
+        stagedAtTimeout = tmpFilesUnder(target);
+        throw new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000);
+      });
     try {
       await expect(importPortableBundle(await bundle(title), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
         LockAcquisitionTimeoutError,
       );
+      /* Positive control: phase 1 really left tmp files to be cleaned up. */
+      expect(stagedAtTimeout.length).toBeGreaterThan(0);
       /* The seam fired, the live file was never promoted... */
       expect(readFileSync(stateJsonPath(target), 'utf8')).toBe(existing);
       /* ...and phase 1's staged tmp files (state.json, manuscript, audio) are gone. */
