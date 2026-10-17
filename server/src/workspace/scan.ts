@@ -687,7 +687,9 @@ async function scanBook(
   const stateJson = stateJsonPath(bookDir);
   const castJson = castJsonPath(bookDir);
   const dotDir = dotAudiobook(bookDir);
-  const hasState = existsSync(stateJson);
+  /* A stranded book (main absent, a backup beside it) still has state: the
+     recovering read below returns the backup. */
+  const hasState = existsSync(stateJson) || existsSync(`${stateJson}.bak.1`);
   const hasCast = existsSync(castJson);
 
   // Folder with neither manuscript nor state — skip as not-a-book.

@@ -75,11 +75,24 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *  Pairs with the `{ rotate }` option on `writeJsonAtomic`. */
 export async function readJsonWithRecovery<T>(
   path: string,
-  opts: { keep: number },
+  opts: { keep: number; recoverMissing?: boolean },
 ): Promise<T | null> {
-  if (!existsSync(path)) return null;
-  /* The read sits OUTSIDE the try: only a parse failure may fall back. */
-  const raw = await readFile(path, 'utf8');
+  /* `recoverMissing` (state.json only): an absent main is a STRANDED one - a
+     crash between the rotation's renames, or a failed rename-in whose restore
+     also failed - so it falls back to the newest parseable backup instead of
+     reading as "no file". Callers where absence means "defaults" don't set it. */
+  if (!opts.recoverMissing && !existsSync(path)) return null;
+  /* The read sits OUTSIDE the try: only a parse failure (or, opted in, a
+     missing main) may fall back. */
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (readErr) {
+    if (opts.recoverMissing && (readErr as NodeJS.ErrnoException).code === 'ENOENT') {
+      return (await readNewestBackup<T>(path, opts.keep, 'was missing')) ?? null;
+    }
+    throw readErr;
+  }
   try {
     /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
        when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
@@ -89,25 +102,38 @@ export async function readJsonWithRecovery<T>(
     return JSON.parse(stripped) as T;
   } catch (originalErr) {
     if (!(originalErr instanceof SyntaxError)) throw originalErr;
-    for (let i = 1; i <= opts.keep; i += 1) {
-      const backupPath = `${path}.bak.${i}`;
-      if (!existsSync(backupPath)) continue;
-      try {
-        const raw = await readFile(backupPath, 'utf8');
-        /* Strip a leading UTF-8 BOM (U+FEFF) if present. */
-        const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
-        const value = JSON.parse(stripped) as T;
-        console.warn(
-          `[state-io] ${path} was unreadable (${(originalErr as Error).message}); ` +
-            `recovered from ${backupPath}.`,
-        );
-        return value;
-      } catch {
-        /* That backup is also corrupt — try the next one. */
-      }
-    }
+    const recovered = await readNewestBackup<T>(
+      path,
+      opts.keep,
+      `was unreadable (${originalErr.message})`,
+    );
+    if (recovered !== undefined) return recovered;
     throw originalErr;
   }
+}
+
+/** The newest `path.bak.{1..keep}` that parses (logging ONE warning naming it),
+ *  or `undefined` when none does. */
+async function readNewestBackup<T>(
+  path: string,
+  keep: number,
+  why: string,
+): Promise<T | undefined> {
+  for (let i = 1; i <= keep; i += 1) {
+    const backupPath = `${path}.bak.${i}`;
+    if (!existsSync(backupPath)) continue;
+    try {
+      const raw = await readFile(backupPath, 'utf8');
+      /* Strip a leading UTF-8 BOM (U+FEFF) if present. */
+      const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
+      const value = JSON.parse(stripped) as T;
+      console.warn(`[state-io] ${path} ${why}; recovered from ${backupPath}.`);
+      return value;
+    } catch {
+      /* That backup is also corrupt - try the next one. */
+    }
+  }
+  return undefined;
 }
 
 export async function writeJsonAtomic(
@@ -151,7 +177,16 @@ export async function writeJsonAtomic(
     /* The rename-in failed after main was moved to `.bak.1`: put it back so a
        reader never finds the book without its main file. */
     if (rotated && !existsSync(path)) {
-      await renameWithRetry(`${path}.bak.1`, path).catch(() => {});
+      await renameWithRetry(`${path}.bak.1`, path).catch((restoreErr) => {
+        /* Not swallowed silently: main is now absent and only the recovering
+           reader (which falls back to `.bak.1`) stands between the book and a
+           hand repair. */
+        console.warn(
+          `[state-io] ${path}: the write failed after rotation and restoring ` +
+            `${path}.bak.1 failed too (${(restoreErr as Error).message}); ` +
+            `readers will recover from the backup.`,
+        );
+      });
     }
     throw e;
   }

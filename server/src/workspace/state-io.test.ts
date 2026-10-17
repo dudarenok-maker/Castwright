@@ -259,6 +259,46 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     expect(reopenedTmp).toEqual([]);
   });
 
+  /* #3625 pass 4: the rename-in fails AFTER main was moved to `.bak.1`. The
+     restore puts the previous state back so a reader never finds the book
+     without its main file. Disabling the restore turns this red. */
+  it('restores main from .bak.1 when the rename-in fails after the rotation', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    setRenameImpl(async (src: string, dest: string) => {
+      if (String(src).includes('.tmp-')) {
+        throw Object.assign(new Error('EROFS: simulated'), { code: 'EROFS' });
+      }
+      return actual.rename(src, dest);
+    });
+
+    await expect(writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } })).rejects.toThrow(/EROFS/);
+
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 1 });
+    expect((await readdir(workdir)).filter((n) => n.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('logs when the .bak.1 restore itself fails (main stays absent, the backup stays)', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    setRenameImpl(async (src: string, dest: string) => {
+      if (String(src).includes('.tmp-') || String(dest) === target) {
+        throw Object.assign(new Error('EROFS: simulated'), { code: 'EROFS' });
+      }
+      return actual.rename(src, dest);
+    });
+
+    await expect(writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } })).rejects.toThrow(/EROFS/);
+
+    await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 1 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('restoring'));
+    warn.mockRestore();
+  });
+
   it('writes while another handle holds main open for write (no copy of a locked file, #3625 review)', async () => {
     const target = join(workdir, 'state.json');
     await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
