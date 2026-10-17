@@ -1735,3 +1735,65 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
     expect(read2.analysisEngine).toBe('local');
   });
 });
+
+describe('readUserSettings — a transient read error is never corruption (#3625 review)', () => {
+  const ebusy = async () => {
+    throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  };
+  let mod: typeof import('./user-settings.js');
+  const seedHealthy = () => {
+    const healthy = JSON.stringify({
+      ...DEFAULT_USER_SETTINGS,
+      displayName: 'Mine',
+      allowCloudFallback: false,
+    });
+    writeFileSync(mod.USER_SETTINGS_PATH, healthy);
+    writeFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, healthy);
+    mod._resetUserSettingsCache();
+  };
+
+  beforeEach(async () => {
+    mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+  });
+
+  it('does not flag corruption, re-reads the healthy file next time, and a writer keeps allowCloudFallback:false', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+
+    // Same hiccup, then a writer: it must re-read, never persist boot-fallback defaults.
+    mod._resetUserSettingsCache();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    await mod.writeUpgradeMeta({ showWhatsNew: false });
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.allowCloudFallback).toBe(false);
+    expect(onDisk.displayName).toBe('Mine');
+  });
+
+  it('a writer whose own re-read also fails refuses instead of persisting defaults', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy).mockImplementationOnce(ebusy);
+    await mod.readUserSettings();
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).rejects.toThrow();
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.allowCloudFallback).toBe(false);
+    expect(onDisk.displayName).toBe('Mine');
+  });
+
+  it('keeps the warm cache when a later re-read hits the hiccup', async () => {
+    seedHealthy();
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    // out-of-band change forces a re-read; that re-read hits EBUSY
+    const changed = JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false });
+    writeFileSync(mod.USER_SETTINGS_PATH, changed);
+    diskRead.spy.mockImplementationOnce(ebusy);
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine');
+    expect(during.allowCloudFallback).toBe(false);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+});

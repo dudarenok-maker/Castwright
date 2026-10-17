@@ -535,6 +535,12 @@ export const USER_SETTINGS_BACKUP_KEEP = 3;
     (task 3 of #3175). */
 let settingsFileCorrupt = false;
 
+/** True after a read hit a non-parse error (#3625 review): what is cached was
+    not verified against the file. Cleared by the next successful commitRead.
+    snapshotCorruptBytesBeforeWrite — the chokepoint every writer passes before
+    writing — refuses while it is set. */
+let readUnverified = false;
+
 /** Identity of the on-disk file the cache was populated from: its mtime AND
     its byte size (#3175 P8 — mtime alone has a ~1 ms floor on NTFS, so a
     same-tick rewrite is invisible to it; a size pairing catches most of
@@ -1086,6 +1092,7 @@ function commitRead(outcome: ReadOutcome): UserSettings {
   explicitlySetKeys = outcome.explicitKeys;
   settingsFileCorrupt = outcome.corrupt;
   cachedFileStamp = outcome.stamp;
+  readUnverified = false;
   return cached;
 }
 
@@ -1101,6 +1108,27 @@ async function performUserSettingsRead(): Promise<UserSettings> {
   try {
     raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP });
   } catch (err) {
+    if (!(err instanceof SyntaxError)) {
+      /* #3625 review — a read error that is NOT a parse failure (EBUSY / EPERM /
+         EIO: a transient lock on a HEALTHY file) says nothing about the file's
+         content, so it is never corruption and is never cached against the
+         file's stamp. Keep whatever is cached; at boot, with nothing cached,
+         serve defaults WITHOUT `corrupt` and a stamp no file carries so the
+         next read re-reads. Either way `readUnverified` makes every writer
+         refuse until a read succeeds — persisting these defaults would
+         silently overwrite the user's file (re-enabling `allowCloudFallback`). */
+      console.warn(
+        `[user-settings] ${USER_SETTINGS_PATH} could not be read (${(err as Error).message}); ` +
+          'keeping the last-known settings and retrying on the next read.',
+      );
+      readUnverified = true;
+      if (cached) return cached;
+      cached = { ...DEFAULT_USER_SETTINGS };
+      explicitlySetKeys = new Set();
+      settingsFileCorrupt = false;
+      cachedFileStamp = STAMP_FORCE_REREAD;
+      return cached;
+    }
     /* Main file AND every backup are unparseable (or no backup exists yet —
        the first corruption ever seen). readJsonWithRecovery already tried
        every candidate; only log here, once, for this terminal case — a
@@ -1200,6 +1228,12 @@ const patchSchema = userSettingsSchema.partial();
     hand-inspect/recover them later. Must be called BEFORE writeJsonAtomic
     so the snapshot captures the corrupt bytes, not the freshly-written data. */
 async function snapshotCorruptBytesBeforeWrite(): Promise<void> {
+  if (readUnverified) {
+    throw new Error(
+      `[user-settings] refusing to write ${USER_SETTINGS_PATH}: the file could not be read just now, ` +
+        'so writing would replace it with unverified settings. Retry.',
+    );
+  }
   if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
     await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
   }
@@ -1894,6 +1928,7 @@ export function _resetUserSettingsCache(): void {
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
   settingsFileCorrupt = false;
+  readUnverified = false;
   /* #3084 P25 — forget archived and unarchived drops and any in-flight archive retry,
      so a later test that reuses an entry archives it again. */
   archivedDrops.clear();
