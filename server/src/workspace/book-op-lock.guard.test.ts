@@ -1,0 +1,984 @@
+/* #3711 — the static guard that stops the per-book operation-lock invariant
+   rotting (`withBookOp*` / `runBookJob`, `workspace/book-op-lock.ts` +
+   `workspace/book-jobs.ts`; design of record docs/features/288-book-op-lock.md
+   "Guard"). Mirrors `state-json-lock.guard.test.ts` (same syntactic approach,
+   same opaque-range tokenizer, same file-AND-count keyed allowlist, same blind
+   spots).
+
+   WHAT IT CHECKS (walks every non-test `.ts` file under `server/src`):
+     G1 MOVERS      outside `book-op-lock.ts`, a `rename(` / `renameWithRetry(` /
+                    `rm(` / `rmdir(` / `cp(` whose first argument is `bookDir`,
+                    `located.bookDir`, `book.bookDir`, `dir` or
+                    `old(Series|Author)Dir` -- only the sanctioned movers
+                    (`moveBookFolder` / `removeBookFolder`) may relocate or delete
+                    a book folder.
+     G2 HANDLERS    every guarded route handler contains `withBookOp(`,
+                    `withBookOps(` or `runBookJob(`. Guarded = POST/PUT/PATCH/DELETE
+                    under `/:bookId…` or `/:id/analysis…`, `GET /:bookId/export/
+                    portable`, and the enumerated workspace-level writers. Also:
+                    inside a `withBookOp*` callback, `runBookJob(`,
+                    `withDesignLock(` and `withLibraryVoiceLock(` are FORBIDDEN
+                    (lock order design -> library-voice -> book-op; a job takes
+                    book-op itself).
+     G3a RESOLVE    in a guarded handler, no `findBookByBookId(` /
+                    `findBookByManuscriptId(` outside a `withBookOp*` / `runBookJob`
+                    callback (`peekBook(` is the sanctioned pre-lock resolve).
+     G3b LOOPS      in the four series-walking files, no `findBookByBookId(`
+                    inside a `for` / `while` body (siblings resolve through the
+                    step's handle).
+     G4 MULTI-BOOK  every `withCastLocks(` sits inside a `withBookOps(` callback;
+                    in `voices.ts` / `voice-library-usage.ts` every `withCastLock(`
+                    sits inside a `withBookOp(` callback, except the permanent
+                    `onlyBookDir` branch (count 1).
+     G5 LONG JOBS   each long-job file carries at least its declared count of
+                    `runBookJob(` tokens, and `runBookJob` stays the ONLY
+                    registration function (`__addBookJobToken` is referenced only
+                    by `book-jobs.ts`).
+
+   ALLOWLISTS are keyed on FILE AND COUNT, both directions (a file that scans
+   clean must not be listed; a count that drifts either way fails). During the
+   #3711 PR every unconverted site is listed with reason `pending:T<n>` (the plan
+   task that converts it); each task shrinks its entries and Task 10 flips
+   `ALLOW_PENDING` to false so none may remain. The final allowlist holds only
+   `no-book-write` / `cross-book-walker` (G2) and the permanent `onlyBookDir`
+   exemption (G4).
+
+   BLIND SPOTS (covered by tests and the review catalogue, not the guard):
+     - aliased imports or re-exports;
+     - a captured `bookDir` used after a callback returns;
+     - a new long job in a file G5 doesn't list;
+     - an un-awaited book-writing child left outside `done`;
+     - a writer reached through a helper (call-graph-blind);
+     - a quick op misclassified as `no-book-write`;
+     - the right lock with the wrong id;
+     - a `peekBook` result fed into a write.
+   Lock IDENTITY is never checked, only PRESENCE. */
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SRC_ROOT = join(__dirname, '..'); // server/src
+
+/** Every non-test `.ts` file under `server/src`, recursively. */
+function collectSourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectSourceFiles(full, out);
+    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/* ===== SHARED OPAQUE-RANGE TOKENIZER - BEGIN =================================
+   Duplicated BYTE-FOR-BYTE between
+   `server/src/workspace/cast-lock.guard.test.ts` and
+   `server/src/workspace/voice-library-write-seam.guard.test.ts`. A drift test in
+   the latter fails the build if the two copies stop matching.
+
+   It is duplicated rather than extracted to an imported module ON PURPOSE. The
+   out-of-tree census harnesses that verify this tokenizer in both directions
+   load it by transpiling a guard file standalone and reading
+   `computeOpaqueRanges` / `isOpaque` out of that file's own module scope, so a
+   tokenizer behind an `import` is invisible to them and the correctness
+   property below becomes unmeasurable. The drift test is the enforceable
+   stand-in for a shared module.
+
+   WHAT IT IS FOR: both guards scan raw source text for a write primitive and
+   must ignore a match that only appears in prose (a comment) or in data (a
+   string / template / regex literal). Getting that wrong is dangerous in BOTH
+   directions:
+     - OVER-REACH (fails OPEN): a range that covers live code hides a real call
+       site, so the guard passes on a genuine violation.
+     - UNDER-REACH (fails CLOSED): a real comment left uncovered makes prose
+       quoting the pattern count as a call site, reddening the guard on correct,
+       unchanged code and destroying the negative control both headers
+       advertise.
+
+   WHY THE TypeScript PARSER AND NOT A HAND-ROLLED WALKER: the walker this
+   replaces opened an opaque range on any `"`, `'` or backtick and ran to the
+   next matching one. Two shapes desynced it, and both failed OPEN:
+     1. A regex literal holding a quote - /["'\s]/ - opened a "string" at the
+        quote INSIDE the character class and ran to the next quote anywhere
+        later in the file.
+     2. A NESTED template literal - a backtick inside a `${...}` slot - ended
+        the outer range at the inner literal's OPENING backtick, leaving the
+        walker permanently out of phase.
+   A bare `ts.createScanner` does NOT fix (1): it cannot resolve the
+   regex-vs-division ambiguity and emits a SlashToken. Only the parser knows.
+
+   DELIBERATE SCOPE DECISION - `${...}` SLOTS ARE LIVE CODE. TemplateHead /
+   TemplateMiddle / TemplateTail cover only a template's literal text chunks, so
+   an expression inside an interpolation is NOT opaque and IS scanned. That is
+   stricter than the walker it replaces, which skipped a template whole and so
+   hid any real call site written inside a `${...}`.
+
+   COMMENTS come from token trivia, not a text scan, because a `//` inside a
+   string literal is not a comment. The walk descends through
+   `node.getChildren(sf)` to the LEAF TOKENS and asks each leaf for its leading
+   and trailing comment ranges, de-duplicated by span since one comment is
+   reachable from two directions.
+
+   WHY LEAF TOKENS AND NOT `ts.forEachChild` - this cost 276 uncovered comments.
+   `forEachChild` yields only syntactically significant child NODES; it never
+   yields punctuation tokens (`}`, `]`, `,`). Every comment in a file is the
+   LEADING trivia of exactly one token, or the TRAILING trivia of the token
+   before it on the same line - and `getTrailingCommentRanges` stops at the
+   first newline. So a comment on its own line whose next token is punctuation
+   belonged to a token `forEachChild` never visits, and nobody asked for it. The
+   commonest shape there is is a comment as the last line of a block:
+
+       try {
+         something();
+         // historical: this used to be withCastLock(dir, async () => {
+       }
+
+   Measured with a token-descent oracle, that left 276 comments across 79 of
+   `server/src`'s 427 non-test files uncovered - `config/registry.ts` alone had
+   92 - and it broke both guards in BOTH directions named above: prose quoting
+   an unbalanced `withCastLock(dir, async () => {` in that position fabricated a
+   lock range over a genuinely unlocked write (fails OPEN), and prose quoting a
+   write primitive in that position counted as a real call site (fails CLOSED).
+   `getChildren` DOES yield punctuation, so descending it to the leaves reaches
+   every token and therefore every comment. It costs more - `getChildren`
+   materialises a token array per node - which is why callers memoize the
+   ranges per file content rather than recomputing them per match.
+
+   LITERALS still come from the AST node kinds, NOT from the token stream: the
+   parser is what resolves the regex-vs-division ambiguity (see (1) above), and
+   a leaf-token walk that trusted a raw scanner would reintroduce it.
+   ============================================================================ */
+interface OpaqueRange {
+  start: number;
+  end: number;
+}
+
+/** Every [start, end) span of `content` that is a string / template-chunk /
+    regex literal or a comment, sorted and merged so the spans are disjoint and
+    ascending (`opaqueEnd` binary-searches them). Parses `content` ONCE - a
+    caller scanning a file must compute these once and thread them through,
+    never call this per match. */
+function computeOpaqueRanges(content: string): OpaqueRange[] {
+  const sf = ts.createSourceFile('guard-scan.ts', content, ts.ScriptTarget.Latest, true);
+  const raw: OpaqueRange[] = [];
+  const seenComments = new Set<string>();
+
+  const addComment = (range: ts.CommentRange): void => {
+    const key = `${range.pos}:${range.end}`;
+    if (seenComments.has(key)) return;
+    seenComments.add(key);
+    raw.push({ start: range.pos, end: range.end });
+  };
+
+  const visit = (node: ts.Node): void => {
+    switch (node.kind) {
+      case ts.SyntaxKind.StringLiteral:
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts.SyntaxKind.RegularExpressionLiteral:
+      case ts.SyntaxKind.TemplateHead:
+      case ts.SyntaxKind.TemplateMiddle:
+      case ts.SyntaxKind.TemplateTail:
+        raw.push({ start: node.getStart(sf), end: node.getEnd() });
+        break;
+      default:
+        break;
+    }
+    const children = node.getChildren(sf);
+    if (children.length === 0) {
+      /* A LEAF TOKEN - punctuation included, which is the whole point (see the
+         block header). Asking only the leaves is sufficient AND cheaper than
+         asking every node: a comment is always the leading trivia of some token
+         or the trailing trivia of the token before it, and an interior node's
+         `pos`/`end` coincide with its first/last leaf's anyway, so an interior
+         node can never contribute a range a leaf does not. */
+      for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
+      for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
+      return;
+    }
+    for (const child of children) visit(child);
+  };
+
+  visit(sf);
+  for (const range of ts.getLeadingCommentRanges(content, 0) ?? []) addComment(range);
+
+  raw.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: OpaqueRange[] = [];
+  for (const range of raw) {
+    const last = merged[merged.length - 1];
+    // `>=` merges touching spans too. That adds no characters to the union, so
+    // it cannot over-reach onto live code.
+    if (last && last.end >= range.start) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ start: range.start, end: range.end });
+    }
+  }
+  return merged;
+}
+
+/** True iff `index` sits inside one of `ranges` - inside a literal or a
+    comment, not real code. */
+function isOpaque(ranges: OpaqueRange[], index: number): boolean {
+  return opaqueEnd(ranges, index) !== -1;
+}
+
+/** The end offset of the opaque range containing `index`, or -1 when `index` is
+    live code. Lets a character walker jump a literal or comment whole. */
+function opaqueEnd(ranges: OpaqueRange[], index: number): number {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const range = ranges[mid];
+    if (index < range.start) hi = mid - 1;
+    else if (index >= range.end) lo = mid + 1;
+    else return range.end;
+  }
+  return -1;
+}
+/* ===== SHARED OPAQUE-RANGE TOKENIZER - END =================================== */
+
+/** Scan forward from `openIndex` (which must hold `openChar`) for the
+    matching `closeChar`, tracking nesting depth. String/template literals and
+    comments are skipped whole (via the precomputed `opaque` ranges) so a
+    bracket character inside one can't desync the count. `opaque` is passed in
+    rather than derived here: this is called once per lock token, and deriving
+    it internally would re-parse the entire file on every call. Returns -1 if
+    unmatched (malformed source). */
+function findMatchingClose(
+  src: string,
+  opaque: OpaqueRange[],
+  openIndex: number,
+  openChar: string,
+  closeChar: string,
+): number {
+  let depth = 0;
+  let i = openIndex;
+  const n = src.length;
+  while (i < n) {
+    const skip = opaqueEnd(opaque, i);
+    if (skip !== -1) {
+      i = skip;
+      continue;
+    }
+    const ch = src[i];
+    if (ch === openChar) {
+      depth++;
+      i++;
+      continue;
+    }
+    if (ch === closeChar) {
+      depth--;
+      if (depth === 0) return i;
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+function lineOf(content: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < content.length; i++) {
+    if (content[i] === '\n') line++;
+  }
+  return line;
+}
+
+interface Span {
+  start: number;
+  end: number;
+}
+
+/** Non-opaque match indexes of `re` (must carry the `g` flag). */
+function tokenIndexes(content: string, opaque: OpaqueRange[], re: RegExp): number[] {
+  const out: number[] = [];
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (!isOpaque(opaque, m.index)) out.push(m.index);
+  }
+  return out;
+}
+
+/** The [token start, matching close paren] span of every non-opaque call whose
+    match (of `re`) ends in `(`. */
+function callSpans(content: string, opaque: OpaqueRange[], re: RegExp): Span[] {
+  const spans: Span[] = [];
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (isOpaque(opaque, m.index)) continue; // prose / a string quoting the token
+    const open = m.index + m[0].length - 1;
+    const close = findMatchingClose(content, opaque, open, '(', ')');
+    if (close === -1) continue; // malformed source
+    spans.push({ start: m.index, end: close });
+  }
+  return spans;
+}
+
+function inAny(spans: Span[], index: number): boolean {
+  return spans.some((s) => index >= s.start && index <= s.end);
+}
+
+/* `(?<!function\s)` skips a declaration; whitespace-tolerant between the paren
+   and the argument so a Prettier-wrapped call is still seen. */
+const BOOK_OP_RE = /(?<!function\s)\bwithBookOp\(/g;
+const BOOK_OPS_RE = /(?<!function\s)\bwithBookOps\(/g;
+const BOOK_OP_ANY_RE = /(?<!function\s)\bwithBookOps?\(/g;
+const BOOK_OP_OR_JOB_RE = /(?<!function\s)\b(?:withBookOps?|runBookJob)\(/g;
+const FORBIDDEN_IN_BOOK_OP_RE = /\b(?:runBookJob|withDesignLock|withLibraryVoiceLock)\(/g;
+const FIND_BOOK_RE = /\bfindBookBy(?:BookId|ManuscriptId)\(/g;
+const FIND_BY_ID_RE = /\bfindBookByBookId\(/g;
+const CAST_LOCKS_RE = /(?<!function\s)\bwithCastLocks\(/g;
+const CAST_LOCK_RE = /(?<!function\s)\bwithCastLock\(/g;
+const RUN_BOOK_JOB_RE = /(?<!function\s)\brunBookJob\(/g;
+/* `(?![\w.$])` keeps `rm(dir.x…` / `rm(dirname(…` (a different value) from
+   matching the bare `dir` / `bookDir` identifiers. */
+const MOVER_RE =
+  /\b(?:renameWithRetry|rename|rmdir|rm|cp)\(\s*(?:located\.bookDir|book\.bookDir|bookDir|dir|old(?:Series|Author)Dir)(?![\w.$])/g;
+const ROUTE_RE = /\b\w*[Rr]outer\.(get|post|put|patch|delete)\(\s*(['"`])([^'"`\n]*)\2/g;
+
+/* ===== G1 ===================================================================== */
+
+/** Files allowed to relocate / delete a book folder: the sanctioned movers. */
+const MOVER_HOME = 'workspace/book-op-lock.ts';
+
+function scanMovers(content: string): string[] {
+  const opaque = computeOpaqueRanges(content);
+  return tokenIndexes(content, opaque, MOVER_RE).map(
+    (i) => `${content.slice(i, content.indexOf('\n', i) === -1 ? undefined : content.indexOf('\n', i)).trim()} @ line ${lineOf(content, i)}`,
+  );
+}
+
+/* ===== G2 / G3a =============================================================== */
+
+/** Workspace-level writers that are not under `/:bookId` but still write a
+    book folder: `<file> <METHOD> <path>`. */
+const ENUMERATED_WRITERS: ReadonlySet<string> = new Set([
+  'routes/voices.ts PUT /:voiceId/override',
+  'routes/voice-library.ts POST /:voiceUuid/assign',
+  'routes/voice-library.ts DELETE /:voiceUuid/assign',
+  'routes/voice-library.ts DELETE /:voiceUuid',
+  'routes/library-cast-override.ts POST /library-cast/override',
+  'routes/exports-portable.ts POST /portable',
+]);
+
+interface Handler extends Span {
+  method: string;
+  path: string;
+  line: number;
+}
+
+function collectHandlers(content: string, opaque: OpaqueRange[]): Handler[] {
+  const out: Handler[] = [];
+  ROUTE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ROUTE_RE.exec(content))) {
+    if (isOpaque(opaque, m.index)) continue;
+    const open = m.index + m[0].indexOf('(');
+    const close = findMatchingClose(content, opaque, open, '(', ')');
+    if (close === -1) continue;
+    out.push({
+      method: m[1].toUpperCase(),
+      path: m[3],
+      start: m.index,
+      end: close,
+      line: lineOf(content, m.index),
+    });
+  }
+  return out;
+}
+
+function isGuardedHandler(rel: string, h: Handler): boolean {
+  if (h.method !== 'GET' && (h.path.startsWith('/:bookId') || h.path.startsWith('/:id/analysis'))) {
+    return true;
+  }
+  if (h.method === 'GET' && h.path.startsWith('/:bookId/export/portable')) return true;
+  return ENUMERATED_WRITERS.has(`${rel} ${h.method} ${h.path}`);
+}
+
+interface HandlerScan {
+  /** Guarded handlers seen (for the "the scan is real" check). */
+  guarded: string[];
+  /** G2: guarded handlers with no `withBookOp*` / `runBookJob`. */
+  uncovered: string[];
+  /** G2: forbidden tokens inside a `withBookOp*` callback (any file). */
+  forbidden: string[];
+  /** G3a: a `findBookBy…` outside a lock callback in a guarded handler. */
+  resolveBeforeLock: string[];
+}
+
+function scanHandlers(rel: string, content: string): HandlerScan {
+  const opaque = computeOpaqueRanges(content);
+  const result: HandlerScan = { guarded: [], uncovered: [], forbidden: [], resolveBeforeLock: [] };
+
+  const bookOpSpans = callSpans(content, opaque, BOOK_OP_ANY_RE);
+  for (const i of tokenIndexes(content, opaque, FORBIDDEN_IN_BOOK_OP_RE)) {
+    if (inAny(bookOpSpans, i)) {
+      result.forbidden.push(`${content.slice(i, content.indexOf('(', i) + 1)} inside a withBookOp* callback @ line ${lineOf(content, i)}`);
+    }
+  }
+
+  if (!content.includes('Router')) return result;
+  const lockOrJobSpans = callSpans(content, opaque, BOOK_OP_OR_JOB_RE);
+  const findTokens = tokenIndexes(content, opaque, FIND_BOOK_RE);
+  for (const h of collectHandlers(content, opaque)) {
+    if (!isGuardedHandler(rel, h)) continue;
+    const label = `${h.method} ${h.path} @ line ${h.line}`;
+    result.guarded.push(label);
+    if (!lockOrJobSpans.some((s) => s.start >= h.start && s.start <= h.end)) {
+      result.uncovered.push(label);
+    }
+    for (const i of findTokens) {
+      if (i >= h.start && i <= h.end && !inAny(lockOrJobSpans, i)) {
+        result.resolveBeforeLock.push(`${label}: resolve before lock @ line ${lineOf(content, i)}`);
+      }
+    }
+  }
+  return result;
+}
+
+/* ===== G3b ==================================================================== */
+
+/** Files that walk a series and must resolve each sibling through the step's
+    handle, never a `findBookByBookId` in the loop body. */
+const LOOP_FILES: readonly string[] = [
+  'routes/cast-series-patch.ts',
+  'routes/voice-override-linked.ts',
+  'routes/voices.ts',
+  'workspace/voice-library-usage.ts',
+];
+
+function loopBodies(content: string, opaque: OpaqueRange[]): Span[] {
+  const bodies: Span[] = [];
+  const re = /\b(?:for|while)\s*(?:await\s*)?\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (isOpaque(opaque, m.index)) continue;
+    const headClose = findMatchingClose(content, opaque, m.index + m[0].length - 1, '(', ')');
+    if (headClose === -1) continue;
+    let b = headClose + 1;
+    while (b < content.length && /\s/.test(content[b])) b++;
+    const end =
+      content[b] === '{'
+        ? findMatchingClose(content, opaque, b, '{', '}')
+        : content.indexOf(';', b);
+    if (end === -1) continue;
+    bodies.push({ start: b, end });
+  }
+  return bodies;
+}
+
+function scanLoopResolves(content: string): string[] {
+  const opaque = computeOpaqueRanges(content);
+  const bodies = loopBodies(content, opaque);
+  return tokenIndexes(content, opaque, FIND_BY_ID_RE)
+    .filter((i) => inAny(bodies, i))
+    .map((i) => `findBookByBookId( inside a loop body @ line ${lineOf(content, i)}`);
+}
+
+/* ===== G4 ===================================================================== */
+
+function scanCastLocks(content: string): string[] {
+  const opaque = computeOpaqueRanges(content);
+  const bookOps = callSpans(content, opaque, BOOK_OPS_RE);
+  return tokenIndexes(content, opaque, CAST_LOCKS_RE)
+    .filter((i) => !inAny(bookOps, i))
+    .map((i) => `withCastLocks( outside a withBookOps( callback @ line ${lineOf(content, i)}`);
+}
+
+/** Files where a single-book `withCastLock(` must sit inside `withBookOp(`. */
+const SINGLE_CAST_LOCK_FILES: readonly string[] = ['routes/voices.ts', 'workspace/voice-library-usage.ts'];
+
+function scanSingleCastLocks(content: string): string[] {
+  const opaque = computeOpaqueRanges(content);
+  const bookOp = callSpans(content, opaque, BOOK_OP_RE);
+  return tokenIndexes(content, opaque, CAST_LOCK_RE)
+    .filter((i) => !inAny(bookOp, i))
+    .map((i) => `withCastLock( outside a withBookOp( callback @ line ${lineOf(content, i)}`);
+}
+
+/* ===== G5 ===================================================================== */
+
+/** `runBookJob(` token counts are only a MINIMUM per file: this guard cannot
+    tell a registered long job from a missing one in a file it doesn't list (a
+    blind spot, listed in the header). `pending` = the plan task that adds them. */
+const LONG_JOB_FILES: ReadonlyMap<string, { min: number; pending: string | null }> = new Map([
+  ['routes/generation.ts', { min: 2, pending: 'T4' }], // generation POST + triggerScoring
+  ['routes/chapter-splice.ts', { min: 1, pending: 'T4' }],
+  ['routes/chapter-qa-repair.ts', { min: 1, pending: 'T4' }],
+  ['routes/qa-report.ts', { min: 1, pending: 'T4' }], // resume-scoring
+  ['routes/analysis.ts', { min: 2, pending: 'T4' }], // main + subset
+  ['routes/cast-design.ts', { min: 1, pending: 'T4' }],
+  ['routes/single-design.ts', { min: 1, pending: 'T4' }],
+  ['routes/qwen-voice.ts', { min: 1, pending: 'T4' }], // design-voice
+  ['routes/voice-style.ts', { min: 2, pending: 'T4' }], // generate + generate-all
+  ['routes/script-review.ts', { min: 1, pending: 'T4' }],
+  ['routes/export.ts', { min: 1, pending: 'T4' }],
+  ['routes/exports-portable.ts', { min: 1, pending: 'T4' }], // GET export/portable
+]);
+
+function countRunBookJob(content: string): number {
+  return tokenIndexes(content, computeOpaqueRanges(content), RUN_BOOK_JOB_RE).length;
+}
+
+/** Function names a module exports (declarations only). */
+function exportedFunctions(content: string): string[] {
+  const opaque = computeOpaqueRanges(content);
+  const out: string[] = [];
+  const re = /\bexport\s+(?:async\s+)?function\s+(\w+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (!isOpaque(opaque, m.index)) out.push(m[1]);
+  }
+  return out;
+}
+
+/* ===== allowlists ============================================================= */
+
+/* Task 10 flips this to false: from then on no `pending:T<n>` entry may remain. */
+const ALLOW_PENDING = true;
+
+interface AllowEntry {
+  count: number;
+  reason: string;
+}
+
+function allow(rows: Array<[string, number, string]>): Map<string, AllowEntry> {
+  return new Map(rows.map(([rel, count, reason]) => [rel, { count, reason }]));
+}
+
+/* G1: file -> unconverted mover sites. A file that scans clean must not be listed. */
+const ALLOW_G1 = allow([['routes/book-state.ts', 4, 'pending:T2']]);
+/* G2: file -> guarded handlers with no book-op / runBookJob. Final reasons are
+   `no-book-write` / `cross-book-walker`. */
+const ALLOW_G2 = allow([
+  ['routes/analysis.ts', 3, 'pending:T4'],
+  ['routes/annotate-emotion.ts', 1, 'no-book-write'],
+  ['routes/backup.ts', 2, 'pending:T3'],
+  ['routes/book-state.ts', 9, 'pending:T2 (PUT state, DELETE) + T3 (the other 7)'],
+  ['routes/cast-add-from-roster.ts', 1, 'pending:T5'],
+  ['routes/cast-aliases.ts', 3, 'pending:T5'],
+  ['routes/cast-create.ts', 1, 'pending:T5'],
+  ['routes/cast-design.ts', 2, 'pending:T4'],
+  ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
+  ['routes/cast-link-prior.ts', 1, 'pending:T6'],
+  ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
+  ['routes/cast-merge.ts', 1, 'pending:T5'],
+  ['routes/cast-not-linked-to.ts', 2, 'pending:T6'],
+  ['routes/cast-reject-orphan.ts', 2, 'pending:T5'],
+  ['routes/cast-series-patch.ts', 1, 'pending:T6'],
+  ['routes/cast-tier.ts', 1, 'pending:T6'],
+  ['routes/chapter-audio.ts', 2, 'pending:T5'],
+  ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
+  ['routes/chapter-splice.ts', 1, 'pending:T4'],
+  ['routes/chapters-restructure.ts', 6, 'pending:T3'],
+  ['routes/cover.ts', 4, 'pending:T5'],
+  ['routes/export.ts', 2, 'pending:T4'],
+  ['routes/exports-portable.ts', 2, 'pending:T4 (GET export/portable) + T7 (POST /portable import)'],
+  ['routes/generation.ts', 2, 'pending:T4'],
+  ['routes/instruct-annotation.ts', 1, 'no-book-write'],
+  ['routes/library-cast-override.ts', 1, 'pending:T6'],
+  ['routes/qa-report.ts', 1, 'pending:T4'],
+  ['routes/qwen-voice.ts', 4, 'pending:T4 (design-voice) + T5 (promote/discard/emotion-variant)'],
+  ['routes/revision-ops.ts', 3, 'pending:T5'],
+  ['routes/script-review.ts', 6, 'pending:T4 (run) + T5 (discard/resolve/selection/cancel/attach)'],
+  ['routes/share.ts', 1, 'pending:T5'],
+  ['routes/single-design.ts', 2, 'pending:T4'],
+  ['routes/voice-library.ts', 3, 'pending:T6'],
+  ['routes/voice-match.ts', 1, 'no-book-write'],
+  ['routes/voice-override-linked.ts', 1, 'pending:T6'],
+  ['routes/voice-style.ts', 2, 'pending:T4'],
+  ['routes/voices.ts', 1, 'pending:T6'],
+]);
+/* G3a: file -> a book resolved before the lock in a guarded handler. The
+   no-book-write handlers still resolve with findBookByBookId today; Task 5/10
+   decides whether they move to peekBook or a read under withBookOp. */
+const ALLOW_G3A = allow([
+  ['routes/annotate-emotion.ts', 1, 'pending:T5'],
+  ['routes/backup.ts', 1, 'pending:T3'],
+  ['routes/book-state.ts', 10, 'pending:T2 + T3'],
+  ['routes/cast-add-from-roster.ts', 2, 'pending:T5'],
+  ['routes/cast-aliases.ts', 3, 'pending:T5'],
+  ['routes/cast-create.ts', 1, 'pending:T5'],
+  ['routes/cast-design.ts', 1, 'pending:T4'],
+  ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
+  ['routes/cast-link-prior.ts', 2, 'pending:T6'],
+  ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
+  ['routes/cast-merge.ts', 1, 'pending:T5'],
+  ['routes/cast-not-linked-to.ts', 4, 'pending:T6'],
+  ['routes/cast-reject-orphan.ts', 2, 'pending:T5'],
+  ['routes/cast-series-patch.ts', 2, 'pending:T6'],
+  ['routes/cast-tier.ts', 1, 'pending:T6'],
+  ['routes/chapter-audio.ts', 2, 'pending:T5'],
+  ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
+  ['routes/chapter-splice.ts', 1, 'pending:T4'],
+  ['routes/chapters-restructure.ts', 1, 'pending:T3'],
+  ['routes/cover.ts', 4, 'pending:T5'],
+  ['routes/export.ts', 1, 'pending:T4'],
+  ['routes/exports-portable.ts', 1, 'pending:T4'],
+  ['routes/generation.ts', 1, 'pending:T4'],
+  ['routes/instruct-annotation.ts', 1, 'pending:T5'],
+  ['routes/library-cast-override.ts', 2, 'pending:T6'],
+  ['routes/qa-report.ts', 1, 'pending:T4'],
+  ['routes/qwen-voice.ts', 4, 'pending:T4 + T5'],
+  ['routes/revision-ops.ts', 3, 'pending:T5'],
+  ['routes/script-review.ts', 4, 'pending:T4 + T5'],
+  ['routes/share.ts', 1, 'pending:T5'],
+  ['routes/single-design.ts', 1, 'pending:T4'],
+  ['routes/voice-library.ts', 2, 'pending:T6'],
+  ['routes/voice-override-linked.ts', 2, 'pending:T6'],
+  ['routes/voice-style.ts', 2, 'pending:T4'],
+]);
+/* G3b: file -> findBookByBookId( inside a loop body. */
+const ALLOW_G3B = allow([
+  ['routes/cast-series-patch.ts', 1, 'pending:T6'],
+  ['routes/voice-override-linked.ts', 1, 'pending:T6'],
+]);
+/* G4a: file -> withCastLocks( outside withBookOps(. */
+const ALLOW_G4A = allow([
+  ['routes/cast-link-prior.ts', 1, 'pending:T6'],
+  ['routes/cast-not-linked-to.ts', 2, 'pending:T6'],
+  ['routes/library-cast-override.ts', 1, 'pending:T6'],
+]);
+/* G4b: file -> withCastLock( outside withBookOp(, on top of PERMANENT_G4B. */
+const ALLOW_G4B = allow([
+  ['routes/voices.ts', 1, 'pending:T6'],
+  ['workspace/voice-library-usage.ts', 1, 'pending:T6'],
+]);
+/* G4b permanent exemption: the `onlyBookDir` branch (the caller holds book-op
+   for that book, or is that book's registered job). Added to the allowlist count. */
+const PERMANENT_G4B = new Map<string, number>([['routes/voices.ts', 1]]);
+
+const VALID_REASON = /^(?:pending:T(?:[2-9]|10)\b.*|no-book-write|cross-book-walker)$/;
+
+/** Compare `found` (file -> details) against `allow` in BOTH directions. */
+function diffAllowlist(
+  label: string,
+  found: Map<string, string[]>,
+  allow: Map<string, AllowEntry>,
+  permanent: Map<string, number> = new Map(),
+): string[] {
+  const problems: string[] = [];
+  for (const [rel, details] of found) {
+    const entry = allow.get(rel);
+    const expected = (entry?.count ?? 0) + (permanent.get(rel) ?? 0);
+    if (!entry && permanent.has(rel) && details.length === expected) continue;
+    if (!entry) {
+      problems.push(`${label} ${rel}: ${details.length} site(s) — NOT on the allowlist:\n  ${details.join('\n  ')}`);
+    } else if (details.length !== expected) {
+      problems.push(
+        `${label} ${rel}: allowlisted for exactly ${expected} (${entry.reason}), but the scan found ${details.length}:\n  ${details.join('\n  ')}`,
+      );
+    }
+  }
+  for (const [rel, entry] of allow) {
+    if (!found.has(rel)) {
+      problems.push(`${label} ${rel}: allowlisted for ${entry.count} (${entry.reason}), but the scan now finds ZERO — update or remove this entry.`);
+    }
+    if (!VALID_REASON.test(entry.reason)) {
+      problems.push(`${label} ${rel}: invalid allowlist reason "${entry.reason}"`);
+    }
+    if (!ALLOW_PENDING && entry.reason.startsWith('pending:')) {
+      problems.push(`${label} ${rel}: pending allowlist entry "${entry.reason}" must not remain`);
+    }
+  }
+  return problems;
+}
+
+interface Scanned {
+  g1: Map<string, string[]>;
+  g2: Map<string, string[]>;
+  g3a: Map<string, string[]>;
+  g3b: Map<string, string[]>;
+  g4a: Map<string, string[]>;
+  g4b: Map<string, string[]>;
+  forbidden: string[];
+  guardedTotal: number;
+  runBookJobCounts: Map<string, number>;
+  addTokenUsers: string[];
+  jobsExports: string[];
+}
+
+function scanTree(): Scanned {
+  const s: Scanned = {
+    g1: new Map(),
+    g2: new Map(),
+    g3a: new Map(),
+    g3b: new Map(),
+    g4a: new Map(),
+    g4b: new Map(),
+    forbidden: [],
+    guardedTotal: 0,
+    runBookJobCounts: new Map(),
+    addTokenUsers: [],
+    jobsExports: [],
+  };
+  const put = (m: Map<string, string[]>, rel: string, d: string[]): void => {
+    if (d.length > 0) m.set(rel, d);
+  };
+  for (const file of collectSourceFiles(SRC_ROOT)) {
+    const rel = relative(SRC_ROOT, file).split(sep).join('/');
+    const content = readFileSync(file, 'utf8');
+    if (rel !== MOVER_HOME) put(s.g1, rel, scanMovers(content));
+    const h = scanHandlers(rel, content);
+    s.guardedTotal += h.guarded.length;
+    put(s.g2, rel, h.uncovered);
+    put(s.g3a, rel, h.resolveBeforeLock);
+    for (const f of h.forbidden) s.forbidden.push(`${rel}: ${f}`);
+    if (LOOP_FILES.includes(rel)) put(s.g3b, rel, scanLoopResolves(content));
+    if (rel !== 'workspace/cast-lock.ts') put(s.g4a, rel, scanCastLocks(content));
+    if (SINGLE_CAST_LOCK_FILES.includes(rel)) put(s.g4b, rel, scanSingleCastLocks(content));
+    if (LONG_JOB_FILES.has(rel)) s.runBookJobCounts.set(rel, countRunBookJob(content));
+    if (
+      rel !== 'workspace/book-jobs.ts' &&
+      rel !== 'workspace/book-op-lock.ts' &&
+      content.includes('__addBookJobToken(')
+    ) {
+      s.addTokenUsers.push(rel);
+    }
+    if (rel === 'workspace/book-jobs.ts') s.jobsExports = exportedFunctions(content);
+  }
+  return s;
+}
+
+describe('book-op lock — static guard (#3711)', () => {
+  const scanned = scanTree();
+
+  it('G1: no unsanctioned rename/rm/rmdir/cp of a book folder outside book-op-lock.ts, except the pinned allowlist', () => {
+    expect(diffAllowlist('G1', scanned.g1, ALLOW_G1), '').toEqual([]);
+  });
+
+  it('G2: every guarded handler takes withBookOp / withBookOps / runBookJob, except the pinned allowlist', () => {
+    expect(diffAllowlist('G2', scanned.g2, ALLOW_G2)).toEqual([]);
+  });
+
+  it('G2: no runBookJob / withDesignLock / withLibraryVoiceLock inside a withBookOp* callback', () => {
+    expect(scanned.forbidden).toEqual([]);
+  });
+
+  it('G3a: no findBookByBookId / findBookByManuscriptId before the lock in a guarded handler, except the pinned allowlist', () => {
+    expect(diffAllowlist('G3a', scanned.g3a, ALLOW_G3A)).toEqual([]);
+  });
+
+  it('G3b: no findBookByBookId inside a for/while body in the series-walking files, except the pinned allowlist', () => {
+    expect(diffAllowlist('G3b', scanned.g3b, ALLOW_G3B)).toEqual([]);
+  });
+
+  it('G4: every withCastLocks sits inside withBookOps; single withCastLock inside withBookOp in the walker files', () => {
+    expect(diffAllowlist('G4a', scanned.g4a, ALLOW_G4A)).toEqual([]);
+    expect(diffAllowlist('G4b', scanned.g4b, ALLOW_G4B, PERMANENT_G4B)).toEqual([]);
+  });
+
+  it('G5: each long-job file carries its declared minimum of runBookJob( tokens', () => {
+    const problems: string[] = [];
+    for (const [rel, { min, pending }] of LONG_JOB_FILES) {
+      const have = scanned.runBookJobCounts.get(rel);
+      if (have === undefined) {
+        problems.push(`${rel}: listed in LONG_JOB_FILES but the file does not exist`);
+        continue;
+      }
+      const required = pending && ALLOW_PENDING ? 0 : min;
+      if (have < required) problems.push(`${rel}: expected >= ${required} runBookJob( token(s), found ${have}`);
+      if (pending && !ALLOW_PENDING) problems.push(`${rel}: pending:${pending} must not remain`);
+      if (pending && have >= min) problems.push(`${rel}: now meets its minimum (${min}) — clear its pending marker`);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('G5: runBookJob is the ONLY registration function (book-jobs.ts exports; __addBookJobToken has no other caller)', () => {
+    expect(scanned.jobsExports.sort()).toEqual(['runBookJob']);
+    expect(scanned.addTokenUsers).toEqual([]);
+  });
+
+  it('no pending:T<n> allowlist entry remains (flipped on by Task 10)', () => {
+    const all = [ALLOW_G1, ALLOW_G2, ALLOW_G3A, ALLOW_G3B, ALLOW_G4A, ALLOW_G4B];
+    const pending = all.flatMap((m) => [...m].filter(([, e]) => e.reason.startsWith('pending:')).map(([k]) => k));
+    expect(ALLOW_PENDING ? [] : pending).toEqual([]);
+  });
+
+  it('the scan is real: it sees the known guarded handlers and long-job files', () => {
+    expect(scanned.guardedTotal).toBeGreaterThan(40);
+    for (const rel of LONG_JOB_FILES.keys()) {
+      expect(scanned.runBookJobCounts.has(rel), `${rel} missing from the scan`).toBe(true);
+    }
+    const bookState = collectHandlers(
+      readFileSync(join(SRC_ROOT, 'routes/book-state.ts'), 'utf8'),
+      computeOpaqueRanges(readFileSync(join(SRC_ROOT, 'routes/book-state.ts'), 'utf8')),
+    );
+    expect(bookState.some((h) => h.method === 'PUT' && h.path === '/:bookId/state')).toBe(true);
+    expect(bookState.some((h) => h.method === 'DELETE' && h.path === '/:bookId')).toBe(true);
+  });
+
+  /* ---- negative controls: each fixture MUST be reported ------------------------ */
+
+  it('G1 negative control: a bare rename/rm/rmdir/cp of a book dir is reported; other args and prose are not', () => {
+    expect(scanMovers('await renameWithRetry(bookDir, newDir);')).toHaveLength(1);
+    expect(scanMovers('await rm(dir, { recursive: true });')).toHaveLength(1);
+    expect(scanMovers('await rmdir(oldSeriesDir).catch(() => {});')).toHaveLength(1);
+    expect(scanMovers('await cp(located.bookDir, dest, { recursive: true });')).toHaveLength(1);
+    expect(scanMovers('await rename(book.bookDir, x);')).toHaveLength(1);
+    expect(scanMovers('await rename(tmpPath, destPath);')).toHaveLength(0);
+    expect(scanMovers('await rm(dirname(x));')).toHaveLength(0);
+    expect(scanMovers('// await rename(bookDir, x) used to live here')).toHaveLength(0);
+    expect(scanMovers("const s = 'rm(bookDir)';")).toHaveLength(0);
+  });
+
+  it('G2 negative control: an uncovered guarded handler is reported (single- and multi-line), a covered one is not', () => {
+    const bad = [
+      "bookRouter.put('/:bookId/state', async (req, res) => {",
+      '  await writeThing(req.params.bookId);',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', bad).uncovered).toHaveLength(1);
+    const multi = [
+      'bookRouter.post(',
+      "  '/:bookId/things',",
+      '  async (req, res) => {},',
+      ');',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', multi).uncovered).toHaveLength(1);
+    const covered = [
+      "bookRouter.delete('/:bookId', async (req, res) => {",
+      '  await withBookOp(req.params.bookId, async (b) => { await removeBookFolder(b); });',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', covered).uncovered).toHaveLength(0);
+    const job = "bookRouter.post('/:bookId/go', async (req, res) => { await runBookJob(id, 'render', f); });";
+    expect(scanHandlers('routes/x.ts', job).uncovered).toHaveLength(0);
+    const analysis = "analysisRouter.post('/:id/analysis/pause', async (req, res) => {});";
+    expect(scanHandlers('routes/x.ts', analysis).uncovered).toHaveLength(1);
+    const portable = "r.get('/:bookId/export/portable', h); portableRouter.get('/:bookId/export/portable', async () => {});";
+    expect(scanHandlers('routes/x.ts', portable).uncovered).toHaveLength(1);
+    const enumerated = "voicesRouter.put('/:voiceId/override', async () => {});";
+    expect(scanHandlers('routes/voices.ts', enumerated).uncovered).toHaveLength(1);
+    expect(scanHandlers('routes/other.ts', enumerated).uncovered).toHaveLength(0);
+  });
+
+  it('G2 negative control: a plain GET and a route inside a comment are not guarded', () => {
+    const src = [
+      "// bookRouter.put('/:bookId/state', async () => {});",
+      "bookRouter.get('/:bookId/state', async (req, res) => {});",
+    ].join('\n');
+    const r = scanHandlers('routes/x.ts', src);
+    expect(r.guarded).toHaveLength(0);
+  });
+
+  it('G2 negative control: runBookJob / withDesignLock / withLibraryVoiceLock inside a withBookOp callback are reported', () => {
+    const rj = "await withBookOp(id, async (b) => { await runBookJob(id, 'render', f); });";
+    expect(scanHandlers('x.ts', rj).forbidden).toHaveLength(1);
+    const dl = 'await withBookOps([a, b], async () => { await withDesignLock(p, async () => {}); });';
+    expect(scanHandlers('x.ts', dl).forbidden).toHaveLength(1);
+    const ll = 'await withBookOp(id, async () => { await withLibraryVoiceLock(u, async () => {}); });';
+    expect(scanHandlers('x.ts', ll).forbidden).toHaveLength(1);
+    const ok = 'await withDesignLock(p, async () => { await withBookOp(id, async () => {}); });';
+    expect(scanHandlers('x.ts', ok).forbidden).toHaveLength(0);
+  });
+
+  it('G3a negative control: a resolve before the lock is reported; one inside a callback or via peekBook is not', () => {
+    const bad = [
+      "bookRouter.post('/:bookId/x', async (req, res) => {",
+      '  const located = await findBookByBookId(req.params.bookId);',
+      '  await withBookOp(req.params.bookId, async () => {});',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', bad).resolveBeforeLock).toHaveLength(1);
+    const manuscript = [
+      "bookRouter.post('/:bookId/x', async (req, res) => {",
+      '  const located = await findBookByManuscriptId(req.params.bookId);',
+      '  await runBookJob(id, "render", async () => {});',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', manuscript).resolveBeforeLock).toHaveLength(1);
+    const ok = [
+      "bookRouter.post('/:bookId/x', async (req, res) => {",
+      '  const peeked = await peekBook(req.params.bookId);',
+      '  await withBookOp(req.params.bookId, async () => { await findBookByBookId(x); });',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', ok).resolveBeforeLock).toHaveLength(0);
+  });
+
+  it('G3b negative control: findBookByBookId inside a for/while body is reported, outside is not', () => {
+    const forBody = 'for (const s of siblings) {\n  const b = await findBookByBookId(s.id);\n}';
+    expect(scanLoopResolves(forBody)).toHaveLength(1);
+    const whileBody = 'while (more) { await findBookByBookId(x); }';
+    expect(scanLoopResolves(whileBody)).toHaveLength(1);
+    const awaitFor = 'for await (const s of gen()) { await findBookByBookId(s); }';
+    expect(scanLoopResolves(awaitFor)).toHaveLength(1);
+    const single = 'for (const s of xs) await findBookByBookId(s);';
+    expect(scanLoopResolves(single)).toHaveLength(1);
+    const outside = 'const b = await findBookByBookId(id);\nfor (const s of xs) { use(b, s); }';
+    expect(scanLoopResolves(outside)).toHaveLength(0);
+    expect(scanLoopResolves('// for (;;) { findBookByBookId(x) }')).toHaveLength(0);
+  });
+
+  it('G4 negative control: withCastLocks outside withBookOps / withCastLock outside withBookOp are reported', () => {
+    expect(scanCastLocks('await withCastLocks([a, b], async () => {});')).toHaveLength(1);
+    expect(scanCastLocks('await withBookOps([x, y], async ([A, B]) => withCastLocks([A.bookDir, B.bookDir], async () => {}));')).toHaveLength(0);
+    expect(scanCastLocks('export async function withCastLocks<T>(d: string[]) {}')).toHaveLength(0);
+    expect(scanSingleCastLocks('await withCastLock(dir, async () => {});')).toHaveLength(1);
+    expect(scanSingleCastLocks('await withBookOp(id, async (b) => withCastLock(b.bookDir, async () => {}));')).toHaveLength(0);
+    // a withBookOps callback does not satisfy the single-book rule's own token, and vice versa
+    expect(scanCastLocks('await withBookOp(id, async () => withCastLocks([a], async () => {}));')).toHaveLength(1);
+  });
+
+  it('G5 negative control: runBookJob tokens are counted; prose, strings and the declaration are not', () => {
+    expect(countRunBookJob('await runBookJob(id, "render", f);\nawait runBookJob(id, "export", g);')).toBe(2);
+    expect(countRunBookJob('// runBookJob( goes here\nconst s = "runBookJob(x)";')).toBe(0);
+    expect(countRunBookJob('export async function runBookJob<T>(id: string) {}')).toBe(0);
+    expect(exportedFunctions('export async function runBookJob() {}\nexport function sneaky() {}\n// export function ghost() {}')).toEqual([
+      'runBookJob',
+      'sneaky',
+    ]);
+  });
+
+  it('the allowlist diff reports drift in BOTH directions and unknown/invalid entries', () => {
+    const found = new Map([['a.ts', ['x', 'y']]]);
+    expect(diffAllowlist('T', found, new Map())).toHaveLength(1); // not on the allowlist
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]))).toHaveLength(1); // count drift up
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 3, reason: 'pending:T2' }]]))).toHaveLength(1); // count drift down
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'pending:T2' }], ['b.ts', { count: 1, reason: 'pending:T3' }]]))).toHaveLength(1); // stale entry
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'because' }]]))).toHaveLength(1); // invalid reason
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'pending:T2' }]]))).toEqual([]);
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]), new Map([['a.ts', 1]]))).toEqual([]);
+    expect(diffAllowlist('T', found, new Map(), new Map([['a.ts', 2]]))).toEqual([]);
+  });
+
+  it('prose quoting an unbalanced withBookOp( does not fabricate a lock range', () => {
+    const src = [
+      "bookRouter.post('/:bookId/x', async (req, res) => {",
+      '  try {',
+      '    await work();',
+      '  } catch {',
+      '    // historical: this used to be withBookOp(id, async (b) => {',
+      '  }',
+      '  await write(req.params.bookId);',
+      '});',
+    ].join('\n');
+    expect(scanHandlers('routes/x.ts', src).uncovered).toHaveLength(1);
+  });
+
+  it('the opaque-range tokenizer is byte-identical to cast-lock.guard.test.ts', () => {
+    const BEGIN = '/* ===== SHARED OPAQUE-RANGE TOKENIZER - ' + 'BEGIN';
+    const END = '/* ===== SHARED OPAQUE-RANGE TOKENIZER - ' + 'END';
+    const extract = (path: string): string => {
+      const text = readFileSync(path, 'utf8');
+      const from = text.indexOf(BEGIN);
+      const to = text.indexOf(END);
+      expect(from, `${path}: missing tokenizer BEGIN sentinel`).toBeGreaterThanOrEqual(0);
+      expect(to, `${path}: missing tokenizer END sentinel`).toBeGreaterThan(from);
+      return text.slice(from, text.indexOf('*/', to) + 2);
+    };
+    const mine = extract(fileURLToPath(import.meta.url));
+    const sibling = extract(join(__dirname, 'cast-lock.guard.test.ts'));
+    expect(mine.length).toBeGreaterThan(1000);
+    expect(sibling).toBe(mine);
+  });
+});

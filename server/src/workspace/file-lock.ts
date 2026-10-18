@@ -324,11 +324,16 @@ export function __chainsSizeForTest(): number {
   return chains.size;
 }
 
-/** Test-only: how many callers are currently queued (waiting to acquire) on the
- *  `state-json` lock for `statePath`. Lets a test wait for a request to be
- *  genuinely blocked on the lock rather than sleeping and hoping. */
+/** Test-only: how many callers are currently queued (waiting to acquire) on
+ *  `key`. Lets a test wait for a request to be genuinely blocked on a lock
+ *  (e.g. `book-op:<bookId>`) rather than sleeping and hoping. */
+export function __keyWaitersForTest(key: string): number {
+  return waiters.get(key) ?? 0;
+}
+
+/** Test-only: `__keyWaitersForTest` for the `state-json` lock of `statePath`. */
 export function __stateJsonWaitersForTest(statePath: string): number {
-  return waiters.get(`state-json:${statePath}`) ?? 0;
+  return __keyWaitersForTest(`state-json:${statePath}`);
 }
 
 /** #3700 — serialise a read-modify-write of one book's `.audiobook/state.json`
