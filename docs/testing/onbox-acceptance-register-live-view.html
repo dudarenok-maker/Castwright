@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="56" data-publish-id="d27fea44e6a0"></div>
+  <div hidden data-published-as="56" data-publish-id="ce24f6181899"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -776,9 +776,22 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A114</span><span class="iname">Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+      <summary><span class="num">A114</span><span class="iname">Revisions server ownership (plan 286, #3400/#3397)</span><span class="risk">GPU box, real sidecar, a real rendered book</span><span class="chev">›</span></summary>
       <div class="body">
-        <p class="body-placeholder">Not yet published — run `npm run register:build` after adding row content, or fill in manually and re-run --check.</p>
+        <p><code>revisions.json</code> moves from a client-written cache to a server-owned one: accept/reject/dismiss go through per-op routes instead of a raw <code>PUT /state</code>, pending comes only from the server, and every render records or drops a chapter&#39;s A/B state itself &#8212; closing the #3397 gap A9 above left open (a Fix-audio or regen take finishing while you were on another book, or any non-book view, used to come back stuck &#8220;rendering&#8221; or without an A/B prompt; it now doesn&#39;t).</p>
+        <p>What to observe, concretely, against a real rendered book with a real sidecar:</p>
+        <ul>
+          <li>Splice a character&#39;s lines (Fix audio) &#8594; switch to a different book before it finishes &#8594; come back: the A/B prompt is there and playable (closes the #3397 gap).</li>
+          <li><strong>Commit selection</strong> (accept) &#8594; the chapter&#39;s <code>.previous.mp3</code> is gone and Revision History shows &#8220;Accepted&#8221;.</li>
+          <li>Re-splice the same chapter, this time <strong>Reject</strong> &#8594; the earlier take is live again, Revision History shows &#8220;Rejected&#8221;.</li>
+          <li>Reject while a generation is running on that book &#8594; refused with &#8220;This chapter is busy &#8212; try again when it finishes&#8221;, the pending entry unchanged.</li>
+          <li>A real <strong>profile-regen preview</strong>: Approve fans the new take out to the rest of the book; a second preview, Reject restores the original take.</li>
+          <li>A <strong>restructure</strong> (merge two chapters, one of them carrying a pending take) &#8594; that take disappears from the Revisions list.</li>
+          <li>An <strong>upgraded book&#39;s legacy entry</strong> (pending from before this update) can be accepted on one chapter and rejected on another.</li>
+          <li>A <strong>legacy stuck entry</strong> (&#8220;Rendering&#8230;&#8221; from before the update, <code>.previous.mp3</code> still on disk) is now reviewable and shows <strong>Recovered from before the update</strong>, with the A card reading &#8220;The take kept before this chapter&#39;s last render&#8221; (never &#8220;the original&#8221; &#8212; OD20). Reject puts that kept take back live &#8212; record which take that turned out to be, since it may predate the stuck take rather than being the one it was rendered against.</li>
+          <li>A <strong>preview that finishes while you are on another book</strong>: the &#8220;Preview ready in &lsaquo;book title&rsaquo;&#8221; toast appears; returning to the book opens the preview player by itself (OD27). Close it with the back arrow &#8212; the Status pill shows it as pending and re-opens it (OD28).</li>
+        </ul>
+        <p class="src">the GPU box, a real sidecar, and a real rendered book (no mock mode &#8212; the mock-mode equivalents are pinned by <code>e2e/revision-ops.spec.ts</code>, <code>e2e/revisions-book-switch.spec.ts</code> and <code>e2e/profile-regen-preview-recorded.spec.ts</code>, plan 286 Task 30) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3400">Castwright#3400</a> &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3397">#3397</a> &#183; no separate run sheet &#183; plan 286&#39;s &#8220;Manual acceptance walkthrough&#8221; and the steps above; open decisions OD20, OD27, OD28, OD29, OD30, OD31</p>
       </div>
     </details>
 
