@@ -575,8 +575,6 @@ const ALLOW_G1 = allow([]);
 const ALLOW_G2 = allow([
   ['routes/analysis.ts', 3, 'pending:T4'],
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
-  ['routes/backup.ts', 2, 'pending:T3'],
-  ['routes/book-state.ts', 6, 'pending:T3'],
   ['routes/cast-add-from-roster.ts', 1, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],
@@ -592,7 +590,6 @@ const ALLOW_G2 = allow([
   ['routes/chapter-audio.ts', 2, 'pending:T5'],
   ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
   ['routes/chapter-splice.ts', 1, 'pending:T4'],
-  ['routes/chapters-restructure.ts', 6, 'pending:T3'],
   ['routes/cover.ts', 4, 'pending:T5'],
   ['routes/export.ts', 2, 'pending:T4'],
   ['routes/exports-portable.ts', 2, 'pending:T4 (GET export/portable) + T7 (POST /portable import)'],
@@ -616,8 +613,6 @@ const ALLOW_G2 = allow([
    decides whether they move to peekBook or a read under withBookOp. */
 const ALLOW_G3A = allow([
   ['routes/annotate-emotion.ts', 1, 'pending:T5'],
-  ['routes/backup.ts', 1, 'pending:T3'],
-  ['routes/book-state.ts', 6, 'pending:T3'],
   ['routes/cast-add-from-roster.ts', 2, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],
@@ -633,7 +628,6 @@ const ALLOW_G3A = allow([
   ['routes/chapter-audio.ts', 2, 'pending:T5'],
   ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
   ['routes/chapter-splice.ts', 1, 'pending:T4'],
-  ['routes/chapters-restructure.ts', 1, 'pending:T3'],
   ['routes/cover.ts', 4, 'pending:T5'],
   ['routes/export.ts', 1, 'pending:T4'],
   ['routes/exports-portable.ts', 1, 'pending:T4'],

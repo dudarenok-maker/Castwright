@@ -47,10 +47,16 @@ import {
   BookPartlyDeletedError,
   BookPathTakenError,
   moveBookFolder,
+  peekBook,
   removeBookFolder,
   withBookOp,
   type BookJobKind,
 } from '../workspace/book-op-lock.js';
+import {
+  manuscriptFingerprint,
+  sameFingerprint,
+  type ManuscriptFingerprint,
+} from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   readStateJsonWithRecovery,
@@ -1459,6 +1465,78 @@ async function applyReparse(
   };
 }
 
+/* #3711 — the reparse's slow, write-free span (the manuscript read + parse). It
+   runs BEFORE `book-op`, off a `peekBook` that takes no lock and feeds no write;
+   the commit re-resolves under the lock and re-validates the fingerprint taken
+   here (file + size + mtime), so a manuscript that changed while it was being
+   parsed is refused (409 `manuscript_changed`) rather than committed from a stale
+   parse. One re-peek-and-retry on ENOENT covers a folder that moved between the
+   peek and the read. */
+type ParsedManuscript = Awaited<ReturnType<typeof parseManuscript>>;
+
+async function prepareReparse(
+  bookId: string,
+): Promise<'gone' | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null }> {
+  for (let attempt = 0; ; attempt++) {
+    const peeked = await peekBook(bookId);
+    if (!peeked) return 'gone';
+    const { bookDir, state } = peeked;
+    const fingerprint = await manuscriptFingerprint(bookDir, state.manuscriptFile);
+    const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
+
+    /* Read the original file as a Buffer so the parser dispatcher can route
+       binary formats (PDF, EPUB) the same way the upload route does. The
+       text parsers will utf8-decode internally when format calls for it.
+       Also pass sourcePath so the EPUB parser can read directly from the
+       workspace location — bypasses the %TEMP%-roundtrip that races
+       against AV/OneDrive on Windows ("Invalid/missing file" errors).
+
+       Legacy fallback: pre-fix versions of the import route wrote the
+       extracted *sourceText* to manuscript.epub instead of the original
+       binary. Detect that here by sniffing the magic bytes and route to
+       parseText when the file is actually plain UTF-8 text — avoids
+       crashing those books and still gives the user a fresh chapter
+       split from the persisted text. */
+    const buffer = existsSync(manuscriptPath)
+      ? await readFile(manuscriptPath).catch((err: NodeJS.ErrnoException) => {
+          if (err.code === 'ENOENT') return null; // vanished between the check and the read
+          throw err;
+        })
+      : null;
+    if (!buffer) {
+      if (attempt === 0) continue;
+      return { fingerprint: null, parsed: null };
+    }
+    const looksLikeEpub =
+      buffer.length >= 4 &&
+      buffer[0] === 0x50 &&
+      buffer[1] === 0x4b &&
+      buffer[2] === 0x03 &&
+      buffer[3] === 0x04;
+    const looksLikePdf = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    const claimsBinary =
+      state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
+    const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
+    let parsed: ParsedManuscript;
+    if (isLegacyTextMasqueradingAsBinary) {
+      console.warn(
+        `[book-state] reparse: ${state.manuscriptFile} is plain text on disk (pre-fix import). Routing through parseText.`,
+      );
+      parsed = await parseManuscript({
+        text: buffer.toString('utf8'),
+        fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+      });
+    } else {
+      parsed = await parseManuscript({
+        buffer,
+        fileName: state.manuscriptFile,
+        sourcePath: manuscriptPath,
+      });
+    }
+    return { fingerprint, parsed };
+  }
+}
+
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
    manuscript so chapter detection picks up parser-rule updates without
    forcing the user to delete and re-upload. Destructive in the sense that
@@ -1476,69 +1554,37 @@ async function applyReparse(
    so the library / open-book flow can re-hydrate without a second round-trip. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
   try {
-    /* #3711 task 2 (INTERIM) — the whole handler holds book-op so P1 (a rename
-       queued behind a reparse) lands every write in the new folder. Task 3
-       replaces this single span with the two-span pattern (parse outside the
-       lock, commit inside) -- see docs/features/288-book-op-lock.md. */
+    /* #3711 — two-span: parse off a `peekBook` with no lock held, then commit
+       under the book's `book-op` lock (see `prepareReparse`). */
+    const prep = await prepareReparse(req.params.bookId);
+    if (prep === 'gone') return res.status(404).json({ error: 'Book not found.' });
     const outcome = await withBookOp(req.params.bookId, async (book) => {
-    const { bookDir, state } = book;
+      const { bookDir, state } = book;
 
-    /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
-       deleted or rewritten (applyReparse's state write + Promise.all). */
-    await assertRevisionsResettable(bookDir);
+      /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
+         deleted or rewritten (applyReparse's state write + Promise.all). */
+      await assertRevisionsResettable(bookDir);
 
-    const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
-    if (!existsSync(manuscriptPath)) {
-      return { status: 409, body: { error: `Manuscript file missing on disk: ${state.manuscriptFile}` } };
-    }
+      /* The parse above is only good for the manuscript it was taken from. */
+      if (!sameFingerprint(prep.fingerprint, await manuscriptFingerprint(bookDir, state.manuscriptFile))) {
+        return {
+          status: 409,
+          body: {
+            error: 'The manuscript changed while it was being prepared — retry.',
+            code: 'manuscript_changed',
+          },
+        };
+      }
+      if (!prep.parsed) {
+        return { status: 409, body: { error: `Manuscript file missing on disk: ${state.manuscriptFile}` } };
+      }
 
-    /* Read the original file as a Buffer so the parser dispatcher can route
-       binary formats (PDF, EPUB) the same way the upload route does. The
-       text parsers will utf8-decode internally when format calls for it.
-       Also pass sourcePath so the EPUB parser can read directly from the
-       workspace location — bypasses the %TEMP%-roundtrip that races
-       against AV/OneDrive on Windows ("Invalid/missing file" errors).
-
-       Legacy fallback: pre-fix versions of the import route wrote the
-       extracted *sourceText* to manuscript.epub instead of the original
-       binary. Detect that here by sniffing the magic bytes and route to
-       parseText when the file is actually plain UTF-8 text — avoids
-       crashing those books and still gives the user a fresh chapter
-       split from the persisted text. */
-    const buffer = await readFile(manuscriptPath);
-    const looksLikeEpub =
-      buffer.length >= 4 &&
-      buffer[0] === 0x50 &&
-      buffer[1] === 0x4b &&
-      buffer[2] === 0x03 &&
-      buffer[3] === 0x04;
-    const looksLikePdf = buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-';
-    const claimsBinary =
-      state.manuscriptFile.endsWith('.epub') || state.manuscriptFile.endsWith('.pdf');
-    const isLegacyTextMasqueradingAsBinary = claimsBinary && !looksLikeEpub && !looksLikePdf;
-    let parsed;
-    if (isLegacyTextMasqueradingAsBinary) {
-      console.warn(
-        `[book-state] reparse: ${state.manuscriptFile} is plain text on disk (pre-fix import). Routing through parseText.`,
-      );
-      parsed = await parseManuscript({
-        text: buffer.toString('utf8'),
-        fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+      const payload = await applyReparse(bookDir, state, prep.parsed, {
+        changeLogType: 'reparse',
+        changeLogTitle: 'Re-parsed manuscript',
       });
-    } else {
-      parsed = await parseManuscript({
-        buffer,
-        fileName: state.manuscriptFile,
-        sourcePath: manuscriptPath,
-      });
-    }
-
-    const payload = await applyReparse(bookDir, state, parsed, {
-      changeLogType: 'reparse',
-      changeLogTitle: 'Re-parsed manuscript',
-    });
-    if (!payload) return { status: 404, body: { error: 'Book not found.' } };
-    return { status: 200, body: payload };
+      if (!payload) return { status: 404, body: { error: 'Book not found.' } };
+      return { status: 200, body: payload };
     });
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     res.status(outcome.status).json(outcome.body);
@@ -1567,47 +1613,53 @@ bookStateRouter.post(
     try {
       if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
-
-      /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
-         writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
-      await assertRevisionsResettable(bookDir);
-
+      /* #3711 — the upload is parsed from memory (no disk read, no peek) before
+         the lock; everything that touches the book folder runs under `book-op`,
+         resolved UNDER it, so a rename queued behind this upload lands the new
+         manuscript in the moved folder. */
       const parsed = await parseManuscript({
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
       });
-
       const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
-      const oldFile = state.manuscriptFile;
-
       safeSegment(newFile);
-      state.manuscriptFile = newFile;
+      const upload = req.file.buffer;
 
-      /* #3700 review pass 3 — the upload is written by applyReparse's
-         `beforeWrite`, inside the state-json lock and only once state.json is
-         confirmed present, so a book that was moved or deleted while this
-         request queued gets a 404 with NOTHING written (writing it up front
-         overwrote the moved book's same-name manuscript, or orphaned a
-         different-extension file there). */
-      const payload = await applyReparse(bookDir, state, parsed, {
-        changeLogType: 'replace-manuscript',
-        changeLogTitle: 'Replaced manuscript',
-        beforeWrite: () => writeFile(join(bookDir, newFile), req.file!.buffer),
+      const outcome = await withBookOp(req.params.bookId, async (book) => {
+        const { bookDir } = book;
+
+        /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
+           writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
+        await assertRevisionsResettable(bookDir);
+
+        const oldFile = book.state.manuscriptFile;
+        const state = { ...book.state, manuscriptFile: newFile };
+
+        /* #3700 review pass 3 — the upload is written by applyReparse's
+           `beforeWrite`, inside the state-json lock and only once state.json is
+           confirmed present, so a book that was moved or deleted out of process
+           while this request queued gets a 404 with NOTHING written (writing it
+           up front overwrote the moved book's same-name manuscript, or orphaned
+           a different-extension file there). */
+        const payload = await applyReparse(bookDir, state, parsed, {
+          changeLogType: 'replace-manuscript',
+          changeLogTitle: 'Replaced manuscript',
+          beforeWrite: () => writeFile(join(bookDir, newFile), upload),
+        });
+        if (!payload) {
+          /* The book vanished or moved mid-request: neither the upload nor
+             state.json was written, and state.json still names the OLD file. */
+          return { status: 404, body: { error: 'Book not found.' } };
+        }
+        /* Only now that state.json names the new file is the old one dead. */
+        if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
+          await unlink(join(bookDir, oldFile)).catch(() => {});
+        }
+        return { status: 200, body: payload };
       });
-      if (!payload) {
-        /* The book vanished or moved mid-request: neither the upload nor
-           state.json was written, and state.json still names the OLD file. */
-        return res.status(404).json({ error: 'Book not found.' });
-      }
-      /* Only now that state.json names the new file is the old one dead. */
-      if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
-        await unlink(join(bookDir, oldFile)).catch(() => {});
-      }
-      res.json(payload);
+      if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+      res.status(outcome.status).json(outcome.body);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);
       /* #2260 FINAL ROUND (B2) — replace-manuscript reaches the same
@@ -1654,74 +1706,82 @@ bookStateRouter.post(
       }
       const excluded: boolean = rawExcluded;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3711 — the whole toggle runs under the book's `book-op` lock, resolved
+         UNDER it, so a rename queued behind it lands the audio cleanup and the
+         state write in the moved folder. */
+      const outcome = await withBookOp(req.params.bookId, async (book) => {
+        const { bookDir, state } = book;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return { status: 404, body: { error: 'Chapter not found.' } };
 
-      let current = state.chapters[idx];
-      let updated = { ...current, excluded: excluded ? true : undefined };
+        let current = state.chapters[idx];
+        let updated = { ...current, excluded: excluded ? true : undefined };
 
-      /* Write state.json first so a crash mid-call leaves the user's
-       choice on disk; audio cleanup is best-effort below. #3700 — the toggle
-       is applied to a fresh read inside the state-json lock, not the
-       `located.state` snapshot, so a sibling render's stamp isn't reverted. */
-      const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
-        const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-        if (i === -1) return null;
-        current = fresh.chapters[i];
-        updated = { ...current, excluded: excluded ? true : undefined };
-        return {
-          ...fresh,
-          chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
-          updatedAt: new Date().toISOString(),
-        };
-      });
-      /* #3700 review pass 2 — absent: the book moved/was deleted after we
-         resolved it. Nothing was written, so answer 404 and touch neither the
-         live ManuscriptRecord nor the audio below. */
-      if (!persisted) return res.status(404).json({ error: 'Book not found.' });
+        /* Write state.json first so a crash mid-call leaves the user's
+         choice on disk; audio cleanup is best-effort below. #3700 — the toggle
+         is applied to a fresh read inside the state-json lock, not the
+         resolve-time snapshot, so a sibling render's stamp isn't reverted. */
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
+          const i = fresh.chapters.findIndex((c) => c.id === chapterId);
+          if (i === -1) return null;
+          current = fresh.chapters[i];
+          updated = { ...current, excluded: excluded ? true : undefined };
+          return {
+            ...fresh,
+            chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        /* #3700 review pass 2 — absent: the book moved/was deleted out of process
+           after we resolved it. Nothing was written, so answer 404 and touch
+           neither the live ManuscriptRecord nor the audio below. */
+        if (!persisted) return { status: 404, body: { error: 'Book not found.' } };
 
-      /* Propagate to the live ManuscriptRecord if it's loaded. The
-       analysis route reads chapterHints directly from this; without
-       the propagation we'd have to wait for a server restart or a
-       book-state GET to pick up the change. */
-      if (state.manuscriptId) {
-        const rec = getManuscript(state.manuscriptId);
-        if (rec) {
-          rec.chapterHints = rec.chapterHints.map((h) =>
-            h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-          );
-        }
-      }
-
-      /* When newly excluded, delete the chapter's audio + segments so the
-       library / chapter list don't keep counting it as "done". The user
-       can re-include later; audio regenerates from the (still-cached)
-       sentence attribution. */
-      if (excluded) {
-        const audioRoot = audioDir(bookDir);
-        const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-        const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
-          join(audioRoot, `${current.slug}.${ext}`),
-        );
-        for (const p of [segmentsPath, ...audioCandidates]) {
-          if (existsSync(p)) {
-            await rm(p, { force: true }).catch(() => {
-              /* best effort */
-            });
+        /* Propagate to the live ManuscriptRecord if it's loaded. The
+         analysis route reads chapterHints directly from this; without
+         the propagation we'd have to wait for a server restart or a
+         book-state GET to pick up the change. */
+        if (state.manuscriptId) {
+          const rec = getManuscript(state.manuscriptId);
+          if (rec) {
+            rec.chapterHints = rec.chapterHints.map((h) =>
+              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+            );
           }
         }
-      }
 
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        excluded: !!updated.excluded,
+        /* When newly excluded, delete the chapter's audio + segments so the
+         library / chapter list don't keep counting it as "done". The user
+         can re-include later; audio regenerates from the (still-cached)
+         sentence attribution. */
+        if (excluded) {
+          const audioRoot = audioDir(bookDir);
+          const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+          const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
+            join(audioRoot, `${current.slug}.${ext}`),
+          );
+          for (const p of [segmentsPath, ...audioCandidates]) {
+            if (existsSync(p)) {
+              await rm(p, { force: true }).catch(() => {
+                /* best effort */
+              });
+            }
+          }
+        }
+
+        return {
+          status: 200,
+          body: {
+            id: updated.id,
+            title: updated.title,
+            slug: updated.slug,
+            excluded: !!updated.excluded,
+          },
+        };
       });
+      if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+      res.status(outcome.status).json(outcome.body);
     } catch (e) {
       console.error('[book-state] exclude toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
@@ -1754,34 +1814,40 @@ bookStateRouter.post(
       }
       const held: boolean = rawHeld;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3711 — under the book's `book-op` lock, resolved UNDER it. */
+      const outcome = await withBookOp(req.params.bookId, async (book) => {
+        const { bookDir, state } = book;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return { status: 404, body: { error: 'Chapter not found.' } };
 
-      let updated = { ...state.chapters[idx], held: held ? true : undefined };
+        let updated = { ...state.chapters[idx], held: held ? true : undefined };
 
-      /* #3700 — applied to a fresh read inside the state-json lock. */
-      const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
-        const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-        if (i === -1) return null;
-        updated = { ...fresh.chapters[i], held: held ? true : undefined };
+        /* #3700 — applied to a fresh read inside the state-json lock. */
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
+          const i = fresh.chapters.findIndex((c) => c.id === chapterId);
+          if (i === -1) return null;
+          updated = { ...fresh.chapters[i], held: held ? true : undefined };
+          return {
+            ...fresh,
+            chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        if (!persisted) return { status: 404, body: { error: 'Book not found.' } };
+
         return {
-          ...fresh,
-          chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
-          updatedAt: new Date().toISOString(),
+          status: 200,
+          body: {
+            id: updated.id,
+            title: updated.title,
+            slug: updated.slug,
+            held: !!updated.held,
+          },
         };
       });
-      if (!persisted) return res.status(404).json({ error: 'Book not found.' });
-
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        held: !!updated.held,
-      });
+      if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+      res.status(outcome.status).json(outcome.body);
     } catch (e) {
       console.error('[book-state] held toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });
@@ -1802,22 +1868,27 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
        that is already gone is an idempotent 204. */
     const outcome = await withBookOp(req.params.bookId, async (book) => {
       let partly: BookPartlyDeletedError | null = null;
+      let removed: 'removed' | 'gone' = 'removed';
       try {
-        await removeBookFolder(book);
+        removed = await removeBookFolder(book);
       } catch (err) {
         /* The book already left the library (state.json is gone): still do the
            cleanup below, then answer 409 so the user is told what was left. */
         if (!(err instanceof BookPartlyDeletedError)) throw err;
         partly = err;
       }
-      return { state: book.state, partly };
+      return { state: book.state, partly, removed };
     });
     if (outcome === BOOK_GONE) {
       res.status(204).end();
       return;
     }
     const { state } = outcome;
-    if (state?.manuscriptId) {
+    /* `'gone'` means the book was already nowhere when the removal ran (moved or
+       deleted out of process while this queued): `state` is then a stale
+       snapshot, and its manuscript id may now belong to a book that still
+       exists. Only a removal this request performed may clear the cache. */
+    if (outcome.removed === 'removed' && state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
     }
     /* Plan 102 — prune any queue entries that target the just-deleted book.
@@ -1964,8 +2035,10 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
 
 bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — the whole read-modify-write runs under the book's `book-op` lock,
+       resolved UNDER it, so a rename queued behind it lands the bookmark in the
+       moved folder. The response is sent from inside the span (synchronous). */
+    const gone = await withBookOp(req.params.bookId, async (located) => {
     const body = req.body as
       | Partial<{
           chapterId: unknown;
@@ -2066,6 +2139,8 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
     };
     await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
     res.json(record);
+    });
+    if (gone === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
   } catch (e) {
     console.error('[book-state] PUT listen-progress failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write listen-progress.' });
@@ -2078,8 +2153,8 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
    it (cheap reversibility). The resume position is carried forward untouched. */
 bookStateRouter.post('/:bookId/shelf-status', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — under the book's `book-op` lock, resolved UNDER it. */
+    const gone = await withBookOp(req.params.bookId, async (located) => {
     const body = req.body as Partial<{ finished: unknown; hidden: unknown }> | undefined;
     const hasFinished = !!body && typeof body.finished === 'boolean';
     const hasHidden = !!body && typeof body.hidden === 'boolean';
@@ -2111,6 +2186,8 @@ bookStateRouter.post('/:bookId/shelf-status', async (req: Request, res: Response
     }
     await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
     res.json(record);
+    });
+    if (gone === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
   } catch (e) {
     console.error('[book-state] POST shelf-status failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write shelf-status.' });
@@ -2121,8 +2198,9 @@ bookStateRouter.post('/:bookId/shelf-status', async (req: Request, res: Response
    Read-modify-write under a per-book key lock; slots upsert via max(). */
 bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — under the book's `book-op` lock, resolved UNDER it; the
+       `listen-stats:` key nests inside it. */
+    const gone = await withBookOp(req.params.bookId, async (located) => {
     const reason = validateStatsBody(req.body, Date.now());
     if (reason) return res.status(400).json({ error: reason });
     const { sessionId, days } = req.body as StatsPutBody;
@@ -2134,6 +2212,8 @@ bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response)
       return next;
     });
     res.json(written);
+    });
+    if (gone === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
   } catch (e) {
     console.error('[book-state] PUT listen-stats failed', e);
     /* #2260 FINAL ROUND (B2) — the only `listen-stats:` key space in the app,
