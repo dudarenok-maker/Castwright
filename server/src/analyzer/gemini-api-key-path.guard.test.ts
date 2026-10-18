@@ -395,12 +395,13 @@ describe('Gemini API key path guard', () => {
     elsewhere: vocabulary([...underAdmin, ...moved]),
   };
 
-  it('reads the five moved section labels from the real MODEL_SETTINGS_SECTIONS export', () => {
+  it('reads the six moved section labels from the real MODEL_SETTINGS_SECTIONS export', () => {
     expect(sectionLabels).toEqual([
       'Defaults for new books',
       'Two-model analyzer split (advanced)',
       'Voice engine',
       'Server configuration',
+      'Analyzer endpoints (OpenAI-compatible)',
       'Install / update analyzer (Ollama)',
     ]);
   });
@@ -418,7 +419,6 @@ describe('Gemini API key path guard', () => {
       'Generation workers',
       'Voice engine URL',
       'Analyzer engine',
-      'Cloud fallback',
       'Ollama URL',
       'Local analyzer',
       'Analyzer models',
