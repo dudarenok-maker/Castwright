@@ -576,49 +576,29 @@ const ALLOW_G2 = allow([
   ['routes/analysis.ts', 1, 'no-book-write'], // POST /:id/analysis/pause: in-memory abort only
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
-  ['routes/cast-link-prior.ts', 1, 'pending:T6'],
-  ['routes/cast-not-linked-to.ts', 2, 'pending:T6'],
-  ['routes/cast-series-patch.ts', 1, 'pending:T6'],
-  ['routes/cast-tier.ts', 1, 'pending:T6'],
+  ['routes/cast-tier.ts', 1, 'cross-book-walker'], // walker: book-op per book inside forEachMatchingCastCharacter
   ['routes/exports-portable.ts', 1, 'pending:T7 (POST /portable import)'],
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
-  ['routes/library-cast-override.ts', 1, 'pending:T6'],
   ['routes/script-review.ts', 2, 'no-book-write'], // cancel (in-memory abort) + attach (re-attach only)
   ['routes/share.ts', 1, 'no-book-write'], // POST /:bookId/share: writes only the workspace-level share-links.json
   ['routes/single-design.ts', 1, 'no-book-write'], // POST design-single/subscribe: re-attach only
-  ['routes/voice-library.ts', 3, 'pending:T6'],
+  ['routes/voice-library.ts', 1, 'cross-book-walker'], // DELETE /:voiceUuid: library-voice -> per-book book-op in clearLibraryVoiceReferences
   ['routes/voice-match.ts', 1, 'no-book-write'],
-  ['routes/voice-override-linked.ts', 1, 'pending:T6'],
-  ['routes/voices.ts', 1, 'pending:T6'],
+  ['routes/voices.ts', 1, 'cross-book-walker'], // PUT /:voiceId/override: walker
 ]);
 /* G3a: file -> a book resolved before the lock in a guarded handler. The
    no-book-write handlers (annotate-emotion, instruct-annotation, share) resolve
    through the lock-free \`peekBook\`, which G3a permits. */
-const ALLOW_G3A = allow([
-  ['routes/cast-link-prior.ts', 2, 'pending:T6'],
-  ['routes/cast-not-linked-to.ts', 4, 'pending:T6'],
-  ['routes/cast-series-patch.ts', 2, 'pending:T6'],
-  ['routes/cast-tier.ts', 1, 'pending:T6'],
-  ['routes/library-cast-override.ts', 2, 'pending:T6'],
-  ['routes/voice-library.ts', 2, 'pending:T6'],
-  ['routes/voice-override-linked.ts', 2, 'pending:T6'],
-]);
+const ALLOW_G3A = allow([]);
 /* G3b: file -> findBookByBookId( inside a loop body. */
-const ALLOW_G3B = allow([
-  ['routes/cast-series-patch.ts', 1, 'pending:T6'],
-  ['routes/voice-override-linked.ts', 1, 'pending:T6'],
-]);
+const ALLOW_G3B = allow([]);
 /* G4a: file -> withCastLocks( outside withBookOps(. */
-const ALLOW_G4A = allow([
-  ['routes/cast-link-prior.ts', 1, 'pending:T6'],
-  ['routes/cast-not-linked-to.ts', 2, 'pending:T6'],
-  ['routes/library-cast-override.ts', 1, 'pending:T6'],
-]);
+const ALLOW_G4A = allow([]);
 /* G4b: file -> withCastLock( outside withBookOp(, on top of PERMANENT_G4B. */
 const ALLOW_G4B = allow([
-  ['routes/voices.ts', 1, 'pending:T6'],
-  ['workspace/voice-library-usage.ts', 1, 'pending:T6'],
+  ['routes/voices.ts', 1, 'cross-book-walker'], // the bookId-less book: cast lock only, no book-op
+  ['workspace/voice-library-usage.ts', 1, 'cross-book-walker'], // same
 ]);
 /* G4b permanent exemption: the `onlyBookDir` branch (the caller holds book-op
    for that book, or is that book's registered job). Added to the allowlist count. */

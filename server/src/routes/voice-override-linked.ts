@@ -30,7 +30,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -96,69 +96,16 @@ voiceOverrideLinkedRouter.post(
         .json({ error: 'Body must include `override: { engine, name }` or `override: null`.' });
     }
 
-    const sourceLocated = await findBookByBookId(bookId);
-    if (!sourceLocated) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-
-    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-    if (!sourceCast?.characters?.length) {
-      return res
-        .status(409)
-        .json({ error: 'Source book has no cast on disk yet — run analysis first.' });
-    }
-    const source = sourceCast.characters.find((c) => c.id === characterId);
-    if (!source) {
-      return res
-        .status(404)
-        .json({ error: `Character "${characterId}" not found in book "${bookId}".` });
-    }
-
-    const canonicalVoiceId = source.voiceId ?? source.id;
-    const sourceTokens = tokensFor(source);
-
-    /* Decide whether a candidate (in `candBookId`) is in the source's group. */
-    const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
-      if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
-      if (BUCKET_IDS.has(cand.id)) return false;
-      if (!intersects(tokensFor(cand), sourceTokens)) return false;
-      if (notLinkedToPair(source, candBookId, cand.id)) return false;
-      if (notLinkedToPair(cand, bookId, source.id)) return false;
-      return true;
-    };
-
-    /* Collect (bookDir, bookTitle, characterIds[]) to write — one entry per book. */
-    const writes: Array<{ bookDir: string; bookId: string; bookTitle: string; ids: string[] }> = [];
-
-    /* Source book: the source char + any in-group sibling rows in the same book. */
-    const sourceIds = sourceCast.characters.filter((c) => inGroup(c, bookId)).map((c) => c.id);
-    if (!sourceIds.includes(source.id)) sourceIds.push(source.id);
-    writes.push({
-      bookDir: sourceLocated.bookDir,
-      bookId,
-      bookTitle: sourceLocated.state.title,
-      ids: sourceIds,
-    });
-
-    /* Series-mates (confirmed, same author+series, source book excluded). */
-    const siblings = await scanSeriesFullCharactersForBookId(bookId);
-    const byBook = new Map<string, { bookTitle: string; ids: string[] }>();
-    for (const rec of siblings) {
-      const cand = rec.character as PersistedCharacter;
-      if (!inGroup(cand, rec.bookId)) continue;
-      const entry = byBook.get(rec.bookId) ?? { bookTitle: rec.bookTitle, ids: [] };
-      if (!entry.ids.includes(cand.id)) entry.ids.push(cand.id);
-      byBook.set(rec.bookId, entry);
-    }
-    for (const [siblingBookId, { bookTitle, ids }] of byBook) {
-      const located = await findBookByBookId(siblingBookId);
-      if (!located) continue;
-      writes.push({ bookDir: located.bookDir, bookId: siblingBookId, bookTitle, ids });
-    }
-
     const updated: Array<{ bookId: string; bookTitle: string; characterId: string }> = [];
     const failed: Array<{ bookId: string; bookTitle: string; error: string }> = [];
-    for (const w of writes) {
+    const writeBook = async (
+      bookDir: string,
+      w: { bookId: string; bookTitle: string; ids: string[] },
+      canonicalVoiceId: string,
+      canonicalVoiceUuid: string | undefined,
+    ): Promise<void> => {
       try {
-        const wrote = await applyToBook(w.bookDir, w.ids, canonicalVoiceId, source.voiceUuid, override);
+        const wrote = await applyToBook(bookDir, w.ids, canonicalVoiceId, canonicalVoiceUuid, override);
         for (const id of wrote) {
           updated.push({ bookId: w.bookId, bookTitle: w.bookTitle, characterId: id });
         }
@@ -170,6 +117,98 @@ voiceOverrideLinkedRouter.post(
         failed.push({
           bookId: w.bookId,
           bookTitle: w.bookTitle,
+          error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
+        });
+      }
+    };
+
+    /* #3711 -- one book-op per book, never nested: the source's span resolves it,
+       reads its row, discovers the group and writes the source; each series-mate
+       is then resolved AND written inside its OWN step (never a resolve in the
+       loop body), so a rename of any one book lands before or after its write. */
+    const sourceStep = await withBookOp(bookId, async (sourceLocated) => {
+      const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+      if (!sourceCast?.characters?.length) {
+        return res
+          .status(409)
+          .json({ error: 'Source book has no cast on disk yet — run analysis first.' });
+      }
+      const source = sourceCast.characters.find((c) => c.id === characterId);
+      if (!source) {
+        return res
+          .status(404)
+          .json({ error: `Character "${characterId}" not found in book "${bookId}".` });
+      }
+
+      const canonicalVoiceId = source.voiceId ?? source.id;
+      const sourceTokens = tokensFor(source);
+
+      /* Decide whether a candidate (in `candBookId`) is in the source's group. */
+      const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
+        if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
+        if (BUCKET_IDS.has(cand.id)) return false;
+        if (!intersects(tokensFor(cand), sourceTokens)) return false;
+        if (notLinkedToPair(source, candBookId, cand.id)) return false;
+        if (notLinkedToPair(cand, bookId, source.id)) return false;
+        return true;
+      };
+
+      /* Source book: the source char + any in-group sibling rows in the same book. */
+      const sourceIds = sourceCast.characters.filter((c) => inGroup(c, bookId)).map((c) => c.id);
+      if (!sourceIds.includes(source.id)) sourceIds.push(source.id);
+
+      /* Series-mates (confirmed, same author+series, source book excluded). */
+      const siblings = await scanSeriesFullCharactersForBookId(bookId);
+      const byBook = new Map<string, { bookTitle: string; ids: string[] }>();
+      for (const rec of siblings) {
+        const cand = rec.character as PersistedCharacter;
+        if (!inGroup(cand, rec.bookId)) continue;
+        const entry = byBook.get(rec.bookId) ?? { bookTitle: rec.bookTitle, ids: [] };
+        if (!entry.ids.includes(cand.id)) entry.ids.push(cand.id);
+        byBook.set(rec.bookId, entry);
+      }
+
+      await writeBook(
+        sourceLocated.bookDir,
+        { bookId, bookTitle: sourceLocated.state.title, ids: sourceIds },
+        canonicalVoiceId,
+        source.voiceUuid,
+      );
+      return {
+        canonicalVoiceId,
+        canonicalVoiceUuid: source.voiceUuid,
+        byBook,
+        series: { author: sourceLocated.state.author, series: sourceLocated.state.series },
+      };
+    });
+    if (sourceStep === BOOK_GONE) return res.status(404).json({ error: `Book "${bookId}" not found.` });
+    if (!('byBook' in sourceStep)) return sourceStep;
+    const { canonicalVoiceId, canonicalVoiceUuid, byBook, series } = sourceStep;
+
+    for (const [siblingBookId, { bookTitle, ids }] of byBook) {
+      try {
+      await withBookOp(siblingBookId, async (sibling) => {
+        /* Re-apply the scope on the FRESH state: a book renamed out of the
+           series since the scan is skipped. (BOOK_GONE is skipped, as before.) */
+        if (
+          sibling.state.isStandalone === true ||
+          sibling.state.author !== series.author ||
+          sibling.state.series !== series.series
+        ) {
+          return;
+        }
+        await writeBook(
+          sibling.bookDir,
+          { bookId: siblingBookId, bookTitle, ids },
+          canonicalVoiceId,
+          canonicalVoiceUuid,
+        );
+      });
+      } catch (err) {
+        /* book-op acquisition timeout (curated): a per-book `failed` entry too. */
+        failed.push({
+          bookId: siblingBookId,
+          bookTitle,
           error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
         });
       }

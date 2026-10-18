@@ -30,7 +30,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { z } from 'zod';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -102,79 +102,89 @@ castSeriesPatchRouter.post(
       return res.status(400).json({ error: 'Patch body must include at least one field.' });
     }
 
-    const sourceLocated = await findBookByBookId(bookId);
-    if (!sourceLocated) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-
-    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-    if (!sourceCast?.characters?.length) {
-      return res
-        .status(409)
-        .json({ error: 'Source book has no cast on disk yet — run analysis before editing.' });
-    }
-    const sourceChar = sourceCast.characters.find((c) => c.id === characterId);
-    if (!sourceChar) {
-      return res
-        .status(404)
-        .json({ error: `Character "${characterId}" not found in book "${bookId}".` });
-    }
-
-    /* Collect every (book, character) row we'll write to. Always includes
-       the source; for series books, anything whose name/alias collides
-       with the source character's name/aliases under the plan-94 dedup
-       rule. Standalones produce an empty siblings list — the source-only
-       write still happens. */
-    const targets: Array<{
-      bookId: string;
-      bookTitle: string;
-      bookDir: string;
-      characterId: string;
-    }> = [
-      {
-        bookId,
-        bookTitle: sourceLocated.state.title,
-        bookDir: sourceLocated.bookDir,
-        characterId,
-      },
-    ];
-
-    const siblings = await scanSeriesCharactersForBookId(bookId);
-    if (siblings.length > 0) {
-      const sourceTokens = tokensFor(sourceChar);
-      /* Group siblings by bookId so we make at most one read+write per
-         book even if a book has multiple cast rows colliding with the
-         source (unlikely but technically possible). */
-      const byBook = new Map<string, { bookTitle: string; characters: LibraryCastCharacter[] }>();
-      for (const rec of siblings) {
-        const entry = byBook.get(rec.bookId) ?? {
-          bookTitle: rec.bookTitle,
-          characters: [],
-        };
-        entry.characters.push(rec.character);
-        byBook.set(rec.bookId, entry);
-      }
-      for (const [otherBookId, { bookTitle, characters }] of byBook) {
-        const matching = characters.find((c) => intersects(tokensFor(c), sourceTokens));
-        if (!matching) continue;
-        const otherLocated = await findBookByBookId(otherBookId);
-        if (!otherLocated) continue;
-        targets.push({
-          bookId: otherBookId,
-          bookTitle,
-          bookDir: otherLocated.bookDir,
-          characterId: matching.id,
-        });
-      }
-    }
-
     const updated: UpdatedEntry[] = [];
     const failed: FailedEntry[] = [];
-    for (const t of targets) {
+    const patchOne = async (
+      bookDir: string,
+      t: { bookId: string; bookTitle: string; characterId: string },
+    ): Promise<void> => {
+      await applyPatchToCastFile(bookDir, t.characterId, patch);
+      updated.push({ bookId: t.bookId, bookTitle: t.bookTitle, characterId: t.characterId });
+    };
+
+    /* #3711 -- one book-op per book, never nested: the source's span resolves it,
+       reads its row, discovers the siblings and writes the source; each sibling
+       is then resolved AND written inside its OWN step (never a resolve in the
+       loop body), so a rename of any one book lands before or after its write,
+       never between. */
+    const sourceStep = await withBookOp(bookId, async (source) => {
+      const sourceCast = await readJson<CastFile>(castJsonPath(source.bookDir));
+      if (!sourceCast?.characters?.length) {
+        return res
+          .status(409)
+          .json({ error: 'Source book has no cast on disk yet — run analysis before editing.' });
+      }
+      const sourceChar = sourceCast.characters.find((c) => c.id === characterId);
+      if (!sourceChar) {
+        return res
+          .status(404)
+          .json({ error: `Character "${characterId}" not found in book "${bookId}".` });
+      }
+
+      /* Collect every (book, character) row we'll write to. Always includes
+         the source; for series books, anything whose name/alias collides
+         with the source character's name/aliases under the plan-94 dedup
+         rule. Standalones produce an empty siblings list — the source-only
+         write still happens. */
+      const siblingTargets: Array<{ bookId: string; bookTitle: string; characterId: string }> = [];
+      const siblings = await scanSeriesCharactersForBookId(bookId);
+      if (siblings.length > 0) {
+        const sourceTokens = tokensFor(sourceChar);
+        /* Group siblings by bookId so we make at most one read+write per
+           book even if a book has multiple cast rows colliding with the
+           source (unlikely but technically possible). */
+        const byBook = new Map<string, { bookTitle: string; characters: LibraryCastCharacter[] }>();
+        for (const rec of siblings) {
+          const entry = byBook.get(rec.bookId) ?? {
+            bookTitle: rec.bookTitle,
+            characters: [],
+          };
+          entry.characters.push(rec.character);
+          byBook.set(rec.bookId, entry);
+        }
+        for (const [otherBookId, { bookTitle, characters }] of byBook) {
+          const matching = characters.find((c) => intersects(tokensFor(c), sourceTokens));
+          if (!matching) continue;
+          siblingTargets.push({ bookId: otherBookId, bookTitle, characterId: matching.id });
+        }
+      }
+
       try {
-        await applyPatchToCastFile(t.bookDir, t.characterId, patch);
-        updated.push({
-          bookId: t.bookId,
-          bookTitle: t.bookTitle,
-          characterId: t.characterId,
+        await patchOne(source.bookDir, { bookId, bookTitle: source.state.title, characterId });
+      } catch (err) {
+        /* Same per-book `failed` shape as a sibling (see the loop below). */
+        const message = err instanceof Error ? err.message : String(err);
+        failed.push({ bookId, bookTitle: source.state.title, error: itemFailureReason(err, message) });
+      }
+      return { siblingTargets, series: { author: source.state.author, series: source.state.series } };
+    });
+    if (sourceStep === BOOK_GONE) return res.status(404).json({ error: `Book "${bookId}" not found.` });
+    if (!('siblingTargets' in sourceStep)) return sourceStep;
+
+    for (const t of sourceStep.siblingTargets) {
+      try {
+        /* BOOK_GONE (deleted since the scan) is skipped, as before. */
+        await withBookOp(t.bookId, async (sibling) => {
+          /* Re-apply the scope on the FRESH state: a sibling renamed out of the
+             series since the scan is skipped. */
+          if (
+            sibling.state.isStandalone === true ||
+            sibling.state.author !== sourceStep.series.author ||
+            sibling.state.series !== sourceStep.series.series
+          ) {
+            return;
+          }
+          await patchOne(sibling.bookDir, t);
         });
       } catch (err) {
         /* #2292 (owner decision) — `applyPatchToCastFile` runs inside that

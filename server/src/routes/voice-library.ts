@@ -66,6 +66,7 @@ import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user
 import { findBookByBookId, bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
@@ -1663,10 +1664,11 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
       }
 
-      const located = await findBookByBookId(bookId);
-      if (!located) {
-        return res.status(404).json({ error: `No book "${bookId}".` });
-      }
+      /* #3711 -- lock order design -> library-voice -> book-op -> cast: the
+         target book's book-op is taken INSIDE the library-voice lock, and the
+         book is resolved under it, so a rename queued behind this assign lands
+         after the cast.json write. */
+      const assignOutcome = await withBookOp(bookId, async (located) => {
 
       /* #1981 — hoisted out of the cast.json read-modify-write window
          (moved up from just above the `nextCharacters` build, where it used
@@ -1975,6 +1977,9 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         const warning = clonedAdvisory ?? languageWarning;
         return res.status(200).json({ updated: 1, written, ...(warning ? { warning } : {}) });
       });
+      });
+      if (assignOutcome === BOOK_GONE) return res.status(404).json({ error: `No book "${bookId}".` });
+      return assignOutcome;
     });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
@@ -2046,17 +2051,15 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
       return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) {
-      return res.status(404).json({ error: `No book "${bookId}".` });
-    }
-
+    /* #3711 -- book-op outermost (this route takes no library-voice lock), so a
+       rename queued behind the unassign lands after the cast.json write. */
+    const unassignOutcome = await withBookOp(bookId, async (located) => {
     /* #1981 — the read is inside the lock; `charIndex`/`cleared` and the
        write are all decisions derived from it. No `withLibraryVoiceLock`
        here — this route's own header comment already explains why: no
        consent/readiness/provenance gate, no `readEntry` at all, so there is
        no library-voice-scoped state to guard, only the cast.json RMW. */
-    await withCastLock(located.bookDir, async () => {
+    return withCastLock(located.bookDir, async () => {
       const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
       const characters = cast?.characters ?? [];
       const charIndex = characters.findIndex((c) => c.id === characterId);
@@ -2087,6 +2090,9 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
 
       return res.status(200).json({ cleared });
     });
+    });
+    if (unassignOutcome === BOOK_GONE) return res.status(404).json({ error: `No book "${bookId}".` });
+    return unassignOutcome;
   } catch (e) {
     console.error('[voice-library] unassign failed', e);
     /* #2260 FINAL ROUND (B2) — the third of this file's three lock-taking

@@ -14,7 +14,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { peekBook } from '../workspace/book-op-lock.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { applyTierToCastFiles } from './voices.js';
 
@@ -31,7 +31,9 @@ castTierRouter.post('/:bookId/cast/tier', async (req: Request, res: Response) =>
     return res.status(400).json({ error: 'ttsModelKey must be "qwen3-tts-1.7b" or null' });
   }
 
-  const located = await findBookByBookId(bookId);
+  /* #3711 -- a cross-book walker: it takes book-op PER BOOK inside the walk, so
+     this handler holds none and its resolve is the lock-free, write-free peek. */
+  const located = await peekBook(bookId);
   if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
 
   const seriesInfo = await findAuthorSeriesForBookId(bookId);

@@ -370,8 +370,13 @@ describe('per-chapter no-progress watchdog', () => {
     await sleep(1200);
     expect(bookJobKinds(bookId)).toContain('render'); // held: the child has not settled
     openGate();
-    await run.catch(() => undefined); // the route's un-caught `registered.done` rejection tears the socket down
+    const body = await run;
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
+    /* The callback threw: the stream still gets a curated terminal frame (never the raw
+       message) instead of the socket being torn down by an unhandled `registered.done`. */
+    expect(body).toContain('"type":"chapter_failed"');
+    expect(body).toContain('"type":"idle"');
+    expect(body).not.toContain('exploded');
   }, 15_000);
 });
 

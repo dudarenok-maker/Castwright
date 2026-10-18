@@ -2454,7 +2454,22 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     send({ type: 'idle' });
     return res.end();
   }
-  await registered.done;
+  try {
+    await registered.done;
+  } catch (e) {
+    /* The render callback threw (the registration itself succeeded). Log the raw error;
+       the client gets the same curated terminal frame as a registration failure, never
+       the raw message, and only if the stream is not already ended. */
+    console.error('[generation] render job failed', e);
+    if (!res.writableEnded) {
+      send({
+        type: 'chapter_failed',
+        errorReason: isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the render.',
+      });
+      send({ type: 'idle' });
+      res.end();
+    }
+  }
 });
 
 /* POST /api/books/:bookId/generation/pause — explicit pause signal.

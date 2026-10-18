@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { withCastLock } from './cast-lock.js';
+import { withBookOp } from './book-op-lock.js';
 import type { BookStateJson } from './scan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
@@ -108,31 +109,58 @@ export async function scanLibraryVoiceUsage(voiceUuid: string): Promise<LibraryV
     locking) still holds because nothing else in this call chain also takes
     a cast lock. */
 export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<void> {
-  for await (const { bookDir } of walkConfirmedCasts()) {
-    await withCastLock(bookDir, async () => {
-      const cast = await readJson<CastJson>(castJsonPath(bookDir));
-      if (!cast) return;
+  /* The per-book read-through-write, under that book's cast lock. Its caller holds
+     the book's book-op (a book with an id) or nothing (one without). */
+  const clearBook = (bookDir: string): Promise<void> =>
+    withCastLock(bookDir, async () => {
+    const cast = await readJson<CastJson>(castJsonPath(bookDir));
+    if (!cast) return;
 
-      let dirty = false;
-      const characters = (cast.characters ?? []).map((c) => {
-        const overrides = c.overrideTtsVoices;
-        if (!overrides) return c;
-        const next = { ...overrides };
-        let changed = false;
-        for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
-          if (overrides[engine]?.libraryUuid === voiceUuid) {
-            delete next[engine];
-            changed = true;
-          }
+    let dirty = false;
+    const characters = (cast.characters ?? []).map((c) => {
+      const overrides = c.overrideTtsVoices;
+      if (!overrides) return c;
+      const next = { ...overrides };
+      let changed = false;
+      for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
+        if (overrides[engine]?.libraryUuid === voiceUuid) {
+          delete next[engine];
+          changed = true;
         }
-        if (!changed) return c;
-        dirty = true;
-        return { ...c, overrideTtsVoices: next };
-      });
-
-      if (dirty) {
-        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
       }
+      if (!changed) return c;
+      dirty = true;
+      return { ...c, overrideTtsVoices: next };
     });
+
+    if (dirty) {
+      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
+    }
+    });
+
+  /* #3711 -- the caller (DELETE /:voiceUuid) holds the library-voice lock, so
+     the lock order is library-voice -> book-op -> cast, taken PER BOOK, one
+     book-op at a time (never nested). The book is resolved under its book-op
+     and the scope (still a confirmed cast) re-checked on the fresh state, so a
+     book deleted since the walk saw it is skipped; a rename queued behind this
+     write lands after it. */
+  const seen = new Set<string>();
+  for await (const { bookDir, state } of walkConfirmedCasts()) {
+    if (!state.bookId) {
+      /* No bookId: the resolver can never match this book, so no route can move
+         it -- it still gets the write, under its cast lock alone. */
+      await clearBook(bookDir);
+      continue;
+    }
+    if (seen.has(state.bookId)) continue;
+    seen.add(state.bookId);
+    await withBookOp(
+      state.bookId,
+      async (b) => {
+        if (!b.state.castConfirmed) return;
+        await clearBook(b.bookDir);
+      },
+      { hintDir: bookDir },
+    );
   }
 }

@@ -39,6 +39,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
@@ -900,6 +901,9 @@ export async function forEachMatchingCastCharacter(
     });
   }
   let updated = 0;
+  /* #3711 -- books already handled, by bookId: a sibling renamed INTO a directory
+     the walk has yet to reach would otherwise be visited a second time. */
+  const seen = new Set<string>();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -911,8 +915,11 @@ export async function forEachMatchingCastCharacter(
           if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
             continue;
         }
-        updated += await withCastLock(bookDir, async () => {
-          const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        /* The per-book cast.json read-through-write, under that book's cast lock. Its
+           caller holds the book's book-op (a book with an id) or nothing (one without). */
+        const writeBook = (dir: string): Promise<number> =>
+          withCastLock(dir, async () => {
+          const cast = await readJson<CastJson>(castJsonPath(dir));
           if (!cast?.characters?.length) return 0;
           let bookUpdated = 0;
           let dirty = false;
@@ -928,10 +935,37 @@ export async function forEachMatchingCastCharacter(
             if (next !== original) bookUpdated += 1;
           }
           if (dirty) {
-            await writeJsonAtomic(castJsonPath(bookDir), cast);
+            await writeJsonAtomic(castJsonPath(dir), cast);
           }
           return bookUpdated;
-        });
+          });
+        if (!state.bookId) {
+          /* A book whose state.json lacks a bookId can never be matched by the
+             resolver, so no route can move it: it still receives the write, under
+             its cast lock alone (#3711, no book-op to take). */
+          updated += await writeBook(bookDir);
+          continue;
+        }
+        if (seen.has(state.bookId)) continue;
+        seen.add(state.bookId);
+        /* The book's write runs under ITS OWN book-op (one at a time, never
+           nested), resolved on the fresh state: the scan above was lock-free, so
+           the scope filter is re-applied here and a sibling renamed out of the
+           series (or deleted) since the walk saw it is skipped. */
+        const bookUpdated = await withBookOp(
+          state.bookId,
+          async (b) => {
+            if (!b.state.castConfirmed) return 0;
+            if (seriesFilter) {
+              if (b.state.isStandalone === true) return 0;
+              if (b.state.author !== seriesFilter.author || b.state.series !== seriesFilter.series)
+                return 0;
+            }
+            return writeBook(b.bookDir);
+          },
+          { hintDir: bookDir },
+        );
+        if (bookUpdated !== BOOK_GONE) updated += bookUpdated;
       }
     }
   }

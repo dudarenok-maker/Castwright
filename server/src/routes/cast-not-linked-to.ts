@@ -17,7 +17,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook, withBookOps } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
@@ -62,12 +62,11 @@ castNotLinkedToRouter.post(
       });
     }
 
-    const sourceLocated = await findBookByBookId(sourceBookId);
-    if (!sourceLocated)
-      return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
-    const otherLocated = await findBookByBookId(otherBookId);
-    if (!otherLocated)
-      return res.status(404).json({ error: `Other book "${otherBookId}" not found.` });
+    /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
+       resolved UNDER the locks so a rename of either book lands after this. */
+    const outcome = await withBookOps([sourceBookId, otherBookId], async (books) => {
+    const sourceLocated = books.find((b) => b.bookId === sourceBookId)!;
+    const otherLocated = books.find((b) => b.bookId === otherBookId)!;
 
     if (
       sourceLocated.state.author !== otherLocated.state.author ||
@@ -133,6 +132,15 @@ castNotLinkedToRouter.post(
         },
       });
     });
+    });
+    if (outcome === BOOK_GONE) {
+      /* Which side vanished only matters for the sentence; peekBook is read-only. */
+      const source = await peekBook(sourceBookId);
+      return res.status(404).json({
+        error: source ? `Other book "${otherBookId}" not found.` : `Source book "${sourceBookId}" not found.`,
+      });
+    }
+    return outcome;
   },
 );
 
@@ -170,12 +178,11 @@ castNotLinkedToRouter.delete(
       });
     }
 
-    const sourceLocated = await findBookByBookId(sourceBookId);
-    if (!sourceLocated)
-      return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
-    const otherLocated = await findBookByBookId(otherBookId);
-    if (!otherLocated)
-      return res.status(404).json({ error: `Other book "${otherBookId}" not found.` });
+    /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
+       resolved UNDER the locks so a rename of either book lands after this. */
+    const outcome = await withBookOps([sourceBookId, otherBookId], async (books) => {
+    const sourceLocated = books.find((b) => b.bookId === sourceBookId)!;
+    const otherLocated = books.find((b) => b.bookId === otherBookId)!;
 
     if (
       sourceLocated.state.author !== otherLocated.state.author ||
@@ -237,6 +244,15 @@ castNotLinkedToRouter.delete(
         },
       });
     });
+    });
+    if (outcome === BOOK_GONE) {
+      /* Which side vanished only matters for the sentence; peekBook is read-only. */
+      const source = await peekBook(sourceBookId);
+      return res.status(404).json({
+        error: source ? `Other book "${otherBookId}" not found.` : `Source book "${sourceBookId}" not found.`,
+      });
+    }
+    return outcome;
   },
 );
 
