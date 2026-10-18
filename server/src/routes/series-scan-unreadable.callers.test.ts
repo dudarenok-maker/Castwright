@@ -113,6 +113,8 @@ describe('callers of findAuthorSeriesForBookId when the scan cannot read the tar
     expect(gate.seen).toBeGreaterThan(1); // the scan really did hit the failing read
     expect(res.status).toBe(500);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(res.text).not.toContain('EBUSY');
   });
 
@@ -125,6 +127,8 @@ describe('callers of findAuthorSeriesForBookId when the scan cannot read the tar
     expect(gate.seen).toBeGreaterThan(1);
     expect(res.status).toBe(500);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(res.text).not.toContain('EBUSY');
   });
 
@@ -137,6 +141,8 @@ describe('callers of findAuthorSeriesForBookId when the scan cannot read the tar
     expect(gate.seen).toBeGreaterThan(0);
     expect(res.status).toBe(500);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(res.text).not.toContain('EBUSY');
   });
 
@@ -149,6 +155,8 @@ describe('callers of findAuthorSeriesForBookId when the scan cannot read the tar
     expect(gate.seen).toBeGreaterThan(1);
     expect(res.status).toBe(500);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(res.text).not.toContain('EBUSY');
   });
 });

@@ -30,7 +30,7 @@ import {
   importPortableBundle,
   type ConflictStrategy,
 } from '../import/scan-import-folder.js';
-import { BOOK_GONE, BookBusyError } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, BookBusyError, BookStateUnreadableError } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
@@ -151,8 +151,13 @@ portableImportRouter.post(
       return res.status(500).json({
         error: 'portable_import_failed',
         /* Fixed sentence: a raw fs error names the absolute workspace path,
-           and this app is served over LAN HTTPS. The raw error is logged above. */
-        message: 'Importing the bundle failed. See the server log for details.',
+           and this app is served over LAN HTTPS. The raw error is logged above.
+           An overwrite target whose state.json could not be read (#3714 review
+           pass 4) answers that error's own sentence, which is path-free. */
+        message:
+          e instanceof BookStateUnreadableError
+            ? e.message
+            : 'Importing the bundle failed. See the server log for details.',
       });
     }
   },

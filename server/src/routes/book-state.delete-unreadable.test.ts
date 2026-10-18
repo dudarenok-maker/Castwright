@@ -287,7 +287,7 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
      bookId lands) while the DELETE waits on the state-json lock is no longer
      stateless - removing it would bypass that id's book-op lock. */
   it('refuses 409 book_changed when the stateless folder gains a real bookId while the DELETE waits', async () => {
-    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
     const { makeBookId } = await import('../workspace/paths.js');
     const title = 'Becomes Real';
     const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
@@ -295,9 +295,28 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'manuscript.txt'), 'x');
     let release!: () => void;
-    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, title)}`).then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    /* Event-based (PR #3714 review pass 4): wait until the DELETE is genuinely
+       queued on this folder's state-json lock, never a fixed sleep. */
+    const deadline = Date.now() + 8000;
+    while (__stateJsonWaitersForTest(statePath) < 1) {
+      if (Date.now() > deadline) {
+        release();
+        throw new Error('timed out waiting for the DELETE to queue on the state-json lock');
+      }
+      await new Promise((r) => setTimeout(r, 5));
+    }
     mkdirSync(join(dir, '.audiobook'), { recursive: true });
     writeFileSync(
       statePath,

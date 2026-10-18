@@ -46,6 +46,7 @@ function makeGate(): Gate {
 const gates = vi.hoisted(() => ({
   slugs: null as null | { wait: () => Promise<void> },
   parse: null as null | { wait: () => Promise<void> },
+  reset: null as null | { wait: () => Promise<void> },
 }));
 
 vi.mock('../audio/rewrite-chapter-slugs.js', async (importOriginal) => {
@@ -57,6 +58,20 @@ vi.mock('../audio/rewrite-chapter-slugs.js', async (importOriginal) => {
       gates.slugs = null;
       if (g) await g.wait();
       return actual.rewriteChapterSlugs(...args);
+    },
+  };
+});
+/* PR #3714 review pass 4 -- holds a reparse INSIDE its book-op commit (the
+   revisions reset is one of applyReparse's arms). */
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return {
+    ...actual,
+    resetRevisions: async (...args: Parameters<typeof actual.resetRevisions>) => {
+      const g = gates.reset;
+      gates.reset = null;
+      if (g) await g.wait();
+      return actual.resetRevisions(...args);
     },
   };
 });
@@ -125,6 +140,7 @@ afterAll(() => {
 beforeEach(async () => {
   gates.slugs = null;
   gates.parse = null;
+  gates.reset = null;
   writeFileSync(
     statePath(),
     JSON.stringify({
@@ -221,5 +237,43 @@ describe('reparse — state.json write is serialised with the chapter restructur
     const rp = await reparse;
     expect(rp.status).toBe(200);
     expect(readState().chapters.find((c) => c.id === 1)?.excluded).toBe(true);
+  });
+});
+
+describe('a restructure queued behind a reparse commits to the LIVE ManuscriptRecord (PR #3714 review pass 4)', () => {
+  it('state.json and the in-memory chapter hints agree after the merge', async () => {
+    /* The merge prepares (and hydrates the record) before book-op; the reparse
+       commit then REPLACES the store entry. A merge that wrote its hints into the
+       record it prepared left the live one on the reparse's 3 chapters while
+       state.json had 2, until a restart. */
+    const { getOrHydrateManuscript, getManuscript } = await import('../store/manuscripts.js');
+    const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
+    await getOrHydrateManuscript(MANUSCRIPT_ID);
+
+    const gate = makeGate();
+    gates.reset = gate;
+    const reparse = request(app)
+      .post(`/api/books/${bookId}/reparse`)
+      .then((r) => r);
+    let merge!: Promise<request.Response>;
+    try {
+      await gate.reached; // the reparse holds book-op, inside its arms
+      merge = request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] })
+        .then((r) => r);
+      const deadline = Date.now() + 8000;
+      while (__keyWaitersForTest(`book-op:${bookId}`) < 1) {
+        if (Date.now() > deadline) throw new Error('timed out waiting for the merge to queue on book-op');
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    } finally {
+      gate.release();
+    }
+    const [rp, rs] = await Promise.all([reparse, merge]);
+    expect(rp.status).toBe(200);
+    expect(rs.status).toBe(200);
+    expect(readState().chapters).toHaveLength(2);
+    expect(getManuscript(MANUSCRIPT_ID)?.chapterHints).toHaveLength(2);
   });
 });

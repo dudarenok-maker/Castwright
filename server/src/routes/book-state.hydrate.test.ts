@@ -248,6 +248,8 @@ describe('GET /state — revisions read through the store (plan 286)', () => {
     expect(res.body.revisions).toBeNull();
     expect(res.body.revisionsError).toBe("This book's A/B review history couldn't be read, so its pending reviews aren't shown.");
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(errorCalls).toBeGreaterThan(0);
   });
   it('a newer-schema file opens the book with its own upgrade sentence', async () => {

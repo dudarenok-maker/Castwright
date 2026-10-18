@@ -152,10 +152,11 @@ Both movers' own state reads curate a read failure to `BookStateUnreadableError`
 no 500 body carries the fs error's absolute path (review pass 3).
 
 The DELETE route's **stateless** branch (a book with no parseable state, addressed by its path-derived id)
-re-reads the folder inside its state-json lock with a reader that rethrows a read failure: an unreadable
-state refuses the delete, and a state that now parses to a real `bookId` is refused (`book_busy`) while a long
-job is registered under **that** id, since a renamed book's job is not keyed by the path-derived id (review
-pass 3).
+refuses (`book_busy`) while a long job is registered under that path-derived id, then re-reads the folder
+inside its state-json lock with a reader that rethrows a read failure: an unreadable state refuses the
+delete, and a state that now parses to **any** real `bookId` is refused with 409 `book_changed`, job or not,
+since a renamed book's job is not keyed by the path-derived id and taking that id's book-op there would invert
+the lock order (review pass 3; wording corrected in review pass 4).
 
 **Errors from the movers** (finding i):
 - `EPERM`/`EBUSY`/`EACCES` → `BookFolderInUseError`. These come after `renameWithRetry`'s own retries.
@@ -294,7 +295,7 @@ The pattern is allowed per route **(coordinator call)**:
 | Route | Before the lock (`peekBook`) | Re-validated inside |
 |---|---|---|
 | `POST /:bookId/reparse` (`book-state.ts:1476`) | `readFile` + `parseManuscript` (one re-peek and retry on ENOENT) | `manuscriptFile` + size + `mtimeMs` fingerprint; `assertRevisionsResettable` runs inside |
-| `POST /:bookId/chapters/*` restructure (`chapters-restructure.ts:154-178`) | `parseForLegacyTitleFlags` | the same fingerprint; on a mismatch the advisory title flags are **dropped silently**, with **no 409** *(coordinator call)* |
+| `POST /:bookId/chapters/*` restructure (`chapters-restructure.ts:154-178`) | `parseForLegacyTitleFlags` (and a cold `ManuscriptRecord` hydrate) | the same fingerprint; on a mismatch the advisory title flags are **dropped silently**, with **no 409** *(coordinator call)*. The commit uses the **live** record (`getManuscript(id) ?? prep.record`), since a reparse it queued behind replaces the store entry (review pass 4) |
 | `POST /:bookId/cover` (`cover.ts:66-91`) | candidate search + `fetchCoverJpeg` | nothing (a cover is title-independent once chosen) |
 | `POST /:bookId/cover/upload` (`cover.ts:156`) | upload re-encode | nothing |
 | `POST /:bookId/resume-scoring` (`qa-report.ts:56`) | early 404 / `isGenerationActive` 409 only | the chapter list comes from `lease.state` inside `runBookJob` |
@@ -521,7 +522,10 @@ What remains is out-of-process moves. That is pre-existing, and #3706's absent-s
 3. Either way, verified by **one** `state.json` read.
 
 It falls back to the O(N) walk only on a miss or a verification failure. An autosave of a uniquely-held id is
-O(1) after the first resolve; a **duplicated** id walks on every resolve.
+O(1) after the first resolve, **but only while every folder in the library reads**: a walk that skipped an
+unreadable `state.json` is non-authoritative and writes no index entry, so while any folder is unreadable a
+not-yet-indexed id walks the library on every resolve (review pass 4). A **duplicated** id walks on every
+resolve.
 
 **k. Guard** — see below. The blind spots are listed there. The allowlist ends with only `no-book-write`,
 `cross-book-walker` and `job-lease` entries, so no no-op wraps are needed.
@@ -703,6 +707,8 @@ It uses the same opaque-range tokenizer as `state-json-lock.guard.test.ts`. The 
    - a bundle id used elsewhere → minted;
    - an overwrite keeps the id and is refused while busy;
    - an overwrite whose target changed id → conflict;
+   - an overwrite whose target `state.json` cannot be read → the curated `BookStateUnreadableError`, nothing
+     replaced, the id kept (review pass 4; a parse failure still reads as "no id");
    - a cover fetched after a rename lands in the new folder;
    - a sweep queued behind book-op writes to the moved folder;
    - the staging sweep removes entries older than 1 h, keeps younger ones, and runs before `listen`.

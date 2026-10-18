@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { ZipFile } from 'yazl';
 
 /* Paths (state.json) whose read throws EBUSY, the way Windows does while another
    process holds the file. Every other read is the real recovering reader. */
@@ -51,6 +52,7 @@ let app: Express;
 let paths: typeof import('../workspace/paths.js');
 let bookOp: typeof import('../workspace/book-op-lock.js');
 let bookJobs: typeof import('../workspace/book-jobs.js');
+let portable: typeof import('../import/scan-import-folder.js');
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-book-op-read-errors-'));
@@ -60,9 +62,14 @@ beforeAll(async () => {
   paths = await import('../workspace/paths.js');
   bookOp = await import('../workspace/book-op-lock.js');
   bookJobs = await import('../workspace/book-jobs.js');
+  portable = await import('../import/scan-import-folder.js');
+  const { portableImportRouter } = await import('./exports-portable.js');
+  const { chaptersRestructureRouter } = await import('./chapters-restructure.js');
   app = express();
   app.use(express.json());
   app.use('/api/books', bookStateRouter);
+  app.use('/api/import', portableImportRouter);
+  app.use('/api/books', chaptersRestructureRouter);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -127,6 +134,25 @@ async function holdRender(bookId: string): Promise<{ finish: () => Promise<void>
   };
 }
 
+/** A client body carries no absolute path and no raw fs error. Checked on every
+ *  string field directly AND on the JSON text in both spellings: on Windows
+ *  `JSON.stringify` doubles each backslash, so the raw root alone never matches
+ *  the serialised body (PR #3714 review pass 4). */
+function expectNoPathLeak(body: unknown): void {
+  const json = JSON.stringify(body);
+  const fields: string[] = [];
+  const walk = (v: unknown): void => {
+    if (typeof v === 'string') fields.push(v);
+    else if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x);
+  };
+  walk(body);
+  for (const text of [...fields, json]) {
+    expect(text).not.toContain(workspaceRoot);
+    expect(text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
+    expect(text).not.toMatch(/EBUSY/);
+  }
+}
+
 describe('(a) DELETE never removes a folder whose state read failed', () => {
   it('refuses while a render is registered, even when the state read throws EBUSY', async () => {
     const bookId = paths.makeBookId('Alpha', 'Saga', 'One');
@@ -144,8 +170,7 @@ describe('(a) DELETE never removes a folder whose state read failed', () => {
       expect(existsSync(dir)).toBe(true);
       expect(bookJobs.bookJobKinds(bookId)).toEqual(['render']);
       /* The fs message carries an absolute path; the body must not. */
-      expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
-      expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+      expectNoPathLeak(res.body);
     } finally {
       faulted.clear();
       await render.finish();
@@ -351,7 +376,7 @@ describe('(f) the stateless DELETE judges the folder by the bookId it holds (rev
       expect(res.status).not.toBe(204);
       expect(existsSync(dir)).toBe(true);
       expect(bookJobs.bookJobKinds(OLD)).toEqual(['render']);
-      expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+      expectNoPathLeak(res.body);
     } finally {
       scripted.clear();
       await render.finish();
@@ -381,8 +406,7 @@ describe('(g) a state read that flips after the resolve never puts a path in the
     const res = await request(app).delete('/api/books/zed__s__book');
     expect(res.status).toBe(500);
     expect(existsSync(dir)).toBe(true);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
-    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+    expectNoPathLeak(res.body);
   });
 
   it('a renaming PUT', async () => {
@@ -393,8 +417,7 @@ describe('(g) a state read that flips after the resolve never puts a path in the
       .send({ slice: 'state', patch: { title: 'Renamed' } });
     expect(res.status).toBe(500);
     expect(existsSync(dir)).toBe(true);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
-    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+    expectNoPathLeak(res.body);
   });
 });
 
@@ -415,8 +438,7 @@ describe('(i) GET /state never puts a path in its 500 body (review pass 3, E)', 
     scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
     const res = await request(app).get('/api/books/zed__s__book/state');
     expect(res.status).toBe(500);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
-    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+    expectNoPathLeak(res.body);
   });
 });
 
@@ -442,5 +464,130 @@ describe('(h) a startup sweep survives a per-book throw (review pass 3, D)', () 
     seedFlipThenZed();
     const { fsckAllBooks } = await import('../workspace/fsck-orphan-audio.js');
     await expect(fsckAllBooks()).resolves.toBeDefined();
+  });
+});
+
+/** A minimal portable bundle (the layout buildPortableBundle writes). */
+function makeBundle(state: Record<string, unknown>): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const zip = new ZipFile();
+    const chunks: Buffer[] = [];
+    zip.outputStream.on('data', (c: Buffer) => chunks.push(c));
+    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
+    zip.outputStream.on('error', reject);
+    zip.addBuffer(Buffer.from(JSON.stringify({ schemaVersion: 1 })), 'MANIFEST.json');
+    zip.addBuffer(Buffer.from(JSON.stringify(state)), 'state.json');
+    zip.addBuffer(Buffer.from('bundle manuscript'), String(state.manuscriptFile));
+    zip.end();
+  });
+}
+
+describe('(j) a bundle overwrite never runs on an unreadable target state (review pass 4)', () => {
+  /* Reading the target's id as "none" skipped book-op and the busy refusal, and
+     the in-claim re-check (also "none") passed: the overwrite replaced the book
+     and minted it a new id while a render was registered under the old one --
+     #3711's split. A read failure is the curated refusal; nothing is replaced. */
+  const bundle = () =>
+    makeBundle({
+      bookId: 'bundle-id',
+      manuscriptId: 'mns_bundle',
+      title: 'Busy Target',
+      author: 'Probe Author',
+      series: 'S',
+      seriesPosition: null,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: true,
+      chapters: [{ id: 1, title: 'Chapter 1', slug: '01-x' }],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+  it('refuses while a render is registered, and leaves the id and files alone', async () => {
+    const dir = seedBook('Probe Author', 'S', 'Busy Target', 'busy-id');
+    expect(paths.bookDirByDisplay('Probe Author', 'S', 'Busy Target')).toBe(dir);
+    const render = await holdRender('busy-id');
+    try {
+      /* Control: readable, the overwrite is refused as busy. */
+      await expect(portable.importPortableBundle(await bundle(), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
+        bookOp.BookBusyError,
+      );
+
+      faulted.add(paths.stateJsonPath(dir));
+      await expect(portable.importPortableBundle(await bundle(), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
+        bookOp.BookStateUnreadableError,
+      );
+      const res = await request(app)
+        .post('/api/import/portable?onConflict=overwrite')
+        .attach('file', await bundle(), 'b.zip');
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe(new bookOp.BookStateUnreadableError().message);
+      expectNoPathLeak(res.body);
+      faulted.clear();
+
+      expect(readState(dir).bookId).toBe('busy-id');
+      expect(readFileSync(join(dir, 'manuscript.md'), 'utf8')).toBe('Opening prose here.\n');
+      expect(bookJobs.bookJobKinds('busy-id')).toEqual(['render']);
+    } finally {
+      faulted.clear();
+      await render.finish();
+    }
+  });
+
+  it('refuses when only the in-claim re-check cannot read the state', async () => {
+    const dir = seedBook('Probe Author', 'S', 'Busy Target', 'busy-id');
+    /* The unlocked id read and book-op's resolve succeed; the claim's re-check throws. */
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'ok', 'busy']);
+    await expect(portable.importPortableBundle(await bundle(), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
+      bookOp.BookStateUnreadableError,
+    );
+    scripted.clear();
+    expect(readState(dir).bookId).toBe('busy-id');
+    expect(readFileSync(join(dir, 'manuscript.md'), 'utf8')).toBe('Opening prose here.\n');
+  });
+});
+
+describe('(k) an in-lock state re-read that fails never puts a path in the body (review pass 4)', () => {
+  /* Each route resolves the book (that read succeeds), then re-reads state.json
+     under its locks; that read throws EBUSY. The fs message names the absolute
+     path; the body answers the curated BookStateUnreadableError sentence. */
+  const curated = () => new bookOp.BookStateUnreadableError().message;
+
+  it('a PUT /state that moves no folder (every autosave)', async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
+    const res = await request(app)
+      .put('/api/books/zed__s__book/state')
+      .send({ slice: 'state', patch: { castConfirmed: true } });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(curated());
+    expectNoPathLeak(res.body);
+    scripted.clear();
+    expect(readState(dir).castConfirmed).toBe(false);
+  });
+
+  it("reparse's presence gate", async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    /* prepareReparse's peek, then book-op's resolve, then the gate. */
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'ok', 'busy']);
+    const res = await request(app).post('/api/books/zed__s__book/reparse');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(curated());
+    expectNoPathLeak(res.body);
+  });
+
+  it("a chapter restructure's in-lock read", async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    const { getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    expect(await getOrHydrateManuscript('m_Book')).toBeDefined();
+    /* prepareRestructure's peek, then book-op's resolve, then the in-lock read. */
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'ok', 'busy']);
+    const res = await request(app)
+      .post('/api/books/zed__s__book/chapters/merge')
+      .send({ chapterIds: [1] });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(curated());
+    expectNoPathLeak(res.body);
   });
 });

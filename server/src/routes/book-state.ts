@@ -1266,7 +1266,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              book-op -> book -> state-json); nothing else is taken in the span. */
           const refusal = await withBookLock(book.bookId, () =>
             withStateJsonLock(stateJsonPath(bookDir), async () => {
-              const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+              /* PR #3714 review pass 4 — a read failure is the curated, path-free
+                 BookStateUnreadableError (the raw fs message names the path). */
+              const fresh = await readBookStateOrThrow(bookDir);
               /* #3700 review pass 2 — absent means the book was deleted or moved
                  out of process after this request resolved `bookDir`. Falling back
                  to the resolve-time snapshot would write it back and resurrect the
@@ -1351,10 +1353,11 @@ async function applyReparse(
      server. Absent => null (the callers answer `reparseRefusal`: 409
      `book_moved` if the book now lives elsewhere, else 404).
      The read is the recovering one (#3625): a stranded main with a `.bak.1`
-     beside it is still the book. */
+     beside it is still the book. A read FAILURE is the curated, path-free
+     BookStateUnreadableError (PR #3714 review pass 4). */
   const present = await withStateJsonLock(
     stateJsonPath(bookDir),
-    async () => (await readStateJsonWithRecovery(stateJsonPath(bookDir))) !== null,
+    async () => (await readBookStateOrThrow(bookDir)) !== null,
   );
   if (!present) return null;
 

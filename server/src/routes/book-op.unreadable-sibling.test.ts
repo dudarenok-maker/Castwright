@@ -186,6 +186,8 @@ describe('what still fails closed', () => {
       .send({ slice: 'state', patch: { castConfirmed: true } });
     expect(res.status).toBe(500);
     expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
   });
 
   it('a KNOWN duplicate whose first twin is unreadable fails instead of writing the second', async () => {

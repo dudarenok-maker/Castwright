@@ -1666,6 +1666,8 @@ describe('plan 286 — restructure drops stale A/B entries', () => {
     err.mockRestore();
     expect(res.status).toBe(200);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(errorCalls).toBeGreaterThan(0);
   });
 });
@@ -2407,6 +2409,8 @@ describe('restructure while an analysis job runs', () => {
         expect(res.body.code).toBe('analysis_running');
         expect(res.body.error).toMatch(/analysis/i);
         expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+        /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+        expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
         expect(stateBefore()).toBe(s);
         expect(editsBefore()).toBe(e);
       } finally {

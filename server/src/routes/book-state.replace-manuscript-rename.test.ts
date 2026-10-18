@@ -241,6 +241,8 @@ describe.each([
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_moved');
       expect(JSON.stringify(res.body)).not.toContain(ws);
+      /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+      expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(ws).slice(1, -1));
 
       const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
       expect(state.manuscriptFile).toBe(original);
@@ -265,6 +267,8 @@ describe('reparse backstop: folder moved on disk during the arms', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_moved');
     expect(JSON.stringify(res.body)).not.toContain(ws);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(ws).slice(1, -1));
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter One']);
     expect(state.castConfirmed).toBe(true);

@@ -227,6 +227,8 @@ describe('POST /api/import/portable', () => {
       expect(res.body.error).toBe('bundle_conflict');
       expect(res.body).not.toHaveProperty('existingPath');
       expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+      /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+      expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
       expect(JSON.stringify(res.body)).not.toContain(AUTHOR);
       expect(res.body.message).toMatch(/already exists/i);
       /* The raw conflict (with its path) is logged for the operator. */

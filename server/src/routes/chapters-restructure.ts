@@ -47,7 +47,13 @@ import {
   type RestructureSentence,
 } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { BOOK_GONE, peekBook, withBookOp, type BookHandle } from '../workspace/book-op-lock.js';
+import {
+  BOOK_GONE,
+  peekBook,
+  readBookStateOrThrow,
+  withBookOp,
+  type BookHandle,
+} from '../workspace/book-op-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
 import { dropPendingForChapters } from '../workspace/revisions-store.js';
@@ -62,10 +68,10 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -228,7 +234,11 @@ async function applyRestructureClaimed(
 }> {
   const { bookDir } = book;
   let { state } = book;
-  const { record } = prep;
+  /* PR #3714 review pass 4 -- the LIVE record, re-read under the lock: a
+     reparse / replace-manuscript this op queued behind replaced the store entry
+     (`putManuscript`), so the one `prepareRestructure` hydrated may be detached.
+     The prep copy serves only a cold store. */
+  const record = getManuscript(manuscriptId) ?? prep.record;
   const advisoryValid = sameFingerprint(
     prep.fingerprint,
     await manuscriptFingerprint(bookDir, state.manuscriptFile),
@@ -244,7 +254,9 @@ async function applyRestructureClaimed(
     // Legacy book: chapters imported before titleSynthesized existed carry no
     // flag. Recognise the app-made ones against a fresh parse (#3628) so every
     // operation below renumbers them like a freshly imported book's.
-    const freshState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+    /* PR #3714 review pass 4 -- a read failure is the curated, path-free
+       BookStateUnreadableError; the route answers its message verbatim. */
+    const freshState = await readBookStateOrThrow(bookDir);
     /* #3700 review pass 2 -- absent: the book was deleted or moved out of
        process after it was resolved. Writing the stale snapshot back would resurrect
        it; refuse and write nothing. */

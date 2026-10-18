@@ -12095,8 +12095,9 @@ export interface operations {
             /**
              * @description Refused (nothing was written). `code` is `manuscript_changed` (the
              *     manuscript changed while it was being prepared; retry), `book_moved`
-             *     (the book was moved while this request was queued; reload and
-             *     retry), or absent (the manuscript file is missing on disk).
+             *     (the book was moved outside the app while it was being re-parsed;
+             *     an in-app rename waits for the re-parse instead; reload and retry),
+             *     or absent (the manuscript file is missing on disk).
              */
             409: {
                 headers: {
@@ -12169,7 +12170,8 @@ export interface operations {
             };
             /**
              * @description Refused (nothing was written). `code` is `book_moved` (the book was
-             *     moved while this request was queued; reload and retry).
+             *     moved outside the app while it was being re-parsed; an in-app
+             *     rename waits for the replace instead; reload and retry).
              */
             409: {
                 headers: {

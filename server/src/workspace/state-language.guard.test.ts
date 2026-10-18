@@ -315,15 +315,20 @@ function countRawStateWrites(
    book-state.ts from 17 to 13 -- the PUT's folder rename (its two lock keys,
    its read and its new-path write) moved into moveBookFolder and the DELETE's
    removal into removeBookFolder, leaving DELETE's stateless-folder lock key --
-   reads, lock keys and one relocated write, not new write sites). Asserted BOTH
+   reads, lock keys and one relocated write, not new write sites); review pass 4
+   then routed three in-lock reads through book-op-lock.ts's `readBookStateOrThrow`
+   (which spells the path itself), taking book-state.ts 13 -> 11 (the non-moving
+   PUT's re-read, applyReparse's presence read), chapters-restructure.ts 3 -> 2
+   (its in-lock read) and scan-import-folder.ts 6 -> 4 (the overwrite's two id
+   reads) -- reads only, no write site moved. Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
-  'import/scan-import-folder.ts': 6,
+  'import/scan-import-folder.ts': 4,
   'routes/analysis.ts': 1,
-  'routes/book-state.ts': 13,
-  'routes/chapters-restructure.ts': 3,
+  'routes/book-state.ts': 11,
+  'routes/chapters-restructure.ts': 2,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,
   'routes/library-sync-manifest.ts': 1,

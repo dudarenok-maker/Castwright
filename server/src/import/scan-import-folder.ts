@@ -57,13 +57,13 @@ import {
   bookJobKinds,
   isBookIdTaken,
   mintBookId,
+  readBookStateOrThrow,
   withBookOp,
   withBookPathClaim,
 } from '../workspace/book-op-lock.js';
 import { assertContained } from '../util/safe-path.js';
 import { makeStagingDir } from '../workspace/portable-staging.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   PORTABLE_SCHEMA_VERSION,
@@ -384,7 +384,8 @@ export async function importPortableBundle(
       expectedId: string | null,
     ): Promise<ImportPortableBundleResult> =>
       withBookPathClaim(async () => {
-        const live = await readStateJsonWithRecovery(stateJsonPath(targetDir)).catch(() => null);
+        /* A read error is the curated refusal, never "carries no id" (review pass 4). */
+        const live = await readBookStateOrThrow(targetDir);
         if (!existsSync(targetDir) || (live?.bookId ?? null) !== expectedId) {
           throw new BundleConflictError(targetDir);
         }
@@ -405,7 +406,11 @@ export async function importPortableBundle(
       /* Read the existing id UNLOCKED, take that book's book-op, then the claim
          (lock order: book-op -> book-path-claim). The overwrite KEEPS the existing
          bookId and is refused while a long job is registered for it. */
-      const existing = await readStateJsonWithRecovery(stateJsonPath(targetDir)).catch(() => null);
+      /* PR #3714 review pass 4 -- a state that does not parse carries no id
+         (null), but a READ failure is not "no id": treating it so skipped book-op
+         and the busy refusal and re-id'd a book a render was still writing. It
+         is the curated `BookStateUnreadableError`, and nothing is replaced. */
+      const existing = await readBookStateOrThrow(targetDir);
       const existingId = existing?.bookId;
       if (!existingId) return await commitOverwrite(targetDir, null);
       const overwritten = await withBookOp(existingId, async () => {
