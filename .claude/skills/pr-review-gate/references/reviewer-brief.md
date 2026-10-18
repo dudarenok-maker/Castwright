@@ -417,6 +417,21 @@ recite:
     deletes, renames, cache wipes) and ask what is left on disk if each step in
     between throws; test with a rejecting step and assert that what
     `state.json` names exists. The same shape applies to moving a write earlier.
+38. **A write staged against a location resolved before the lock, committed by a
+    step that re-resolves the location inside the lock** -- `server/src/routes/
+    book-state.ts` (replace-manuscript / reparse), PR #3594 gate pass 9:
+    572f26fa moved the upload's write into the locked step but built its paths
+    from the `bookDir` the route resolved before any lock, while the locked step
+    re-located the book by id and recorded `manuscriptFile` against the new
+    folder. A folder-renaming write that landed during the destructive arms left
+    the record in one folder and the file in another (409 after a restart, or a
+    silently lost same-extension upload). Fixed in 47c23fc2 (the locked step
+    refuses with the absent-book 404 when the located folder differs). Checkable:
+    for every locked step that locates the target again, list each earlier side
+    effect and path that was derived from the pre-lock location and ask whether
+    the two can name different places; test by forcing the move between the two
+    (hold one of the earlier steps open) and assert nothing was installed and
+    the moved book is untouched.
 
 ### Keeping the catalogue current
 
