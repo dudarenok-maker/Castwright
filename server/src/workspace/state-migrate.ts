@@ -181,5 +181,10 @@ export async function updateStateJsonLocked(
  *  reads via `readJson` are still valid for callers that prefer the
  *  fast-fail diagnostic. */
 export async function readStateJsonWithRecovery(path: string): Promise<BookStateJson | null> {
-  return readJsonWithRecovery<BookStateJson>(path, { keep: STATE_BACKUP_KEEP });
+  /* `recoverMissing`: nothing deletes state.json on purpose, so an absent main
+     with a backup beside it is a stranded book, not a new one. */
+  return readJsonWithRecovery<BookStateJson>(path, {
+    keep: STATE_BACKUP_KEEP,
+    recoverMissing: true,
+  });
 }

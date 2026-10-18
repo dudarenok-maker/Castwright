@@ -8,7 +8,7 @@
    then a dynamic import of the router). */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -205,5 +205,46 @@ describe('POST /api/books/:bookId/backups/restore', () => {
       .send({ backupFile: '20260101-000000.json' });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('backup is corrupt');
+  });
+});
+
+describe('POST /api/books/:bookId/backups/restore — state lock (#3625)', () => {
+  it('waits on the state lock: state.json is unchanged while held, restored after release', async () => {
+    await seedBook({ v: 'original' });
+    const file = await backup.backupBook(
+      { bookId: BOOK_ID, bookDir: bookDir() },
+      { keep: 14, now: new Date(2026, 0, 1, 9, 0, 0) },
+    );
+    // Move the live state.json on so a restore is observable.
+    await writeFile(paths.stateJsonPath(bookDir()), JSON.stringify(makeState({ v: 'changed' })), 'utf8');
+    const before = await readFile(paths.stateJsonPath(bookDir()), 'utf8');
+
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir()), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    try {
+      const pending = request(app)
+        .post(`/api/books/${BOOK_ID}/backups/restore`)
+        .send({ backupFile: file })
+        .then((r) => r);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await readFile(paths.stateJsonPath(bookDir()), 'utf8')).toBe(before);
+      release();
+      await held;
+      const res = await pending;
+      expect(res.status).toBe(200);
+      const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir()), 'utf8'));
+      expect(after.v).toBe('original');
+    } finally {
+      release();
+    }
   });
 });

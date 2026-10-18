@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
@@ -764,7 +764,7 @@ export async function finalizeChapterAudioWrite(
      the per-book state.json lock. */
   const statePath = stateJsonPath(bookDir);
   const prev = await withStateJsonLock(statePath, async () => {
-    const onDisk = await readJson<BookStateJson>(statePath);
+    const onDisk = await readStateJsonWithRecovery(statePath);
     if (onDisk) {
       const formatted = formatDuration(durationSec);
       const next: BookStateJson = {

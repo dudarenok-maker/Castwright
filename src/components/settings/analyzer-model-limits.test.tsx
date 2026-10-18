@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { accountSlice } from '../../store/account-slice';
+import { accountSlice, fetchAccountSettings } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import { chaptersSlice, type ActiveStreamSnapshot } from '../../store/chapters-slice';
 import { librarySlice } from '../../store/library-slice';
@@ -51,6 +51,28 @@ beforeEach(() => {
   vi.mocked(api.putUserSettings).mockImplementation(async (patch) => patch as never);
   vi.mocked(api.testAnalyzerModel).mockResolvedValue({
     serverUrl: 'gemini', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: {},
+  });
+});
+
+describe('AnalyzerModelLimits - unreadable settings file (#3625)', () => {
+  it('disables Save and sends no PUT while the file is unreadable (the map shown is the boot default, not the saved one)', async () => {
+    const store = renderLimits();
+    store.dispatch(fetchAccountSettings.fulfilled({ settingsFileUnreadable: true } as never, 'req'));
+    fireEvent.change(await screen.findByLabelText('Gemini 3.6 Flash RPM'), { target: { value: '3' } });
+    const save = screen.getByTestId('model-limits-save');
+    expect(save).toBeDisabled();
+    expect(screen.getByTestId('model-limits-unreadable')).toBeInTheDocument();
+    fireEvent.click(save);
+    expect(api.putUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('Save works again once the file reads', async () => {
+    const store = renderLimits();
+    store.dispatch(fetchAccountSettings.fulfilled({ settingsFileUnreadable: true } as never, 'req'));
+    store.dispatch(fetchAccountSettings.fulfilled({ settingsFileUnreadable: false } as never, 'req'));
+    fireEvent.change(await screen.findByLabelText('Gemini 3.6 Flash RPM'), { target: { value: '3' } });
+    expect(screen.getByTestId('model-limits-save')).toBeEnabled();
+    expect(screen.queryByTestId('model-limits-unreadable')).toBeNull();
   });
 });
 

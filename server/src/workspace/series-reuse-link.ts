@@ -36,8 +36,7 @@ import {
 import { scanLibraryCharacters, type LibraryCharacterRecord } from './library-cast-scan.js';
 import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
-import { readJson } from './state-io.js';
-import type { BookStateJson } from './scan.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import { scoreOne, type CharacterMatchInput, type LibraryVoice } from '../routes/voice-match.js';
 import { resolveReusedVoiceFields, type CastLoader } from '../tts/hydrate-reused-voice.js';
 import { createWorkspaceCastLoader } from '../tts/hydrate-reused-voice-workspace.js';
@@ -111,7 +110,7 @@ async function seriesPositionByBookId(): Promise<Map<string, number | null>> {
   for (const authorName of dirs(BOOKS_ROOT)) {
     for (const seriesName of dirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of dirs(join(BOOKS_ROOT, authorName, seriesName))) {
-        const state = await readJson<BookStateJson>(
+        const state = await readStateJsonWithRecovery(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
         );
         if (state?.bookId) out.set(state.bookId, state.seriesPosition ?? null);

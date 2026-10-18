@@ -717,13 +717,19 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       const result = await actual.findBookByBookId(id); // real read, now
       if (isSecondLookup) {
         arrived += 1;
-        if (arrived === 2) releaseBoth();
+        /* A slow runner disk (fsync per write, #3694) stretches this window; the
+           barrier must tolerate it, so simulate it on every run - but on the SHARED
+           release, never per request: a per-request sleep lets the first request
+           take both cast locks before the second wakes, and the AB/BA interleaving
+           this test exists to force never happens (it then passes without .sort()). */
+        if (arrived === 2) setTimeout(releaseBoth, 2500);
         await gate; // hold the RESOLUTION open until both requests arrive
       }
       return result;
     });
 
     let results: [{ status: number }, { status: number }];
+    let deadlockTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       results = (await Promise.race([
         Promise.all([
@@ -738,11 +744,15 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
             targetCharacterId: 'wren',
           }),
         ]),
-        new Promise((_resolve, reject) =>
-          setTimeout(() => reject(new Error('DEADLOCK')), 2000),
-        ),
+        /* Wall-clock detector: generous enough for a slow, fsyncing runner disk
+           (#3694: 2 s false-tripped on the Windows leg) yet under the 15 s
+           testTimeout, so a lock that never releases still fails HERE. */
+        new Promise((_resolve, reject) => {
+          deadlockTimer = setTimeout(() => reject(new Error('DEADLOCK')), 12_000);
+        }),
       ])) as [{ status: number }, { status: number }];
     } finally {
+      clearTimeout(deadlockTimer);
       // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
       // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
       // default passthrough behaviour explicitly.

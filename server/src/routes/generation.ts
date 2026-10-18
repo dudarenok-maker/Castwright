@@ -40,7 +40,7 @@ import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
   requireBookStateLanguage,
@@ -2280,7 +2280,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            success-path stamp: a failing chapter must not clobber (or be
            clobbered by) a sibling's concurrent state.json write. */
         await withStateJsonLock(statePath, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             const next: BookStateJson = {
               ...prev,
@@ -2304,6 +2304,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           }
         });
       } catch (persistErr) {
+        /* #3625 — a state-lock timeout is deliberately swallowed here, like a
+           disk fault: `chapter_failed` already went out over SSE, and this stamp
+           is only a reload annotation. The raw error (with the lock key) stays in
+           the log and never reaches a client. */
         console.warn(
           `[generation] failed to persist error state for chapter ${chapter.id}:`,
           persistErr,

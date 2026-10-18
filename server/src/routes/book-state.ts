@@ -56,7 +56,7 @@ import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
 import {
   readStateJsonWithRecovery,
@@ -1368,9 +1368,12 @@ async function applyReparse(
      folder-renaming PUT, a DELETE) has finished; the state step at the end
      checks again under the book + state-json locks. The destructive arms cannot
      run inside those locks (they take `cast`, which is ordered before `book`),
-     so this is a gate, not an exclusion. Absent => null (the callers answer 404). */
-  const present = await withStateJsonLock(stateJsonPath(bookDir), async () =>
-    existsSync(stateJsonPath(bookDir)),
+     so this is a gate, not an exclusion. Absent => null (the callers answer 404).
+     The read is the recovering one (#3625): a stranded main with a `.bak.1`
+     beside it is still the book. */
+  const present = await withStateJsonLock(
+    stateJsonPath(bookDir),
+    async () => (await readStateJsonWithRecovery(stateJsonPath(bookDir))) !== null,
   );
   if (!present) return null;
 
@@ -1901,9 +1904,13 @@ bookStateRouter.post(
          is applied to a fresh read inside the state-json leaf lock (nested in
          the book lock), not the located snapshot, so a sibling render's stamp
          isn't reverted. */
+        let chapterGone = false;
         const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
           const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-          if (i === -1) return null;
+          if (i === -1) {
+            chapterGone = true;
+            return null;
+          }
           current = fresh.chapters[i];
           updated = { ...current, excluded: excluded ? true : undefined };
           return {
@@ -1916,6 +1923,9 @@ bookStateRouter.post(
            it. Nothing was written, so answer 404 and touch neither the live
            ManuscriptRecord nor the audio below. */
         if (!persisted) return res.status(404).json({ error: 'Book not found.' });
+        /* #3625 -- the chapter can vanish while waiting on the lock: nothing is
+           written and the answer is 404, not a 200 built from the stale snapshot. */
+        if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
 
         /* Propagate to the live ManuscriptRecord if it's loaded. The
          analysis route reads chapterHints directly from this; without
@@ -1999,9 +2009,13 @@ bookStateRouter.post(
         let updated = { ...state.chapters[idx], held: held ? true : undefined };
 
         /* #3700 -- applied to a fresh read inside the state-json leaf lock. */
+        let chapterGone = false;
         const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
           const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-          if (i === -1) return null;
+          if (i === -1) {
+            chapterGone = true; // vanished while waiting on the lock (#3625)
+            return null;
+          }
           updated = { ...fresh.chapters[i], held: held ? true : undefined };
           return {
             ...fresh,
@@ -2010,6 +2024,7 @@ bookStateRouter.post(
           };
         });
         if (!persisted) return res.status(404).json({ error: 'Book not found.' });
+        if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
 
         return res.json({
           id: updated.id,
@@ -2039,23 +2054,48 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
        refuses. Leaf lock: nothing else is taken inside. If state.json is
        already gone by the time we hold the lock, the folder moved (a rename
        PUT held the key) - resolve the book again rather than answering 204
-       for a delete that removed nothing. */
+       for a delete that removed nothing.
+       #3625 pass 6 - "gone" is the recovering read's verdict, not main's
+       existence: a STRANDED book (main absent, a good `.bak.1`, the state
+       `findBookByBookId` matched on) is still here and is removed, as
+       `restoreBackup` treats it. The read also names the book now in the
+       folder, so a different book moved into it is never removed. A state
+       that no longer parses at all is still the folder resolved a moment ago
+       and is removed. */
     let located = await findBookByBookId(req.params.bookId);
     let removed = false;
     for (let attempt = 0; located && !removed && attempt < 3; attempt += 1) {
       const dir = located.bookDir;
       removed = await withStateJsonLock(stateJsonPath(dir), async () => {
-        if (!existsSync(stateJsonPath(dir))) return false;
+        const fresh = await readStateJsonWithRecovery(stateJsonPath(dir)).catch((err: unknown) => {
+          if (err instanceof SyntaxError) return undefined;
+          throw err;
+        });
+        if (fresh === null) return false;
+        if (fresh && fresh.bookId !== req.params.bookId) return false;
         await rm(dir, { recursive: true, force: true });
         return true;
       });
       if (!removed) located = await findBookByBookId(req.params.bookId);
     }
-    if (!located || !removed) {
+    if (!located) {
+      /* #3625 — an `unreadable` or `not_analysed` book has no parseable state
+         to match on; its row id comes from its folder path, so resolve it the
+         same way the scan does. Same lock as above, but no state.json check:
+         a not_analysed folder never had one. */
+      const statelessDir = await findStatelessBookDirByBookId(req.params.bookId);
+      if (statelessDir) {
+        await withStateJsonLock(stateJsonPath(statelessDir), () =>
+          rm(statelessDir, { recursive: true, force: true }),
+        );
+        removed = true;
+      }
+    }
+    if (!removed) {
       res.status(204).end();
       return;
     }
-    const { state } = located;
+    const state = located?.state;
     if (state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
     }
@@ -2180,7 +2220,7 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
        chapter. Falls back to the stored chapterId when the record predates
        uuids or the chapter has since been deleted. */
     if (progress?.chapterUuid) {
-      const current = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+      const current = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
       const match = current?.chapters.find((c) => c.uuid === progress.chapterUuid);
       if (match && match.id !== progress.chapterId) {
         return res.json({ ...progress, chapterId: match.id });
@@ -2277,7 +2317,7 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
        current chapterId) so GET can re-derive the chapterId after a
        restructure. Absent when the chapterId doesn't map to a chapter (or
        a legacy book without uuids) — GET then keeps the stored chapterId. */
-    const stateForUuid = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+    const stateForUuid = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
     const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
     /* fs-15 shelf controls — merge the prior record's shelf flags rather than
        clobbering them: `finished` is sticky (a user "Mark as finished" survives

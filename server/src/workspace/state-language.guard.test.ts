@@ -302,15 +302,17 @@ function countRawStateWrites(
    dropped 3 -> 1 and scan.ts 4 -> 3 when the layered `updateStateAtDir` /
    `persistHealPatches` began reading and writing through `updateStateJsonLocked`
    rather than spelling the path themselves; book-state.ts then gained 2 for
-   applyReparse's presence gate -- a lock key and an existence read, not a write).
+   applyReparse's presence gate -- a lock key and an existence read, not a write;
+   #3625 then added scan-import-folder.ts +1 (the in-lock claim keys the target's
+   state.json) and book-state.ts +1 (DELETE's stateless-folder lock key)).
    Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
-  'import/scan-import-folder.ts': 1,
+  'import/scan-import-folder.ts': 2,
   'routes/analysis.ts': 1,
-  'routes/book-state.ts': 16,
+  'routes/book-state.ts': 17,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,

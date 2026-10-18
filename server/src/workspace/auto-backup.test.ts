@@ -5,7 +5,7 @@
    so paths.ts re-reads the override, then dynamic import). */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -123,6 +123,24 @@ describe('runBackupSweep', () => {
     expect(res.booksBackedUp).toBe(2);
     expect(await mod.listBackups(a.bookId)).toHaveLength(1);
     expect(await mod.listBackups(b.bookId)).toHaveLength(1);
+  });
+
+  /* #3625 pass 6 (🟠1): a rotating write renames main to `.bak.1` before its
+     rename-in. A book caught in that window is still a book: the sweep finds
+     it and snapshots the state before the write. */
+  it('snapshots a book whose state.json is mid-write (main renamed away, .bak.1 holding it)', async () => {
+    const a = bookDirFor('alpha');
+    const b = bookDirFor('beta');
+    await seedBook(a.bookId, a.bookDir, { v: 1 });
+    await seedBook(b.bookId, b.bookDir, { v: 7 });
+    const sp = paths.stateJsonPath(b.bookDir);
+    await rename(sp, `${sp}.bak.1`);
+    const res = await mod.runBackupSweep({ keep: 5, now: new Date(2026, 0, 1, 12, 0, 0) });
+    expect(res.booksBackedUp).toBe(2);
+    const [snap] = await mod.listBackups(b.bookId);
+    expect(snap).toBeDefined();
+    const saved = JSON.parse(await readFile(join(paths.bookBackupsDir(b.bookId), snap.file), 'utf8'));
+    expect(saved.v).toBe(7);
   });
 });
 

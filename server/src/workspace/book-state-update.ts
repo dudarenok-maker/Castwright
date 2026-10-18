@@ -27,8 +27,7 @@
 import { withBookLock } from './book-lock.js';
 import { stateJsonPath } from './paths.js';
 import { findBookByBookId, type BookStateJson } from './scan.js';
-import { readJson } from './state-io.js';
-import { updateStateJsonLocked } from './state-migrate.js';
+import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 
 export type LocatedBook = NonNullable<Awaited<ReturnType<typeof findBookByBookId>>>;
 
@@ -68,7 +67,7 @@ export async function updateStateAtDir(
   const path = stateJsonPath(bookDir);
   /* Peek only for the lock key; the state the decision is made from is the
      re-read under the locks. */
-  const peek = await readJson<BookStateJson>(path);
+  const peek = await readStateJsonWithRecovery(path);
   if (!peek) return false;
   return withBookLock(peek.bookId ?? bookDir, async () => {
     await opts.underBookLock?.();

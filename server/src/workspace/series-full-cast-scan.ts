@@ -23,7 +23,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, ensureWorkspace, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
-import type { BookStateJson } from './scan.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import { findAuthorSeriesForBookId } from './series-cast-scan.js';
 
 /* A cast.json character carried through with every field intact. Typed
@@ -68,7 +68,7 @@ export async function scanSeriesFullCharacters(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (state.isStandalone === true) continue;
         if (state.author !== author || state.series !== series) continue;

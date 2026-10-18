@@ -121,10 +121,12 @@ const runDir = resolveRunDir(repoRoot);
     (`void bootWarmUserSettings()`). Since #3175, `readUserSettings()` never
     rejects for a MALFORMED file: it recovers from the newest parseable
     `.bak.N`, or falls back to in-memory defaults with the corruption flag
-    set (a missing file was always fine — it reads as defaults). What can
-    still reject is `readFile`/`stat` itself (a locked/unreadable file —
-    e.g. an antivirus or OneDrive hold at boot) or the legacy-settings
-    migration's `copyFile` failing; nothing on that path catches those.
+    set (a missing file was always fine — it reads as defaults), and since
+    #3625 a locked/unreadable file (an antivirus or OneDrive hold at boot)
+    doesn't reject either: it serves uncached defaults, logs its own warning
+    and refuses writes until a read succeeds. What can still reject is the
+    legacy-settings migration's `copyFile` failing; nothing on that path
+    catches it.
     Before this wrapper existed such a throw escaped as a process-level
     unhandledRejection. This only makes the failure loud and contained.
     Extracted into its own exported function (mirroring `runShutdownSequence`
@@ -137,7 +139,7 @@ export async function bootWarmUserSettings(): Promise<void> {
     await readUserSettings();
   } catch (err) {
     console.error(
-      '[server] user-settings.json could not be read at boot (a malformed file recovers from its .bak.N backups or falls back to defaults on its own, so this is a locked/unreadable file or a failed legacy-settings migration)',
+      '[server] user-settings.json could not be read at boot (a malformed file recovers from its .bak.N backups, and a locked/unreadable one serves defaults on its own, so this is a failed legacy-settings migration)',
       err,
     );
   }
@@ -181,10 +183,10 @@ async function main(): Promise<void> {
      see real values from disk before the first request lands.
      Fire-and-forget: a MISSING file falls through to defaults inside
      readUserSettings(), and since #3175 so does a MALFORMED one (via its
-     `.bak.N` backups, else defaults + the corruption flag). Only a
-     locked/unreadable file or a failed legacy migration still rejects --
-     bootWarmUserSettings (#3174) is what makes that failure loud and
-     contained. See its own doc comment. */
+     `.bak.N` backups, else defaults + the corruption flag); a
+     locked/unreadable one serves uncached defaults (#3625). Only a failed
+     legacy migration still rejects -- bootWarmUserSettings (#3174) is what
+     makes that failure loud and contained. See its own doc comment. */
   void bootWarmUserSettings();
 
   /* One-shot wipe-and-fresh for change-logs written before the

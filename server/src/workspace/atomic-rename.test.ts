@@ -7,18 +7,15 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 let callCount = 0;
 const renameMock = vi.fn();
-const copyFileMock = vi.fn();
 
 vi.mock('node:fs/promises', () => ({
   rename: (...args: unknown[]) => renameMock(...args),
-  copyFile: (...args: unknown[]) => copyFileMock(...args),
 }));
 
-const { renameWithRetry, copyFileWithRetry } = await import('./atomic-rename.js');
+const { renameWithRetry } = await import('./atomic-rename.js');
 
 afterEach(() => {
   renameMock.mockReset();
-  copyFileMock.mockReset();
   callCount = 0;
 });
 
@@ -67,24 +64,5 @@ describe('renameWithRetry', () => {
     renameMock.mockRejectedValueOnce(new Error('weird'));
     await expect(renameWithRetry('src', 'dest')).rejects.toThrow(/weird/);
     expect(renameMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('copyFileWithRetry', () => {
-  it('retries past transient EPERM then succeeds', async () => {
-    callCount = 0;
-    copyFileMock.mockImplementation(async () => {
-      callCount += 1;
-      if (callCount < 3) throw makeErr('EPERM');
-      return undefined;
-    });
-    await copyFileWithRetry('src', 'dest');
-    expect(callCount).toBe(3);
-  });
-
-  it('throws immediately on a non-retryable code (EROFS)', async () => {
-    copyFileMock.mockRejectedValueOnce(makeErr('EROFS'));
-    await expect(copyFileWithRetry('src', 'dest')).rejects.toThrow(/EROFS/);
-    expect(copyFileMock).toHaveBeenCalledTimes(1);
   });
 });

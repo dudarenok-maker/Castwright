@@ -41,14 +41,36 @@ function readinessWith(analyzer: BlockerDiagnosis): SetupReadiness {
   };
 }
 
-function renderForm() {
-  const store = configureStore({ reducer: { account: accountSlice.reducer } });
+function renderForm(account: Partial<ReturnType<typeof accountSlice.getInitialState>> = {}) {
+  const store = configureStore({
+    reducer: { account: accountSlice.reducer },
+    preloadedState: { account: { ...accountSlice.getInitialState(), ...account } },
+  });
   return render(
     <Provider store={store}>
       <ModelSettingsForm embedded />
     </Provider>,
   );
 }
+
+describe('ModelSettingsForm — unreadable settings file (#3625)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('disables Save and sends no PUT while settingsFileUnreadable', async () => {
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+    renderForm({ settingsFileUnreadable: true, hydrated: true });
+    const save = await screen.findByRole('button', { name: 'Save changes' });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(api.putUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('Save is enabled once the file reads again', async () => {
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+    renderForm({ settingsFileUnreadable: false, hydrated: true });
+    expect(await screen.findByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+});
 
 describe('ModelSettingsForm — analyzer readiness badge (fe-49 mirror #1641)', () => {
   beforeEach(() => vi.clearAllMocks());
