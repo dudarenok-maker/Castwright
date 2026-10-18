@@ -18,7 +18,7 @@
  * Same fetch+SSE socket harness as generation-recycle-recovery.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,43 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   return {
     ...actual,
     synthesiseChapter: (args: unknown) => synthesiseImpl(args as never),
+  };
+});
+/* #3711 review: `throwAfterChild` makes a chapter throw AFTER its scoring child is pushed (the
+   throughput rollup throws, then the failure classifier throws too), so the error escapes the
+   registered render job's fn; `scoringGate` holds the scoring child's `runBookJob` registration. */
+let throwAfterChild = false;
+let scoringGate: Promise<void> | null = null;
+vi.mock('../tts/generation-stats.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/generation-stats.js')>();
+  return {
+    ...actual,
+    recordChapterThroughput: (...a: Parameters<typeof actual.recordChapterThroughput>) => {
+      if (throwAfterChild) throw new Error('rollup exploded');
+      return actual.recordChapterThroughput(...a);
+    },
+  };
+});
+vi.mock('./generation-error.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./generation-error.js')>();
+  return {
+    ...actual,
+    describeSynthesisError: (...a: Parameters<typeof actual.describeSynthesisError>) => {
+      if (throwAfterChild) throw new Error('classifier exploded');
+      return actual.describeSynthesisError(...a);
+    },
+  };
+});
+vi.mock('../audio/render-integrity/aggregate.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../audio/render-integrity/aggregate.js')>()),
+  scoreBook: async () => ({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 }),
+}));
+vi.mock('../workspace/book-jobs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-jobs.js')>();
+  return {
+    ...actual,
+    runBookJob: (...a: Parameters<typeof actual.runBookJob>) =>
+      a[1] === 'scoring' && scoringGate ? scoringGate.then(() => actual.runBookJob(...a)) : actual.runBookJob(...a),
   };
 });
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
@@ -195,6 +232,10 @@ const ENTRY_ID = 'stall-entry-1';
 beforeEach(async () => {
   forceSidecarRecycleMock.mockClear();
   encodeImpl = null;
+  throwAfterChild = false;
+  scoringGate = null;
+  vi.restoreAllMocks();
+  for (const f of readdirSync(join(bookDir, 'audio'))) rmSync(join(bookDir, 'audio', f), { force: true, recursive: true });
   /* Reset the persisted state so a prior test's failure doesn't leak in. */
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
   state.chapters = [{ id: 1, title: 'Chapter 1', slug: 'chapter-1' }];
@@ -295,4 +336,56 @@ describe('per-chapter no-progress watchdog', () => {
     expect(body).not.toContain('"type":"chapter_failed"');
     expect(body).not.toContain('no progress');
   }, 10_000);
+
+  it('an abandoned chapter whose abort-ignoring synth resolves late writes nothing (#3711)', async () => {
+    process.env.CHAPTER_NO_PROGRESS_MS = '250';
+    let releaseSynth!: () => void;
+    synthesiseImpl = () =>
+      new Promise((resolve) => {
+        releaseSynth = () => resolve(okResult()); // ignores the abort signal entirely
+      });
+    const body = await runChapter();
+    expect(body).toContain('"type":"chapter_failed"');
+    const { bookJobKinds } = await import('../workspace/book-op-lock.js');
+    expect(bookJobKinds(bookId)).toEqual([]); // the render token is released
+
+    releaseSynth(); // the zombie body resumes after the token is gone
+    await sleep(1500);
+    expect(readdirSync(join(bookDir, 'audio'))).toEqual([]);
+    expect(persistedChapter().generationState).toBe('failed');
+  }, 15_000);
+
+  it('a render whose fn throws after pushing a scoring child still waits for that child (#3711)', async () => {
+    process.env.CHAPTER_NO_PROGRESS_MS = '0';
+    synthesiseImpl = async () => okResult();
+    throwAfterChild = true;
+    const configModule = await import('../config/resolver.js');
+    const realConfigValue = configModule.configValue;
+    vi.spyOn(configModule, 'configValue').mockImplementation(((key: string) =>
+      key === 'qa.speaker.enabled' ? true : realConfigValue(key as never)) as typeof realConfigValue);
+    let openGate!: () => void;
+    scoringGate = new Promise<void>((r) => (openGate = r));
+    const { bookJobKinds } = await import('../workspace/book-op-lock.js');
+    const run = runChapter();
+    await sleep(1200);
+    expect(bookJobKinds(bookId)).toContain('render'); // held: the child has not settled
+    openGate();
+    await run.catch(() => undefined); // the route's un-caught `registered.done` rejection tears the socket down
+    await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
+  }, 15_000);
+});
+
+describe('drainChildren (#3711)', () => {
+  it('also waits for children pushed while earlier ones were being awaited', async () => {
+    const { drainChildren } = await import('./generation.js');
+    const children: Promise<unknown>[] = [];
+    let lateSettled = false;
+    children.push(
+      sleep(50).then(() => {
+        children.push(sleep(50).then(() => (lateSettled = true)));
+      }),
+    );
+    await drainChildren({ children } as never);
+    expect(lateSettled).toBe(true);
+  });
 });

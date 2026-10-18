@@ -3124,6 +3124,11 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
   return !!subset && !subset.controller.signal.aborted;
 }
 
+/** Test helper: the in-flight job for a manuscript (#3711 route-level lease tests). */
+export function __inFlightJobForTest(manuscriptId: string, kind: 'main' | 'subset'): AnalysisJob | undefined {
+  return jobMapFor(kind).get(manuscriptId);
+}
+
 /** Test helper: register a job into the in-flight map. Used by
     analysis.rejoin-miss.test.ts's buildJob to ensure the staleness guard
     in endJob has a valid map entry to check. #3435 — fills the lifecycle

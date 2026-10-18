@@ -33,6 +33,19 @@ vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
   setLastKnownAnalyzerDevice: vi.fn(),
 }));
+/* `__baj_clone_records`: hand out DETACHED copies, so a route's pre-queue `record` snapshot is
+   not silently kept current by an in-place `rec.bookDir = newDir` from the rename (the lease
+   is then the only source of the new folder). */
+vi.mock('../store/manuscripts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/manuscripts.js')>();
+  return {
+    ...actual,
+    getManuscript: (id: string) => {
+      const r = actual.getManuscript(id);
+      return r && (globalThis as G).__baj_clone_records ? structuredClone(r) : r;
+    },
+  };
+});
 vi.mock('../analyzer/select-analyzer.js', async () => {
   const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
     '../analyzer/select-analyzer.js',
@@ -349,5 +362,137 @@ describe('the analysis lease is released only when the tracked units settle (#37
     expect(bookJobKinds(s.bookId)).toEqual([]);
     expect((await renameOf(s)).status).toBe(204);
     expect(existsSync(s.newDir)).toBe(true);
+  });
+});
+
+/* Park a rename inside book-op (via the book's state-json lock) and queue the REAL route POST
+   behind it on book-op; returns once both are queued. `go()` lets the rename finish, so the
+   POST's registration then starts on the NEW folder. */
+async function queuePostBehindRename(s: Seeded, url: string, body: object) {
+  const paths = await import('../workspace/paths.js');
+  const fileLock = await import('../workspace/file-lock.js');
+  const open = gate();
+  const held = gate();
+  void fileLock.withStateJsonLock(paths.stateJsonPath(s.bookDir), async () => {
+    held.open();
+    await open.promise;
+  });
+  await held.promise;
+  const renameP = Promise.resolve(renameOf(s) as unknown as PromiseLike<request.Response>);
+  while (fileLock.__keyWaitersForTest(`state-json:${paths.stateJsonPath(s.bookDir)}`) < 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  const postP = Promise.resolve(request(app).post(url).send(body) as unknown as PromiseLike<request.Response>);
+  while (fileLock.__keyWaitersForTest(`book-op:${s.bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
+  return { renameP, postP, go: () => open.open() };
+}
+
+describe('the REAL analysis POST routes (#3711 review)', () => {
+  it('main POST: the lease is held past the drain deadline until the last tracked unit settles', async () => {
+    const s = await seedBook('route-drain');
+    const { takeWork, releaseWork, __inFlightJobForTest } = analysisModule;
+    let held: AnalysisJob | undefined;
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          held = __inFlightJobForTest(s.manuscriptId, 'main');
+          takeWork(held!); // a tracked unit that outlives the run
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const timers: Array<() => void> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...a: unknown[]) => {
+      if (ms === analysisModule.MAIN_DRAIN_DEADLINE_MS) {
+        timers.push(fn);
+        return { unref() {} } as unknown as NodeJS.Timeout;
+      }
+      return (realSetTimeout as unknown as (...x: unknown[]) => NodeJS.Timeout)(fn, ms, ...a);
+    }) as unknown as typeof setTimeout);
+    try {
+      const res = await request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis`).send({});
+      expect(sseFrames(res.text).some((f) => f.kind === 'result')).toBe(true);
+      expect(held?.ended).toBe(true);
+      expect(timers).toHaveLength(1);
+      timers[0](); // the drain deadline fires: busy flag + pin released ...
+      expect(held?.left).toBe(true);
+      /* ... but the unit is still running, so the book is still held. */
+      expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+      const refused = await renameOf(s);
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('book_busy');
+      expect(existsSync(s.newDir)).toBe(false);
+      releaseWork(held!);
+      await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+      expect((await renameOf(s)).status).toBe(204);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('main POST queued behind a rename runs on the NEW folder (job.bookDir from the lease)', async () => {
+    const s = await seedBook('route-lease-main');
+    const entered = gate();
+    const release = gate();
+    let seenDir: string | null | undefined;
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          seenDir = analysisModule.__inFlightJobForTest(s.manuscriptId, 'main')?.bookDir;
+          entered.open();
+          await release.promise;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    g.__baj_clone_records = true;
+    const q = await queuePostBehindRename(s, `/api/manuscripts/${s.manuscriptId}/analysis`, {});
+    q.go();
+    expect((await q.renameP).status).toBe(204);
+    await entered.promise;
+    expect(seenDir).toBe(s.newDir);
+    release.open();
+    await q.postP;
+    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+  });
+
+  it('subset POST queued behind a rename runs on the NEW folder (job.bookDir from the lease)', async () => {
+    const s = await seedBook('route-lease-subset');
+    const entered = gate();
+    const release = gate();
+    let seenDir: string | null | undefined;
+    const hold = async () => {
+      seenDir ??= analysisModule.__inFlightJobForTest(s.manuscriptId, 'subset')?.bookDir;
+      entered.open();
+      await release.promise;
+    };
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          await hold();
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(
+      stubAnalyzer({
+        runStage2Chapter: async (_m: string, chapterId: number) => {
+          await hold();
+          return { sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: 'nova', confidence: 0.9, text: BODIES[chapterId] }] };
+        },
+      }),
+    );
+    g.__baj_clone_records = true;
+    const q = await queuePostBehindRename(s, `/api/manuscripts/${s.manuscriptId}/analysis/chapters`, { chapterIds: [1] });
+    q.go();
+    expect((await q.renameP).status).toBe(204);
+    await entered.promise;
+    expect(seenDir).toBe(s.newDir);
+    release.open();
+    await q.postP;
+    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
   });
 });

@@ -382,7 +382,11 @@ singleDesignRouter.post(
       return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the voice design.') });
     }
     if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
-    registered.done.catch((e) => console.error('[single-design] design job failed', e));
+    registered.done.catch((e) => {
+      console.error('[single-design] design job failed', e);
+      /* A `fn` that threw before it answered: curated 500 (nothing else will respond). */
+      if (!res.headersSent) res.status(500).json({ error: requestFailureMessage(e, 'Could not start the voice design.') });
+    });
   },
 );
 

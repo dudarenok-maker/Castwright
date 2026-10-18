@@ -33,10 +33,20 @@ vi.mock('../workspace/scan.js', async (importOriginal) => {
 /* #3711 -- POST resume-scoring resolves its early 404/409 through `peekBook` (advisory,
    no lock) instead of findBookByBookId, so the same sentinel bookIds drive its catch
    block through the peek. Real lookups pass through. */
+const failRegistration = vi.hoisted(() => ({ on: false }));
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
   return {
     ...actual,
+    /* `failRegistration.on`: the `runBookJob` registration (its `withBookOp`) times out -- the
+       realistic source of a lock timeout on this route, after the advisory peek passed. */
+    withBookOp: async (...args: Parameters<typeof actual.withBookOp>) => {
+      if (failRegistration.on) {
+        const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+        throw new LockAcquisitionTimeoutError('book-op:C:/SECRET-WORKSPACE/book', 10_000);
+      }
+      return actual.withBookOp(...args);
+    },
     peekBook: async (bookId: string, hintDir?: string) => {
       if (bookId === 'THROW_TRIGGER') {
         throw new Error('disk read failed');
@@ -240,6 +250,19 @@ describe('POST /:bookId/resume-scoring', () => {
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  it('a timed-out runBookJob registration answers the curated 500 (no lock-key path)', async () => {
+    const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    failRegistration.on = true;
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+      expect(res.text).not.toContain('SECRET-WORKSPACE');
+    } finally {
+      failRegistration.on = false;
+    }
   });
 
   it('a non-lock failure keeps its own message', async () => {

@@ -755,6 +755,19 @@ describe('POST /api/books/:bookId/cast/design', () => {
     designLock.clearAnalysisBusy(bookDir);
   });
 
+  it('answers a curated 500 when the design job throws before it responds (#3711 review)', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    vi.spyOn(designLock, 'isAnalysisBusy').mockImplementation(() => {
+      throw new LockAcquisitionTimeoutError('cast:C:/Users/real-name/books/x/.audiobook/cast.json', 10_000);
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('real-name');
+  });
+
   it('bare POST with no live job replays idle and ends', async () => {
     const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({});
     expect(res.status).toBe(200);

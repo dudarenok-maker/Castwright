@@ -462,6 +462,17 @@ interface RunningJob {
   children: Promise<unknown>[];
 }
 
+/** #3711 — await every child the job started, INCLUDING ones pushed while earlier ones
+    were being awaited (a plain `Promise.allSettled(job.children)` snapshots the array). */
+export async function drainChildren(job: RunningJob): Promise<void> {
+  let seen = 0;
+  while (seen < job.children.length) {
+    const batch = job.children.slice(seen);
+    seen += batch.length;
+    await Promise.allSettled(batch);
+  }
+}
+
 /* Primary registry — one entry per in-flight chapter, keyed
    `${bookId}::${chapterId}` (or `${bookId}::*` for the back-compat
    sequential job). The queue dispatcher fires one POST per chapter, so the
@@ -1359,6 +1370,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     children: [],
   };
   registerJob(key, job);
+  /* #3711 — from here on the job can own children, so the wait for them lives in the
+     `finally` that closes this `try` (an early return above has no job to drain). */
+  try {
 
   /* SSE close on the starter connection is just an unsubscribe — the job
      keeps running for any other observers. If the starter was the only
@@ -1896,6 +1910,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          finalize capture below wrongly folded encode into synthMs.) */
       const synthOnlyMs = Date.now() - synthStartMs;
 
+      /* #3711 — the no-progress watchdog abandoned this chapter: the failure is already
+         recorded and the render token may be released, so an abort-ignoring synth that
+         resolves late must not write the book (it could recreate a moved folder). */
+      if (watchdogFired) return;
+
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
@@ -1977,6 +1996,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            else. */
         castHistorySeq: castIdHistory.seq ?? 0,
       });
+      /* #3711 — abandoned DURING the finalize write (which cannot be cancelled): that write
+         has landed, but nothing after it may run (no scoring child, no queue-done mark). */
+      if (watchdogFired) return;
       if (audioQa.status === 'suspect') {
         console.warn(
           `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +
@@ -2410,10 +2432,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      entry and starts a fresh run. */
   endAllSubscribers(job, { type: 'idle' });
 
-  /* #3711 — wait for the un-awaited children that write the book. They resolve once
-     scoring's own `runBookJob` registration has (triggerScoring), so by the time this
-     render's token is released scoring's is already held. */
-  await Promise.allSettled(job.children);
+  } finally {
+    /* #3711 — wait for the un-awaited children that write the book. They resolve once
+       scoring's own `runBookJob` registration has (triggerScoring), so by the time this
+       render's token is released scoring's is already held. In a `finally` so a `fn` that
+       throws after pushing a child still waits for it. */
+    await drainChildren(job);
+  }
     });
   } catch (e) {
     console.error('[generation] job registration failed', e);

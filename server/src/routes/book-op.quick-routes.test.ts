@@ -13,7 +13,7 @@
    route's slow, unlocked prepare span runs, change the manuscript, then release. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -453,5 +453,65 @@ describe('#3711 task 3 -- DELETE only clears the analysis cache when it removed 
     const res = await request(app).delete(`/api/books/${book.bookId}`);
     expect(res.status).toBe(204);
     expect(spies.clearAnalysisCache).toHaveBeenCalledWith(book.manuscriptId);
+  });
+});
+
+describe('#3711 review -- the move runs FIRST (inside a held book-op span); the route resolves the book UNDER the lock', () => {
+  /** Hold book-op, start the route, wait for it to queue on book-op, MOVE the folder inside the
+   *  held span, release. A route that resolved the book before taking the lock holds the old
+   *  folder and writes (re-creating) it; one that resolves under the lock writes the new one. */
+  async function moveWhileQueued(book: Seeded, route: () => { then: PromiseLike<unknown>['then'] }, newTitle: string) {
+    let release!: () => void;
+    const open = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const held = new Promise<void>((r) => (acquired = r));
+    void bookOpLock.withBookOp(book.bookId, async () => {
+      acquired();
+      await open;
+    });
+    await held;
+    const routeP = fire(route());
+    await waitUntil(() => waiters(`book-op:${book.bookId}`) >= 1, 'the route to queue on book-op');
+    const newDir = paths.bookDirByDisplay(AUTHOR, paths.STANDALONES_SERIES, newTitle);
+    renameSync(book.bookDir, newDir);
+    release();
+    return { res: await routeP, newDir };
+  }
+
+  it('exclude writes the moved folder and does not re-create the old one', async () => {
+    const book = seedBook('Moved Exclude');
+    const { res, newDir } = await moveWhileQueued(
+      book,
+      () => request(app).post(`/api/books/${book.bookId}/chapters/1/exclude`).send({ excluded: true }),
+      'Moved Exclude Renamed',
+    );
+    expect(res.status).toBe(200);
+    expect(existsSync(book.bookDir)).toBe(false);
+    expect(readJsonFile<{ chapters: Array<{ excluded?: boolean }> }>(paths.stateJsonPath(newDir)).chapters[0].excluded).toBe(true);
+  });
+
+  it('reparse commits to the moved folder and does not re-create the old one', async () => {
+    const book = seedBook('Moved Reparse');
+    const { res, newDir } = await moveWhileQueued(
+      book,
+      () => request(app).post(`/api/books/${book.bookId}/reparse`),
+      'Moved Reparse Renamed',
+    );
+    expect(res.status).toBe(200);
+    expect(existsSync(book.bookDir)).toBe(false);
+    expect(existsSync(paths.stateJsonPath(newDir))).toBe(true);
+    expect(existsSync(paths.castJsonPath(newDir))).toBe(false); // the reparse discarded the NEW folder's cast
+  });
+
+  it('listen-progress PUT lands the bookmark in the moved folder and does not re-create the old one', async () => {
+    const book = seedBook('Moved Progress');
+    const { res, newDir } = await moveWhileQueued(
+      book,
+      () => request(app).put(`/api/books/${book.bookId}/listen-progress`).send({ chapterId: 1, currentSec: 7 }),
+      'Moved Progress Renamed',
+    );
+    expect(res.status).toBe(200);
+    expect(existsSync(book.bookDir)).toBe(false);
+    expect(readJsonFile<{ currentSec: number }>(paths.listenProgressJsonPath(newDir)).currentSec).toBe(7);
   });
 });

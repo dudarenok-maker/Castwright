@@ -949,7 +949,11 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the cast design.') });
   }
   if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
-  registered.done.catch((e) => console.error('[cast-design] design job failed', e));
+  registered.done.catch((e) => {
+    console.error('[cast-design] design job failed', e);
+    /* A `fn` that threw before it answered: curated 500 (nothing else will respond). */
+    if (!res.headersSent) res.status(500).json({ error: requestFailureMessage(e, 'Could not start the cast design.') });
+  });
 });
 
 castDesignRouter.get('/:bookId/cast/design/status', (req: Request, res: Response) => {
