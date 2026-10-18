@@ -113,4 +113,42 @@ describe('updateStateAtDir underBookLock', () => {
     expect(order).toEqual(['hook', 'mutate']);
     expect(leafFreeInHook).toBe(true);
   });
+
+  /* "Inside the book lock" has to be observable, or the hook could run before
+     withBookLock and the case above would still be green. A holder owns the
+     book lock; the hook must not run until it lets go. */
+  it('does not run until a concurrent holder of the book lock releases it', async () => {
+    const { updateStateAtDir } = await import('./book-state-update.js');
+    const { withBookLock } = await import('./book-lock.js');
+    const bookDir = join(workspaceRoot, 'books', 'tester', 'myseries', 'locate');
+
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((r) => {
+      releaseHolder = r;
+    });
+    let holding!: () => void;
+    const holderIn = new Promise<void>((r) => {
+      holding = r;
+    });
+    const holder = withBookLock(BOOK_ID, async () => {
+      holding();
+      await holderGate;
+    });
+    await holderIn;
+
+    let hookRan = false;
+    const update = updateStateAtDir(bookDir, (s) => ({ ...s, title: 'Mutated' }), {
+      underBookLock: async () => {
+        hookRan = true;
+      },
+    });
+    /* give a hook that wrongly ran outside the lock ample time to show itself */
+    await new Promise((r) => setTimeout(r, 100));
+    expect(hookRan).toBe(false);
+
+    releaseHolder();
+    await holder;
+    expect(await update).toBe(true);
+    expect(hookRan).toBe(true);
+  });
 });
