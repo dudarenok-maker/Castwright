@@ -1342,14 +1342,23 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
 });
 
 describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
-  it('→ analyzer-request-rejected with its own copy: the message, no HTTP status, a chunk-size or larger-window remediation, and fixes', () => {
+  it('→ analyzer-request-rejected with its own copy: the message, no HTTP status, a larger-window remediation, and fixes that can help a context target (#3710 M3)', () => {
     const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context'), 'Endpoint Lab (qwen3-30b)');
     expect(r.code).toBe('analyzer-request-rejected');
     expect(r.userMessage).toBe('prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context 8192 tokens)');
     expect(r.userMessage).not.toMatch(/\(400\)|rejected the request/);
-    expect(r.remediation).toMatch(/Lower the chunk size/);
     expect(r.remediation).toMatch(/fallback target with a larger window/);
+    expect(r.remediation).toMatch(/turn the fallback off/i);
+    expect(r.remediation).not.toMatch(/stage input fractions|Lower the chunk size/);
     expect(r.remediation).not.toMatch(/\(400\)/);
+    /* Both the primary's chunk and the target's budget are min(ceiling, f x ctx x 2), so a smaller
+       fraction can never bring a context target's budget above the chunk: no fraction fixes. */
+    expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.ollama.numCtx']);
+  });
+
+  it('keeps the chunk-size fixes for a per-request-cap target', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap'), 'Endpoint Lab (m)');
+    expect(r.remediation).toMatch(/Lower the chunk size/);
     expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.stage1.localInputFraction', 'analyzer.stage2.localInputFraction']);
   });
 

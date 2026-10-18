@@ -693,13 +693,24 @@ export function reasoningOverflowFixes(ctx: {
   return [...fixes, ...reads];
 }
 
-/** #3084 P30 — the settings that let a fallback target take the request. */
-export function targetInputTooLargeFixes(): AnalysisFailureFix[] {
-  return [
-    { label: 'Choose a fallback target with a larger window', settingKey: 'analyzer.fallback.target' },
-    { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
-    { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+/** #3084 P30 — the settings that let a fallback target take the request. For a context-window
+    target the stage input fractions are no help: the primary's chunk and the target's budget are
+    both min(ceiling, fraction x context x 2), so a smaller fraction never lifts the target's budget
+    above the chunk. Only a bigger window (or no fallback) can; a per-request cap can also be met by
+    smaller chunks. */
+export function targetInputTooLargeFixes(family: 'context' | 'requestCap', transport: TransportKind): AnalysisFailureFix[] {
+  const fixes: AnalysisFailureFix[] = [
+    { label: 'Choose a fallback target with a larger window, or turn the fallback off', settingKey: 'analyzer.fallback.target' },
   ];
+  if (family === 'requestCap') {
+    fixes.push(
+      { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
+      { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+    );
+  } else if (transport === 'ollama') {
+    fixes.push({ label: "Raise the Ollama target's context (num_ctx)", settingKey: 'analyzer.ollama.numCtx' });
+  }
+  return fixes;
 }
 
 /** #3084 pass-3 — the actionable half of `reasoningOverflowFixes` as one
@@ -903,9 +914,11 @@ export function classifyAnalysisFailure(
       code: 'analyzer-request-rejected',
       userMessage: err.message,
       remediation:
-        'Lower the chunk size (Advanced Settings → Analyzer chunking: the stage input fractions) or choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), then resume — finished chapters are kept.',
+        err.family === 'context'
+          ? "Choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), raise the target's served context size, or turn the fallback off, then resume — finished chapters are kept. Lowering the chunk size cannot help here."
+          : 'Lower the chunk size (Advanced Settings → Analyzer chunking: the stage input fractions) or choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), then resume — finished chapters are kept.',
       detail: `transport=${err.transport} model=${err.model} limit=${err.limitTokens} family=${err.family}`,
-      fixes: targetInputTooLargeFixes(),
+      fixes: targetInputTooLargeFixes(err.family, err.transport),
     };
   }
   if (err instanceof AnalyzerReasoningOverflowError) {

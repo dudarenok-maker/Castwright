@@ -218,11 +218,20 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
   });
 
   it('targetInputTooLargeFixes names only registry keys (#3084 P30)', () => {
-    const fixes = targetInputTooLargeFixes();
-    expect(fixes.length).toBeGreaterThan(0);
-    for (const fix of fixes) {
-      expect(fix.settingKey, fix.label).toBeDefined();
-      expect(getKnob(fix.settingKey!), fix.settingKey).toBeDefined();
+    for (const [family, transport] of [['context', 'ollama'], ['context', 'openai'], ['requestCap', 'gemini']] as const) {
+      const fixes = targetInputTooLargeFixes(family, transport);
+      expect(fixes.length).toBeGreaterThan(0);
+      for (const fix of fixes) {
+        expect(fix.settingKey, fix.label).toBeDefined();
+        expect(getKnob(fix.settingKey!), fix.settingKey).toBeDefined();
+      }
+    }
+  });
+
+  it('targetInputTooLargeFixes offers no input-fraction fix for a context target (#3710 M3)', () => {
+    for (const transport of ['ollama', 'openai', 'gemini'] as const) {
+      expect(targetInputTooLargeFixes('context', transport).map((f) => f.settingKey)).not.toContain('analyzer.stage1.localInputFraction');
+      expect(targetInputTooLargeFixes('context', transport).map((f) => f.settingKey)).not.toContain('analyzer.stage2.localInputFraction');
     }
   });
 
