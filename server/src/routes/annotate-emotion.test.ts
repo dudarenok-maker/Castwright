@@ -498,8 +498,16 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     emotionEngineState.model = 'openai:lab::m';
     emotionMarks.length = 0;
     emotionReleases.count = 0;
+    /* Sampled INSIDE every chapter call: the mark must already be held at the first call and
+       still be held at the second, i.e. across the gap between them. */
+    const busyDuringCalls: boolean[] = [];
+    runEmotion.mockImplementation(async () => {
+      busyDuringCalls.push(isEndpointBusy('lab'));
+      return { annotations: [] };
+    });
     try {
       await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCalls).toEqual([true, true]);
       expect(emotionMarks).toEqual([['lab']]);
       expect(emotionReleases.count).toBe(1);
       expect(isEndpointBusy('lab')).toBe(false);

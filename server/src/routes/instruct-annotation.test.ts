@@ -506,8 +506,16 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     instructEngineState.model = 'openai:lab::m';
     instructMarks.length = 0;
     instructReleases.count = 0;
+    /* Sampled INSIDE every chapter call: the mark must already be held at the first call and
+       still be held at the second, i.e. across the gap between them. */
+    const busyDuringCalls: boolean[] = [];
+    runStage3.mockImplementation(async () => {
+      busyDuringCalls.push(isEndpointBusy('lab'));
+      return { annotations: [] };
+    });
     try {
       await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCalls).toEqual([true, true]);
       expect(instructMarks).toEqual([['lab']]);
       expect(instructReleases.count).toBe(1);
       expect(isEndpointBusy('lab')).toBe(false);

@@ -1176,8 +1176,16 @@ describe('POST /api/books/:bookId/script-review', () => {
     selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m' }));
     reviewMarks.length = 0;
     reviewReleases.count = 0;
+    /* Sampled INSIDE each chapter's review call, so an early release is caught. */
+    const busyDuringCalls: boolean[] = [];
+    runReview.mockImplementation(async () => {
+      busyDuringCalls.push(isEndpointBusy('lab'));
+      return { ops: [] };
+    });
     try {
       await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCalls.length).toBeGreaterThan(0);
+      expect(busyDuringCalls.every(Boolean)).toBe(true);
       expect(reviewMarks).toEqual([['lab']]);
       expect(reviewReleases.count).toBe(1);
     } finally {

@@ -97,7 +97,12 @@ afterEach(() => {
 describe('analysis runs hold their endpoints busy (#3084 P1)', () => {
   it('the main POST marks the endpoints of both phases at job creation and releases them when the job ends', async () => {
     seed();
+    let labBusyDuringCall: boolean | undefined;
+    runState.onCall = () => {
+      labBusyDuringCall = isEndpointBusy('lab');
+    };
     await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis').send({ model: 'openai:lab::qwen3-30b' });
+    expect(labBusyDuringCall).toBe(true);
     expect(marks).toEqual([['lab']]);
     expect(releases.count).toBe(1);
     expect(isEndpointBusy('lab')).toBe(false);
@@ -105,7 +110,12 @@ describe('analysis runs hold their endpoints busy (#3084 P1)', () => {
 
   it('the subset POST marks and releases the same way', async () => {
     seed();
+    let labBusyDuringCall: boolean | undefined;
+    runState.onCall = () => {
+      labBusyDuringCall = isEndpointBusy('lab');
+    };
     await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis/chapters').send({ model: 'openai:lab::qwen3-30b', chapterIds: [1] });
+    expect(labBusyDuringCall).toBe(true);
     expect(marks).toEqual([['lab']]);
     expect(releases.count).toBe(1);
     expect(isEndpointBusy('lab')).toBe(false);
