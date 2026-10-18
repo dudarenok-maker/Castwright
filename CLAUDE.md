@@ -598,7 +598,9 @@ Design rationale:
   write, and every `state.json` read-modify-write that derives from a read goes
   through it (`workspace/book-state-update.ts`, enforced by
   `workspace/state-lock.guard.test.ts`). `state-json` is taken INSIDE `book`
-  (or alone, by the render finalize / stamp paths, which hold no `book`), only
+  (or alone, by the paths that hold no `book`: `DELETE`, the bundle-import overwrite
+  (`scan-import-folder.ts`), import / samples creation, reparse's presence gate, the
+  render finalize and the generation failure persist), only
   around the fresh re-read + write (`updateStateJsonLocked`, `state-migrate.ts`);
   nothing else is taken while it is held — the one nesting is the folder-renaming
   PUT, which also keys the destination path's `state-json`. The read goes inside
