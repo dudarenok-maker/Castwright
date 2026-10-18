@@ -8,6 +8,9 @@ import { Provider } from 'react-redux';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { librarySlice } from '../store/library-slice';
+import { configSlice } from '../store/config-slice';
 import { ModelSettingsForm } from './model-settings-form';
 import { api, type SetupReadiness, type BlockerDiagnosis } from '../lib/api';
 
@@ -46,7 +49,7 @@ function readinessWith(analyzer: BlockerDiagnosis): SetupReadiness {
 
 function renderForm(account: Partial<ReturnType<typeof accountSlice.getInitialState>> = {}) {
   const store = configureStore({
-    reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
+    reducer: { account: accountSlice.reducer, ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, config: configSlice.reducer },
     preloadedState: { account: { ...accountSlice.getInitialState(), ...account } },
   });
   return render(
@@ -179,6 +182,38 @@ describe('ModelSettingsForm — fallback lives in Advanced Settings (#3084 P30)'
     unmount();
 
     expect(clearTimeoutSpy).toHaveBeenCalledWith(confirmTimeoutId);
+  });
+});
+
+describe('ModelSettingsForm — analysis model and engine move together (#3710 F2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+    vi.mocked(api.putUserSettings).mockImplementation(
+      async (patch) => ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
+    );
+  });
+
+  const LAB = {
+    id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', concurrency: 1, requestCeilingMs: 1_800_000,
+    structuredOutput: 'schema', reasoningStyle: 'not_controllable', reasoning: 'model-default', maxOutputTokens: 0, contextTokens: 32768,
+  };
+
+  it('picking an endpoint model saves analysisEngine: openai with it', async () => {
+    renderForm({
+      analyzerEndpoints: [LAB],
+      analyzerCatalog: {
+        groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab', status: 'ok', models: [{ id: 'openai:lab::qwen3', label: 'qwen3', engine: 'openai', model: 'qwen3', structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 } }] }],
+      },
+    } as never);
+    const select = await screen.findByTestId('account-default-analysis-model');
+    fireEvent.change(select, { target: { value: 'openai:lab::qwen3' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(vi.mocked(api.putUserSettings)).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.putUserSettings).mock.calls[0][0]).toMatchObject({
+      defaultAnalysisModel: 'openai:lab::qwen3',
+      analysisEngine: 'openai',
+    });
   });
 });
 

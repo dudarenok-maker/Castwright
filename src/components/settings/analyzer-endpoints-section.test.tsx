@@ -270,7 +270,7 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     renderSection({ endpoints: [LAB] });
     fireEvent.change(screen.getByTestId('endpoint-free-model-lab'), { target: { value: 'qwen3-30b-a3b' } });
     fireEvent.click(screen.getByTestId('endpoint-use-free-model-lab'));
-    await waitFor(() => expect(api.putUserSettings).toHaveBeenCalledWith({ defaultAnalysisModel: 'openai:lab::qwen3-30b-a3b' }));
+    await waitFor(() => expect(api.putUserSettings).toHaveBeenCalledWith({ defaultAnalysisModel: 'openai:lab::qwen3-30b-a3b', analysisEngine: 'openai' }));
   });
 
   it('shows the dropped entries banner above the endpoints (P31)', () => {

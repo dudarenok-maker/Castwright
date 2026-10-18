@@ -243,7 +243,7 @@ export class AnalyzerEndpointMissingError extends Error {
     readonly endpointId: string,
     readonly source: 'settings' | 'env' | 'run-pick' | 'persona',
   ) {
-    super(`Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) cannot be used for analysis yet.`);
+    super(`Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`);
     this.name = 'AnalyzerEndpointMissingError';
   }
 }

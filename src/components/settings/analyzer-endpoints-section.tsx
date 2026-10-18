@@ -15,7 +15,7 @@ import {
 } from '../../store/account-slice';
 import { api, detectAnalyzerEndpointContext, AnalyzerEndpointError } from '../../lib/api';
 import { defaultGpuForBaseUrl } from '../../lib/analyzer-endpoints';
-import { endpointModelId } from '../../lib/model-id';
+import { endpointModelId, engineForModelId } from '../../lib/model-id';
 import { modelLabel } from '../../lib/model-label';
 import type { AnalyzerEndpoint, AnalyzerEndpointInput, AnalyzerEndpointModelsPreview, GpuDevice } from '../../lib/types';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
@@ -312,7 +312,8 @@ export function AnalyzerEndpointsSection() {
   const useFreeModel = (id: string) => {
     const model = (freeModels[id] ?? '').trim();
     if (model === '') return;
-    void dispatch(saveAccountSettings({ defaultAnalysisModel: endpointModelId(id, model) }));
+    const modelId = endpointModelId(id, model);
+    void dispatch(saveAccountSettings({ defaultAnalysisModel: modelId, analysisEngine: engineForModelId(modelId) }));
   };
 
   return (

@@ -29,7 +29,7 @@ import { api, type BlockerDiagnosis } from '../lib/api';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
-import type { AnalysisEngine } from '../lib/model-id';
+import { engineForModelId, type AnalysisEngine } from '../lib/model-id';
 import { ModelPullStatus } from './model-pull-status';
 import { AnalyzerEndpointsSection } from './settings/analyzer-endpoints-section';
 
@@ -285,7 +285,12 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
           <select
             data-testid="account-default-analysis-model"
             value={defaultAnalysisModel}
-            onChange={(e) => setDefaultAnalysisModel(e.target.value)}
+            onChange={(e) => {
+              /* Engine follows the id (same grammar as the setup wizard) so an
+                 endpoint pick can't be saved under engine 'local'. */
+              setDefaultAnalysisModel(e.target.value);
+              setAnalysisEngine(engineForModelId(e.target.value));
+            }}
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             {analyzerModelGroups.map((g) => (
