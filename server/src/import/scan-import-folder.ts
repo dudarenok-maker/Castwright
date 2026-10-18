@@ -41,6 +41,8 @@ import {
   makeBookId,
   stateJsonPath,
 } from '../workspace/paths.js';
+import { reencodeToJpeg } from '../cover/reencode.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   PORTABLE_SCHEMA_VERSION,
@@ -215,25 +217,45 @@ export async function importPortableBundle(
   let resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
   let renamedTo: string | undefined;
 
-  if (existsSync(bookDir)) {
-    if (strategy === 'fail') {
-      throw new BundleConflictError(bookDir);
+  /* The conflict decision is made, and the target dir CLAIMED (mkdir), inside
+     the target's state-json lock (#3625): decided outside it, two concurrent
+     imports of one title both saw "free" ('fail' both succeeded) or both
+     picked the same "(2)" ('rename'). The unlocked pick below only chooses a
+     candidate; the in-lock re-check is authoritative. A 'rename' candidate is
+     always a dir that did not exist at pick time, so finding it present under
+     the lock means another import claimed it first — re-pick. Phase 1's tmp
+     writes still stay outside the lock. */
+  for (let attempt = 0; ; attempt += 1) {
+    if (attempt >= 100) {
+      throw new Error('bundle_conflict: too many colliding imports; aborting after 100 attempts');
     }
-    if (strategy === 'rename') {
+    bookDir = bookDirByDisplay(author, series, baseTitle);
+    resolvedTitle = baseTitle;
+    resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
+    renamedTo = undefined;
+    if (existsSync(bookDir) && strategy === 'rename') {
       const renamed = resolveRenamedTarget(author, series, baseTitle);
       bookDir = renamed.bookDir;
       resolvedTitle = renamed.title;
       resolvedBookId = renamed.bookId;
       renamedTo = bookDir;
-      state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
     }
-    /* 'overwrite' falls through — bookDir stays as the existing path. */
+    const claimed = await withStateJsonLock(stateJsonPath(bookDir), async () => {
+      if (existsSync(bookDir)) {
+        if (strategy === 'fail') throw new BundleConflictError(bookDir);
+        /* 'overwrite' keeps the existing path; 'rename' lost the race. */
+        if (strategy === 'rename') return false;
+      }
+      await mkdir(bookDir, { recursive: true });
+      return true;
+    });
+    if (claimed) break;
   }
+  if (renamedTo) state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
 
   /* Stage every entry into a tmp file alongside its eventual home, then
      promote all of them via rename. Per-file atomicity (see file-header
      comment for the caveat about bundle-atomicity). */
-  await mkdir(bookDir, { recursive: true });
   await mkdir(dotAudiobook(bookDir), { recursive: true });
   await mkdir(audioDir(bookDir), { recursive: true });
 
@@ -255,7 +277,8 @@ export async function importPortableBundle(
     staged.push({ dest, tmp: `${dest}${tmpSuffix}`, buf, sourceEntry });
   }
 
-  planEntry(stateJsonPath(bookDir), finalStateBuf, 'state.json');
+  const liveStatePath = stateJsonPath(bookDir);
+  planEntry(liveStatePath, finalStateBuf, 'state.json');
   const manuscriptBuf = entries.get(state.manuscriptFile);
   if (!manuscriptBuf) {
     throw new InvalidBundleError(
@@ -266,6 +289,7 @@ export async function importPortableBundle(
   planEntry(join(bookDir, state.manuscriptFile), manuscriptBuf, state.manuscriptFile);
 
   /* Optional top-level entries: cover.{jpg,png,…} and change-log.json. */
+  const coverEntries: [string, Buffer][] = [];
   for (const [name, buf] of entries.entries()) {
     if (name === 'MANIFEST.json' || name === 'state.json') continue;
     if (name === state.manuscriptFile) continue;
@@ -278,10 +302,31 @@ export async function importPortableBundle(
       continue;
     }
     if (name.startsWith('cover.')) {
-      planEntry(join(dotAudiobook(bookDir), name), buf, name);
+      coverEntries.push([name, buf]);
       continue;
     }
     /* Forward-compat: skip silently. */
+  }
+
+  /* #3535: re-encode the cover to a clean JPEG like every other cover path,
+     and store it as cover.jpg whatever the entry's extension. Every cover.*
+     entry shares that one destination (and so one tmp file), so stage at most
+     one: an exact cover.jpg first, else the first that decodes. An undecodable
+     entry is skipped (the book still imports), like an unknown entry. */
+  coverEntries.sort(([a], [b]) => Number(b === 'cover.jpg') - Number(a === 'cover.jpg'));
+  let coverStaged = false;
+  for (const [name, buf] of coverEntries) {
+    if (coverStaged) {
+      console.warn(`[import] skipping extra cover entry ${name}: one cover per bundle`);
+      continue;
+    }
+    try {
+      const jpeg = await reencodeToJpeg(buf, { tolerant: true });
+      planEntry(join(dotAudiobook(bookDir), 'cover.jpg'), jpeg, name);
+      coverStaged = true;
+    } catch (e) {
+      console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
+    }
   }
 
   /* Audio entries — audio/<slug>.<ext>. Restored into <bookDir>/audio/. */
@@ -309,15 +354,27 @@ export async function importPortableBundle(
   }
 
   /* Phase 2: rename each tmp file over its final destination. Failure
-     mid-rename is the half-imported case called out in the header. */
+     mid-rename is the half-imported case called out in the header.
+     This is the one state.json writer that does not go through
+     writeStateJsonAtomic, so the state-json-lock guard cannot see it: it is locked
+     by hand (#3625). Phase 1 (tmp writes) stays outside the lock.
+     The cleanup wraps the lock acquisition itself, not just the renames:
+     `withKeyLock` never runs its callback when acquisition times out, so a
+     catch inside the callback would leak every staged tmp file on exactly
+     that failure. */
   try {
-    for (const s of staged) {
-      await rename(s.tmp, s.dest);
-    }
+    /* Always under the lock, fresh folder or not (#3700 locked only the
+       overwrite path): an 'overwrite' import can land on a folder another
+       import has just claimed, so a fresh folder is not writer-free. */
+    await withStateJsonLock(liveStatePath, async () => {
+      for (const s of staged) {
+        await rename(s.tmp, s.dest);
+      }
+    });
   } catch (e) {
-    /* Best-effort cleanup of remaining tmp files (the ones we hadn't
-       renamed yet); already-renamed live files are left in place because
-       we don't have their pre-import bytes any more. */
+    /* Best-effort cleanup of the tmp files not yet renamed (a renamed one no
+       longer exists at its tmp path); already-renamed live files are left in
+       place because we don't have their pre-import bytes any more. */
     for (const t of tmpsWritten) await unlink(t).catch(() => {});
     throw e;
   }

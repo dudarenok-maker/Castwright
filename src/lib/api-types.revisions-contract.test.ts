@@ -3,8 +3,8 @@
    runtime `expect`s exist so vitest also reports each case. */
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import type { components, paths } from './api-types';
-import type { SpliceTick, QaRepairTick } from './api';
-import type { ReviewRequest } from './types';
+import type { SpliceTick, QaRepairTick, __MockApi, __RealApi } from './api';
+import type { ReviewRequest, BookStateResponse } from './types';
 
 type S = components['schemas'];
 type RevisionsState = S['RevisionsState'];
@@ -59,25 +59,52 @@ describe('openapi: plan 285 PR 1', () => {
     expect([poll, tick, rev, q]).toHaveLength(4);
     expectTypeOf<S['RevisionsResponse']['fileId']>().toEqualTypeOf<string | null | undefined>();
     expectTypeOf<S['GenerationTick']['reviewChapter']>().toEqualTypeOf<boolean | undefined>();
-    expectTypeOf<S['GenerationTick']['reviewRecorded']>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<S['GenerationTick']['reviewOutcome']>().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
     expectTypeOf<S['Revision']['origin']>().toEqualTypeOf<'server' | undefined>();
     expectTypeOf<S['QueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
     expectTypeOf<S['QueueEnqueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
-    expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>['schema']>().toEqualTypeOf<
-      number | undefined
-    >();
+    expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>>().toEqualTypeOf<S['RevisionsState']>();
+    expectTypeOf<S['BookStateResponse']['revisionsError']>().toEqualTypeOf<string | undefined>();
   });
 
   it('ReviewRequest is { characterId, triggeredBy }', () => {
     expectTypeOf<ReviewRequest>().toEqualTypeOf<{ characterId: string; triggeredBy: string }>();
   });
 
-  it('the hand-written splice / qa-repair completion ticks carry an optional reviewRecorded', () => {
+  it('the hand-written splice / qa-repair completion ticks carry an optional reviewOutcome', () => {
     expectTypeOf<
-      Extract<SpliceTick, { type: 'splice_complete' }>['reviewRecorded']
-    >().toEqualTypeOf<boolean | undefined>();
+      Extract<SpliceTick, { type: 'splice_complete' }>['reviewOutcome']
+    >().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
     expectTypeOf<
-      Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewRecorded']
-    >().toEqualTypeOf<boolean | undefined>();
+      Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewOutcome']
+    >().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
+  });
+});
+
+describe('openapi: plan 286 PR 2', () => {
+  it('plan 286 — restore-unrecorded is a POST with 204 / 404 / 409 / 500', () => {
+    type Op = paths['/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded']['post'];
+    expectTypeOf<keyof Op['responses']>().toEqualTypeOf<204 | 404 | 409 | 500>();
+  });
+
+  it('plan 286 (OD20) — Revision carries an optional recovered flag', () => {
+    expectTypeOf<S['Revision']['recovered']>().toEqualTypeOf<boolean | undefined>();
+  });
+
+  it('plan 286 — the client BookStateResponse.revisions is the generated RevisionsState', () => {
+    expectTypeOf<BookStateResponse['revisions']>().toEqualTypeOf<S['RevisionsState'] | null>();
+    expectTypeOf<BookStateResponse['revisionsError']>().toEqualTypeOf<string | undefined>();
+  });
+
+  it('plan 286 — mock and real revisions functions have identical signatures', () => {
+    type K =
+      | 'acceptRevision'
+      | 'rejectRevision'
+      | 'dismissDrift'
+      | 'restorePreviousUnrecorded'
+      | 'pollRevisions'
+      | 'pollRevisionsBulk'
+      | 'getChapterAudioPrevious';
+    expectTypeOf<Pick<__MockApi, K>>().toEqualTypeOf<Pick<__RealApi, K>>();
   });
 });

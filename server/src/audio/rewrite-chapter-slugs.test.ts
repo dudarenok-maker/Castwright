@@ -8,11 +8,15 @@ import {
   writeFileSync,
   existsSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
+import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { applyExclude, applyMerge, applySplit } from '../workspace/restructure.js';
+import type { BookStateJson } from '../workspace/scan.js';
 
 let workRoot: string;
 let audioRoot: string;
@@ -69,6 +73,33 @@ describe('rewriteChapterSlugs', () => {
     expect(result.renamed.map((r) => r.suffix).sort()).toEqual(
       ['mp3', 'peaks.json', 'segments.json'],
     );
+  });
+
+  it('moves the render-integrity sidecars (embeddings, verdicts, attempted sentinel) with a renamed chapter and deletes them with a deleted one (#3524)', async () => {
+    const sidecars = ['embeddings.json', 'render-integrity.json', 'render-integrity-attempted.json'];
+    for (const slug of ['02-old-title', '05-gone']) {
+      seed(slug);
+      /* render-integrity.json is a JSON array whose rows are re-stamped with the
+         new chapter id (a non-JSON body is reported as an error, see the corrupt
+         test below), so it is seeded as an empty array and compared parsed. */
+      for (const s of sidecars) {
+        writeFileSync(join(audioRoot, `${slug}.${s}`), s === 'render-integrity.json' ? '[]' : `${s}:${slug}`);
+      }
+    }
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old-title', to: '03-new-title', newChapterId: 3, newChapterTitle: 'new' },
+      { kind: 'delete', from: '05-gone' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    for (const s of sidecars) {
+      expect(existsSync(join(audioRoot, `02-old-title.${s}`))).toBe(false);
+      const moved = readFileSync(join(audioRoot, `03-new-title.${s}`), 'utf8');
+      if (s === 'render-integrity.json') expect(JSON.parse(moved)).toEqual([]);
+      else expect(moved).toBe(`${s}:02-old-title`);
+      expect(existsSync(join(audioRoot, `05-gone.${s}`))).toBe(false);
+    }
   });
 
   it('rotates three chapters without clobbering (two-pass via temp slug)', async () => {
@@ -142,6 +173,35 @@ describe('rewriteChapterSlugs', () => {
     expect(result.renamed.map((r) => r.suffix)).toEqual(['mp3']);
   });
 
+  // #3400 — finalize writes <slug>.m4a / <slug>.ogg for non-mp3 books; the live
+  // audio must follow the same rename/delete rules as .mp3.
+  for (const ext of ['m4a', 'ogg'] as const) {
+    it(`swaps two chapters' live .${ext} audio together with their segments`, async () => {
+      for (const slug of ['01-a', '02-b']) {
+        writeFileSync(join(audioRoot, `${slug}.${ext}`), `audio-bytes:${slug}`);
+        writeFileSync(join(audioRoot, `${slug}.segments.json`), JSON.stringify({ segments: [] }));
+      }
+      const result = await rewriteChapterSlugs(audioRoot, [
+        { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+        { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+      ]);
+      expect(result.errors).toEqual([]);
+      expect(readFileSync(join(audioRoot, `02-a.${ext}`), 'utf8')).toBe('audio-bytes:01-a');
+      expect(readFileSync(join(audioRoot, `01-b.${ext}`), 'utf8')).toBe('audio-bytes:02-b');
+      expect(existsSync(join(audioRoot, `01-a.${ext}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${ext}`))).toBe(false);
+    });
+
+    it(`deletes the live .${ext} audio for a delete op`, async () => {
+      writeFileSync(join(audioRoot, `05-doomed.${ext}`), 'x');
+      writeFileSync(join(audioRoot, '05-doomed.segments.json'), '{}');
+      const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+      expect(result.errors).toEqual([]);
+      expect(existsSync(join(audioRoot, `05-doomed.${ext}`))).toBe(false);
+      expect(result.deleted.map((d) => d.suffix)).toContain(ext);
+    });
+  }
+
   it('tolerates a delete on a slug that has no files (silent no-op)', async () => {
     const result = await rewriteChapterSlugs(audioRoot, [
       { kind: 'delete', from: '99-never-existed' },
@@ -177,7 +237,445 @@ describe('rewriteChapterSlugs', () => {
   });
 });
 
-import { readdirSync } from 'node:fs';
+describe('rewriteChapterSlugs per-book audio format (#3524 S2)', () => {
+  it.each(['m4a', 'ogg', 'mp3'] as const)(
+    'a renamed %s chapter keeps its audio and lufs.json and findChapterAudio finds it at the new slug',
+    async (ext) => {
+      writeFileSync(join(audioRoot, `03-x.${ext}`), `audio:${ext}`);
+      writeFileSync(join(audioRoot, '03-x.lufs.json'), JSON.stringify({ integrated: -18 }));
+      writeFileSync(join(audioRoot, '03-x.segments.json'), JSON.stringify({ segments: [] }));
+
+      const result = await rewriteChapterSlugs(audioRoot, [
+        { kind: 'rename', from: '03-x', to: '02-x', newChapterId: 2, newChapterTitle: 'X' },
+      ]);
+
+      expect(result.errors).toEqual([]);
+      expect(findChapterAudio(audioRoot, '02-x')?.ext).toBe(ext);
+      expect(readFileSync(join(audioRoot, `02-x.${ext}`), 'utf8')).toBe(`audio:${ext}`);
+      expect(existsSync(join(audioRoot, '02-x.lufs.json'))).toBe(true);
+      expect(readdirSync(audioRoot).filter((n) => n.startsWith('03-x'))).toEqual([]);
+    },
+  );
+
+  it('a delete op removes the m4a/ogg audio and lufs.json too', async () => {
+    for (const f of ['05-gone.m4a', '05-gone.ogg', '05-gone.lufs.json']) {
+      writeFileSync(join(audioRoot, f), 'x');
+    }
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-gone' }]);
+    expect(readdirSync(audioRoot)).toEqual([]);
+  });
+});
+
+describe('rewriteChapterSlugs x applyMerge (#3524 S1)', () => {
+  it('a merge that renumbers app-made titles never deletes the files a rename just moved into the deleted slug', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b',
+      manuscriptId: 'm',
+      title: 'T',
+      author: 'A',
+      series: 'Standalones',
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1,
+        title,
+        slug: slugOf(i + 1, title),
+        titleSynthesized: true,
+        audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: `body ${i + 1}` }));
+    const suffixes = [
+      'mp3',
+      'segments.json',
+      'peaks.json',
+      'embeddings.json',
+      'render-integrity.json',
+      'render-integrity-attempted.json',
+    ];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.slug}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const merged = applyMerge(state, hints, [], { chapterIds: [3, 4] });
+    const result = await rewriteChapterSlugs(audioRoot, merged.audioOps);
+
+    expect(result.errors).toEqual([]);
+    // Old chapter 5 is now chapter 4: all of its files must have survived the move.
+    const newFour = merged.state.chapters.find((c) => c.id === 4)!;
+    for (const s of suffixes) {
+      const p = join(audioRoot, `${newFour.slug}.${s}`);
+      expect(existsSync(p), `${newFour.slug}.${s}`).toBe(true);
+      const tag = `${s}:05-chapter-5`;
+      expect(readFileSync(p, 'utf8')).toContain(tag);
+    }
+  });
+});
+
+describe('rewriteChapterSlugs x applyMerge with an empty chapter (#3524 N2)', () => {
+  it('every rendered chapter keeps its own files at its final slug when the empty-chapter prune renumbers it', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: `body ${i + 1}` }));
+    // Chapter 2 has no sentences (a heading-only "Part One"), so the prune pass removes it.
+    const sentences = [1, 3, 4, 5].map((chapterId, i) => ({ id: i + 1, chapterId, characterId: 'narrator', text: `s${chapterId}` }));
+    const suffixes = ['mp3', 'segments.json', 'peaks.json', 'lufs.json', 'embeddings.json'];
+    const tagOf = (s: string, slug: string) => `${s}:${slug}`;
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = tagOf(s, c.slug);
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const merged = applyMerge(state, hints, sentences, { chapterIds: [4, 5] });
+    const result = await rewriteChapterSlugs(audioRoot, merged.audioOps);
+    expect(result.errors).toEqual([]);
+
+    const finalChapters = merged.state.chapters;
+    expect(finalChapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    // Rendered, content-unchanged chapters: old 1 -> 1, old 3 -> 2. Each owns its own old content.
+    const ownerOf = new Map([[1, '01-chapter-1'], [2, '03-chapter-3']]);
+    for (const [newId, oldSlug] of ownerOf) {
+      const ch = finalChapters.find((c) => c.id === newId)!;
+      expect(ch.audioRenderedAt).toBeTruthy();
+      for (const s of suffixes) {
+        const p = join(audioRoot, `${ch.slug}.${s}`);
+        expect(existsSync(p), `${ch.slug}.${s}`).toBe(true);
+        const body = readFileSync(p, 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(tagOf(s, oldSlug));
+      }
+    }
+    // The merged chapter was not rendered: it must not inherit any chapter's audio.
+    const mergedCh = finalChapters.find((c) => c.id === 3)!;
+    expect(mergedCh.audioRenderedAt).toBeFalsy();
+    expect(readdirSync(audioRoot).filter((n) => n.startsWith(`${mergedCh.slug}.`))).toEqual([]);
+    // Nothing is left at the old slugs of the tail.
+    expect(readdirSync(audioRoot).sort()).toEqual(
+      ['01-chapter-1', '02-chapter-2'].flatMap((sl) => suffixes.map((s) => `${sl}.${s}`)).sort(),
+    );
+  });
+});
+describe('rewriteChapterSlugs x applySplit then applyExclude (#3524 R)', () => {
+  it('the title renumber after a split re-slugs a rendered chapter the later op did not touch, and moves its files with it', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: i === 1 ? 'Alpha one. Beta two.' : `body ${i + 1}` }));
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 's1' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Alpha one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Beta two.' },
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 's3' },
+      { id: 1, chapterId: 4, characterId: 'narrator', text: 's4' },
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 's5' },
+    ];
+    const suffixes = ['mp3', 'segments.json', 'peaks.json'];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.title}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const split = applySplit(state, hints, sentences, { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' });
+    expect((await rewriteChapterSlugs(audioRoot, split.audioOps)).errors).toEqual([]);
+    // Chapters after the split keep their old app-made titles at shifted ids.
+    const toggled = applyExclude(split.state, split.hints, split.sentences, { chapterIds: [1], excluded: true });
+    expect((await rewriteChapterSlugs(audioRoot, toggled.audioOps)).errors).toEqual([]);
+
+    // Old "Chapter 3/4/5" are rendered survivors at final ids 4/5/6: each owns its content at its final slug.
+    const finalById = new Map(toggled.state.chapters.map((c) => [c.id, c]));
+    const owners: Array<[number, string]> = [[4, 'Chapter 3'], [5, 'Chapter 4'], [6, 'Chapter 5']];
+    for (const [id, originalTitle] of owners) {
+      const ch = finalById.get(id)!;
+      expect(ch.audioRenderedAt, `id ${id}`).toBeTruthy();
+      for (const s of suffixes) {
+        const p = join(audioRoot, `${ch.slug}.${s}`);
+        expect(existsSync(p), `${ch.slug}.${s}`).toBe(true);
+        const body = readFileSync(p, 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(`${s}:${originalTitle}`);
+      }
+    }
+    // Nothing is stranded at a slug no chapter owns.
+    const ownedSlugs = new Set(toggled.state.chapters.map((c) => c.slug));
+    for (const name of readdirSync(audioRoot)) {
+      const slug = name.slice(0, name.indexOf('.'));
+      expect(ownedSlugs.has(slug), name).toBe(true);
+    }
+  });
+});
+
+describe('rewriteChapterSlugs x applySplit then applyMerge of later chapters (#3524 R2)', () => {
+  it("the unrendered merged chapter owns no files: a deleted member's audio is not renamed onto its slug", async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: i === 1 ? 'Alpha one. Beta two.' : `body ${i + 1}` }));
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 's1' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Alpha one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Beta two.' },
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 's3' },
+      { id: 1, chapterId: 4, characterId: 'narrator', text: 's4' },
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 's5' },
+    ];
+    const suffixes = ['mp3', 'segments.json', 'peaks.json'];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.title}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const split = applySplit(state, hints, sentences, { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' });
+    expect((await rewriteChapterSlugs(audioRoot, split.audioOps)).errors).toEqual([]);
+    // After the split the old "Chapter 4"/"Chapter 5" sit at ids 5/6; merge them.
+    const merged = applyMerge(split.state, split.hints, split.sentences, { chapterIds: [5, 6] });
+    expect((await rewriteChapterSlugs(audioRoot, merged.audioOps)).errors).toEqual([]);
+
+    const mergedCh = merged.state.chapters.find((c) => c.id === 5)!;
+    expect(mergedCh.audioRenderedAt).toBeFalsy();
+    expect(readdirSync(audioRoot).filter((n) => n.startsWith(`${mergedCh.slug}.`))).toEqual([]);
+    // The rendered survivors still own their own content.
+    for (const [id, originalTitle] of [[4, 'Chapter 3']] as Array<[number, string]>) {
+      const ch = merged.state.chapters.find((c) => c.id === id)!;
+      for (const s of suffixes) {
+        const body = readFileSync(join(audioRoot, `${ch.slug}.${s}`), 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(`${s}:${originalTitle}`);
+      }
+    }
+  });
+});
+
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }
+
+/* #3400 — the A/B take's `.previous.*` artifacts follow the live audio. */
+function seedPrevious(slug: string): void {
+  writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-bytes:${slug}`);
+  writeFileSync(
+    join(audioRoot, `${slug}.previous.segments.json`),
+    JSON.stringify({ bookId: 'b', chapterId: 99, chapterTitle: 'OLD', segments: [] }),
+  );
+}
+
+describe('rewriteChapterSlugs — .previous.* artifacts', () => {
+  it('moves a chapter\'s previous take with it on a swap, never leaving it under a slug another chapter now owns', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a'); // only chapter A has a previous take
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '01-a', newChapterId: 1, newChapterTitle: 'b' },
+    ]);
+
+    // A's previous take travelled to A's new slug.
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(existsSync(join(audioRoot, '02-b.previous.segments.json'))).toBe(true);
+    // B (now 01-a) had no previous take and must not inherit A's.
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+    // Embedded chapter metadata follows the live segments rewrite.
+    const seg = JSON.parse(readFileSync(join(audioRoot, '02-b.previous.segments.json'), 'utf8'));
+    expect(seg).toMatchObject({ chapterId: 2, chapterTitle: 'a' });
+  });
+
+  it('chain A→B while B→C does not clobber either chapter\'s previous take', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a');
+    seedPrevious('02-b');
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '03-c', newChapterId: 3, newChapterTitle: 'b' },
+    ]);
+
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:02-b');
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+  });
+
+  it('deletes the previous take when the chapter\'s audio is deleted (content changed)', async () => {
+    seed('01-a');
+    seedPrevious('01-a');
+
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '01-a' }]);
+
+    expect(existsSync(join(audioRoot, '01-a.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+  });
+
+  it('a delete whose slug is also a rename target removes the OLD occupant, never the chapter renamed into it (#3400)', async () => {
+    seed('03-c');
+    seedPrevious('03-c');
+    seed('04-d');
+    seedPrevious('04-d');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '03-c' },
+      { kind: 'rename', from: '04-d', to: '03-c', newChapterId: 3, newChapterTitle: 'd' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    // Renamed chapter's live + previous + segments + peaks landed at the slug...
+    expect(readFileSync(join(audioRoot, '03-c.mp3'), 'utf8')).toBe('audio-bytes:04-d');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:04-d');
+    expect(existsSync(join(audioRoot, '03-c.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.peaks.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.previous.segments.json'))).toBe(true);
+    // ...and the deleted chapter's bytes are gone, the source slug vacated.
+    expect(existsSync(join(audioRoot, '04-d.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '04-d.previous.mp3'))).toBe(false);
+    expect(result.deleted.map((d) => d.slug)).toEqual(Array(5).fill('03-c'));
+  });
+});
+
+/* #3400 — per-chapter sidecars written next to the audio by finalize
+   (`.lufs.json`), the content-QA pass (`.embeddings.json`) and the
+   render-integrity scorer (`.render-integrity.json`,
+   `.render-integrity-attempted.json`) describe THIS chapter's audio, so they
+   must follow it on a slug swap and go with it on a delete. */
+const PER_CHAPTER_SIDECARS = [
+  'lufs.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
+] as const;
+
+function seedSidecars(slug: string): void {
+  for (const suffix of PER_CHAPTER_SIDECARS) {
+    writeFileSync(join(audioRoot, `${slug}.${suffix}`), JSON.stringify(`${suffix}:${slug}`));
+  }
+}
+
+describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
+  it('swaps two chapters\' loudness/QA sidecars together with their audio', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedSidecars('01-a');
+    seedSidecars('02-b');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+      { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(readFileSync(join(audioRoot, `02-a.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:01-a`));
+      expect(readFileSync(join(audioRoot, `01-b.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:02-b`));
+      expect(existsSync(join(audioRoot, `01-a.${suffix}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${suffix}`))).toBe(false);
+    }
+  });
+
+  it('rewrites the chapterId embedded in a moved render-integrity.json to the new id', async () => {
+    seed('02-old');
+    const row = (characterId: string, extra: object = {}) => ({
+      characterId,
+      sentenceIds: [1],
+      verdict: 'voice-mismatch',
+      ...extra,
+    });
+    writeFileSync(
+      join(audioRoot, '02-old.render-integrity.json'),
+      JSON.stringify([row('c1', { chapterId: 2 }), row('c2', { chapterId: 2 }), row('legacy')]),
+    );
+    // The other sidecars embed no chapter identity (lufs: measurements; embeddings:
+    // characterId/sentenceIds/vec; attempted: attemptedAt) and must move byte-for-byte.
+    const attempted = JSON.stringify({ attemptedAt: '2026-01-01T00:00:00.000Z' });
+    writeFileSync(join(audioRoot, '02-old.render-integrity-attempted.json'), attempted);
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    const rows = JSON.parse(readFileSync(join(audioRoot, '03-new.render-integrity.json'), 'utf8'));
+    expect(rows.map((r: { chapterId?: number }) => r.chapterId)).toEqual([3, 3, undefined]);
+    expect(readFileSync(join(audioRoot, '03-new.render-integrity-attempted.json'), 'utf8')).toBe(attempted);
+  });
+
+  it('a corrupt render-integrity.json is reported, not thrown, and the other files still move', async () => {
+    seed('02-old');
+    writeFileSync(join(audioRoot, '02-old.render-integrity.json'), '{not json');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(existsSync(join(audioRoot, '03-new.mp3'))).toBe(true);
+    expect(result.errors.map((e) => e.suffix)).toEqual(['render-integrity.json']);
+  });
+
+  it('deletes the sidecars when the chapter\'s audio is deleted', async () => {
+    seed('05-doomed');
+    seedSidecars('05-doomed');
+
+    const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `05-doomed.${suffix}`))).toBe(false);
+    }
+  });
+
+  it('a delete on a slug that is also a rename source leaves the files to move away intact', async () => {
+    seed('01-x');
+    seedSidecars('01-x');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '01-x' },
+      { kind: 'rename', from: '01-x', to: '02-y', newChapterId: 2, newChapterTitle: 'Y' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-y.mp3'), 'utf8')).toBe('audio-bytes:01-x');
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `02-y.${suffix}`))).toBe(true);
+      expect(existsSync(join(audioRoot, `01-x.${suffix}`))).toBe(false);
+    }
+  });
+});

@@ -31,8 +31,12 @@ import {
   applySplit,
   applyReorder,
   applyExclude,
+  backfillTitleSynthesized,
+  GENERIC_TITLE_RE,
   applyRefreshTitles,
   applyRename,
+  touchedChapterIds,
+  carryMergedAwayKeys,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
@@ -41,6 +45,9 @@ import {
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
+import { withBookLock } from '../workspace/book-lock.js';
+import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
+import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   audioDir,
@@ -48,7 +55,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -61,40 +69,44 @@ import { join } from 'node:path';
 
 export const chaptersRestructureRouter = Router();
 
-/* Per-book write lock — serialises concurrent restructure requests on the
-   same book so the three-file write order (state.json → manuscript-edits.json
-   → in-memory hints) can't interleave between requests. Lock is held for
-   the duration of one handler call; releases happen in finally{} so a
-   throw inside the handler doesn't leak. */
-const bookWriteLock = new Map<string, Promise<void>>();
-
-async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T> {
-  const prev = bookWriteLock.get(bookId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  // `mine` is what actually goes in the map. The old code compared the
-  // cleanup below against `prev.then(() => next)` called a second time —
-  // `.then()` always returns a new Promise object, so that comparison was
-  // never equal to what was stored and this delete never ran: the map grew
-  // one entry per bookId for the process lifetime.
-  const mine = prev.then(() => next);
-  bookWriteLock.set(bookId, mine);
+/* Best-effort: any parse failure leaves the state untouched. Skips the parse
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title.
+   Returns the parsed title/flag lists (or null) WITHOUT touching state: the parse
+   is slow, so it runs outside the state-json lock (#3700) and the caller applies
+   `backfillTitleSynthesized` to the fresh read inside it. */
+async function parseForLegacyTitleFlags(
+  state: Parameters<typeof backfillTitleSynthesized>[0],
+  bookDir: string,
+): Promise<{ titles: string[]; flags: boolean[] } | null> {
+  /* Only a keyless, non-overridden chapter whose title looks generic can be
+     flagged (renumbering and both refresh passes act on that shape alone), so
+     a book without one never needs the parse. */
+  if (
+    !state.chapters.some(
+      (c) =>
+        !Object.hasOwn(c, 'titleSynthesized') &&
+        !c.titleOverridden &&
+        GENERIC_TITLE_RE.test(c.title.trim()),
+    )
+  ) {
+    return null;
+  }
+  const manuscriptPath = join(bookDir, state.manuscriptFile);
+  if (!existsSync(manuscriptPath)) return null;
   try {
-    await prev;
-    return await fn();
-  } finally {
-    release();
-    // Best-effort cleanup: if no further requests queued behind us, drop
-    // the entry so the map doesn't grow unboundedly over a long server
-    // lifetime.
-    if (bookWriteLock.get(bookId) === mine) {
-      bookWriteLock.delete(bookId);
-    }
+    const parsed = await parseManuscript({
+      buffer: await readFile(manuscriptPath),
+      fileName: state.manuscriptFile,
+      sourcePath: manuscriptPath,
+    });
+    return {
+      titles: parsed.chapters.map((c) => c.title),
+      flags: parsed.chapters.map((c) => c.titleSynthesized === true),
+    };
+  } catch {
+    return null;
   }
 }
-
 /** Shared "load → transform → write" prologue. Returns the new result and
     side-effects: writes state.json + manuscript-edits.json, mutates the
     in-memory ManuscriptRecord.chapterHints, applies audio ops, clears the
@@ -113,16 +125,52 @@ async function applyRestructure(
   const located = await findBookByBookId(bookId);
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
-  const { bookDir, state } = located;
-  if (!state.manuscriptId) {
+  const manuscriptId = located.state.manuscriptId;
+  if (!manuscriptId) {
     return {
       status: 400,
       body: { error: 'Book has no manuscript id — cannot restructure.' },
     };
   }
 
+  /* An analysis job's terminal persist rewrites manuscript-edits.json from
+     the chapter structure it analysed, which would undo this remap — so a
+     restructure is refused while one is registered for the book. Claimed
+     synchronously with the check, inside the book lock, and held to the end so
+     a job cannot start under it (workspace/restructure-gate.ts). */
+  if (!beginRestructure(manuscriptId)) {
+    return {
+      status: 409,
+      body: {
+        error: 'Analysis is running on this book. Pause it or wait for it to finish, then change the chapters.',
+        code: 'analysis_running',
+      },
+    };
+  }
+  try {
+    return await applyRestructureClaimed(located, manuscriptId, transform);
+  } finally {
+    endRestructure(manuscriptId);
+  }
+}
+
+async function applyRestructureClaimed(
+  located: NonNullable<Awaited<ReturnType<typeof findBookByBookId>>>,
+  manuscriptId: string,
+  transform: (
+    state: Parameters<typeof applyMerge>[0],
+    hints: Parameters<typeof applyMerge>[1],
+    sentences: Parameters<typeof applyMerge>[2],
+  ) => RestructureResult,
+): Promise<{
+  status: number;
+  body: unknown;
+}> {
+  const { bookDir } = located;
+  let { state } = located;
+
   // Hydrate manuscript record so we have current ChapterHint[]
-  const record = await getOrHydrateManuscript(state.manuscriptId);
+  const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
     return {
       status: 404,
@@ -130,46 +178,85 @@ async function applyRestructure(
     };
   }
 
-  // Align hint titles with state.json's user-facing chapter titles.
-  // The parser-derived hint titles can diverge (e.g. when state.json
-  // captures a more refined title from a later parser-version refresh,
-  // or the user has renamed chapters inline). State titles are the
-  // source of truth for slugs and display; hints contribute the body
-  // text only.
-  const alignedHints = record.chapterHints.map((h) => {
-    const sc = state.chapters.find((c) => c.id === h.id);
-    return sc ? { ...h, title: sc.title } : h;
+  /* #3628/#3700 — the legacy-title parse is slow (a full manuscript parse), so
+     it runs BEFORE the lock, off the `located.state` snapshot; only the cheap
+     `backfillTitleSynthesized` application happens inside, on the fresh read. */
+  const legacyParse = await parseForLegacyTitleFlags(state, bookDir);
+
+  /* #3700 -- state.json is read, transformed and rewritten as one span under
+     the per-book state-json lock (leaf: nothing inside takes another lock; this
+     function already runs inside the book lock, which is OUTSIDE it), and the
+     read is FRESH from disk rather than the `located.state` snapshot, so a
+     sibling chapter render's stamp can't be reverted by the renumbered state. */
+  const outcome = await withStateJsonLock(stateJsonPath(bookDir), async () => {
+    // Legacy book: chapters imported before titleSynthesized existed carry no
+    // flag. Recognise the app-made ones against a fresh parse (#3628) so every
+    // operation below renumbers them like a freshly imported book's.
+    const freshState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+    /* #3700 review pass 2 -- absent: the book was deleted or moved after
+       `located` resolved it. Writing the stale snapshot back would resurrect
+       it; refuse and write nothing. */
+    if (!freshState) return { early: { status: 404, body: { error: 'Book not found.' } } };
+    state = legacyParse
+      ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
+      : freshState;
+    // Align hint titles with state.json's user-facing chapter titles.
+    // The parser-derived hint titles can diverge (e.g. when state.json
+    // captures a more refined title from a later parser-version refresh,
+    // or the user has renamed chapters inline). State titles are the
+    // source of truth for slugs and display; hints contribute the body
+    // text only.
+    const alignedHints = record.chapterHints.map((h) => {
+      const sc = state.chapters.find((c) => c.id === h.id);
+      return sc ? { ...h, title: sc.title } : h;
+    });
+
+    // Read current sentences from manuscript-edits.json (may be empty/missing
+    // for a fresh book -- that's fine, transform handles it). Each transform
+    // requires sentences for split when it needs to locate the body offset.
+    const editsPath = manuscriptEditsJsonPath(bookDir);
+    const edits = await readJson<{ sentences?: RestructureSentence[]; mergedAwayKeys?: string[] }>(editsPath);
+    const sentences = edits?.sentences ?? [];
+
+    /* srv-35 -- ensure the OLD chapters carry uuids before the transform so
+       buildNewStateChapters can inherit them by identity (a book that has
+       never been written since the upgrade has none yet). The result.state
+       is persisted below, so this also migrates the book. */
+    ensureChapterUuids(state);
+
+    /* Plan 286 -- captured before transform(...) in case the transform
+       mutates `state` in place. */
+    const oldChapters = state.chapters.map((c) => ({ ...c }));
+
+    let result: RestructureResult;
+    try {
+      result = transform(state, alignedHints, sentences);
+    } catch (e) {
+      return {
+        early: {
+          status: 400,
+          body: { error: (e as Error).message || 'Invalid restructure operation.' },
+        },
+      };
+    }
+
+    // Write order: state.json (rotating backup) -> manuscript-edits.json ->
+    // in-memory hints -> audio ops -> analysis cache. If any step throws past
+    // here, earlier writes are already on disk; partial state is recoverable
+    // via the reconciliation filter in book-state.ts:166-185.
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
+    /* #3400 -- merged-away tombstones ride along (the client's save after the
+       remap applies the same rule), so a restructure no longer wipes them. */
+    await writeJsonAtomic(editsPath, {
+      sentences: result.sentences,
+      ...(edits?.mergedAwayKeys
+        ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
+        : {}),
+    });
+    return { early: null, result, editsPath, oldChapters };
   });
-
-  // Read current sentences from manuscript-edits.json (may be empty/missing
-  // for a fresh book — that's fine, transform handles it). Each transform
-  // requires sentences for split when it needs to locate the body offset.
-  const editsPath = manuscriptEditsJsonPath(bookDir);
-  const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
-  const sentences = edits?.sentences ?? [];
-
-  /* srv-35 — ensure the OLD chapters carry uuids before the transform so
-     buildNewStateChapters can inherit them by identity (a book that has
-     never been written since the upgrade has none yet). The result.state
-     is persisted below, so this also migrates the book. */
-  ensureChapterUuids(state);
-
-  let result: RestructureResult;
-  try {
-    result = transform(state, alignedHints, sentences);
-  } catch (e) {
-    return {
-      status: 400,
-      body: { error: (e as Error).message || 'Invalid restructure operation.' },
-    };
-  }
-
-  // Write order: state.json (rotating backup) → manuscript-edits.json →
-  // in-memory hints → audio ops → analysis cache. If any step throws past
-  // here, earlier writes are already on disk; partial state is recoverable
-  // via the reconciliation filter in book-state.ts:166-185.
-  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
-  await writeJsonAtomic(editsPath, { sentences: result.sentences });
+  if (outcome.early) return outcome.early;
+  const { result, editsPath, oldChapters } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -178,13 +265,29 @@ async function applyRestructure(
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
 
+  /* Plan 286 — entries for chapters this op touched no longer pair with the
+     live take. Best-effort: logged, never in a response (the six handlers
+     return raw messages, so a lock-key path must not reach them). A deliberate
+     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
+     that survives a failed drop is NOT left to act on whichever chapter now
+     holds its id: a server-recorded entry carries the chapter's uuid +
+     audioRenderedAt and revisions-store's entryMatchesChapter refuses it
+     (revision_not_found) once the chapter at that id differs (#3400). A legacy
+     client-written entry has no stamps and is not covered. */
+  try {
+    const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
+    if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);
+  } catch (e) {
+    console.error('[chapters-restructure] could not drop stale A/B review entries', e);
+  }
+
   // Plan 70c — re-derive the analysis cache from the freshly-written
   // manuscript-edits.json so subsequent generation runs still find
   // sentences keyed by the new chapter ids. Earlier code wiped the
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
-  // Plan 286 — 'replace': ids are renumbered, so prior keys cannot be kept.
-  await rebuildCacheFromEdits(state.manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
+  // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
+  await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 
@@ -269,6 +372,7 @@ chaptersRestructureRouter.post(
       // error) downgrade gracefully — we still run the first-line
       // promotion pass on the in-memory state.
       let parsedTitles: string[] = [];
+      let parsedTitleSynthesized: boolean[] = [];
       const manuscriptPath = join(bookDir, state.manuscriptFile);
       if (existsSync(manuscriptPath)) {
         try {
@@ -279,6 +383,7 @@ chaptersRestructureRouter.post(
             sourcePath: manuscriptPath,
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
+          parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);
         } catch (parseErr) {
           console.warn(
             `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
@@ -291,6 +396,7 @@ chaptersRestructureRouter.post(
         applyRestructure(req.params.bookId, (s, hints, sentences) =>
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles,
+            parsedTitleSynthesized,
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

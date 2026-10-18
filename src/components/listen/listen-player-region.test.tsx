@@ -11,17 +11,19 @@
    mislead the user. */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { ListenPlayerRegion } from './listen-player-region';
 import { listenProgressSlice, listenProgressActions } from '../../store/listen-progress-slice';
 import { qaRepairSlice, qaRepairActions } from '../../store/qa-repair-slice';
+import { uiSlice, uiActions } from '../../store/ui-slice';
+import { RESTRUCTURING_REASON } from '../../store/restructure-lock';
 import type { Chapter, ChapterLoudness } from '../../lib/types';
 
 function makeStore() {
   return configureStore({
-    reducer: { listenProgress: listenProgressSlice.reducer },
+    reducer: { listenProgress: listenProgressSlice.reducer, ui: uiSlice.reducer },
   });
 }
 
@@ -478,5 +480,41 @@ describe('ListenPlayerRegion — audio-QA repair affordance (plan 179)', () => {
     expect(btn.className).toContain('fine-pointer:min-w-0');
     expect(btn.className).not.toMatch(/\bmd:w-\d/);
     expect(btn.className).not.toMatch(/\bmd:h-\d/);
+  });
+});
+
+describe('ListenPlayerRegion — Rename vs. restructure (#3400 pass 7)', () => {
+  it('disables the chapter Rename pencil with the reason while its book restructures, not for another book', () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <ListenPlayerRegion
+          bookId="test-book"
+          chapters={[makeChapter(1)]}
+          listenable={[makeChapter(1)]}
+          characters={[]}
+          currentTrack={null}
+          onPlayChapter={vi.fn()}
+          onRegenerate={vi.fn()}
+          onSeekMarker={vi.fn()}
+          onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
+        />
+      </Provider>,
+    );
+    const rename = screen.getByTestId('chapter-row-1-rename');
+    expect(rename).toBeEnabled();
+    act(() => {
+      store.dispatch(uiActions.setRestructuringBook('other-book'));
+    });
+    expect(rename).toBeEnabled();
+    act(() => {
+      store.dispatch(uiActions.setRestructuringBook('test-book'));
+    });
+    expect(rename).toBeDisabled();
+    expect(rename).toHaveAttribute('title', RESTRUCTURING_REASON);
+    fireEvent.click(rename);
+    expect(screen.queryByTestId('edit-chapter-title-input')).toBeNull();
   });
 });

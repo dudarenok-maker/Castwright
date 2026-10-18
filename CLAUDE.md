@@ -282,10 +282,10 @@ dispatching session's model; the table below does not apply to them.
 
 | Tier | Model | Selected for |
 |---|---|---|
-| Cheap | Haiku 4.5 | Mechanical search-and-report subagents, boilerplate/scaffolding, running commands and summarizing output, single well-specified bug fixes with a clear repro and no design decisions, high-volume parallel fan-out via non-fork subagents |
-| Default | Sonnet 5 | Everything else — standard feature work, most debugging, most non-fork subagent dispatch, code review, the main session itself |
-| Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (spec/plan and PR review — see below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
-| Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
+| Cheap | Haiku 5.5 | Mechanical search-and-report subagents, boilerplate/scaffolding, running commands and summarizing output, single well-specified bug fixes with a clear repro and no design decisions, high-volume parallel fan-out via non-fork subagents |
+| Default | Sonnet 5.5 | Everything else — standard feature work, most debugging, most non-fork subagent dispatch, code review, the main session itself |
+| Premium | Opus 5.5 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (spec/plan and PR review — see below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
+| Reserved | Fable 5.1 | Never auto-selected. Explicit user approval only, per task |
 
 **Reasoning effort is the second axis, and `medium` is this repo's declared
 norm** — for dispatched roles, for the main session, and for CLI worker
@@ -586,8 +586,28 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
-  `…/audio/previous` routes) additionally serialise per chapter on a
+  other lock is taken while it is held. The per-book `book` lock
+  (`workspace/book-lock.ts`, #3400) sits between them, and the per-book
+  `state-json` lock (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is
+  the innermost **leaf** — the full order is
+  **`design` → `library-voice` → `cast` → `book` → `state-json`**, with `revisions`
+  a separate leaf beside it (never nested with `state-json`). `book` may be taken
+  while holding `cast` (the cast merge's `manuscript-edits.json` rewrite), but no
+  holder of it may take `cast`, `design` or `library-voice`; it is the
+  operation-level lock a chapter restructure holds across its read -> multi-file
+  write, and every `state.json` read-modify-write that derives from a read goes
+  through it (`workspace/book-state-update.ts`, enforced by
+  `workspace/state-lock.guard.test.ts`). `state-json` is taken INSIDE `book`
+  (or alone, by the paths that hold no `book`: `DELETE`, the bundle-import overwrite
+  (`scan-import-folder.ts`), import / samples creation, reparse's presence gate, the
+  render finalize and the generation failure persist), only
+  around the fresh re-read + write (`updateStateJsonLocked`, `state-migrate.ts`);
+  nothing else is taken while it is held — the one nesting is the folder-renaming
+  PUT, which also keys the destination path's `state-json`. The read goes inside
+  it, an absent `state.json` answers 404 and writes nothing, and
+  `workspace/state-json-lock.guard.test.ts` fails the build on an unlocked
+  `writeStateJsonAtomic`. Accept/reject and `restore-unrecorded`
+  additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
   while holding `revisions`. Since #2260 that
@@ -600,26 +620,50 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  cover an authoritative write and a best-effort one at once). TWELVE sites fail
   loud *by rethrowing into their job's or request's terminal outcome*: the six
   best-effort `catch` blocks around identity writes, plus the two
   AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
-  journals, which are lineage and must stay best-effort. Swallowing at an
+  journals, which are lineage and must stay best-effort — plus four
+  `state.json` sites under the `state-json` leaf lock (#3625): finalize's duration/model/render stamp
+  (`server/src/audio/finalize-chapter-write.ts`), Start fresh's `castConfirmed`
+  un-confirm (`analysis.ts`), and the two analysis persist `state.json` writes
+  (parked in `persistLockTimeout` and rethrown after the remaining writes, like
+  the `cast.json` ones). The analysis sites go through `updateStateAtDir`, taken
+  after the cast work — the `book` lock does not bound its wait, but the
+  `state-json` leaf lock inside it does, so that wrap is live and keeps the
+  write from ever being the silent kind. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
+  `cast.json` and `state.json` never written at all. TWELVE handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
   re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292); and `applyReview`
+  diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  `reviewOutcome: 'failed'`, never the lock key; and the restructure pending
+  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — an entry
+  it fails to drop answers `revision_not_found` on the next accept/reject
+  once its chapter has been renumbered or re-rendered, because a
+  server-recorded entry carries the chapter's `uuid` and `audioRenderedAt`
+  and `revisions-store.ts` refuses it when the chapter at its id no longer
+  matches (`entryMatchesChapter`, #3400). A legacy client-written entry
+  has no stamps and is not covered; and six `state.json` sites under
+  `withStateJsonLock` (#3625): generation's failure stamp
+  (`routes/generation.ts`), which only annotates a reload after `chapter_failed`
+  already went out over SSE; `refreshChapterTitles` (`routes/book-state.ts`),
+  whose re-derived titles are recomputed on the next read; the sync-manifest
+  chapter-uuid migration (`routes/library-sync-manifest.ts`), whose in-memory
+  uuids still serve the response and re-mint next time; `scan.ts`'s two lazy
+  migrations (uuid mint and segments backfill), which the next scan repeats;
+  and the cover background-fetch hook (`cover/store.ts`), which must never fail
+  an import. A THIRTEENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
@@ -636,7 +680,7 @@ Design rationale:
   timeout's own message** — not an escalating body, not a per-item reason, and
   not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  HTTPS. Three route-level curation seams, all in `workspace/file-lock.ts`, and a route
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
@@ -646,14 +690,19 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of the two legacy `…/audio/previous` routes in
-  `chapter-audio.ts` (`DELETE` and `…/restore`); and
+  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  legacy `…/audio/previous` routes there answer 410 unconditionally since
+  plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
+  leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
+  so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round). See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` alone, which already
+  curates its own message. See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

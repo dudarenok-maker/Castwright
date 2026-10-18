@@ -3,28 +3,24 @@
    - validateUpload(buffer, mimeType): throws UploadError on size/MIME unless
      the magic bytes are a PNG or JPEG; returns the sniffed type (the label
      only gates the allowlist, so a real JPEG named .png still uploads).
-   - writeUploadedCover(buffer, mimeType, destPath): transcodes PNG→JPEG
-     via sharp (q=85), decode-validates JPEG (bytes kept), writes atomically (tmp + rename) — same pattern
-     as `downloadCover` in openlibrary.ts.
-   - patchStateLocalCover(bookDir, originalFilename): replaces
+   - encodeUploadedCover(buffer, mimeType): re-encodes every upload (PNG and
+     JPEG) to a clean sharp-written JPEG (q=85, EXIF orientation applied) so
+     trailing bytes never survive into cover.jpg (#3535). It writes nothing:
+     the route hands the bytes to `writeCoverFile` (store.ts, atomic tmp +
+     rename) from inside the state-json lock, once state.json is confirmed
+     present (#3700).
+   - patchStateLocalCover(bookDir, originalFilename, beforeWrite?): replaces
      state.json.coverImage with the `source: 'local'` shape, dropping
      any prior OpenLibrary fields. Resets framing — a fresh image
      deserves a fresh frame; the user reframes via the Frame tab.
    - patchStateFraming(bookDir, framing): persists pan + zoom onto the
      existing coverImage record. No-op when no cover is pinned. */
 
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import sharp from 'sharp';
-import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { stateJsonPath } from '../workspace/paths.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import { updateStateAtDir } from '../workspace/book-state-update.js';
+import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-export const JPEG_QUALITY = 85;
 
 export type UploadMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 
@@ -81,62 +77,53 @@ function sniffMime(buffer: Buffer): UploadMimeType | undefined {
   return undefined;
 }
 
-export async function writeUploadedCover(
+/** Re-encode an upload to a clean JPEG with NO disk write, so the caller can
+    defer the write until it has confirmed (under the state-json lock) that the
+    book still exists. */
+export async function encodeUploadedCover(
   buffer: Buffer,
   mimeType: UploadMimeType,
-  destPath: string,
-): Promise<{ bytes: number }> {
+): Promise<Buffer> {
+  // Both branches re-encode through the shared sharp helper (reencode.ts) so
+  // cover.jpg on disk is always a clean sharp-written JPEG and trailing junk
+  // can never survive (#3535). PNG keeps the strict decode; JPEG stays
+  // tolerant so a damaged-but-real JPEG missing only its EOI marker is still
+  // accepted, as before.
+  const tolerant = mimeType === 'image/jpeg';
+  const prefix =
+    mimeType === 'image/png' ? 'PNG → JPEG transcode failed:' : 'JPEG decode failed:';
   let jpegBytes: Buffer;
-  if (mimeType === 'image/png') {
-    try {
-      jpegBytes = await sharp(buffer).jpeg({ quality: JPEG_QUALITY }).toBuffer();
-    } catch (e) {
-      throw new UploadError(
-        'transcode_failed',
-        `PNG → JPEG transcode failed: ${(e as Error).message}`,
-      );
-    }
-  } else {
-    // Keep the original bytes (no re-encode), but a bare FF D8 FF prefix is not
-    // enough: decode it so non-image bytes are never stored as the cover.
-    // failOn 'none' keeps a damaged-but-real JPEG (e.g. missing only its EOI
-    // marker) accepted, as it was before the decode check and as PNG is.
-    try {
-      await sharp(buffer, { failOn: 'none' }).raw().toBuffer();
-    } catch (e) {
-      throw new UploadError('transcode_failed', `JPEG decode failed: ${(e as Error).message}`);
-    }
-    jpegBytes = buffer;
-  }
-
-  await mkdir(dirname(destPath), { recursive: true });
-  const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, jpegBytes);
   try {
-    await renameWithRetry(tmp, destPath);
+    jpegBytes = await reencodeToJpeg(buffer, { tolerant });
   } catch (e) {
-    await unlink(tmp).catch(() => {
-      /* best-effort */
-    });
-    throw e;
+    throw new UploadError('transcode_failed', `${prefix} ${(e as Error).message}`);
   }
-  return { bytes: jpegBytes.length };
+  return jpegBytes;
 }
 
 export async function patchStateLocalCover(
   bookDir: string,
   originalFilename: string | null,
-): Promise<void> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  state.coverImage = {
-    source: 'local',
-    originalFilename,
-    uploadedAt: new Date().toISOString(),
-  };
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  /** Runs inside the lock once state.json is confirmed present - the cover
+      file write, so nothing lands in a book folder that moved or was deleted. */
+  beforeWrite?: () => Promise<void>,
+): Promise<boolean> {
+  /* #3400 + #3700 -- read-modify-write under the per-book lock and the
+     state-json leaf lock (`updateStateAtDir`). `false` = state.json absent
+     (deleted/moved while queued): nothing was written. */
+  return updateStateAtDir(
+    bookDir,
+    (state) => {
+      state.coverImage = {
+        source: 'local',
+        originalFilename,
+        uploadedAt: new Date().toISOString(),
+      };
+      state.updatedAt = new Date().toISOString();
+      return state;
+    },
+    { beforeWrite },
+  );
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -148,14 +135,12 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 }
 
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return false;
-  if (!state.coverImage) return false;
-  state.coverImage.framing = clampFraming(framing);
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-  return true;
+  return updateStateAtDir(bookDir, (state) => {
+    if (!state.coverImage) return null;
+    state.coverImage.framing = clampFraming(framing);
+    state.updatedAt = new Date().toISOString();
+    return state;
+  });
 }
 
 function clamp(n: number, min: number, max: number): number {

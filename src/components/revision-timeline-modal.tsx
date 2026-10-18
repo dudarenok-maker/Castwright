@@ -16,6 +16,7 @@
 
 import { useMemo } from 'react';
 import { useAppSelector } from '../store';
+import { selectActiveTimeline } from '../store/revisions-slice';
 import { IconClose, IconCheck, IconReject, IconArrowLeft } from '../lib/icons';
 import type { TimelineEntry, Character } from '../lib/types';
 
@@ -53,7 +54,7 @@ export function RevisionTimelineModal({
   characters,
   onClose,
 }: Props) {
-  const timeline = useAppSelector((s) => s.revisions.timeline);
+  const timeline = useAppSelector(selectActiveTimeline);
 
   const entries = useMemo<TimelineEntry[]>(() => {
     if (chapterId == null) {

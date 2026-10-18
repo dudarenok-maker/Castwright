@@ -41,15 +41,26 @@ describe('scoreBook', () => {
 
     await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
 
+    // #3524 — a CURRENT cast voice (qwen-h) so the old-voice rule runs: a fallback
+    // line is stamped with the FALLBACK engine's voice (synthesise-chapter.ts), which
+    // must not read as "old voice".
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+    writeFileSync(castJsonPath(dir), JSON.stringify({
+      characters: [{ id: 'hero', name: 'Hero', overrideTtsVoices: { qwen: { name: 'Hero voice', libraryUuid: 'h' } } }],
+    }));
+
     // REAL shape: voiceEngine lives ONLY on characterSnapshots (per-character);
     // renderedFallbackEngine is per-segment on the segments[] entries.
+    const isFallback = (r: { sentenceIds: number[] }) => r.sentenceIds[0] === 100 || r.sentenceIds[0] === 101;
     writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
       chapterId: 1,
       segments: rows.map((r) => ({
         characterId: 'hero', sentenceIds: r.sentenceIds,
-        renderedFallbackEngine: (r.sentenceIds[0] === 100 || r.sentenceIds[0] === 101) ? 'kokoro' : null,
+        renderedFallbackEngine: isFallback(r) ? 'kokoro' : null,
+        voiceName: isFallback(r) ? 'af_heart' : 'qwen-h',
+        baseVoiceName: isFallback(r) ? 'af_heart' : 'qwen-h',
       })),
-      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+      characterSnapshots: { hero: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-h' } },
     }));
 
     await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);

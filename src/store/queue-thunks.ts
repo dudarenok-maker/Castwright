@@ -19,6 +19,7 @@ import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
 import type { TtsModelKey, ReviewRequest } from '../lib/types';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
+import { refuseIfEditsLocked } from './restructure-lock';
 import { mockQueueRequest } from '../mocks/mock-queue';
 import { api } from '../lib/api';
 import { selectAnalysisBusyForBook, analysisBusyMessage } from './analysis-substage-selectors';
@@ -55,7 +56,7 @@ export interface EnqueueInput {
       per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for it. */
   fallbackConfirmed?: boolean;
   /** Plan 285 — the A/B review intent; rides the persisted entry into the
-      generation request. Nothing sets it until PR 2. */
+      generation request. Set by the profile-regen preview enqueue (plan 286). */
   review?: ReviewRequest;
 }
 
@@ -348,7 +349,16 @@ export function cancelQueueEntry(entryId: string, opts?: { force?: boolean }) {
          alone; their audio stays and they must not flip to "Not queued".
        Cross-book entries (not the loaded book) are skipped: their rows aren't
        on screen, and we can't read their chapter state here. */
-    if (entry && entry.scope === 'this' && entry.chapterId != null) {
+    /* #3400 pass 7 — the hold is keyed by chapter id, which a restructure of
+       that book renumbers: written mid-restructure it would land on the wrong
+       chapter. The cancel itself stands; the hold is skipped (the modal also
+       disables Cancel for that book, so this is the backstop). */
+    if (
+      entry &&
+      entry.scope === 'this' &&
+      entry.chapterId != null &&
+      !refuseIfEditsLocked(getState, dispatch, entry.bookId)
+    ) {
       const chaptersState = getState().chapters;
       const ch =
         chaptersState.currentBookId === entry.bookId

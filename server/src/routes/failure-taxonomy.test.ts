@@ -7,7 +7,7 @@
    so a refactor can't silently regress them. The file also covers the
    analysis-side classifiers (classifyAnalysisError + classifyAnalysisFailure). */
 
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { ApiError } from '@google/genai';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
@@ -574,6 +574,18 @@ describe('classifyAnalysisFailure — a lock timeout is curated, everything else
     /* And the model label is deliberately NOT prefixed: the analyzer model had
        nothing to do with it. */
     expect(r.userMessage).not.toContain('gemma-4-31b-it');
+  });
+
+  it('the curated error `withStateJsonLock` throws (#3700, e.g. the Start-fresh site) classifies as lock-contention', async () => {
+    const { withKeyLock, withStateJsonLock, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    const statePath = '/w/taxonomy-state-json/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    const err = await withStateJsonLock(statePath, async () => 'ran', 50).catch((e: unknown) => e);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
   });
 
   it('discriminates on the stable `code` string, not the class or the name', async () => {
@@ -1345,5 +1357,45 @@ describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
     expect(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap').message).toBe(
       'prompt is larger than the fallback target Gemini (gemini-3.5-flash-lite) can take (per-request cap 12000 tokens)',
     );
+  });
+});
+
+
+describe('classifyFailure — state-lock timeout from finalize (#3625)', () => {
+  it('curates a LockAcquisitionTimeoutError so the workspace path never reaches userMessage', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const r = classifyFailure(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(r.userMessage).not.toContain('/abs/secret/path');
+    expect(r.remediation).toBe(FAILURE_REMEDIATIONS['lock-contention'].remediation);
+    expect(r.fatal).toBe(false);
+  });
+
+  it('maps the curated timeout `withStateJsonLock` actually throws (#3700: message curated, code kept)', async () => {
+    const { withKeyLock, withStateJsonLock, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const key = '/abs/secret/path/state.json';
+    const holder = withKeyLock(`state-json:${key}`, () => new Promise<void>((r) => setTimeout(r, 200)));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let thrown: unknown;
+    try {
+      await withStateJsonLock(key, async () => undefined, 20).catch((e: unknown) => {
+        thrown = e;
+      });
+    } finally {
+      await holder;
+      warn.mockRestore();
+    }
+    const r = classifyFailure(thrown);
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
+  it('describeSynthesisError of the same error broadcasts only the curated reason', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const { describeSynthesisError } = await import('./generation-error.js');
+    const out = describeSynthesisError(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(out.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(out.errorReason).not.toContain('/abs/secret/path');
   });
 });

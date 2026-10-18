@@ -18,6 +18,10 @@ export function AnalyzerModelLimits() {
   const dispatch = useAppDispatch();
   const catalog = useAppSelector((s) => s.account.analyzerCatalog);
   const saved = useAppSelector((s) => s.account.analyzerRateLimitsByModel) ?? EMPTY;
+  /* #3625 - while the settings file is unreadable `saved` is the boot default ({}),
+     not the user's map, and Save writes the WHOLE map: it would replace the real
+     one. */
+  const blocked = useAppSelector((s) => !!s.account.settingsFileUnreadable);
   const [draft, setDraft] = useState<LimitsMap>(saved);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -42,6 +46,7 @@ export function AnalyzerModelLimits() {
   };
 
   const save = async () => {
+    if (blocked) return;
     setStatus('saving');
     const action = await dispatch(saveAccountSettings({ analyzerRateLimitsByModel: draft }));
     setStatus(saveAccountSettings.fulfilled.match(action) ? 'saved' : 'error');
@@ -91,11 +96,16 @@ export function AnalyzerModelLimits() {
           type="button"
           data-testid="model-limits-save"
           onClick={() => void save()}
-          disabled={status === 'saving'}
+          disabled={status === 'saving' || blocked}
           className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0"
         >
           {status === 'saving' ? 'Saving…' : 'Save rate limits'}
         </button>
+        {blocked && (
+          <span data-testid="model-limits-unreadable" className="text-xs text-rose-700">
+            Your settings can't be read right now, so saving is off until they load.
+          </span>
+        )}
         {status === 'saved' && <span className="text-xs text-magenta font-semibold">Saved.</span>}
         {status === 'error' && <span className="text-xs text-rose-700">Could not save rate limits.</span>}
       </div>

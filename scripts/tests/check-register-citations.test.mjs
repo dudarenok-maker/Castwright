@@ -33,7 +33,18 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
 
+// The real-tree run is a pure function of an unchanged checkout (these tests
+// never write a real tracked file; no-inplace-tracked-rewrite pins it), so
+// identical args share one spawn (#3701). Sandbox (mutated) runs are never cached.
+const realRunCache = new Map();
 function runCli(args, cliPath = CLI_PATH) {
+  if (cliPath !== CLI_PATH) return spawnCli(args, cliPath);
+  const key = args.join('\0');
+  if (!realRunCache.has(key)) realRunCache.set(key, spawnCli(args, cliPath));
+  return realRunCache.get(key);
+}
+
+function spawnCli(args, cliPath) {
   // The real CLI scans the real repo (ambient git env honoured); any other
   // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
   // the real index.
@@ -3017,7 +3028,35 @@ test('CLI: the real tree scan finds at least one binary file, and the success li
   // because unreadableCount could never leave 0.
   const result = runCli([]);
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /\d+ unreadable\/binary excluded/);
+  // `\d+` alone also matches "0 unreadable/binary excluded" — the exact value
+  // the defect produced — and a bare ">= 1" is met by any genuine I/O failure
+  // on some checkouts (a tracked path the OS can't read), without the binary
+  // sniff running at all. So compare against an independent count of the
+  // tracked, non-frozen binary files (frozen paths are excluded before the
+  // sniff; self-referential ones are all text): the reported figure can only
+  // be lower if the sniff was skipped.
+  const count = Number(result.stdout.match(/(\d+) unreadable\/binary excluded/)?.[1]);
+  const tracked = spawnSync('git', ['ls-files', '-z'], {
+    cwd: REAL_REPO,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+  })
+    .stdout.split('\0')
+    .filter(Boolean);
+  const binaryCount = tracked.filter((rel) => {
+    if (isFrozenPath(rel)) return false; // excluded before the sniff, so not in the count
+    try {
+      return isLikelyBinaryFile(join(REAL_REPO, rel));
+    } catch {
+      return false;
+    }
+  }).length;
+  assert.ok(binaryCount >= 1, 'the real tree must track at least one binary file');
+  assert.ok(
+    count >= binaryCount,
+    `expected >= ${binaryCount} unreadable/binary files excluded (the tracked binaries), got ${count} in:\n${result.stdout}`,
+  );
 });
 
 // --- Check D: title drift is advisory, non-fatal even under --strict ---

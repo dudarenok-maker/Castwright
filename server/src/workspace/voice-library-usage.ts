@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { withCastLock } from './cast-lock.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import type { BookStateJson } from './scan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
@@ -50,7 +51,7 @@ async function* walkConfirmedCasts(): AsyncGenerator<{
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;

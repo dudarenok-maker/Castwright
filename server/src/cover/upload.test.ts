@@ -1,6 +1,6 @@
 /* Unit tests for the local-cover upload pipeline (plan 40). */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
   mkdtempSync,
   rmSync,
@@ -10,7 +10,6 @@ import {
   readdirSync,
   existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import {
@@ -20,9 +19,27 @@ import {
   clampFraming,
   patchStateFraming,
   patchStateLocalCover,
+  encodeUploadedCover,
   validateUpload,
-  writeUploadedCover,
+  type UploadMimeType,
 } from './upload.js';
+import { writeCoverFile } from './store.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
+import { stateJsonPath } from '../workspace/paths.js';
+
+/* writeCoverFile asserts containment in WORKSPACE_ROOT (read once at import),
+   so the per-test book dirs must live under a root fixed before it loads. */
+const testRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'cover-upload-root-'));
+  process.env.WORKSPACE_DIR = root;
+  return root;
+});
+afterAll(() => {
+  rmSync(testRoot, { recursive: true, force: true });
+});
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -45,7 +62,7 @@ async function makePng(width = 10, height = 10): Promise<Buffer> {
 }
 
 beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'cover-upload-test-'));
+  workspaceRoot = mkdtempSync(join(testRoot, 'cover-upload-test-'));
   bookDir = join(workspaceRoot, 'books', 'Author', 'Series', TITLE);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
   writeFileSync(
@@ -179,15 +196,77 @@ describe('validateUpload', () => {
   });
 });
 
-describe('writeUploadedCover', () => {
-  it('writes JPEG bytes verbatim when MIME is image/jpeg', async () => {
+/* The production route composes these two (encode, then write under the
+   state-json lock); the tests below pin that composition's on-disk result. */
+async function writeUploadedCover(
+  buffer: Buffer,
+  mimeType: UploadMimeType,
+  destPath: string,
+): Promise<{ bytes: number }> {
+  const jpegBytes = await encodeUploadedCover(buffer, mimeType);
+  await writeCoverFile(destPath, jpegBytes);
+  return { bytes: jpegBytes.length };
+}
+
+describe('encodeUploadedCover + writeCoverFile', () => {
+  /* #3535 regression: a tiny valid JPEG with an MPEG-TS-looking stream
+     appended used to be stored verbatim, and ffmpeg's byte-probing then
+     picked the mpegts demuxer over the JPEG one, breaking the m4b export.
+     The upload path must re-encode, so the stored cover is only ever a
+     clean sharp-written JPEG. */
+  it('re-encodes a JPEG with an appended MPEG-TS-looking tail so no trailing bytes survive (#3535)', async () => {
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
-    const jpeg = await makeJpeg();
+    const jpeg = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: { r: 200, g: 100, b: 50 } },
+    })
+      .jpeg()
+      .toBuffer();
+    // A few 188-byte MPEG-TS-shaped packets (0x47 sync byte, zero-filled
+    // payload) appended as trailing bytes. They are NOT a real stream and
+    // this fixture does not make ffmpeg probe the file as mpegts; the test
+    // only pins that trailing bytes do not survive the re-encode.
+    const packets = Array.from({ length: 3 }, () => {
+      const packet = Buffer.alloc(188, 0x00);
+      packet[0] = 0x47;
+      return packet;
+    });
+    const input = Buffer.concat([jpeg, ...packets]);
+    const result = await writeUploadedCover(input, 'image/jpeg', dest);
+    const written = readFileSync(dest);
+    expect(Buffer.compare(written, input)).not.toBe(0);
+    expect(written.length).toBeLessThan(input.length);
+    expect(result.bytes).toBe(written.length);
+    // Clean sharp-written JPEG: ends with the EOI marker and decodes as a
+    // JPEG with the original pixel dimensions.
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(2);
+    expect(meta.height).toBe(2);
+  });
+
+  it('re-encodes a JPEG upload to a clean sharp-written JPEG with the same dimensions', async () => {
+    const dest = join(bookDir, '.audiobook', 'cover.jpg');
+    /* Behaviour change (#3642 / #3535): every upload is re-encoded through
+       sharp. The input is written at quality 100, so only a real re-encode
+       (quality 85) can make the stored file differ from — and be smaller
+       than — the input. */
+    const jpeg = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: { r: 200, g: 100, b: 50 } },
+    })
+      .jpeg({ quality: 100 })
+      .toBuffer();
     const result = await writeUploadedCover(jpeg, 'image/jpeg', dest);
     expect(existsSync(dest)).toBe(true);
-    expect(result.bytes).toBe(jpeg.length);
     const written = readFileSync(dest);
-    expect(Buffer.compare(written, jpeg)).toBe(0);
+    expect(result.bytes).toBe(written.length);
+    expect(Buffer.compare(written, jpeg)).not.toBe(0);
+    expect(written.length).toBeLessThan(jpeg.length);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(10);
+    expect(meta.height).toBe(10);
   });
 
   it('transcodes PNG to JPEG on disk', async () => {
@@ -202,28 +281,67 @@ describe('writeUploadedCover', () => {
     expect(Buffer.compare(written, png)).not.toBe(0);
   });
 
-  it('keeps real baseline, progressive and EXIF JPEGs byte-for-byte', async () => {
+  it('re-encodes baseline, progressive and EXIF JPEGs to clean JPEGs with the same dimensions', async () => {
     const base = { create: { width: 16, height: 16, channels: 3 as const, background: '#c86432' } };
     const variants = [
       await sharp(base).jpeg().toBuffer(),
       await sharp(base).jpeg({ progressive: true }).toBuffer(),
-      await sharp(base).withExif({ IFD0: { Copyright: 'x' } }).jpeg().toBuffer(),
+      await sharp(base)
+        .withExif({ IFD0: { Copyright: 'x' } })
+        .jpeg()
+        .toBuffer(),
     ];
     for (const jpeg of variants) {
       const dest = join(bookDir, '.audiobook', 'cover.jpg');
       await writeUploadedCover(jpeg, 'image/jpeg', dest);
-      expect(Buffer.compare(readFileSync(dest), jpeg)).toBe(0);
+      const written = readFileSync(dest);
+      expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+      const meta = await sharp(written).metadata();
+      expect(meta.format).toBe('jpeg');
+      expect(meta.width).toBe(16);
+      expect(meta.height).toBe(16);
+      // Only a real re-encode flattens a progressive scan and drops EXIF.
+      expect(meta.isProgressive).toBe(false);
+      expect(meta.exif).toBeUndefined();
     }
   });
 
-  it('keeps a real JPEG missing only its end-of-image marker byte-for-byte', async () => {
+  it('accepts a real JPEG missing only its end-of-image marker and repairs it (tolerant decode)', async () => {
     const jpeg = await makeJpeg();
     expect([...jpeg.subarray(jpeg.length - 2)]).toEqual([0xff, 0xd9]);
     const cut = jpeg.subarray(0, jpeg.length - 2);
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
     const result = await writeUploadedCover(cut, 'image/jpeg', dest);
-    expect(result.bytes).toBe(cut.length);
-    expect(Buffer.compare(readFileSync(dest), cut)).toBe(0);
+    const written = readFileSync(dest);
+    /* The damaged input is re-encoded, so the stored cover is whole again. */
+    expect(result.bytes).toBe(written.length);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(10);
+    expect(meta.height).toBe(10);
+  });
+
+  /* .rotate() in reencodeToJpeg applies EXIF orientation before sharp drops
+     the metadata — a rotated phone photo must not land sideways (#3642). */
+  it('applies EXIF orientation on re-encode so a rotated phone photo lands upright', async () => {
+    const input = await sharp({
+      create: { width: 32, height: 16, channels: 3, background: { r: 10, g: 200, b: 90 } },
+    })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    const dest = join(bookDir, '.audiobook', 'cover.jpg');
+    await writeUploadedCover(input, 'image/jpeg', dest);
+    const written = readFileSync(dest);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    // Orientation 6 (rotate 90 CW to display): the stored pixels are already
+    // rotated, so the cover is 16x32 portrait, not the raw 32x16 landscape.
+    expect(meta.width).toBe(16);
+    expect(meta.height).toBe(32);
+    // The orientation tag is consumed, not carried forward.
+    expect(meta.orientation).toBeUndefined();
   });
 
   it('refuses JPEG-signature bytes that do not decode and writes nothing', async () => {
@@ -316,5 +434,46 @@ describe('clampFraming', () => {
       zoom: 3,
     });
     expect(clampFraming({ offsetX: 0, offsetY: 0, zoom: 0.5 }).zoom).toBe(1);
+  });
+});
+
+describe('cover state.json helpers wait on the state lock (#3625)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  const readState = () => JSON.parse(readFileSync(statePath(), 'utf8'));
+
+  async function holdLock(): Promise<{ release: () => void; held: Promise<void> }> {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPath(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('patchStateLocalCover does not write while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await holdLock();
+    const p = patchStateLocalCover(bookDir, 'locked.png');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    release();
+    await Promise.all([held, p]);
+    expect(readState().coverImage.originalFilename).toBe('locked.png');
+  });
+
+  it('patchStateFraming does not write while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await holdLock();
+    const p = patchStateFraming(bookDir, { offsetX: 10, offsetY: 20, zoom: 2 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    release();
+    const [, ok] = await Promise.all([held, p]);
+    expect(ok).toBe(true);
+    expect(readState().coverImage.framing).toEqual({ offsetX: 10, offsetY: 20, zoom: 2 });
   });
 });

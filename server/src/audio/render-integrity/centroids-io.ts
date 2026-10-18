@@ -59,12 +59,24 @@ export interface CharacterCentroid {
    *  - 'audition': from the character's audition sample (Task 10 Option-B)
    *  - 'too-short': not enough clean segments; segments scored inconclusive */
   referenceKind: 'in-book' | 'audition' | 'too-short';
-  /** #1969 — the voice this centroid was built from, recorded only on 'audition' rows so
-   *  resolveCharacterReference can tell when a voice reassignment has made the persisted
-   *  reference stale. Absent on a legacy row written before this field existed (and on any
-   *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
-   *  rebuilt rather than trusted. */
+  /** #1969 / #3676 — the voice this centroid was computed under, recorded on 'audition' rows and
+   *  on 'too-short' rows that had voice info, so resolveCharacterReference can tell when a voice
+   *  reassignment has made the persisted reference stale. Absent on 'in-book' rows, on a legacy
+   *  row written before this field existed, and on a 'too-short' row computed with no voice
+   *  info. An 'audition' row with no recorded voice is treated as unknown and rebuilt; a
+   *  'too-short' row with none is reused only while there is still no voice info. */
   auditionVoice?: AuditionVoiceRef;
+  /** #3524 — the cast.json voice an 'in-book' row's anchors were pooled from (only lines
+   *  rendered in the character's then-current voice count). Recorded only when the character
+   *  had a current voice; absent on 'audition'/'too-short' rows and on legacy rows. Lets the
+   *  qa-repair route tell when the in-book reference has gone stale after a voice change. */
+  inBookVoiceName?: string;
+  /** #3524 — marker on a 'too-short' row written for a character that has a current cast voice
+   *  but NO rendered line in it yet (reassigned before any re-render, or rendered only on a
+   *  fallback engine). It is a conclusive "nothing to check yet", not a reference: it takes the
+   *  character off the qa-report's `charactersPending`, is never reused as a reference, and the
+   *  next pass that finds a current-voice line rebuilds a real one over it. */
+  noCurrentVoiceReference?: true;
   /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
    *  method was used on post-fix audition centroid rows:
    *  - 'percentile': percentile-of-pool method (used on real-anchor paths, or on synthetic-only
@@ -115,8 +127,12 @@ export async function readCentroids(
  *  (chapter-qa-repair.ts) derives the voice name from the CURRENT cast via
  *  pickVoiceForEngine, but the model key from the snapshot/segFile (NOT the current
  *  cast). Voice name staleness after a reassignment with no re-render is caught here
- *  (#3449); in-book rows are kept and rebuilt only when rescored, so after a voice
- *  change with no re-render they reflect the old voice (#3517). An 'audition' row is
+ *  (#3449). An in-book row is usable when it recorded NO `inBookVoiceName` (a legacy
+ *  row, or one built when no current voice was known — kept as before, rebuilt with
+ *  the field once a line is rendered in the current voice and `scoreBook` runs) or when that name equals the character's
+ *  current voice; a recorded name that differs (or a missing current voice) means the
+ *  anchors came from a voice the character no longer has and the row is dropped
+ *  (#3524, settles #3517's in-book half). An 'audition' row is
  *  usable ONLY when it recorded a voice identity AND that identity matches the
  *  character's current resolved voice/model — otherwise it is a stale reference
  *  (possibly for a voice the character no longer is) and must not be scored against.
@@ -133,7 +149,9 @@ export function auditionCentroidUsableForCurrent(
   currentVoiceName: string | undefined,
   currentModelKey: string,
 ): boolean {
-  if (row.referenceKind === 'in-book') return true;
+  if (row.referenceKind === 'in-book') {
+    return row.inBookVoiceName == null || row.inBookVoiceName === currentVoiceName;
+  }
   if (row.referenceKind !== 'audition') return false; // incl. 'too-short'
   if (row.auditionVoice == null || currentVoiceName == null) return false;
   return row.auditionVoice.voiceName === currentVoiceName && row.auditionVoice.modelKey === currentModelKey;

@@ -795,3 +795,97 @@ describe('scan status — current takes (plan 287)', () => {
     ).toBe('cast_pending');
   });
 });
+
+describe('scan lazy state.json migrations take the state lock (#3625)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const readState = async (bookDir: string) => {
+    const fs = await import('node:fs/promises');
+    return JSON.parse(await fs.readFile(join(bookDir, '.audiobook', 'state.json'), 'utf-8'));
+  };
+  /* Hold the book's real state lock until `release()` is called. Resolves once held. */
+  async function holdStateLock(bookDir: string) {
+    const { withStateJsonLock } = await import('./file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('./paths.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const acquired = new Promise<void>((r) => (held = r));
+    const done = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      held();
+      await gate;
+    });
+    await acquired;
+    return { release, done };
+  }
+
+  it('site 1: the uuid migration waits on the lock, then lands', async () => {
+    const { bookDir } = bookSkeleton('Lock Site 1');
+    const lock = await holdStateLock(bookDir);
+    const scan = flatten();
+    try {
+      await sleep(200);
+      expect((await readState(bookDir)).chapters[0].uuid).toBeUndefined();
+    } finally {
+      lock.release();
+      await lock.done;
+    }
+    await scan;
+    expect((await readState(bookDir)).chapters[0].uuid).toBeTruthy();
+  });
+
+  it('site 2: the segments backfill waits on the lock, then lands', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Lock Site 2', {
+      chapters: [{ id: 1, slug: 'ls2-01' }],
+    });
+    writeSegments(audioRoot, 'ls2-01', 90);
+    const { findBookByBookId } = await import('./scan.js');
+    const lock = await holdStateLock(bookDir);
+    const found = findBookByBookId(bookId);
+    try {
+      await sleep(200);
+      expect((await readState(bookDir)).chapters[0].audioModelKey).toBeUndefined();
+    } finally {
+      lock.release();
+      await lock.done;
+    }
+    const result = await found;
+    expect(result?.state.chapters[0].audioModelKey).toBe('xtts_v2');
+    expect((await readState(bookDir)).chapters[0].audioModelKey).toBe('xtts_v2');
+  });
+
+  it('site 2 stale snapshot: a chapter changed on disk while waiting is not reverted', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Lock Site 2 Stale', {
+      chapters: [
+        { id: 1, slug: 'ls2s-01' },
+        { id: 2, slug: 'ls2s-02' },
+      ],
+    });
+    writeSegments(audioRoot, 'ls2s-01', 90);
+    const fs = await import('node:fs/promises');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const seeded = await readState(bookDir);
+    seeded.chapters[1].duration = '00:01';
+    await fs.writeFile(statePath, JSON.stringify(seeded));
+
+    const { findBookByBookId } = await import('./scan.js');
+    const lock = await holdStateLock(bookDir);
+    const found = findBookByBookId(bookId);
+    try {
+      await sleep(200);
+      /* A sibling finalize lands while the migration is queued. */
+      const mid = await readState(bookDir);
+      mid.chapters[1].duration = '09:09';
+      mid.chapters[1].audioRenderedAt = '2026-10-16T00:00:00.000Z';
+      await fs.writeFile(statePath, JSON.stringify(mid));
+    } finally {
+      lock.release();
+      await lock.done;
+    }
+    await found;
+
+    const after = await readState(bookDir);
+    expect(after.chapters[1].duration).toBe('09:09');
+    expect(after.chapters[1].audioRenderedAt).toBe('2026-10-16T00:00:00.000Z');
+    expect(after.chapters[0].audioModelKey).toBe('xtts_v2');
+  });
+});

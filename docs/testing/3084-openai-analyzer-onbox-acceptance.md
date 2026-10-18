@@ -262,7 +262,7 @@ small `--max-model-len` or an OpenRouter key.
 
 Run by / date / SHA:
 
-## 7. Long silent prefill — register row A114
+## 7. Long silent prefill — register row A115
 
 1. Endpoint on the slower card, context ≥ 64k; chapter whose stage-1 prompt > 64k tokens.
 2. Time to first token: ___  Total: ___  Timeouts/retries/fallbacks in the log: ___
@@ -270,7 +270,7 @@ Run by / date / SHA:
 
 Run by / date / SHA:
 
-## 8. Fallback to a smaller context — register row A116
+## 8. Fallback to a smaller context — register row A117
 
 1. Endpoint (context ≥ 64k) primary, target `local` with `num_ctx` ≤ 16k; stop `llama-server` during phase 0.
    Per target chunk: `prompt_eval_count` ___ `eval_count` ___ `num_ctx` ___ `done_reason` ___ context shift or error ___
@@ -282,7 +282,7 @@ Run by / date / SHA:
 
 Run by / date / SHA:
 
-## 9. Same-card eviction — register row A115
+## 9. Same-card eviction — register row A116
 
 1. Idle, one served model: Qwen on the endpoint's card → one unload POST logged, Qwen loaded. Result:
 2. Qwen on the other card → no unload POST. Result:

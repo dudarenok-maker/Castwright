@@ -547,50 +547,50 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
   });
 });
 
-/* #3395 pass 2, N2 — `markRevisionPlayable` must key off `revisions.bookId`
-   (kept in lockstep with the active book by revisions-scope-middleware), not
-   `chapters.currentBookId` / `sliceMatchesHandle`. `chapters.currentBookId`
-   only moves once a per-book hydrate lands — never on navigation itself — so
-   a stream completing for a book the user just navigated AWAY from could,
-   under the old guard, still land its revision in the book the user
-   navigated TO whenever the two books shared a chapterId (every book's
-   chapters are numbered 1..N, so this collides constantly). */
-describe('generation-stream-runner — markRevisionPlayable guards on revisions.bookId (#3395 pass 2, N2)', () => {
-  it('does not flip a pending revision playable when revisions.bookId names a different book than the stream', () => {
-    const { store, runner } = makeRunner();
-    /* The revisions slice is scoped to a book the stream is NOT for —
-       exactly the shape mid-navigation produces (see revisions-scope-
-       middleware: it resets revisions.bookId to the newly active book the
-       instant the user navigates, ahead of any chapter completing for the
-       book they left). */
-    store.dispatch(
-      revisionsSlice.actions.hydrateFromBookState({
-        bookId: 'bk-other',
-        pending: [{ id: 'r1', chapterId: 1, characterId: 'nora', playable: false, segments: [] }],
-        drift: [],
-      }),
-    );
-    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
-    onTickFor('b1', 1)({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
-    expect(store.getState().revisions.pending[0].playable).toBe(false);
+/* Plan 286 (Task 24) — a chapter actually rendered with review is stamped
+   `reviewChapter: true` on its own live `chapter_complete` (never a
+   replay). The runner dispatches `chapters/previewChapterComplete` for
+   ANY book on that tick (OD12: no refetch on a plain `chapter_complete`,
+   so the dispatch alone must not fire for a tick without the flag), and
+   and the deprecated preview-playable dispatch is gone. */
+describe('plan 286 — preview completion', () => {
+  function recordingRunner() {
+    const types: Array<{ type: string; payload?: unknown }> = [];
+    const store = configureStore({
+      reducer: {
+        chapters: chaptersSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        revisions: revisionsSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      middleware: (g) =>
+        g().concat(() => (next: (a: unknown) => unknown) => (a: unknown) => {
+          types.push(a as { type: string; payload?: unknown });
+          return next(a);
+        }),
+    });
+    return { store, runner: createStreamRunner(store), types };
+  }
+
+  it('dispatches previewChapterComplete only for reviewChapter, for any book', () => {
+    const { store, runner, types } = recordingRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('viewed'));
+    runner.open('other', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    runner.open('other', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    onTickFor(
+      'other',
+      1,
+    )({ type: 'chapter_complete', chapterId: 1, reviewChapter: true, reviewOutcome: 'recorded' } as GenerationTick);
+    onTickFor('other', 2)({ type: 'chapter_complete', chapterId: 2 } as GenerationTick);
+    const previews = types.filter((t) => t.type === 'chapters/previewChapterComplete');
+    expect(previews.map((t) => t.payload)).toEqual([{ bookId: 'other', chapterId: 1, reviewOutcome: 'recorded' }]);
   });
 
-  it('flips a pending revision playable when revisions.bookId matches the stream, even if chapters.currentBookId does not', () => {
-    const { store, runner } = makeRunner();
-    /* chapters is still on a DIFFERENT book — the hydrate-gated
-       currentBookId the old guard used — while revisions has already
-       caught up to the streamed book. The old `sliceMatchesHandle` guard
-       would have dropped this; the fix must not. */
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
-    store.dispatch(
-      revisionsSlice.actions.hydrateFromBookState({
-        bookId: 'b1',
-        pending: [{ id: 'r1', chapterId: 1, characterId: 'nora', playable: false, segments: [] }],
-        drift: [],
-      }),
-    );
+  it('never dispatches revisions/markRevisionPlayable', () => {
+    const { store, runner, types } = recordingRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
     onTickFor('b1', 1)({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
-    expect(store.getState().revisions.pending[0].playable).toBe(true);
+    expect(types.some((t) => t.type === 'revisions/markRevisionPlayable')).toBe(false);
   });
 });

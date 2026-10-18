@@ -434,3 +434,44 @@ describe('parseText — return shape', () => {
     expect(out.chapters.map((c) => c.title)).toEqual(['One', 'Two']);
   });
 });
+
+describe('parseText — titleSynthesized', () => {
+  it('flags the made-up "Chapter 1" for text before the first heading', () => {
+    const out = parseText('Opening words with no heading.\n\nChapter 2\nbody two', {
+      format: 'plaintext',
+    });
+    expect(out.chapters[0].title).toBe('Chapter 1');
+    expect(out.chapters[0].titleSynthesized).toBe(true);
+    expect(out.chapters[1].titleSynthesized).toBeUndefined();
+  });
+
+  it('does not flag a real "Chapter 1" heading', () => {
+    const out = parseText('Chapter 1\nbody one\n\nChapter 2\nbody two', {
+      format: 'plaintext',
+    });
+    expect(out.chapters.map((c) => c.titleSynthesized)).toEqual([undefined, undefined]);
+    expect('titleSynthesized' in out.chapters[0]).toBe(false);
+  });
+
+  it('does not flag a Prologue heading', () => {
+    const out = parseText('Prologue\nbody zero\n\nChapter 1\nbody one', { format: 'plaintext' });
+    expect(out.chapters[0].title).toBe('Prologue');
+    expect(out.chapters[0].titleSynthesized).toBeUndefined();
+  });
+
+  it('flags the "Chapter 1" fallback for a heading-less document', () => {
+    const out = parseText('just some prose, no headings', { format: 'plaintext' });
+    expect(out.chapters[0].title).toBe('Chapter 1');
+    expect(out.chapters[0].titleSynthesized).toBe(true);
+  });
+
+  it('flags the empty-body "Chapter 1" fallback only when no fileName is given', () => {
+    const bare = parseText('', { format: 'plaintext' });
+    expect(bare.chapters[0].title).toBe('Chapter 1');
+    expect(bare.chapters[0].titleSynthesized).toBe(true);
+
+    const named = parseText('', { format: 'plaintext', fileName: 'My Book.txt' });
+    expect(named.chapters[0].title).toBe('My Book.txt');
+    expect(named.chapters[0].titleSynthesized).toBeUndefined();
+  });
+});

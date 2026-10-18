@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import {
   readRevisions,
+  hasPendingForChapter,
   assertRevisionsResettable,
   resetRevisions,
   recordPending,
   dropPendingForChapter,
+  dropPendingForChapters,
   dismissDriftId,
   beginRevisionOp,
   commitRevisionOp,
@@ -20,7 +22,7 @@ import {
   type ChapterRef,
   type StoredRevision,
 } from './revisions-store.js';
-import { revisionsJsonPath, audioDir } from './paths.js';
+import { revisionsJsonPath, audioDir, stateJsonPath } from './paths.js';
 
 let bookDir: string;
 const CHAPTERS: ChapterRef[] = [
@@ -80,7 +82,7 @@ describe('readRevisions — normalisation (never writes)', () => {
     expect(existsSync(revisionsJsonPath(bookDir))).toBe(false);
   });
 
-  it('drops drift, playable:false legacy entries, and legacy entries with no .previous.mp3', async () => {
+  it('drops drift and legacy entries with no .previous.mp3; a later playable entry replaces a stuck one', async () => {
     writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
     seedRaw({
       drift: [{ id: 'd1' }],
@@ -99,6 +101,46 @@ describe('readRevisions — normalisation (never writes)', () => {
       { id: 'c1', chapterId: 1, characterId: 'c', playable: true, hasPreviousAudio: true, segments: [] },
     ]);
     expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(before);
+  });
+
+  it('plan 286 (OD20) — a legacy playable:false entry with .previous.mp3 is surfaced as playable and recovered; nothing is written', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    seedRaw({ pending: [{ id: 'splice-b-1-c', chapterId: 1, characterId: 'c', playable: false, hasPreviousAudio: true, segments: [] }] });
+    const before = readFileSync(revisionsJsonPath(bookDir), 'utf8');
+    const file = await readRevisions(bookDir, CHAPTERS);
+    expect(file.pending).toEqual([{ id: 'splice-b-1-c', chapterId: 1, characterId: 'c', playable: true, hasPreviousAudio: true, recovered: true, segments: [] }]);
+    expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(before);
+  });
+
+  it('plan 286 (OD20) — a legacy playable:true entry is not marked recovered', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    seedRaw({ pending: [{ id: 'revision:1:c', chapterId: 1, characterId: 'c', playable: true, segments: [] }] });
+    expect((await readRevisions(bookDir, CHAPTERS)).pending[0]).not.toHaveProperty('recovered');
+  });
+
+  it('plan 286 (OD20) — a legacy playable:false entry without .previous.mp3 is still dropped', async () => {
+    seedRaw({ pending: [{ id: 'splice-b-1-c', chapterId: 1, characterId: 'c', playable: false, segments: [] }] });
+    expect((await readRevisions(bookDir, CHAPTERS)).pending).toEqual([]);
+  });
+
+  it('plan 286 (OD20) — the next unrelated store write persists it as playable:true, and the label survives', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    seedRaw({ pending: [{ id: 'splice-b-1-c', chapterId: 1, characterId: 'c', playable: false, hasPreviousAudio: true, segments: [] }] });
+    await dismissDriftId(bookDir, CHAPTERS, 'unrelated-drift');
+    const stored = (onDisk().pending as Array<Record<string, unknown>>)[0];
+    expect(stored).toMatchObject({ id: 'splice-b-1-c', playable: true, recovered: true });
+    expect((await readRevisions(bookDir, CHAPTERS)).pending[0]).toMatchObject({ id: 'splice-b-1-c', recovered: true });
+  });
+
+  it('plan 286 (OD20, pass 3 #5) — a stuck entry appended AFTER a playable one on the same chapter does not shadow it', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    seedRaw({ pending: [
+      { id: 'revision:1:c', chapterId: 1, characterId: 'c', playable: true, hasPreviousAudio: true, segments: [] },
+      { id: 'splice-b-1-c', chapterId: 1, characterId: 'c', playable: false, hasPreviousAudio: true, segments: [] },
+    ] });
+    const pending = (await readRevisions(bookDir, CHAPTERS)).pending;
+    expect(pending.map((p) => p.id)).toEqual(['revision:1:c']);
+    expect(pending[0]).not.toHaveProperty('recovered');
   });
 
   it('treats a legacy entry with no playable flag as playable (kept only when .previous.mp3 exists)', async () => {
@@ -124,6 +166,20 @@ describe('readRevisions — normalisation (never writes)', () => {
     expect(file.acceptedSelections).toEqual({ r1: { '0': 'A' } });
     expect(file.timeline).toEqual({});
     expect(({} as Record<string, unknown>)['0']).toBeUndefined();
+  });
+});
+
+describe('hasPendingForChapter (plan 286)', () => {
+  it('is true only for a chapter with a pending entry in the normalised view', async () => {
+    seedRaw({ schema: 1, fileId: null, rev: 0, pending: [serverEntry(1, 'r1')], dismissed: [], acceptedSelections: {}, timeline: {} });
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(true);
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 2)).toBe(false);
+  });
+  it('a legacy entry whose .previous.mp3 is gone does not count', async () => {
+    seedRaw({ pending: [{ id: 'revision:1:narrator', chapterId: 1, characterId: 'narrator', playable: true, segments: [] }] });
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(false);
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(true);
   });
 });
 
@@ -227,6 +283,15 @@ describe('recordPending / dropPendingForChapter', () => {
     expect((await readRevisions(bookDir, CHAPTERS)).pending.map((p) => p.id).sort()).toEqual(['r2', 'r3']);
     await dropPendingForChapter(bookDir, CHAPTERS, 1);
     expect((await readRevisions(bookDir, CHAPTERS)).pending.map((p) => p.id)).toEqual(['r2']);
+  });
+
+  it('plan 286 — dropPendingForChapters drops several chapters in one write; no-op when none match', async () => {
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [serverEntry(1, 'r1'), serverEntry(2, 'r2')], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const out = await dropPendingForChapters(bookDir, CHAPTERS, [1, 2]);
+    expect(out.pending).toEqual([]);
+    expect(onDisk().rev).toBe(5);
+    await dropPendingForChapters(bookDir, CHAPTERS, [7]);
+    expect(onDisk().rev).toBe(5);
   });
 });
 
@@ -436,5 +501,75 @@ describe('lock serialisation — accept racing recordPending', () => {
     expect(file.pending.map((p) => p.id)).toEqual(['revision:1:2000']);
     expect(file.timeline).toEqual({});
     expect(file.rev).toBe(2);
+  });
+});
+
+describe('identity stamps (#3400)', () => {
+  const stamped = (over: Partial<StoredRevision> = {}): StoredRevision => ({
+    ...serverEntry(1, 'r-s'),
+    chapterUuid: 'u1',
+    renderedAt: 't1',
+    ...over,
+  });
+  const ch = (over: Partial<ChapterRef> = {}): ChapterRef[] => [
+    { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1', ...over },
+    { id: 2, slug: '02-two', uuid: 'u2' },
+  ];
+
+  it('a stamped entry is visible and proceeds while its chapter matches', async () => {
+    seedRaw({ ...EMPTY, pending: [stamped()] });
+    expect((await readRevisions(bookDir, ch())).pending.map((p) => p.id)).toEqual(['r-s']);
+    expect((await beginRevisionOp(bookDir, ch(), 'accept', 'r-s')).kind).toBe('proceed');
+  });
+
+  it.each([
+    ['a different uuid at the id (renumbered)', { uuid: 'other' }],
+    ['a re-rendered chapter (render stamp moved)', { audioRenderedAt: 't2' }],
+    ['a chapter with no render stamp', { audioRenderedAt: undefined }],
+  ])('refuses and hides a stamped entry for %s, and the next write drops it', async (_n, over) => {
+    seedRaw({ ...EMPTY, pending: [stamped()] });
+    expect((await readRevisions(bookDir, ch(over))).pending).toEqual([]);
+    expect((await beginRevisionOp(bookDir, ch(over), 'accept', 'r-s')).kind).toBe('not-found');
+    await dismissDriftId(bookDir, ch(over), 'd1');
+    expect((onDisk().pending as unknown[]).length).toBe(0);
+  });
+
+  describe('a stale caller snapshot never costs a sibling chapter its entry', () => {
+    const sibling = (): StoredRevision => ({ ...serverEntry(2, 'r-sib'), chapterUuid: 'u2', renderedAt: 't2-new' });
+    /* The caller's snapshot predates the sibling's render; state.json (the truth) already carries it. */
+    const staleSnapshot = (): ChapterRef[] => [
+      { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1' },
+      { id: 2, slug: '02-two', uuid: 'u2', audioRenderedAt: 't2-old' },
+    ];
+    const seedState = (chapter2RenderedAt: string) =>
+      writeFileSync(
+        stateJsonPath(bookDir),
+        JSON.stringify({
+          chapters: [
+            { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1' },
+            { id: 2, slug: '02-two', uuid: 'u2', audioRenderedAt: chapter2RenderedAt },
+          ],
+        }),
+      );
+
+    it("recordPending for chapter 1 keeps chapter 2's fresh entry on disk", async () => {
+      seedState('t2-new');
+      seedRaw({ ...EMPTY, pending: [sibling()] });
+      await recordPending(bookDir, staleSnapshot(), { ...serverEntry(1, 'r-one'), chapterUuid: 'u1', renderedAt: 't1' });
+      expect((onDisk().pending as { id: string }[]).map((p) => p.id).sort()).toEqual(['r-one', 'r-sib']);
+    });
+
+    it('a genuinely mismatched entry is still dropped when state.json agrees with the snapshot', async () => {
+      seedState('t2-old');
+      seedRaw({ ...EMPTY, pending: [sibling()] });
+      await recordPending(bookDir, staleSnapshot(), { ...serverEntry(1, 'r-one'), chapterUuid: 'u1', renderedAt: 't1' });
+      expect((onDisk().pending as { id: string }[]).map((p) => p.id)).toEqual(['r-one']);
+    });
+  });
+
+  it('a legacy entry (no stamps) is kept whatever the chapter carries', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'x');
+    seedRaw({ ...EMPTY, pending: [{ ...serverEntry(1, 'r-l'), origin: undefined }] });
+    expect((await readRevisions(bookDir, ch({ uuid: 'other', audioRenderedAt: 't9' }))).pending.map((p) => p.id)).toEqual(['r-l']);
   });
 });

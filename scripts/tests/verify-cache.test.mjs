@@ -1,10 +1,10 @@
-// Unit tests for the verify-cache runner. Includes hash composition, cache
-// decision, load/save logic, and acceptance-driven behavioural tests that spawn
-// real `npm run` against throwaway fixture repos — test:server/lint/etc run
-// instantly (a one-line node invocation, not vitest batteries). Entry point:
-// `npm run test:hooks` (node --test, no extra deps).
+// Pure/unit seams of the verify-cache runner: hash composition, cache decision,
+// load/save, flag parsing, scope (stepTouchedByDiff), contention probes, budget
+// arithmetic and git-diff helpers. The process-spawning tests live in the
+// sibling verify-cache.*.test.mjs files (split by topic, #3701, so node:test
+// runs them in parallel).
 
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
@@ -21,9 +21,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-
 import { walk } from '../lib/module-graph.mjs';
-import { computeScopes } from '../ci-scope.mjs';
 import {
   composeInputHash,
   decide,
@@ -43,10 +41,6 @@ import {
   siblingContentionFor,
   SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
-  runStepProcess,
-  runPipeline,
-  runUnconditionalLocalChecks,
-  UNCONDITIONAL_LOCAL_CHECK_SCRIPTS,
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
@@ -60,20 +54,22 @@ import {
   DEFAULT_RUN_TIMEOUT_MIN,
   _internals,
 } from '../verify-cache.mjs';
+import {
+  cleanGitEnv,
+  gitAt,
+  makeGitFixture,
+  mkTmp,
+  parseLastHeartbeat,
+  stepByName,
+} from './verify-cache-test-support.mjs';
 
-const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER } = _internals;
-import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
-
-const { SCHEMA_VERSION } = _internals;
+const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER, SCHEMA_VERSION } = _internals;
 
 // Resolve relative to THIS file, not the process cwd — same rationale as
 // scripts/tests/run-golden-audio.test.mjs's own HERE/SRC_PATH.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
 const src = readFileSync(SRC_PATH, 'utf8');
-
-// Track temporary directories created by mkTmp() so we can clean them up after all tests.
-const createdDirs = [];
 
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
@@ -86,26 +82,6 @@ test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests'
   // Benign / empty.
   assert.equal(isVitestPoolCrash(''), false);
   assert.equal(isVitestPoolCrash(undefined), false);
-});
-
-function mkTmp() {
-  const dir = mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
-  createdDirs.push(dir);
-  return dir;
-}
-
-// Clean up temporary directories after all tests complete. Best-effort: ignore
-// any failures to remove individual directories (e.g., locked files on Windows).
-// Only remove directories this run created — never glob %TEMP% to avoid deleting
-// another concurrent run's fixtures.
-after(() => {
-  for (const dir of createdDirs) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Ignore failures (locked files, permissions, etc.)
-    }
-  }
 });
 
 function fixedArgs(overrides = {}) {
@@ -454,16 +430,14 @@ test('stepName participates in the hash (different steps with same inputs differ
 
 // --- Pre-commit scope filter (plan 156) ---------------------------------
 
-const stepByName = Object.fromEntries(STEPS.map((s) => [s.name, s]));
-
-test("stepTouchedByDiff: server/tts-sidecar/main.py diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715), but not frontend/hooks", () => {
+test('stepTouchedByDiff: server/tts-sidecar/main.py diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715), but not frontend/hooks', () => {
   const diff = ['server/tts-sidecar/main.py'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), false); // frontend
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), false);
 });
 
-test("stepTouchedByDiff: docs/features/264-vram-aware-gpu-placement.md diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715)", () => {
+test('stepTouchedByDiff: docs/features/264-vram-aware-gpu-placement.md diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715)', () => {
   const diff = ['docs/features/264-vram-aware-gpu-placement.md'];
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
 });
@@ -474,7 +448,7 @@ test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server',
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
 });
 
-test("stepTouchedByDiff: scripts/repair-cast-id-drift.mjs diff matches test:server via extraFiles (#2130 — cast-resolve.repair-pass-contract.test.ts imports it directly, but the script lives outside server/src/**)", () => {
+test('stepTouchedByDiff: scripts/repair-cast-id-drift.mjs diff matches test:server via extraFiles (#2130 — cast-resolve.repair-pass-contract.test.ts imports it directly, but the script lives outside server/src/**)', () => {
   const diff = ['scripts/repair-cast-id-drift.mjs'];
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
 });
@@ -513,14 +487,20 @@ test('stepTouchedByDiff: an agent-definition diff is in scope for test:hooks', (
   // print test:hooks [cached] and gate nothing, locally AND in cloud CI,
   // since ci-scope.mjs derives from this same STEPS[]. Same #1847 trap the
   // fixtures/** and .claude/skills/** comments document at length.
-  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/pr-reviewer.md']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/pr-reviewer.md']),
+    true,
+  );
 });
 
 test('stepTouchedByDiff: an agent definition added later is in scope for test:hooks', () => {
   // The enumeration half, matching the brand-new-skill-file case above: the
   // glob must see a file that does not exist when it is written, or the next
   // role added needs hand-registering here and silently does not get it.
-  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/some-future-role.md']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/some-future-role.md']),
+    true,
+  );
 });
 
 // #2375 review, finding 2: review-gate-mechanism.test.mjs's linkScanSet()
@@ -597,7 +577,10 @@ test('stepTouchedByDiff: a .env.mock diff matches test:hooks via extraFiles (dev
 // printed [cached]. The guard ran on PR #3055 itself only because that PR also
 // touched root package.json (computeShared). Same #1847 trap as fixtures/**.
 test('stepTouchedByDiff: a .psm1-only diff matches test:hooks (ps-ascii-scan.test.mjs scans PowerShell source at runtime)', () => {
-  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['scripts/lib/wt-gc-junctions.psm1']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['scripts/lib/wt-gc-junctions.psm1']),
+    true,
+  );
 });
 
 test('stepTouchedByDiff: a .ps1 diff OUTSIDE scripts/ matches test:hooks (the guard set is repo-wide)', () => {
@@ -656,10 +639,7 @@ test('stepTouchedByDiff: a scripts/*.mts diff matches test:hooks via globs (#221
 // assertions against real workflow paths are what must stay in scope when
 // verify.yml changes, or the guard cannot run on the PR that breaks it.
 test('stepTouchedByDiff: a verify.yml diff matches test:hooks via globs', () => {
-  assert.equal(
-    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']),
-    true,
-  );
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']), true);
 });
 
 test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
@@ -725,7 +705,9 @@ test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
 // .husky/** diff selects.
 test('stepTouchedByDiff: a .husky diff matches test:hooks and NOTHING ELSE', () => {
   for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
-    const matched = STEPS.filter((step) => stepTouchedByDiff(step, [hook])).map((step) => step.name);
+    const matched = STEPS.filter((step) => stepTouchedByDiff(step, [hook])).map(
+      (step) => step.name,
+    );
     assert.deepEqual(matched, ['test:hooks'], hook);
   }
 });
@@ -735,7 +717,10 @@ test('stepTouchedByDiff: a .husky diff matches test:hooks and NOTHING ELSE', () 
 // So on a server-only staged diff the budgeted-poll guardrail never ran on
 // the very commit introducing the pattern (#2120b).
 test('stepTouchedByDiff: a server test diff is in scope for check:budget-poll', () => {
-  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['server/src/tts/foo.test.ts']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['check:budget-poll'], ['server/src/tts/foo.test.ts']),
+    true,
+  );
 });
 
 test('stepTouchedByDiff: a server test diff still does NOT bust test:hooks', () => {
@@ -743,7 +728,10 @@ test('stepTouchedByDiff: a server test diff still does NOT bust test:hooks', () 
 });
 
 test('stepTouchedByDiff: editing the budget-poll script is in scope for its own step', () => {
-  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']),
+    true,
+  );
 });
 
 // ops-3138: check:onbox-register was folded in from the deleted onbox-register-check.yml
@@ -755,7 +743,10 @@ test('stepTouchedByDiff: editing the budget-poll script is in scope for its own 
 // (exactly the shape that breaks the wiring) reports [cached] and the check never
 // re-runs — green on the very diff that reddens it.
 test('stepTouchedByDiff: a verify.yml diff is in scope for check:onbox-register', () => {
-  assert.equal(stepTouchedByDiff(stepByName['check:onbox-register'], ['.github/workflows/verify.yml']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['check:onbox-register'], ['.github/workflows/verify.yml']),
+    true,
+  );
 });
 
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
@@ -897,9 +888,7 @@ test('stepTouchedByDiff: an arbitrary scripts/*.mjs file is in scope for test:se
 
 test('stepTouchedByDiff: an install script is in scope for test:server (EXTERNAL_FILES_FLOOR auto-detection)', () => {
   assert.equal(
-    stepTouchedByDiff(stepByName['test:server'], [
-      'server/tts-sidecar/scripts/bootstrap-venv.mjs',
-    ]),
+    stepTouchedByDiff(stepByName['test:server'], ['server/tts-sidecar/scripts/bootstrap-venv.mjs']),
     true,
   );
   assert.equal(
@@ -993,7 +982,9 @@ test('stepTouchedByDiff: .gitattributes is in scope for test:server (#2588 pass-
 
 test('stepTouchedByDiff: a server/tts-sidecar/requirements/*.txt diff is in scope for test:server (#2588 pass-2 review)', () => {
   assert.equal(
-    stepTouchedByDiff(stepByName['test:server'], ['server/tts-sidecar/requirements/speaker-qa.txt']),
+    stepTouchedByDiff(stepByName['test:server'], [
+      'server/tts-sidecar/requirements/speaker-qa.txt',
+    ]),
     true,
   );
 });
@@ -1322,7 +1313,7 @@ test('siblingContentionFor: busy when at least SIBLING_CONTENTION_THRESHOLD othe
   assert.equal(SIBLING_CONTENTION_THRESHOLD, 1);
 });
 
-test('siblingContentionFor: excludes the caller\'s own PID from the count', () => {
+test("siblingContentionFor: excludes the caller's own PID from the count", () => {
   // Own verify-cache.mjs process can itself match the 'verify-cache\\.mjs'
   // filter in the PowerShell probe — must not count itself as a sibling.
   assert.deepEqual(siblingContentionFor('111\n', 111), { busy: false, count: 0 });
@@ -1359,7 +1350,7 @@ test('detectSiblingContention falls back to busy:false, count:null on probe fail
     body,
     /if \(r\.error \|\| r\.status !== 0\) return \{ busy: false, count: null \};/,
     'detectSiblingContention must fail open (busy:false) on a non-Windows box or a PowerShell error, ' +
-      'mirroring detectGpuContention\'s own fallback',
+      "mirroring detectGpuContention's own fallback",
   );
 });
 
@@ -1375,204 +1366,6 @@ test('CHANGED_ONLY_NPM_SCRIPT maps test/test:server to their :changed npm script
   assert.match(testMatch[0], /test: 'test:changed'/);
   assert.match(testMatch[0], /'test:server': 'test:server:changed'/);
 });
-
-test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the spawned npm script', () => {
-  const match = src.match(/function runStepProcess\([\s\S]*?\n\}/);
-  assert.ok(match, "could not locate runStepProcess's function body in verify-cache.mjs");
-  const body = match[0];
-  assert.match(
-    body,
-    /RETRIABLE_POOL_STEPS\.has\(retryKey\)/,
-    'runStepProcess must check RETRIABLE_POOL_STEPS against retryKey (the original step name, e.g. ' +
-      "\"test:server\"), not the substituted --changed npm script (\"test:server:changed\") — " +
-      'otherwise a --scope-staged run never retries a fork-pool crash',
-  );
-  assert.match(
-    body,
-    /spawn\('npm', \['run', npmScript\]/,
-    'runStepProcess must spawn npmScript (the possibly-substituted script), not retryKey',
-  );
-});
-
-// --- Attempt-count propagation (#3018) -----------------------------------
-//
-// Unlike the CHANGED_ONLY_NPM_SCRIPT/runStepProcess wiring test above (which
-// pins the retryKey-vs-npmScript distinction by source regex to avoid
-// spawning real vitest), these tests need to observe runStepProcess's actual
-// return value across real retries — that can't be proven by reading source.
-// So they spawn a real npm process, but only ever against a throwaway
-// package.json whose "script" is a one-line node invocation of a local
-// fixture file — milliseconds, not a vitest battery.
-
-function writeFlakyFixture(dir, npmScriptName, { failFirst = false, alwaysFail = false } = {}) {
-  // Determine fixture filename and marker name based on failure mode.
-  let fixtureFile;
-  let markerName;
-  if (alwaysFail) {
-    fixtureFile = 'allfail.mjs';
-    markerName = 'attempts-allfail.txt';
-  } else if (failFirst) {
-    fixtureFile = 'flaky.mjs';
-    markerName = 'attempts-flaky.txt';
-  } else {
-    fixtureFile = 'pass.mjs';
-    markerName = 'attempts-pass.txt';
-  }
-  const marker = join(dir, markerName);
-
-  // Generate fixture code based on failure mode.
-  let fixtureCode;
-  if (alwaysFail) {
-    fixtureCode = `import { appendFileSync } from 'node:fs';
-const marker = ${JSON.stringify(marker)};
-appendFileSync(marker, 'x');
-process.stderr.write('Worker exited unexpectedly\\n');
-process.exit(1);
-`;
-  } else if (failFirst) {
-    fixtureCode = `import { existsSync, appendFileSync } from 'node:fs';
-const marker = ${JSON.stringify(marker)};
-const already = existsSync(marker);
-appendFileSync(marker, 'x');
-if (!already) {
-  process.stderr.write('Worker exited unexpectedly\\n');
-  process.exit(1);
-}
-process.exit(0);
-`;
-  } else {
-    // Always pass
-    fixtureCode = `import { appendFileSync } from 'node:fs';
-appendFileSync(${JSON.stringify(marker)}, 'x');
-process.exit(0);
-`;
-  }
-
-  writeFileSync(join(dir, fixtureFile), fixtureCode, 'utf8');
-
-  // Update or create package.json, merging the new script with existing ones.
-  const packageJsonPath = join(dir, 'package.json');
-  let packageJson;
-  if (existsSync(packageJsonPath)) {
-    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-  } else {
-    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
-  }
-  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
-  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
-
-  return marker;
-}
-
-test('runStepProcess: a step passing on the first attempt records 1 attempt', async () => {
-  const dir = mkTmp();
-  writeFlakyFixture(dir, 'always-pass', { failFirst: false });
-  const result = await runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
-  assert.equal(result.code, 0);
-  assert.equal(result.attempts, 1);
-});
-
-test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', async () => {
-  const dir = mkTmp();
-  const marker = writeFlakyFixture(dir, 'flaky', { failFirst: true });
-  const result = await runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
-  assert.equal(result.code, 0);
-  assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
-  // The fixture appends to marker on each launch, so 2 attempts → 2 bytes.
-  assert.equal(readFileSync(marker, 'utf8').length, 2, 'marker file must record 2 real process launches');
-});
-
-test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', async () => {
-  const dir = mkTmp();
-  writeFlakyFixture(dir, 'flaky-nonretriable', { failFirst: true });
-  // retryKey NOT in RETRIABLE_POOL_STEPS — must never retry, regardless of
-  // stderr shape, and must report exactly 1 attempt.
-  const result = await runStepProcess('flaky-nonretriable', {
-    cwd: dir,
-    env: process.env,
-    retryKey: 'some-other-step',
-  });
-  assert.equal(result.code, 1);
-  assert.equal(result.attempts, 1);
-});
-
-// --- Part 2 (ops-72) time budgets ----------------------------------------
-
-function writeHangingFixture(dir, npmScriptName) {
-  // Deliberately never exits on its own — simulates a genuinely wedged
-  // process (the 4h34m incident this feature exists to bound), so a real
-  // timeout kill is exercised rather than a step that would have finished by
-  // itself. The 60s self-exit is a safety net, not the mechanism under test:
-  // if the kill path being tested is itself broken (the exact class of bug
-  // this fixture caught on Linux CI — killTree() was a no-op there), this
-  // process must not become an unreapable orphan that outlives the test run
-  // — confirmed live on a real box (PR #3260 review pass 1, B1): the census
-  // sweep that's supposed to catch a `/T`-survivor doesn't recognize a bare
-  // `node hang.mjs` as a battery invocation, so it's invisible to
-  // runCensus()'s own reap and survives until reboot.
-  const fixtureFile = 'hang.mjs';
-  writeFileSync(
-    join(dir, fixtureFile),
-    'setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60_000);\n',
-    'utf8',
-  );
-  const packageJsonPath = join(dir, 'package.json');
-  let packageJson;
-  if (existsSync(packageJsonPath)) {
-    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-  } else {
-    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
-  }
-  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
-  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
-}
-
-test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a crash-retry exhaustion (mutation test)', async () => {
-  const dir = mkTmp();
-  writeHangingFixture(dir, 'hang');
-  const start = Date.now();
-  // retryKey IS in RETRIABLE_POOL_STEPS on purpose — this is exactly the
-  // shape that could be mistaken for a crash-retry exhaustion (attempts ===
-  // MAX_POOL_ATTEMPTS) if the timeout classification were folded into, or
-  // ordered after, the isVitestPoolCrash check instead of short-circuiting
-  // before it.
-  const result = await runStepProcess('hang', {
-    cwd: dir,
-    env: process.env,
-    retryKey: 'test:server',
-    timeoutMs: 400,
-  });
-  const elapsed = Date.now() - start;
-  assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
-  assert.notEqual(result.code, 0);
-  assert.equal(
-    result.attempts,
-    1,
-    'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
-      'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
-  );
-  assert.ok(
-    elapsed < 30000,
-    `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
-  );
-});
-
-// PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
-// tight once LOW_CONCURRENCY has actually throttled the fork pool for THIS
-// run — without accounting for that, the SAME throttle runPipeline applies
-// to itself makes its own step timeout fire on an otherwise-healthy,
-// merely-slower run.
-//
-// PR #3260 review pass 3, B9/B11: this used to be two tests that raced a
-// real `npm run` subprocess against a wall-clock deadline. That went flaky
-// on this box: real process-launch overhead alone (565-698ms measured on
-// Windows) rivals the fixtures' own sleep durations, leaving 0-100ms of
-// actual margin — both tests failed unmutated, repeatedly, on the
-// committed head. Replaced with direct value assertions against
-// computeStepBudgetMs/computeRunBudgetMs (no subprocess, no wall clock),
-// PLUS a source-regex check that runPipeline's real call sites actually go
-// through those functions rather than reimplementing the formula inline —
-// together these prove both the arithmetic AND the wiring, deterministically.
 
 test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs/computeRunBudgetMs, not an inline reimplementation', () => {
   const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
@@ -1608,19 +1401,6 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
 });
 
-// Last COMPLETE heartbeat line of beat.txt ("<t0> <now> <maxGap>\n" per beat).
-// Pure so the empty / torn / garbage cases are pinned deterministically (#3419).
-function parseLastHeartbeat(text) {
-  const lines = text.split('\n').slice(0, -1);
-  assert.ok(lines.length > 0, 'the hanging fixture never completed a heartbeat line');
-  const [, last, maxGap] = lines[lines.length - 1].split(' ').map(Number);
-  assert.ok(
-    Number.isFinite(last) && Number.isFinite(maxGap),
-    `heartbeat line must hold finite numbers, got: ${JSON.stringify(lines[lines.length - 1])}`,
-  );
-  return { last, maxGap };
-}
-
 test('parseLastHeartbeat: empty file fails clearly instead of yielding NaN (Castwright#3419)', () => {
   assert.throws(() => parseLastHeartbeat(''), /never completed a heartbeat line/);
 });
@@ -1632,136 +1412,6 @@ test('parseLastHeartbeat: a torn tail is dropped, the last complete line wins (C
 
 test('parseLastHeartbeat: a non-numeric complete line fails the finite assertion (Castwright#3419)', () => {
   assert.throws(() => parseLastHeartbeat('1 10 3\nx y z\n'), /finite numbers/);
-});
-
-// Castwright#3361 behavioural pair. Both measure the span the hanging step was
-// ALIVE for (first heartbeat -> last heartbeat, written by the fixture itself),
-// not the `[timeout] ... after Ns` figure: that one also contains taskkill plus
-// a synchronous runCensus (a PowerShell CIM spawn, 0.8-3.5s measured here),
-// which is variance unrelated to the budget under test. The fixture dies at the
-// kill, so the span ends when the budget fires and excludes kill/census time;
-// taskkill latency (a few hundred ms) is NOT excluded and the tolerances allow
-// for it. The span is only returned when the log shows the budget ended the
-// step (a fixture that exits on its own would otherwise be measured as a cut),
-// and the fixture's largest heartbeat gap rides along for failure messages.
-async function runHangingStepSpanMs(extraEnv) {
-  const dir = makeGitFixture();
-  writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
-  writeFileSync(
-    join(dir, 'hang.mjs'),
-    "import { appendFileSync } from 'node:fs';\n" +
-      'const t0 = Date.now();\n' +
-      'let prev = t0;\n' +
-      'let maxGap = 0;\n' +
-      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; appendFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap + '\\n'); };\n" +
-      'beat();\n' +
-      'setInterval(beat, 100);\n' +
-      'setTimeout(() => process.exit(0), 60_000);\n',
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-  const originalLog = console.log;
-  let runLoggedAt = null;
-  const logs = [];
-  console.log = (...args) => {
-    logs.push(args.map(String).join(' '));
-    // `[run] test` is logged immediately before the step is spawned, so it
-    // stands in for the budget timer's own start (npm/node startup, which
-    // varies by seconds under load, is not part of the budget under test).
-    if (runLoggedAt === null && String(args[0]).startsWith('[run] test')) runLoggedAt = Date.now();
-  };
-  let code;
-  try {
-    code = await runPipeline({
-      argv: ['--steps', 'test'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1', ...extraEnv },
-    });
-  } finally {
-    console.log = originalLog;
-  }
-  assert.notEqual(code, 0, 'the hanging step must time out, not pass');
-  assert.ok(
-    logs.some((l) => l.startsWith('[timeout] test')),
-    `expected the budget (not the fixture) to end the step -- no [timeout] test line, got:\n${logs.join('\n')}`,
-  );
-  assert.notEqual(runLoggedAt, null, 'expected a `[run] test` log line');
-  // The fixture APPENDS one line per beat instead of truncate-then-write. The
-  // fixture is killed mid-run, and a truncating write killed (or read) between
-  // open and write can expose an EMPTY file; the NaN/undefinedms seen on Linux
-  // CI (Castwright#3419) can only come from an empty or truncated beat.txt.
-  // Appending removes that window. The specific trigger on Linux CI was not
-  // reproduced. Only a newline-terminated line is complete; a torn tail is dropped.
-  const beatPath = join(dir, 'beat.txt');
-  // The budget starts at spawn, so under load npm/node startup can consume all
-  // of it and the step is killed before the fixture's first beat (Castwright#3422).
-  assert.ok(
-    existsSync(beatPath),
-    `fixture never wrote a heartbeat within the budget (startup consumed it); no beat.txt at ${beatPath}\ncaptured logs:\n${logs.join('\n')}`,
-  );
-  const beatText = readFileSync(beatPath, 'utf8');
-  const { last, maxGap } = parseLastHeartbeat(beatText);
-  // The span above assumes the fixture died at the kill. With append, a
-  // surviving hang.mjs would keep adding lines unnoticed, so prove it stopped.
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal(
-    readFileSync(join(dir, 'beat.txt'), 'utf8').length,
-    beatText.length,
-    'the hanging fixture outlived the step kill: beat.txt kept growing after the step ended',
-  );
-  return { spanMs: last - runLoggedAt, maxGapMs: maxGap };
-}
-
-test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY (Castwright#3361, behavioural)', async () => {
-  // Pipeline deadline is the binding constraint in both runs: the step's own
-  // budget (10 min, x2 under throttle) dwarfs the run floor, so the step is
-  // clamped to the deadline and its live span is the pipeline budget itself.
-  // Correct code: throttled - control ~ 0 (startup jitter only). A 2x widening
-  // of the pipeline budget: ~ +FLOOR_MS.
-  const FLOOR_MS = 10000;
-  const env = {
-    CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
-    CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
-  };
-  const throttled = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
-  const control = await runHangingStepSpanMs(env);
-  const throttledMs = throttled.spanMs;
-  const controlMs = control.spanMs;
-  const gaps = `(max heartbeat gap: throttled ${throttled.maxGapMs}ms, control ${control.maxGapMs}ms)`;
-  // The control ceiling stops a never-clamped control from passing vacuously.
-  assert.ok(
-    controlMs < 2 * FLOOR_MS,
-    `control run must be clamped near the flat ${FLOOR_MS}ms floor, was alive ${controlMs}ms ${gaps}`,
-  );
-  assert.ok(
-    Math.abs(throttledMs - controlMs) <= FLOOR_MS / 2,
-    `pipeline budget must not widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms ${gaps}`,
-  );
-});
-
-test('runPipeline: the per-step budget IS widened under LOW_CONCURRENCY for a vitest-backed step (Castwright#3361, behavioural)', async () => {
-  // Mirror image: the run budget is huge, the step floor small, so the step's
-  // own budget binds. Correct code: throttled ~ 2x control (diff ~ +FLOOR_MS).
-  // stepContentionMultiplier forced to 1: diff ~ 0.
-  const FLOOR_MS = 10000;
-  const env = {
-    CASTWRIGHT_RUN_TIMEOUT_MIN: '10',
-    CASTWRIGHT_STEP_TIMEOUT_MIN: String(FLOOR_MS / 60000),
-  };
-  const throttled = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
-  const control = await runHangingStepSpanMs(env);
-  const throttledMs = throttled.spanMs;
-  const controlMs = control.spanMs;
-  const gaps = `(max heartbeat gap: throttled ${throttled.maxGapMs}ms, control ${control.maxGapMs}ms)`;
-  assert.ok(
-    controlMs < 2 * FLOOR_MS,
-    `control run must be bounded by the ${FLOOR_MS}ms step floor, was alive ${controlMs}ms ${gaps}`,
-  );
-  assert.ok(
-    throttledMs - controlMs >= FLOOR_MS / 2,
-    `step budget must widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms ${gaps}`,
-  );
 });
 
 test('computeStepBudgetMs widens the FLOOR for an UNCALIBRATED step (no cache entry) under LOW_CONCURRENCY (B2)', () => {
@@ -1792,8 +1442,15 @@ test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDur
     178.5 * 60 * 1000,
     'sanity: the old (buggy) shape doubles the already-throttled baseline a second time',
   );
-  assert.equal(fixed, 90 * 60 * 1000, 'the fixed shape must land on max(2F, 2.5d), not 2 x max(F, 2.5d)');
-  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
+  assert.equal(
+    fixed,
+    90 * 60 * 1000,
+    'the fixed shape must land on max(2F, 2.5d), not 2 x max(F, 2.5d)',
+  );
+  assert.ok(
+    fixed < oldBuggyShape,
+    'the fix must not double-count a baseline the prior throttled run already absorbed',
+  );
 });
 
 test('computeRunBudgetMs keeps the uncalibrated pipeline floor flat — never widened, throttle or no throttle (#3272 decision C, #3361)', () => {
@@ -1805,7 +1462,11 @@ test('computeRunBudgetMs keeps the uncalibrated pipeline floor flat — never wi
   // runPipeline's own `Math.min(...)` clamp; this pipeline-level floor is the
   // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
-  assert.equal(computeRunBudgetMs(0, floorMs), floorMs, 'uncalibrated: the pipeline floor is the flat floorMs');
+  assert.equal(
+    computeRunBudgetMs(0, floorMs),
+    floorMs,
+    'uncalibrated: the pipeline floor is the flat floorMs',
+  );
 });
 
 test('computeRunBudgetMs returns max(floorMs, 2.5 x qualified) for a calibrated run, widened by nothing (#3361)', () => {
@@ -1872,7 +1533,7 @@ test('sumQualifiedRunDurationMs: an attempts > 1 (crash-inflated) baseline contr
   assert.equal(
     sumQualifiedRunDurationMs(cache, [{ name: 'lint' }, { name: 'test' }], () => true),
     60000,
-    'the sum must honour qualifiedDurationFor\'s attempts === 1 rule: an unqualified entry adds nothing',
+    "the sum must honour qualifiedDurationFor's attempts === 1 rule: an unqualified entry adds nothing",
   );
 });
 
@@ -1886,7 +1547,7 @@ test('runPipeline budgets only in-scope steps, via one shared outOfScope predica
   assert.match(
     pipelineBody,
     /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
-    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate AND the stepPlan pre-pass\' planned action — never an unfiltered inline reduce',
+    "the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate AND the stepPlan pre-pass' planned action — never an unfiltered inline reduce",
   );
   assert.match(
     pipelineBody,
@@ -2065,704 +1726,6 @@ test('makeStatHashMemo: each of size, mtimeMs, ctimeMs, ino alone invalidates th
   }
 });
 
-// Castwright#3393 review pass 2: the run/skip decision must describe a step's
-// inputs as they are when THAT step starts, not as they were when the pre-pass
-// planned the run. Step B (`check:onbox-register`) passes only on the ORIGINAL
-// content and is cached on it by run 1 (B alone). Run 2 is A,B: step A
-// (`lint`) rewrites B's input after the pre-pass planned B as `skip`, so B
-// must run again (and fail), never print `[cached]`. This is a route #3413's
-// post-run guard cannot mask: B's entry is legitimately written in run 1, and
-// only the start-of-step re-plan stands between it and a false `[cached]`.
-async function runTwoStepFixture({ sharedFile, createsFile = false }) {
-  const dir = makeGitFixture();
-  // `sharedFile` true: the mutated file is ALSO an input of step A (a `.mjs`
-  // matched by both `lint` and `check:onbox-register`), so a per-run memo
-  // populated while planning/running A would serve B a stale hash.
-  // `createsFile` true: the target does not exist (never `git add`ed) until A
-  // creates it, so it is absent from any file LIST taken before A ran — the
-  // file SET, not just the hashes, must be taken at B's start.
-  const target = createsFile
-    ? 'scripts/new.mjs'
-    : sharedFile
-      ? 'scripts/shared.mjs'
-      : 'docs/testing/onbox-acceptance-register.md';
-  mkdirSync(dirname(join(dir, target)), { recursive: true });
-  if (!createsFile) writeFileSync(join(dir, target), 'orig', 'utf8');
-  writeFileSync(
-    join(dir, 'a.mjs'),
-    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, target))}, 'mutated');\n`,
-    'utf8',
-  );
-  writeFileSync(
-    join(dir, 'b.mjs'),
-    createsFile
-      ? `import { existsSync } from 'node:fs';\nprocess.exit(existsSync(${JSON.stringify(join(dir, target))}) ? 1 : 0);\n`
-      : `import { readFileSync } from 'node:fs';\nprocess.exit(readFileSync(${JSON.stringify(join(dir, target))}, 'utf8') === 'orig' ? 0 : 1);\n`,
-    'utf8',
-  );
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'stale-hash-fixture',
-      private: true,
-      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  const run = async (steps = 'lint,check:onbox-register') => {
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      const result = await runPipeline({
-        argv: ['--steps', steps],
-        cwd: dir,
-        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-      });
-      return { result, logs };
-    } finally {
-      console.log = originalLog;
-    }
-  };
-
-  // Run 1: B alone, on the original content — passes and is cached.
-  const first = await run('check:onbox-register');
-  assert.equal(first.result, 0, `run 1 must pass (B sees the original):\n${first.logs.join('\n')}`);
-  assert.ok(first.logs.some((l) => l.includes('[pass] check:onbox-register')), first.logs.join('\n'));
-  // Run 2: A then B. A mutates B's input after the pre-pass planned B as cached.
-  const second = await run();
-  return { second };
-}
-
-for (const [label, sharedFile] of [
-  ['an input only the later step reads', false],
-  ['an input BOTH steps read (per-run memo route)', true],
-]) {
-  test(`runPipeline: a step's cache entry reflects its inputs at START, not at plan time — ${label} (#3393)`, async () => {
-    const { second } = await runTwoStepFixture({ sharedFile });
-    assert.ok(
-      !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
-      `check:onbox-register was cached on content A has since changed; it must not be [cached]:\n${second.logs.join('\n')}`,
-    );
-    assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
-    assert.equal(second.result, 1, 'B fails on the content A wrote');
-  });
-}
-
-test("runPipeline: a file an earlier step CREATES inside a later step's globs is in that step's hash (#3393 pass 3)", async () => {
-  const { second } = await runTwoStepFixture({ sharedFile: true, createsFile: true });
-  assert.ok(
-    !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
-    `check:onbox-register was cached before step A created scripts/new.mjs; it must not be [cached]:\n${second.logs.join('\n')}`,
-  );
-  assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
-  assert.equal(second.result, 1, 'B fails once A has created the file');
-});
-
-// Castwright#3413: a step whose own inputs change while it runs must not be
-// cached under its start-time hash. `check:onbox-register` runs `s.mjs`, which
-// (optionally) rewrites/creates a file inside that step's own globs and exits 0.
-async function runSelfMutatingStepFixture({ mutation }) {
-  const dir = makeGitFixture();
-  const register = 'docs/testing/onbox-acceptance-register.md';
-  const created = 'scripts/created.mjs';
-  mkdirSync(dirname(join(dir, register)), { recursive: true });
-  writeFileSync(join(dir, register), 'orig', 'utf8');
-  const body =
-    mutation === 'rewrite'
-      ? `writeFileSync(${JSON.stringify(join(dir, register))}, 'mutated');`
-      : mutation === 'create'
-        ? `mkdirSync(${JSON.stringify(dirname(join(dir, created)))}, { recursive: true });\nwriteFileSync(${JSON.stringify(join(dir, created))}, 'x');`
-        : '';
-  writeFileSync(
-    join(dir, 's.mjs'),
-    `import { writeFileSync, mkdirSync } from 'node:fs';\n${body}\nprocess.exit(0);\n`,
-    'utf8',
-  );
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'self-mutating-fixture',
-      private: true,
-      scripts: { 'check:onbox-register': 'node s.mjs' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  const run = async () => {
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      const result = await runPipeline({
-        argv: ['--steps', 'check:onbox-register'],
-        cwd: dir,
-        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-      });
-      return { result, logs };
-    } finally {
-      console.log = originalLog;
-    }
-  };
-
-  const first = await run();
-  assert.equal(first.result, 0, `run 1 must pass:\n${first.logs.join('\n')}`);
-  const cacheEntry = () => {
-    const cacheFile = join(dir, _internals.CACHE_FILENAME);
-    if (!existsSync(cacheFile)) return undefined;
-    return JSON.parse(readFileSync(cacheFile, 'utf8')).steps?.['check:onbox-register'];
-  };
-  const entryAfterFirst = cacheEntry();
-  // put the inputs back exactly as they were when run 1 started
-  if (mutation === 'rewrite') writeFileSync(join(dir, register), 'orig', 'utf8');
-  if (mutation === 'create') rmSync(join(dir, created));
-  const second = await run();
-  return { first, second, entryAfterFirst };
-}
-
-for (const mutation of ['rewrite', 'create']) {
-  test(`runPipeline: a step whose own inputs change while it runs (${mutation}) is not cached (#3413)`, async () => {
-    const { first, second, entryAfterFirst } = await runSelfMutatingStepFixture({ mutation });
-    assert.equal(entryAfterFirst, undefined, 'no cache entry may be written for the self-mutating step');
-    assert.ok(
-      !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
-      `the entry would vouch for content the step did not fully run against:\n${second.logs.join('\n')}`,
-    );
-    assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
-    assert.ok(
-      first.logs.some((l) => l.includes('check:onbox-register inputs changed while it ran; not caching')),
-      `run 1 must log the not-caching line:\n${first.logs.join('\n')}`,
-    );
-  });
-}
-
-test('runPipeline: a step that leaves its inputs alone is still cached (#3413 control)', async () => {
-  const { first, second, entryAfterFirst } = await runSelfMutatingStepFixture({ mutation: 'none' });
-  assert.ok(!first.logs.some((l) => l.includes('not caching')), first.logs.join('\n'));
-  assert.ok(entryAfterFirst, 'an input-stable step must write its cache entry');
-  assert.ok(
-    second.logs.some((l) => l.includes('[cached] check:onbox-register')),
-    second.logs.join('\n'),
-  );
-});
-
-// Castwright#3413 review pass 2: the external writer of an edit-and-restore
-// test. Every wait is bounded by a deadline that throws a clear message, so a
-// run that never starts the step fails the test instead of hanging it. The
-// promise is `.catch`-observed so an unawaited rejection can't crash the runner
-// when the caller bails out on run 1's assertion first.
-function abaWriter({ started, sawMutated, file, mutated, restored, deadlineMs = 15000 }) {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const until = async (path, what) => {
-    const end = Date.now() + deadlineMs;
-    while (!existsSync(path)) {
-      if (Date.now() > end) throw new Error(`abaWriter: timed out waiting for ${what} (${path})`);
-      await sleep(20);
-    }
-  };
-  const p = (async () => {
-    await until(started, 'the step to start');
-    await sleep(100);
-    writeFileSync(file, mutated, 'utf8');
-    await until(sawMutated, 'the step to see the edit');
-    await sleep(100);
-    writeFileSync(file, restored, 'utf8');
-  })();
-  p.catch(() => {});
-  return p;
-}
-
-// Castwright#3413 review pass 1: an input edited AND restored while its own step
-// runs has the same CONTENT at step end as at step start, so a content-only
-// re-hash would cache it. The step below passes only because it saw `mutated`
-// (it exits 1 on `orig`); an external writer edits the register after the step
-// starts and restores it once the step has read the edit. Run 2 must re-run.
-test('runPipeline: an input edited and restored while its own step runs is not cached (#3413)', async () => {
-  const dir = makeGitFixture();
-  const side = mkdtempSync(join(tmpdir(), 'aba-side-'));
-  try {
-    const register = join(dir, 'docs/testing/onbox-acceptance-register.md');
-    mkdirSync(dirname(register), { recursive: true });
-    writeFileSync(register, 'orig', 'utf8');
-    const started = join(side, 'started');
-    const sawMutated = join(side, 'saw');
-    writeFileSync(
-      join(dir, 's.mjs'),
-      `import { readFileSync, writeFileSync } from 'node:fs';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-writeFileSync(${JSON.stringify(started)}, '1');
-let ok = false;
-for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(register)}, 'utf8') === 'mutated') { ok = true; break; } await sleep(50); }
-if (!ok) process.exit(1);
-writeFileSync(${JSON.stringify(sawMutated)}, '1');
-for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(register)}, 'utf8') === 'orig') break; await sleep(50); }
-process.exit(0);
-`,
-      'utf8',
-    );
-    writeFileSync(
-      join(dir, 'package.json'),
-      JSON.stringify({
-        name: 'aba-fixture',
-        private: true,
-        scripts: { 'check:onbox-register': 'node s.mjs' },
-      }),
-      'utf8',
-    );
-    gitAt(dir, ['add', '.']);
-    gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-    const writer = abaWriter({ started, sawMutated, file: register, mutated: 'mutated', restored: 'orig' });
-
-    const run = async () => {
-      const logs = [];
-      const originalLog = console.log;
-      console.log = (...args) => logs.push(args.join(' '));
-      try {
-        const result = await runPipeline({
-          argv: ['--steps', 'check:onbox-register'],
-          cwd: dir,
-          env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-        });
-        return { result, logs };
-      } finally {
-        console.log = originalLog;
-      }
-    };
-    const first = await run();
-    // Assert run 1 BEFORE awaiting the writer: if run 1 never started the step,
-    // fail here with its log rather than waiting on a writer that never fires.
-    assert.equal(first.result, 0, `run 1 must pass (the step saw the edit):\n${first.logs.join('\n')}`);
-    await writer;
-    assert.equal(readFileSync(register, 'utf8'), 'orig', 'the register ends restored');
-    const second = await run();
-    assert.ok(
-      !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
-      `the step exits 1 on the restored content; it must not be [cached]:\n${second.logs.join('\n')}`,
-    );
-    assert.equal(second.result, 1);
-  } finally {
-    rmSync(side, { recursive: true, force: true });
-  }
-});
-
-// Castwright#3413 review pass 2: `audit` has `globs: []`, so its lockfile is its
-// ONLY real input. The lockfile is hashed (pickLockHashes) but was not in the
-// stat signature, so an edit-and-restore of it mid-step was cached.
-// Both lockfile-only audit steps are run: `audit:server`'s lockfile joins the
-// stat signature through its own `'server'` line, which `audit` never reaches.
-for (const { stepName, lockRel } of [
-  { stepName: 'audit', lockRel: 'package-lock.json' },
-  { stepName: 'audit:server', lockRel: 'server/package-lock.json' },
-]) {
-test(`runPipeline: a lockfile edited and restored while the ${stepName} step runs is not cached (#3413)`, async () => {
-  const dir = makeGitFixture();
-  const side = mkdtempSync(join(tmpdir(), 'lockaba-side-'));
-  try {
-    const lock = join(dir, lockRel);
-    mkdirSync(dirname(lock), { recursive: true });
-    writeFileSync(lock, '{"v":"orig"}', 'utf8');
-    writeFileSync(join(dir, 'audit-waivers.json'), '[]', 'utf8');
-    const started = join(side, 'started');
-    const sawMutated = join(side, 'saw');
-    writeFileSync(
-      join(dir, 's.mjs'),
-      `import { readFileSync, writeFileSync } from 'node:fs';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-writeFileSync(${JSON.stringify(started)}, '1');
-let ok = false;
-for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(lock)}, 'utf8').includes('mutated')) { ok = true; break; } await sleep(50); }
-if (!ok) process.exit(1);
-writeFileSync(${JSON.stringify(sawMutated)}, '1');
-for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(lock)}, 'utf8').includes('orig')) break; await sleep(50); }
-process.exit(0);
-`,
-      'utf8',
-    );
-    writeFileSync(
-      join(dir, 'package.json'),
-      JSON.stringify({ name: 'lockaba-fixture', private: true, scripts: { [stepName]: 'node s.mjs' } }),
-      'utf8',
-    );
-    gitAt(dir, ['add', '.']);
-    gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-    const writer = abaWriter({ started, sawMutated, file: lock, mutated: '{"v":"mutated"}', restored: '{"v":"orig"}' });
-    const run = async () => {
-      const logs = [];
-      const originalLog = console.log;
-      console.log = (...args) => logs.push(args.join(' '));
-      try {
-        const result = await runPipeline({
-          argv: ['--steps', stepName],
-          cwd: dir,
-          env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-        });
-        return { result, logs };
-      } finally {
-        console.log = originalLog;
-      }
-    };
-    const first = await run();
-    assert.equal(first.result, 0, `run 1 must pass (the step saw the edit):\n${first.logs.join('\n')}`);
-    await writer;
-    assert.equal(readFileSync(lock, 'utf8'), '{"v":"orig"}', 'the lockfile ends restored');
-    assert.ok(
-      first.logs.some((l) => l.includes(`${stepName} inputs changed while it ran; not caching`)),
-      `run 1 must log the not-caching line:\n${first.logs.join('\n')}`,
-    );
-    const cacheFile = join(dir, _internals.CACHE_FILENAME);
-    const entry = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')).steps?.[stepName] : undefined;
-    assert.equal(entry, undefined, 'no cache entry may be written for the lockfile-ABA step');
-    const second = await run();
-    assert.ok(
-      !second.logs.some((l) => l.includes(`[cached] ${stepName}`)),
-      `the step exits 1 on the restored lockfile; it must not be [cached]:\n${second.logs.join('\n')}`,
-    );
-    assert.equal(second.result, 1);
-  } finally {
-    rmSync(side, { recursive: true, force: true });
-  }
-});
-}
-
-test('runPipeline: a per-step file listing that fails mid-run logs the uncached notice once and writes no entry (#3393 pass 4)', async () => {
-  const dir = makeGitFixture();
-  // Step A corrupts the git index, so step B's re-taken `git ls-files` fails.
-  writeFileSync(
-    join(dir, 'a.mjs'),
-    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, '.git', 'index'))}, 'garbage');\n`,
-    'utf8',
-  );
-  writeFileSync(join(dir, 'b.mjs'), 'process.exit(0);\n', 'utf8');
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'listing-fails-fixture',
-      private: true,
-      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-  let result;
-  try {
-    result = await runPipeline({
-      argv: ['--steps', 'lint,check:onbox-register'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-  } finally {
-    console.log = originalLog;
-  }
-  assert.equal(result, 0, `both steps must still run and pass:\n${logs.join('\n')}`);
-  assert.ok(logs.some((l) => l.includes('[run] check:onbox-register')), logs.join('\n'));
-  assert.equal(
-    logs.filter((l) => l.includes('[verify-cache] git ls-files failed; running uncached')).length,
-    1,
-    `the mid-run listing failure must be announced exactly once:\n${logs.join('\n')}`,
-  );
-  // A's own post-run listing already fails (it corrupted the index), so since
-  // #3413 no entry is written for A either and the cache file may not exist.
-  const cachePath = join(dir, '.verify-cache.json');
-  const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { steps: {} };
-  assert.equal(cache.steps['check:onbox-register'], undefined, 'no cache entry for the uncached step');
-});
-
-test('runPipeline: a start-of-step listing that fails after a --changed-only predecessor logs the uncached notice once and writes no entry (#3393 pass 4)', async () => {
-  // A `--changed`-only pass gets no post-run re-take (#3413), so the failed
-  // listing is first hit by the NEXT step's start-of-step re-take.
-  const dir = makeGitFixture();
-  const srcFile = join(dir, 'src', 'index.ts');
-  mkdirSync(dirname(srcFile), { recursive: true });
-  writeFileSync(srcFile, 'export default 1;', 'utf8');
-  writeFileSync(
-    join(dir, 'corrupt.mjs'),
-    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, '.git', 'index'))}, 'garbage');\n`,
-    'utf8',
-  );
-  writeFileSync(join(dir, 'ok.mjs'), 'process.exit(0);\n', 'utf8');
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'changed-only-listing-fails-fixture',
-      private: true,
-      scripts: { 'test:changed': 'node corrupt.mjs', build: 'node ok.mjs' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'base']);
-  // a staged diff confined to src/*.ts makes `test` run via test:changed
-  writeFileSync(srcFile, 'export default 2;', 'utf8');
-  gitAt(dir, ['add', '.']);
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-  let result;
-  try {
-    result = await runPipeline({
-      argv: ['--steps', 'test,build', '--scope-staged'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-  } finally {
-    console.log = originalLog;
-  }
-  assert.equal(result, 0, `both steps must still run and pass:\n${logs.join('\n')}`);
-  assert.ok(logs.some((l) => l.includes('[run] test (--changed HEAD only)')), logs.join('\n'));
-  assert.ok(logs.some((l) => l.includes('[run] build')), logs.join('\n'));
-  assert.equal(
-    logs.filter((l) => l.includes('[verify-cache] git ls-files failed; running uncached')).length,
-    1,
-    `the start-of-step listing failure must be announced exactly once:\n${logs.join('\n')}`,
-  );
-  const cachePath = join(dir, '.verify-cache.json');
-  const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { steps: {} };
-  assert.equal(cache.steps.build, undefined, 'no cache entry for the step run uncached');
-  assert.equal(cache.steps.test, undefined, 'a --changed-only pass is never cached');
-});
-
-test('runPipeline with scope filtering: a step not touched by the diff prints [skip] and does not execute (#3393)', async () => {
-  // Verifies the scope filter correctly identifies and skips steps outside the diff.
-  // Edited file (src/index.ts) matches lint glob but not config:check glob.
-  const dir = makeGitFixture();
-  const srcFile = join(dir, 'src', 'index.ts');
-  const markerFile = join(dir, '.marker');
-  mkdirSync(dirname(srcFile), { recursive: true });
-  writeFileSync(srcFile, 'export default 1;', 'utf8');
-  writeFileSync(join(dir, 'mark.cjs'), `require('fs').appendFileSync('.marker', '1');`, 'utf8');
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'scope-fixture',
-      private: true,
-      scripts: { lint: 'node mark.cjs && exit 0' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'base']);
-  gitAt(dir, ['switch', '-q', '-c', 'feature']);
-
-  writeFileSync(srcFile, 'export default 2;', 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'edit src']);
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-  try {
-    const result = await runPipeline({
-      argv: ['--steps', 'lint,config:check', '--scope-branch'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-    const lintLog = logs.find((l) => l.match(/^\[run\] lint\b/));
-    const checkLog = logs.find((l) => l.match(/^\[skip\] config:check\b/));
-
-    assert.ok(lintLog, `expected [run] lint, got:\n${logs.join('\n')}`);
-    assert.ok(checkLog, `expected [skip] config:check, got:\n${logs.join('\n')}`);
-    assert.ok(
-      existsSync(markerFile),
-      'lint ran (marker file created)',
-    );
-    assert.equal(result, 0);
-  } finally {
-    console.log = originalLog;
-  }
-});
-
-test('runPipeline with unchanged inputs: step prints [cached], does not execute, then [run] again after input change (#3393)', async () => {
-  // Verifies: (1) unchanged inputs trigger cache hit and skip execution,
-  // (2) changed inputs clear cache and force re-execution.
-  const dir = makeGitFixture();
-  const envFile = join(dir, 'server', '.env.example');
-  mkdirSync(dirname(envFile), { recursive: true });
-  writeFileSync(envFile, 'FOO=1', 'utf8');
-  writeFileSync(join(dir, 'increment.cjs'), `
-const fs = require('fs');
-const count = parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1;
-fs.writeFileSync('.exec-count', String(count));
-`, 'utf8');
-  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'cache-fixture',
-      private: true,
-      scripts: { 'config:check': 'node increment.cjs && exit 0' },
-    }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'base']);
-
-  const run = async () => {
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      const result = await runPipeline({
-        argv: ['--steps', 'config:check'],
-        cwd: dir,
-        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-      });
-      return { result, logs };
-    } finally {
-      console.log = originalLog;
-    }
-  };
-
-  // Run 1: no cache, step executes
-  const first = await run();
-  assert.equal(first.result, 0);
-  const firstLog = first.logs.find((l) => l.match(/^\[run\] config:check\b/));
-  assert.ok(firstLog, `run 1 expected [run], got:\n${first.logs.join('\n')}`);
-  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '1', 'marker shows step executed once');
-
-  // Run 2: unchanged inputs, cache hits, step does NOT execute
-  const second = await run();
-  assert.equal(second.result, 0);
-  const secondLog = second.logs.find((l) => l.match(/^\[cached\] config:check\b/));
-  assert.ok(
-    secondLog,
-    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
-  );
-  assert.equal(
-    readFileSync(join(dir, '.exec-count'), 'utf8'),
-    '1',
-    'marker unchanged: step did NOT execute on cache hit',
-  );
-
-  // Run 3: change an input (server/.env.example is in config:check inputs), cache invalidates, step re-executes
-  writeFileSync(envFile, 'FOO=2', 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'change env']);
-
-  const third = await run();
-  assert.equal(third.result, 0);
-  const thirdLog = third.logs.find((l) => l.match(/^\[run\] config:check\b/));
-  assert.ok(
-    thirdLog,
-    `run 3 expected [run] after input change, got:\n${third.logs.join('\n')}`,
-  );
-  assert.equal(
-    readFileSync(join(dir, '.exec-count'), 'utf8'),
-    '2',
-    'marker shows step executed a second time after input change',
-  );
-});
-
-test('runPipeline: a lockfile edit alone re-runs a step whose only input is its lockfile (planStep lock hashing)', async () => {
-  const dir = makeGitFixture();
-  writeFileSync(join(dir, 'package-lock.json'), '{"v":1}', 'utf8');
-  writeFileSync(join(dir, 'increment.cjs'), `
-const fs = require('fs');
-fs.writeFileSync('.exec-count', String(parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1));
-`, 'utf8');
-  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({ name: 'cache-fixture', private: true, scripts: { audit: 'node increment.cjs' } }),
-    'utf8',
-  );
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'base']);
-
-  const run = async () => {
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      const result = await runPipeline({
-        argv: ['--steps', 'audit'],
-        cwd: dir,
-        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-      });
-      return { result, logs };
-    } finally {
-      console.log = originalLog;
-    }
-  };
-
-  assert.equal((await run()).result, 0);
-  const second = await run();
-  assert.ok(
-    second.logs.some((l) => /^\[cached\] audit\b/.test(l)),
-    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
-  );
-  writeFileSync(join(dir, 'package-lock.json'), '{"v":2}', 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'bump lock']);
-  const third = await run();
-  assert.ok(
-    third.logs.some((l) => /^\[run\] audit\b/.test(l)),
-    `run 3 expected [run] after lockfile edit, got:\n${third.logs.join('\n')}`,
-  );
-  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '2');
-});
-
-test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
-  const dir = makeGitFixture();
-  writeHangingFixture(dir, 'test:server');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-  const start = Date.now();
-  try {
-    const result = await runPipeline({
-      argv: ['--steps', 'test:server'],
-      cwd: dir,
-      env: {
-        ...scrubGitEnvForThrowawayRepo(process.env),
-        SKIP_CONTENTION_CHECK: '1',
-        CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms — deliberately tiny for the mutation test
-      },
-    });
-    const elapsed = Date.now() - start;
-    // Without this, a genuinely broken kill (killStepChildTree() a no-op) is
-    // indistinguishable from a real one: the hanging fixture's own 60s
-    // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
-    // safety net, not the mechanism under test) supplies a clean exit that
-    // satisfies every assertion below just as well as a fast kill would,
-    // taking ~61s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
-    // guard mirrors the one runStepProcess's own equivalent test already has
-    // a few lines up).
-    assert.ok(
-      elapsed < 30000,
-      `the kill path should land well under the fixture's own 60s self-exit safety net — took ${elapsed}ms`,
-    );
-    assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
-    const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
-    assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);
-    assert.ok(
-      !logs.some((l) => l.includes('[retry]')),
-      'a timed-out step must never be retried as a vitest pool crash',
-    );
-    assert.ok(
-      !logs.some((l) => l.includes('[fail]') && l.includes('3 attempts')),
-      'must not be reported as a MAX_POOL_ATTEMPTS-exhausted crash-retry outcome',
-    );
-  } finally {
-    console.log = originalLog;
-  }
-});
-
 // The tail/head stderr-accumulator regression test (#3258). Part 2's
 // retriable-pool-steps capture stderr through makeTailAccumulator, which keeps
 // the TAIL of the stream when it overflows. isVitestPoolCrash's signature
@@ -2921,8 +1884,8 @@ test('the --changed-only substitution requires scopeStaged, !scopeShared, a know
   assert.match(
     body,
     /flags\.scopeStaged\s*&&\s*\n\s*!scopeShared\s*&&\s*\n\s*scopeDiff !== null\s*&&\s*\n\s*diffSafeForChangedOnly\(step, scopeDiff\)\s*\n\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*\n\s*:\s*undefined/,
-    'a shared-scope diff, an uncertain diff, or a diff touching anything outside the step\'s own ' +
-      'primary source tree must all run that step\'s FULL script — --changed against any of them ' +
+    "a shared-scope diff, an uncertain diff, or a diff touching anything outside the step's own " +
+      "primary source tree must all run that step's FULL script — --changed against any of them " +
       'would otherwise silently select and run zero tests',
   );
 });
@@ -2934,7 +1897,7 @@ test('the --changed-only substitution requires scopeStaged, !scopeShared, a know
 // zero files. Same for src/styles.css against the frontend `test` step
 // (commit 8ce2aa30): its two guard tests (styles-neutrals.test.ts,
 // dark-mode-css.test.ts) read it via readFileSync, not import.
-test('diffSafeForChangedOnly: true only for a path under the step\'s primary source root with a safe extension', () => {
+test("diffSafeForChangedOnly: true only for a path under the step's primary source root with a safe extension", () => {
   const testServerStep = { name: 'test:server' };
   assert.equal(diffSafeForChangedOnly(testServerStep, ['server/src/foo.ts']), true);
   assert.equal(
@@ -2981,53 +1944,11 @@ test('a --changed-only pass is never written to the verify-cache — only a full
     body,
     /if \(fileList !== null && !changedOnlyScript\) \{/,
     'the cache.steps[step.name] write must be gated on !changedOnlyScript — a --changed-narrowed ' +
-      'pass must not be cached under the full step\'s input hash',
+      "pass must not be cached under the full step's input hash",
   );
 });
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
-
-// Strip ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX (and anything
-// else GIT_-prefixed) before spawning: when this suite runs inside a real git
-// hook (pre-commit calls `npm run verify:fast:scoped` -> `npm run
-// test:hooks`), git sets these in the process env for the hook, and without
-// stripping them these fixture commands would operate on the REAL repo
-// instead of the throwaway `cwd`. Case-insensitive match: Windows preserves
-// whatever casing a var was stored under while lookup is case-insensitive,
-// and git honours a lowercase `git_dir` identically to `GIT_DIR` — a
-// destructure keyed on the canonical uppercase names alone (the pre-#2841
-// shape here) leaves a differently-cased survivor that still redirects these
-// fixture commands at the real repo. Demonstrated live: an ambient lowercase
-// `git_dir` flipped a real checkout's `core.bare` from false to true via
-// `makeGitFixture()`'s `git init` below.
-// Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
-// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
-// and why this needs a separate helper from scrubGitEnv().
-function cleanGitEnv() {
-  return scrubGitEnvForThrowawayRepo();
-}
-
-function gitAt(cwd, args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv(), windowsHide: true });
-  if (r.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
-  }
-  return r.stdout;
-}
-
-// Builds a throwaway repo with one commit on a `main` branch, so tests can
-// exercise branchDiffFiles' real `git merge-base` + `git diff` calls without
-// touching this actual repo.
-function makeGitFixture() {
-  const dir = mkTmp();
-  gitAt(dir, ['init', '-q', '-b', 'main']);
-  gitAt(dir, ['config', 'user.email', 'test@example.com']);
-  gitAt(dir, ['config', 'user.name', 'Test']);
-  writeFileSync(join(dir, 'base.txt'), 'base', 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'base']);
-  return dir;
-}
 
 // #2841 review round 2 — this file's own git-env scrub was a hardcoded-
 // uppercase object destructure, the same case-sensitivity gap already fixed
@@ -3265,14 +2186,14 @@ test('sidecarFingerprint still returns unavailable when no venv exists on POSIX'
 // selected step is affected by LOW_CONCURRENCY (vitest-only). The probe (~4.6s)
 // cannot affect non-vitest runners (pytest, Pester, Playwright).
 test('hasVitestStep returns true when any vitest-backed step is selected', () => {
-  const vitestSteps = [
-    { name: 'test' },
-    { name: 'test:server' },
-    { name: 'test:server-slow' },
-  ];
+  const vitestSteps = [{ name: 'test' }, { name: 'test:server' }, { name: 'test:server-slow' }];
   for (const step of vitestSteps) {
     assert.equal(hasVitestStep([step]), true, `${step.name} is vitest-backed`);
-    assert.equal(hasVitestStep([step, { name: 'test:sidecar' }]), true, 'mixed selection with vitest');
+    assert.equal(
+      hasVitestStep([step, { name: 'test:sidecar' }]),
+      true,
+      'mixed selection with vitest',
+    );
   }
 });
 
@@ -3296,7 +2217,11 @@ test('hasVitestStep returns false when no vitest steps are selected', () => {
     [{ name: 'test:sidecar' }, { name: 'lint' }, { name: 'typecheck' }],
   ];
   for (const steps of nonVitestSteps) {
-    assert.equal(hasVitestStep(steps), false, `${steps.map((s) => s.name).join(', ')} has no vitest`);
+    assert.equal(
+      hasVitestStep(steps),
+      false,
+      `${steps.map((s) => s.name).join(', ')} has no vitest`,
+    );
   }
 });
 
@@ -3307,414 +2232,3 @@ test('hasVitestStep returns FALSE for an empty array', () => {
   // ever called with the resolved list, so the two never disagree in practice.
   assert.equal(hasVitestStep([]), false, 'empty selection contains no vitest step');
 });
-
-// --- Attempt-count wiring verification (#3018) ---
-//
-// Issue #3018 added an `attempts` field to runStepProcess's return value and
-// wired it into the cache write. This test verifies the wiring through
-// runPipeline's actual execution against a throwaway git repo: a fixture
-// package.json maps scripts to one-line node invocations (not vitest, so fast —
-// 1–2 seconds total). Both acceptance criteria are observable end-to-end: the
-// cache entry persists attempts, and the [pass] console line conditionally
-// reports the count.
-
-test('#3018: runPipeline persists attempts to cache and reports count only on retry', async () => {
-  const dir = makeGitFixture();
-
-  // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
-  const marker1 = writeFlakyFixture(dir, 'test:server', { failFirst: true });
-
-  // Fixture 2: always passes on first attempt.
-  const marker2 = writeFlakyFixture(dir, 'test', { failFirst: false });
-
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  // Capture console output.
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-
-  try {
-    // Criterion 1: retry case → cache.steps[step].attempts = 2
-    // Criterion 2: [pass] line includes "2 attempts" (only when attempts > 1)
-    logs.length = 0;
-    const result1 = await runPipeline({
-      argv: ['--steps', 'test:server'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-    assert.equal(result1, 0);
-
-    const cache1 = loadCache(join(dir, '.verify-cache.json'));
-    assert.equal(cache1.steps['test:server'].attempts, 2);
-    assert.equal(readFileSync(marker1, 'utf8').length, 2, 'marker shows 2 launches');
-
-    const passLine1 = logs.find((l) => l.includes('[pass]') && l.includes('test:server'));
-    assert.ok(passLine1);
-    assert.match(passLine1, /2 attempts/);
-
-    // Criterion 1: first-try case → cache.steps[step].attempts = 1
-    // Criterion 2: [pass] line does NOT include attempt count (only when attempts > 1)
-    logs.length = 0;
-    const result2 = await runPipeline({
-      argv: ['--steps', 'test'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-    assert.equal(result2, 0);
-
-    const cache2 = loadCache(join(dir, '.verify-cache.json'));
-    assert.equal(cache2.steps.test.attempts, 1);
-    assert.equal(readFileSync(marker2, 'utf8').length, 1, 'marker shows 1 launch');
-
-    const passLine2 = logs.find((l) => l.includes('[pass]') && l.includes('test'));
-    assert.ok(passLine2);
-    assert.doesNotMatch(passLine2, /attempts/);
-  } finally {
-    console.log = originalLog;
-  }
-});
-
-test('#3018: [fail] line reports attempt count when step crashes all retries', async () => {
-  const dir = makeGitFixture();
-
-  // Fixture: crashes on all 3 attempts (fork-pool crash shape).
-  const marker = writeFlakyFixture(dir, 'test:server', { alwaysFail: true });
-
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-
-  // Capture console output.
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-
-  try {
-    // Run the pipeline; it will crash all 3 attempts and return non-zero
-    logs.length = 0;
-    const result = await runPipeline({
-      argv: ['--steps', 'test:server'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
-    });
-    assert.ok(result !== 0, 'pipeline should return non-zero for a failing step');
-
-    // Verify that all 3 attempts were launched (marker file has 3 x's)
-    assert.equal(
-      readFileSync(marker, 'utf8').length,
-      3,
-      'marker shows all 3 attempts were launched',
-    );
-
-    // Criterion: [fail] line must include "3 attempts" to document how many attempts failed
-    const failLine = logs.find((l) => l.includes('[fail]') && l.includes('test:server'));
-    assert.ok(failLine, 'should have a [fail] line for test:server');
-    assert.match(failLine, /3 attempts/, '[fail] line should include attempt count');
-  } finally {
-    console.log = originalLog;
-  }
-});
-
-// --- Unconditional local checks (#3271, closing #3140's local-wiring gap) ---
-//
-// `npm run verify` must reach `check:register-citations` UNCONDITIONALLY — never
-// `[cached]`, never scope-skipped, and never through a `STEPS[]` entry. Shape
-// mirrors the CI-side precedent test at
-// scripts/tests/workflow-wiring.test.mjs:1496 ("register citation check: must be
-// unconditional (no if: guard) — issue #3122"), which pins the
-// `.github/workflows/verify.yml` step for this exact check; these tests are the
-// local half of that same guarantee.
-//
-// WHY it cannot be a `STEPS[]` entry: scripts/ci-scope.mjs's
-// `computeScopes`/`slugFor` auto-derives a `step_<slug>` scope key for EVERY
-// `STEPS[]` entry, and workflow-wiring.test.mjs's "every emitted scope key is
-// referenced by the workflow" test then requires that key be referenced by some
-// `if:` in verify.yml — while the CI-side test above requires the
-// register-citation step to have no `if:` at all. A `STEPS[]` entry would drive
-// those two tests into direct contradiction.
-//
-// WHY it is uncached rather than merely unconditional: the checker scans the
-// WHOLE git-tracked tree for register-row citations, so neither a diff-scope nor
-// any `inputs.globs` set can predict whether a citation broke. Reached only via
-// `test:hooks` (the pre-#3271 state), a diff touching any file outside that
-// step's globs printed `test:hooks [cached]` and left a broken citation
-// stale-green locally.
-//
-// These tests are written to go RED on the plausible reverts, not just on a
-// total deletion of the feature: dropping the script from
-// UNCONDITIONAL_LOCAL_CHECK_SCRIPTS (source pin + behavioural), adding a second
-// STEPS[] entry for it (source pin), wrapping the call in a cache-hash check or
-// a scope gate (source pin), skipping it under
-// `--scope-branch`/`--scope-staged` (source pin), restricting it to some other
-// subset of full runs (behavioural), and losing the early return that makes a
-// broken citation fail the whole run (source pin + behavioural).
-
-// The check this issue wires must be the one the checker script actually
-// answers to. Named once, so renaming the npm script fails loudly here instead
-// of silently un-pinning the assertions below.
-const CHECK_SCRIPT = 'check:register-citations';
-
-test('#3271: check:register-citations is an unconditional local check, not a STEPS[] entry', () => {
-  assert.deepEqual(
-    [...UNCONDITIONAL_LOCAL_CHECK_SCRIPTS],
-    [CHECK_SCRIPT],
-    'UNCONDITIONAL_LOCAL_CHECK_SCRIPTS must name exactly the register-citation check — ' +
-      'removing it here silently restores the #3140 gap (the check then only runs via ' +
-      'test:hooks, which is cache-hash-skipped and scope-gated)',
-  );
-
-  assert.ok(
-    STEPS.every((s) => s.name !== CHECK_SCRIPT),
-    `${CHECK_SCRIPT} must NOT appear in STEPS[]: scripts/ci-scope.mjs auto-derives a ` +
-      'step_<slug> scope key for every STEPS[] entry, and workflow-wiring.test.mjs ' +
-      'requires that key be referenced by an `if:` in verify.yml — contradicting its own ' +
-      '"register citation check: must be unconditional" test (#3122)',
-  );
-});
-
-function runPipelineBody() {
-  const match = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/);
-  assert.ok(match, "could not locate runPipeline's function body in verify-cache.mjs");
-  return match[0];
-}
-
-test('#3271: runPipeline calls the unconditional checks unguarded, outside the cache and scope paths', () => {
-  const body = runPipelineBody();
-
-  assert.match(
-    body,
-    /runUnconditionalLocalChecks\(\{\s*cwd,\s*env\s*\}\)/,
-    'runPipeline must call runUnconditionalLocalChecks({ cwd, env }) directly',
-  );
-
-  assert.match(
-    body,
-    /if \(!flags\.steps \|\| flags\.steps\.length === 0\) \{\s*\n\s*const checkCode = await runUnconditionalLocalChecks\(/,
-    'the call must be gated only on "this is a full run" (`!flags.steps`) — the same ' +
-      'condition the step-selection block above uses to tell "full" from "--steps"-filtered',
-  );
-
-  assert.match(
-    body,
-    /if \(checkCode !== 0\) return checkCode;/,
-    'a non-zero exit from the unconditional checks must fail the WHOLE run (early return), ' +
-      'exactly like a failed step',
-  );
-
-  // The failure modes this test exists to catch: a future "optimisation" that
-  // routes the call back through the same machinery that caused #3140.
-  assert.doesNotMatch(
-    body,
-    /decide\(\{[\s\S]{0,200}?stepName: \u0027[^\u0027]*register-citations\u0027/,
-    'the register-citation check must not be routed through decide() (the cache-hash ' +
-      'skip) — a cached citation check is the #3140 bug itself',
-  );
-  assert.doesNotMatch(
-    body,
-    /stepTouchedByDiff\([^)]*register-citations/,
-    'the register-citation check must not be scope-filtered — it scans the whole tracked tree',
-  );
-  // Scope-gating pin, aimed at the current spelling (the scope test is the
-  // shared `outOfScope` predicate over scopeDiff/scopeShared, defined AFTER the
-  // call). Everything before the call must be free of all three names: the call
-  // sits ahead of the scope machinery, so any of them appearing earlier means it
-  // was moved under (or after) a scope guard. Asserts the call was located first,
-  // so a failed extraction cannot pass vacuously.
-  const callIdx = body.indexOf('runUnconditionalLocalChecks({');
-  assert.ok(callIdx > 0, 'could not locate the runUnconditionalLocalChecks call in runPipeline');
-  assert.doesNotMatch(
-    body.slice(0, callIdx),
-    /outOfScope|scopeDiff|scopeShared/,
-    'the unconditional checks must not be moved under a scope guard — ' +
-      'that is exactly the `--scope-branch`/`--scope-staged` skip this issue removes',
-  );
-});
-
-test('#3271: runUnconditionalLocalChecks spawns via the existing runStepProcess helper', () => {
-  const match = src.match(/export async function runUnconditionalLocalChecks\([\s\S]*?\n\}\n/);
-  assert.ok(match, 'could not locate runUnconditionalLocalChecks in verify-cache.mjs');
-  const body = match[0];
-
-  assert.match(
-    body,
-    /await runStepProcess\(/,
-    'must spawn through the existing runStepProcess helper rather than inventing a new ' +
-      'spawn path (same retry/`shell: true`/windowsHide semantics as every STEPS[] step)',
-  );
-  assert.match(
-    body,
-    /\[fail\] \$\{script\} \(exit \$\{code\}, took \$\{formatSecs\(dt\)\}\)/,
-    'the failure line must match the existing step-output shape ' +
-      '`[fail] <name> (exit <n>, took <n>s)`',
-  );
-  assert.match(
-    body,
-    /return code;/,
-    'must return the failing exit code so runPipeline can fail the run',
-  );
-});
-
-// The source pins above are cheap but blind to the wiring actually executing.
-// These behavioural tests drive runPipeline's real code path against a throwaway
-// git repo whose `check:register-citations` script is a one-line node invocation
-// (not vitest, so fast).
-function writeRegisterCitationFixture(dir, { passing = true } = {}) {
-  const marker = join(dir, 'citations-attempts.txt');
-  writeFileSync(
-    join(dir, 'citations-fixture.mjs'),
-    passing
-      ? `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.exit(0);\n`
-      : `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.stderr.write('register citation broken: A99 cites a row that does not exist\\n');\nprocess.exit(1);\n`,
-    'utf8',
-  );
-  const pkgPath = join(dir, 'package.json');
-  const pkg = existsSync(pkgPath)
-    ? JSON.parse(readFileSync(pkgPath, 'utf8'))
-    : { name: 'citations-fixture', private: true, scripts: {} };
-  pkg.scripts[CHECK_SCRIPT] = 'node citations-fixture.mjs';
-  writeFileSync(pkgPath, JSON.stringify(pkg), 'utf8');
-  return marker;
-}
-
-async function captureLogs(fn) {
-  const logs = [];
-  const originalLog = console.log;
-  console.log = (...args) => logs.push(args.join(' '));
-  try {
-    return { result: await fn(), logs };
-  } finally {
-    console.log = originalLog;
-  }
-}
-
-test('#3271: a full run executes the citation check every time, and never reports it [cached]', async () => {
-  const dir = makeGitFixture();
-  const marker = writeRegisterCitationFixture(dir);
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
-
-  // Two consecutive full runs with nothing changed in between — the exact shape
-  // that printed `test:hooks [cached]` before #3271.
-  for (const run of [1, 2]) {
-    const { logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
-
-    assert.ok(
-      logs.some((l) => l.startsWith(`[run] ${CHECK_SCRIPT} (unconditional)`)),
-      `run ${run}: a full run must print the unconditional [run] line for ${CHECK_SCRIPT}`,
-    );
-    assert.ok(
-      logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
-      `run ${run}: expected a [pass] line for ${CHECK_SCRIPT} — got:\n${logs.join('\n')}`,
-    );
-    assert.ok(
-      !logs.some((l) => l.includes('[cached]') && l.includes(CHECK_SCRIPT)),
-      `run ${run}: the citation check must NEVER be reported [cached] — the checker scans ` +
-        'the whole tracked tree, so no input hash can say it is unchanged (#3140)',
-    );
-    assert.ok(
-      !logs.some((l) => l.includes('[skip]') && l.includes(CHECK_SCRIPT)),
-      `run ${run}: the citation check must never be scope-skipped`,
-    );
-    assert.equal(
-      readFileSync(marker, 'utf8').length,
-      run,
-      `run ${run}: the checker must have been spawned exactly once per full run`,
-    );
-  }
-});
-
-test('#3271: a --scope-branch run with EVERY step out of scope still runs the citation check', async () => {
-  // makeGitFixture is on `main` with no diff vs main, so scopeDiff is [] and
-  // every STEPS[] entry is out of scope. The check must still run: it scans the
-  // whole tracked tree, so it can never be scope-gated.
-  const dir = makeGitFixture();
-  const marker = writeRegisterCitationFixture(dir);
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
-
-  const { logs } = await captureLogs(() => runPipeline({ argv: ['--scope-branch'], cwd: dir, env }));
-
-  assert.ok(
-    logs.some((l) => l.includes('nothing in scope')),
-    `expected the all-out-of-scope path — got:\n${logs.join('\n')}`,
-  );
-  assert.ok(
-    logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
-    `the citation check must run and pass under an all-out-of-scope --scope-branch run — got:\n${logs.join('\n')}`,
-  );
-  assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have been spawned once');
-});
-
-test('#3271: a broken citation fails the whole run with the checker error visible', async () => {
-  const dir = makeGitFixture();
-  const marker = writeRegisterCitationFixture(dir, { passing: false });
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
-
-  const { result, logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
-
-  assert.equal(result, 1, 'runPipeline must return the failure exit code');
-  assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have run once');
-  const failLine = logs.find((l) => l.startsWith(`[fail] ${CHECK_SCRIPT}`));
-  assert.ok(
-    failLine,
-    `expected a [fail] line for ${CHECK_SCRIPT} matching the existing step shape — got:\n${logs.join('\n')}`,
-  );
-  assert.match(failLine, /\(exit 1, took /);
-  // `result === 1` alone doesn't prove the early return fired: STEPS[0] is
-  // `lint`, which also fails (with "Missing script") in this throwaway
-  // fixture repo, so a deleted `if (checkCode !== 0) return checkCode;`
-  // would still leave `result` at 1 for the wrong reason. Assert `lint`
-  // never ran (runPipeline logs `[run] ${step.name}` per step) so this only
-  // passes when the early return actually short-circuited the pipeline.
-  assert.ok(
-    !logs.some((l) => l.startsWith('[run] lint')),
-    'the early return must short-circuit before any STEPS[] entry runs — got:\n' +
-      logs.join('\n'),
-  );
-});
-
-test('#3271: a --steps run is left alone (the deliberate narrow developer/hook filter)', async () => {
-  const dir = makeGitFixture();
-  const marker = writeRegisterCitationFixture(dir);
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
-
-  // The pre-commit hook and package.json's verify:fast* scripts are narrow
-  // `--steps` filters, and test:hooks already covers the checker there. Widening
-  // them would silently change what the hook costs.
-  assert.equal(await runUnconditionalLocalChecks({ cwd: dir, env }), 0);
-  assert.equal(readFileSync(marker, 'utf8').length, 1);
-
-  const { logs } = await captureLogs(() =>
-    runPipeline({ argv: ['--steps', 'test:hooks'], cwd: dir, env }),
-  );
-  assert.ok(
-    !logs.some((l) => l.startsWith(`[run] ${CHECK_SCRIPT} (unconditional)`)),
-    'a --steps run must not run the unconditional local leg',
-  );
-  assert.equal(
-    readFileSync(marker, 'utf8').length,
-    1,
-    'the checker must not have been spawned again by the --steps run',
-  );
-});
-
-// check-audit.test.mjs reads audit-waivers.json (the committed-waivers
-// validity test) and BOTH lockfiles (the braces/micromatch/fast-glob waiver
-// premise pin) as TEXT at RUNTIME - no module-graph edge. Without these
-// extraFiles entries, a waivers-only or server-lockfile-only diff leaves
-// test:hooks [cached] locally and skips its CI leg (computeScopes derives from
-// the same STEPS[] entry). A root package-lock.json diff already trips
-// computeShared, but is pinned here too so the entry cannot be dropped.
-for (const f of ['audit-waivers.json', 'package-lock.json', 'server/package-lock.json']) {
-  test(`stepTouchedByDiff + computeScopes: a ${f}-only diff puts test:hooks in scope (check-audit.test.mjs reads it at runtime)`, () => {
-    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [f]), true);
-    assert.equal(computeScopes([f]).step_test_hooks, true);
-  });
-}

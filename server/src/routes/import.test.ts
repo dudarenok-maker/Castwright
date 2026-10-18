@@ -930,3 +930,133 @@ describe('POST /api/import — CJK-aware word count (fs-59 W2)', () => {
     expect(ch1.wordCount).toBe(4);
   });
 });
+
+describe('POST /api/books — new-book state.json write waits on the state lock (#3625)', () => {
+  it('does not write state.json while the lock is held, then lands', async () => {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    const { bookDirByDisplay, stateJsonPath } = await import('../workspace/paths.js');
+    const md = `# Lock Title\n\n## Chapter One\n\nA short opening.\n`;
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'lock.md' });
+    expect(importRes.status).toBe(200);
+
+    const bookDir = bookDirByDisplay('Lock Author', 'Standalones', 'Lock Book');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+
+    const pending = request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'Lock Author',
+        title: 'Lock Book',
+        seriesPosition: null,
+        isStandalone: true,
+      })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(stateJsonPath(bookDir))).toBe(false);
+    release();
+    const [confirmRes] = await Promise.all([pending, held]);
+    expect(confirmRes.status).toBe(201);
+    expect(existsSync(stateJsonPath(bookDir))).toBe(true);
+  });
+});
+
+describe('POST /api/books — the existing-book 409 check and the write are one span (#3625)', () => {
+  it('two concurrent confirms of one title: one 201, one 409, and nothing is created before the lock', async () => {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    const { bookDirByDisplay, stateJsonPath } = await import('../workspace/paths.js');
+    const md = `# Race Title
+
+## Chapter One
+
+A short opening.
+`;
+    const a = await request(app).post('/api/import').send({ text: md, fileName: 'race-a.md' });
+    const b = await request(app).post('/api/import').send({ text: md, fileName: 'race-b.md' });
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+
+    const bookDir = bookDirByDisplay('Race Author', 'Standalones', 'Race Book');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+
+    const confirm = (tempId: string) =>
+      request(app)
+        .post('/api/books')
+        .send({ tempId, author: 'Race Author', title: 'Race Book', seriesPosition: null, isStandalone: true })
+        .then((r) => r);
+    const pending = [confirm(a.body.tempId), confirm(b.body.tempId)];
+    await new Promise((r) => setTimeout(r, 300));
+    /* Both requests are parked on the lock. If the existence check ran outside
+       it, the first request has already created the folder here and the second
+       one's 409 was decided on a half-made book. */
+    expect(existsSync(bookDir)).toBe(false);
+    release();
+    const [results] = await Promise.all([Promise.all(pending), held]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    const winner = results.find((r) => r.status === 201)!;
+    expect(JSON.parse(readFileSync(stateJsonPath(bookDir), 'utf8')).manuscriptId).toBe(
+      winner.body.manuscriptId,
+    );
+  });
+});
+
+describe('POST /api/books — titleSynthesized persistence (#3628)', () => {
+  it('writes titleSynthesized: true on the made-up leading chapter only', async () => {
+    const md = [
+      'Some opening words that come before any heading at all.',
+      '',
+      '## Prologue',
+      '',
+      'The prologue body has a few sentences of narrative content in it.',
+      '',
+      '## Chapter 1',
+      '',
+      'The first real chapter carries on with some more narrative content.',
+    ].join('\n');
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'synth.md' });
+    expect(importRes.status).toBe(200);
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Synth Author',
+      title: 'Synth Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    ) as { chapters: Array<{ title: string; titleSynthesized?: boolean }> };
+
+    const [lead, ...headed] = stateJson.chapters;
+    expect(lead.title).toBe('Chapter 1');
+    expect(lead.titleSynthesized).toBe(true);
+    expect(headed.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1']);
+    for (const ch of headed) {
+      expect('titleSynthesized' in ch).toBe(false);
+    }
+  });
+});

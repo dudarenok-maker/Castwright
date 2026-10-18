@@ -12,9 +12,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { chaptersSlice } from '../store/chapters-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
+import { RESTRUCTURING_REASON, RESTRUCTURING_TOAST_MESSAGE } from '../store/restructure-lock';
 import { EditChapterTitleModal } from './edit-chapter-title';
 import { api } from '../lib/api';
 import type { Chapter } from '../lib/types';
@@ -45,6 +47,7 @@ function renderModal(
     reducer: {
       chapters: chaptersSlice.reducer,
       notifications: notificationsSlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: {
       chapters: {
@@ -197,5 +200,51 @@ describe('EditChapterTitleModal — save', () => {
     expect(onClose).not.toHaveBeenCalled();
     // Slice not updated on failure — chapter still has original title.
     expect(store.getState().chapters.chapters[0].title).toBe('Chapter 3 — Awkward Heuristic');
+  });
+});
+
+describe('EditChapterTitleModal — restructuring lock (#3400 pass 7)', () => {
+  it('disables Save with the reason and never calls the API while the book restructures', () => {
+    const { store } = renderModal();
+    fireEvent.change(screen.getByTestId('edit-chapter-title-input'), {
+      target: { value: 'A new title' },
+    });
+    // control: not restructuring -> Save is enabled
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    act(() => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    expect(screen.getByTestId('edit-chapter-title-hint')).toHaveTextContent(RESTRUCTURING_REASON);
+    fireEvent.click(save);
+    fireEvent.keyDown(screen.getByTestId('edit-chapter-title-input'), { key: 'Enter' });
+    expect(renameSpy).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the live flag in the handler: a restructure that starts after render refuses with a toast', async () => {
+    const { store } = renderModal();
+    fireEvent.change(screen.getByTestId('edit-chapter-title-input'), {
+      target: { value: 'A new title' },
+    });
+    // Flag flips without a re-render of the (memoised) closure: dispatch outside act.
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    fireEvent.keyDown(screen.getByTestId('edit-chapter-title-input'), { key: 'Enter' });
+    await Promise.resolve();
+    expect(renameSpy).not.toHaveBeenCalled();
+    const toasts = (store.getState() as any).notifications.toasts ?? [];
+    expect(JSON.stringify(toasts)).toContain(RESTRUCTURING_TOAST_MESSAGE);
+  });
+
+  it('does not lock for a different book', () => {
+    const { store } = renderModal();
+    act(() => {
+      store.dispatch(uiActions.setRestructuringBook('other-book'));
+    });
+    fireEvent.change(screen.getByTestId('edit-chapter-title-input'), {
+      target: { value: 'A new title' },
+    });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

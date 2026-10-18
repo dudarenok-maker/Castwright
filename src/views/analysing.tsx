@@ -35,6 +35,7 @@ import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { uiActions, selectPhaseModelPick } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
+import { RESTRUCTURING_REASON, selectBookEditsLocked } from '../store/restructure-lock';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -408,6 +409,9 @@ export function AnalysingView({
      or another), so Retry is disabled: the server refuses a subset run beside
      it. */
   const mainAnalysisLive = useAppSelector((s) => selectMainAnalysisLive(s, manuscriptId));
+  /* #3400 pass 8 - the server refuses an analysis start while the book's chapters
+     are being restructured, so every start trigger below disables itself. */
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
 
   /* Analyzer readiness gate — declared up here (above the analysis
      useEffect) because the analysis effect depends on it. The full
@@ -798,7 +802,9 @@ export function AnalysingView({
            go idle, and show the server's message. */
         if (
           e instanceof AnalysisError &&
-          (e.code === 'subset_analysis_running' || e.code === 'main_analysis_running')
+          (e.code === 'subset_analysis_running' ||
+            e.code === 'main_analysis_running' ||
+            e.code === 'chapters_restructuring')
         ) {
           if (preStartSnapshot) dispatch(analysisActions.setActiveStream(preStartSnapshot));
           else dispatch(analysisActions.clearActiveStream());
@@ -1197,7 +1203,9 @@ export function AnalysingView({
            restore, keep the row, show the server's message on it. */
         if (
           err instanceof AnalysisError &&
-          (err.code === 'subset_in_progress' || err.code === 'main_analysis_running')
+          (err.code === 'subset_in_progress' ||
+            err.code === 'main_analysis_running' ||
+            err.code === 'chapters_restructuring')
         ) {
           subsetInProgressRef.current = true;
           /* The snapshot may be another book's by now: restore only
@@ -1630,7 +1638,7 @@ export function AnalysingView({
                   : 'Start analysis'
                 : 'Waiting for analyzer…';
               const onClick = handlePauseOrResume;
-              const disabled = !isRunning && !isAnalyzerReady;
+              const disabled = (!isRunning && !isAnalyzerReady) || restructuring;
               return (
                 <div className="mt-6 flex flex-col items-center gap-2">
                   {/* fs-65 Task 12 — Expressive directions toggle (eager default ON).
@@ -1657,6 +1665,7 @@ export function AnalysingView({
                     type="button"
                     onClick={onClick}
                     disabled={disabled}
+                    title={restructuring ? RESTRUCTURING_REASON : undefined}
                     className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors ${
                       disabled
                         ? 'bg-ink/15 text-ink/40 cursor-not-allowed'
@@ -1665,6 +1674,7 @@ export function AnalysingView({
                   >
                     {label}
                   </button>
+                  {restructuring && <p className="text-[11px] text-ink/50">{RESTRUCTURING_REASON}</p>}
                   {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
                     <p className="text-[11px] text-ink/50">
                       The model needs to be resident in VRAM before analysis can run.
@@ -1810,6 +1820,8 @@ export function AnalysingView({
                 <AnalyzerModelOverrideBadge />
                 <button
                   onClick={() => setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }))}
+                  disabled={restructuring}
+                  title={restructuring ? RESTRUCTURING_REASON : undefined}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink/90"
                 >
                   <IconRefresh className="w-3.5 h-3.5" /> Try again
@@ -1822,11 +1834,14 @@ export function AnalysingView({
                       setRetry((r) => ({ nonce: r.nonce + 1, fresh: true }));
                     }
                   }}
+                  disabled={restructuring}
+                  title={restructuring ? RESTRUCTURING_REASON : undefined}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-red-700 text-xs font-semibold hover:bg-red-50"
                 >
                   Start fresh
                 </button>
               </div>
+              {restructuring && <p className="mt-2 text-xs text-red-700/70">{RESTRUCTURING_REASON}</p>}
               <p className="mt-2 text-xs text-red-700/70">
                 Try again resumes from the first uncached chapter. Start fresh discards all cached
                 progress and re-runs stage 1.
@@ -2017,7 +2032,7 @@ export function AnalysingView({
               {failedChapters.map((f) => {
                 const isRetrying = retryingChapterId === f.chapterId;
                 const anotherRetryInFlight = retryingChapterId !== null && !isRetrying;
-                const disabled = isRetrying || anotherRetryInFlight || retryBlockedByMain;
+                const disabled = isRetrying || anotherRetryInFlight || retryBlockedByMain || restructuring;
                 const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
                 /* #3435 (A10) — without a final roster a Retry cannot attribute
                    (it would only re-detect the cast and end resume_required), so
@@ -2065,7 +2080,7 @@ export function AnalysingView({
                         type="button"
                         onClick={() => handleRetryChapter(f.chapterId)}
                         disabled={disabled}
-                        title={retryBlockedByMain ? 'Pause the analysis first' : undefined}
+                        title={restructuring ? RESTRUCTURING_REASON : retryBlockedByMain ? 'Pause the analysis first' : undefined}
                         className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                           disabled
                             ? 'bg-ink/10 text-ink/40 cursor-not-allowed'
@@ -2083,6 +2098,7 @@ export function AnalysingView({
             {retryBlockedByMain && (
               <p className="mt-2 text-xs text-amber-800/80">Pause the analysis first</p>
             )}
+            {restructuring && <p className="mt-2 text-xs text-amber-800/80">{RESTRUCTURING_REASON}</p>}
           </div>
         )}
       </div>

@@ -5,7 +5,7 @@
    so paths.ts re-reads the override, then dynamic import). */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -124,6 +124,24 @@ describe('runBackupSweep', () => {
     expect(await mod.listBackups(a.bookId)).toHaveLength(1);
     expect(await mod.listBackups(b.bookId)).toHaveLength(1);
   });
+
+  /* #3625 pass 6 (🟠1): a rotating write renames main to `.bak.1` before its
+     rename-in. A book caught in that window is still a book: the sweep finds
+     it and snapshots the state before the write. */
+  it('snapshots a book whose state.json is mid-write (main renamed away, .bak.1 holding it)', async () => {
+    const a = bookDirFor('alpha');
+    const b = bookDirFor('beta');
+    await seedBook(a.bookId, a.bookDir, { v: 1 });
+    await seedBook(b.bookId, b.bookDir, { v: 7 });
+    const sp = paths.stateJsonPath(b.bookDir);
+    await rename(sp, `${sp}.bak.1`);
+    const res = await mod.runBackupSweep({ keep: 5, now: new Date(2026, 0, 1, 12, 0, 0) });
+    expect(res.booksBackedUp).toBe(2);
+    const [snap] = await mod.listBackups(b.bookId);
+    expect(snap).toBeDefined();
+    const saved = JSON.parse(await readFile(join(paths.bookBackupsDir(b.bookId), snap.file), 'utf8'));
+    expect(saved.v).toBe(7);
+  });
 });
 
 describe('restoreBackup', () => {
@@ -198,5 +216,40 @@ describe('restoreBackup', () => {
     const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
     expect(after.language).toBe('fr');
     expect(after.schema).toBe(1);
+  });
+
+  /* #3400 pass 8 -- the restore runs under the book lock: a restore queued
+     behind a chapter restructure must wait for it, not write the snapshot into
+     the middle of it. */
+  it('waits for the book lock before writing the snapshot', async () => {
+    const { bookId, bookDir } = bookDirFor('restore-locked');
+    await seedBook(bookId, bookDir, { v: 'original' });
+    const file = await mod.backupBook(
+      { bookId, bookDir },
+      { keep: 5, now: new Date(2026, 0, 3, 9, 0, 0) },
+    );
+    await writeFile(
+      paths.stateJsonPath(bookDir),
+      JSON.stringify(makeState(bookId, { v: 'edited' })),
+      'utf8',
+    );
+    const { withBookLock } = await import('./book-lock.js');
+    let release!: () => void;
+    let entered!: () => void;
+    const holderIn = new Promise<void>((r) => (entered = r));
+    const holder = withBookLock(bookId, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await holderIn;
+    const restore = mod.restoreBackup(bookId, file!);
+    await new Promise((r) => setTimeout(r, 150));
+    const during = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect(during.v).toBe('edited');
+    release();
+    await holder;
+    await restore;
+    const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect(after.v).toBe('original');
   });
 });

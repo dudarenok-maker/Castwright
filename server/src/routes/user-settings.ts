@@ -24,6 +24,7 @@ import {
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
   isUserSettingsFileCorrupt,
+  isUserSettingsFileUnreadable,
   endpointModelIdRefusals,
   listDroppedEndpointEntriesSync,
   acknowledgeDroppedEndpointEntries,
@@ -76,6 +77,9 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'anal
      isUserSettingsFileCorrupt() in workspace/user-settings.ts. Recomputed
      fresh on every response, same as apiKeyStatus/workspaceRoot/workspaceSource. */
   corruptSettingsFile: boolean;
+  /* True while the settings file can't be read (EPERM/EBUSY): writes are refused
+     and the values shown may be defaults. See isUserSettingsFileUnreadable(). */
+  settingsFileUnreadable: boolean;
 }
 
 export function envDerived(settings: UserSettings): UserSettingsResponse {
@@ -111,6 +115,7 @@ export function envDerived(settings: UserSettings): UserSettingsResponse {
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
     corruptSettingsFile: isUserSettingsFileCorrupt(),
+    settingsFileUnreadable: isUserSettingsFileUnreadable(),
     droppedEndpointEntries: listDroppedEndpointEntriesSync(),
   };
 }

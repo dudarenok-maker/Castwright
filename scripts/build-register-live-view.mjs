@@ -3,7 +3,7 @@
 //
 // Reconciles derived figures and row shells in
 // docs/testing/onbox-acceptance-register-live-view.html against
-// docs/testing/onbox-acceptance-register.md. Each row shell matched by ID/title
+// docs/testing/onbox-acceptance-register.md. Each row shell matched by ID
 // (its <details class="item">…</details> block) is preserved verbatim; inter-shell
 // content in a section body (blank lines, stray HTML markup between shells) is
 // NOT preserved — shells are rebuilt in markdown order, joined by newlines. See
@@ -26,6 +26,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { splitRowId, parseNextIdMarker } from './check-onbox-register.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_REGISTER_PATH = 'docs/testing/onbox-acceptance-register.md';
@@ -144,9 +145,9 @@ export function main(
   const currentHtml = readNormalized(htmlPath);
 
   // buildLiveView's own helpers throw on a structural mismatch between the
-  // markdown and the live view (e.g. a Blocked/Unconfirmed row's title was
-  // reworded in the .md but not the .html, so reconcileTitledSection can no
-  // longer find its shell by title). Uncaught, that crashes this CLI with a
+  // markdown and the live view (e.g. a Blocked/Unconfirmed row has no BLK/UNC
+  // ID, or its section lost its <header>, so reconcileTitledSection cannot
+  // place its shell). Uncaught, that crashes this CLI with a
   // raw stack trace instead of the checked, actionable exit-1 every other
   // drift case in this function already reports — the one path here that
   // didn't match the rest.
@@ -256,53 +257,19 @@ function buildPlaceholderShell(id, title) {
     </details>`;
 }
 
-// Strips ONE balanced trailing "(...)" — walking from the end, tracking
-// paren depth, so a nested markdown link's own (url) doesn't stop the strip
-// early. Returns the input unchanged if it doesn't end in ")".
-function stripTrailingParenthetical(s) {
-  const trimmed = s.trimEnd();
-  if (!trimmed.endsWith(')')) return trimmed;
-  let depth = 0;
-  for (let i = trimmed.length - 1; i >= 0; i--) {
-    if (trimmed[i] === ')') depth++;
-    else if (trimmed[i] === '(') {
-      depth--;
-      if (depth === 0) return trimmed.slice(0, i).trimEnd();
-    }
-  }
-  return trimmed; // unbalanced — leave as-is rather than guess
-}
-
-export function decodeHtmlEntities(s) {
-  return s.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
-}
-
-// Applied to BOTH the .md heading and the decoded .html iname — not just one
-// side, which is the defect an earlier draft of this normaliser shipped (its
-// own paired test normalised both sides; its implementation normalised only
-// the .md side, so the test could never have failed against the real file).
-export function normaliseTitle(raw) {
-  // A plain string replace, not a regex literal — a bare backtick inside a
-  // regex literal desyncs src/spawn-windows-hide.test.ts's own quote-tracking
-  // scanner (#2747), which cannot tell it apart from a template-literal
-  // delimiter.
-  return stripTrailingParenthetical(raw.split('`').join('')).trim();
-}
-
 const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm;
 const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
-const SHELL_BY_TITLE_REGEX = /[ \t]*<details class="item">\s*<summary>\s*<span class="num">—<\/span>\s*<span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
 
 // Blocked/Unconfirmed's row counts, unlike every lettered group's, were
 // sourced from the hand-typed "## At a glance" table cell (parseRegisterFigures'
 // blockedCount/unconfirmedCount) rather than the actual body rows — so a row
 // added or removed from '## Blocked'/'## Unconfirmed' without a matching
-// glance-table edit went undetected by both register:build --check (which
-// wrote the stale, hand-typed number right back) and check-onbox-register
-// (whose Check 1 iterates lettered groups only, by design, per its own
-// header comment). Lettered groups derive their gcount from the body
-// (parseBodyGroupCounts) precisely so this class of drift self-corrects;
-// this mirrors that for the two title-matched sections.
+// glance-table edit went undetected by register:build --check (which wrote
+// the stale, hand-typed number right back). check-onbox-register's check 4d
+// now also compares that cell with the body, but the section's gcount still
+// derives from the body (parseBodyGroupCounts does the same for lettered
+// groups) so this class of drift self-corrects; this mirrors that for the
+// Blocked/Unconfirmed sections.
 export function parseTitledSectionBodyCounts(mdText) {
   let blockedCount = 0;
   let unconfirmedCount = 0;
@@ -316,26 +283,53 @@ export function parseTitledSectionBodyCounts(mdText) {
   return { blockedCount, unconfirmedCount };
 }
 
-function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
+// A Blocked heading / Unconfirmed bullet's captured text is
+// "BLK101 · <title>" / "UNC101 · <title>". The ID is split with
+// check-onbox-register's pinned splitRowId, not a second regex; only the
+// section's own prefix counts. Text without such an ID yields id: null, which
+// reconcileTitledSection rejects: register:build is where "every Blocked/
+// Unconfirmed row carries an ID" is enforced, because checkRegister cannot
+// require it (it is retro-applied to origin/main's register).
+function parseTitledRow(rawText, idPrefix) {
+  const sep = rawText.indexOf(' · ');
+  if (sep > 0) {
+    const parts = splitRowId(rawText.slice(0, sep));
+    if (parts && parts.prefix === idPrefix) {
+      return { id: rawText.slice(0, sep), title: rawText.slice(sep + 3) };
+    }
+  }
+  return { id: null, title: rawText };
+}
+
+function reconcileTitledSection(html, sectionId, rows, idPrefix, nextId = null) {
   const sectionRegex = new RegExp(
     `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
   );
   const match = html.match(sectionRegex);
   if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
   const [, headerAndOpen, body, closeTag] = match;
-  const shellsByIname = new Map();
-  for (const m of body.matchAll(SHELL_BY_TITLE_REGEX)) {
-    shellsByIname.set(decodeHtmlEntities(m[1]), m[0]);
-  }
-  const newBody = titles
-    .map((rawTitle) => {
-      const wanted = prefixMatch ? rawTitle : normaliseTitle(rawTitle);
-      const matches = [...shellsByIname.entries()].filter(([iname]) =>
-        prefixMatch ? iname.startsWith(wanted) : normaliseTitle(iname) === wanted,
-      );
-      if (matches.length === 0) throw new Error(`reconcileRowShells: no shell title matches "${wanted}" in #${sectionId}`);
-      if (matches.length > 1) throw new Error(`reconcileRowShells: "${wanted}" matches ${matches.length} shells in #${sectionId}`);
-      return matches[0][1];
+  const shellsById = splitShellsById(body);
+  const sectionName = idPrefix === 'BLK' ? 'Blocked' : 'Unconfirmed';
+  const newBody = rows
+    .map(({ id, title }) => {
+      if (id === null) {
+        // Text that already starts with this section's own ID is a separator
+        // slip (`BLK107 - x`), not a missing ID: say what to write instead.
+        const slip = title.match(new RegExp(`^(${idPrefix}[0-9]+)(?![0-9A-Za-z])`));
+        if (slip) {
+          throw new Error(
+            `${sectionName} row "${title}" carries ${slip[1]} but the wrong separator: write "${slip[1]} · <title>" — the ID, a space, a middle dot (·), a space, then the title`,
+          );
+        }
+        const hint = nextId === null ? '' : ` (e.g. ${idPrefix}${nextId})`;
+        throw new Error(
+          `${sectionName} row "${title}" has no ${idPrefix} ID: allocate one from the section's next-id marker${hint} and bump the marker`,
+        );
+      }
+      // Keyed by ID: a shell already numbered with this ID is kept as-is; with
+      // no such shell, a placeholder that register:build --check flags until
+      // its content is filled in. A shell whose ID left the .md is dropped.
+      return shellsById.get(id) ?? buildPlaceholderShell(id, title);
     })
     .join('\n');
   // No extra '\n' inserted here: closeTag's own `\s*` capture already carries
@@ -364,11 +358,11 @@ export function reconcileRowShells(mdText, html) {
     // until substantiated" — both start with the bare word, so the prefix
     // test below covers the real titles without assuming the whole line.
     if (/^Blocked\b/.test(section.title)) {
-      const blockedTitles = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => m[1]);
-      result = reconcileTitledSection(result, 'blocked', blockedTitles, { prefixMatch: false });
+      const blockedRows = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => parseTitledRow(m[1], 'BLK'));
+      result = reconcileTitledSection(result, 'blocked', blockedRows, 'BLK', parseNextIdMarker(section.body, 'BLK'));
     } else if (/^Unconfirmed\b/.test(section.title)) {
-      const unconfirmedTitles = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => m[1]);
-      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedTitles, { prefixMatch: true });
+      const unconfirmedRows = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => parseTitledRow(m[1], 'UNC'));
+      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedRows, 'UNC', parseNextIdMarker(section.body, 'UNC'));
     }
   }
   return result;

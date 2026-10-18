@@ -29,6 +29,8 @@ interface ManuscriptDiffModalProps {
      Optional for older call sites; render a banner when non-empty. */
   overrideConflicts?: OverrideConflict[];
   onApply: () => void;
+  /** When set, Apply is disabled and this explains why (shown as title + text). */
+  applyDisabledReason?: string;
   onDiscard: () => void;
 }
 
@@ -38,6 +40,7 @@ export function ManuscriptDiffModal({
   diff,
   overrideConflicts,
   onApply,
+  applyDisabledReason,
   onDiscard,
 }: ManuscriptDiffModalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -201,8 +204,10 @@ export function ManuscriptDiffModal({
               </button>
               <button
                 onClick={onApply}
+                disabled={!!applyDisabledReason}
+                title={applyDisabledReason}
                 data-testid="diff-apply"
-                className="inline-flex items-center gap-2 rounded-full bg-ink text-canvas hover:bg-ink-soft px-5 py-2 text-sm font-semibold"
+                className="inline-flex items-center gap-2 rounded-full bg-ink text-canvas hover:bg-ink-soft px-5 py-2 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Apply changes
               </button>

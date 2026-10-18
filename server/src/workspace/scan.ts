@@ -17,8 +17,9 @@ import {
   stateJsonPath,
 } from './paths.js';
 import { readJson } from './state-io.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
+import { withBookLock } from './book-lock.js';
 import {
   analysisCompleteFor,
   hasCurrentTake,
@@ -117,6 +118,14 @@ export interface BookStateJson {
         land. Round-trips through `state.json` and through the portable
         book bundle (plan 75). */
     titleOverridden?: boolean;
+    /** `true` ONLY when the app itself made the title up (the fallback
+        "Chapter N" for a chapter with no heading). Absent means the title
+        came from the manuscript or the user - including every legacy chapter
+        written before this field existed, which is therefore never
+        renumbered. Never persisted as `false`. Server-only (not in
+        `openapi.yaml`); carried across `PUT /state` by chapter id like
+        `uuid`. */
+    titleSynthesized?: boolean;
     /** Durable record of the LAST synthesis FAILURE for this chapter.
         Only `'failed'` is ever persisted — "done" is derived from the
         audio file on disk (`completedSlugs`) and "queued" is the absence
@@ -678,7 +687,9 @@ async function scanBook(
   const stateJson = stateJsonPath(bookDir);
   const castJson = castJsonPath(bookDir);
   const dotDir = dotAudiobook(bookDir);
-  const hasState = existsSync(stateJson);
+  /* A stranded book (main absent, a backup beside it) still has state: the
+     recovering read below returns the backup (#3625). */
+  const hasState = existsSync(stateJson) || existsSync(`${stateJson}.bak.1`);
   const hasCast = existsSync(castJson);
 
   // Folder with neither manuscript nor state — skip as not-a-book.
@@ -688,10 +699,13 @@ async function scanBook(
   let unreadable = false;
   if (hasState) {
     try {
-      state = await readJson<BookStateJson>(stateJson);
+      state = await readStateJsonWithRecovery(stateJson);
     } catch {
       unreadable = true;
     }
+    /* State files exist but none parsed (a stranded book whose backups are all
+       torn): the same total loss as a torn main, so it reads the same. */
+    if (!state) unreadable = true;
   }
 
   const bookId = state?.bookId ?? makeBookId(author, series, title);
@@ -762,9 +776,21 @@ async function scanBook(
        one and persist once. Idempotent; subsequent scans are no-ops. Runs
        before the segments backfill so a freshly-uuid'd book is on disk
        even if the segments pass finds nothing to write. */
+    const unminted = state.chapters.filter((c) => !c.uuid);
     if (ensureChapterUuids(state)) {
       try {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+        /* #3400 — locked fresh-read merge (fills only chapters still lacking a
+           uuid), then adopt whatever uuid won on disk so a concurrent mint
+           can't leave this caller holding a different one. */
+        const { merged } = await persistHealPatches(
+          bookDir,
+          state.bookId ?? bookDir,
+          unminted.map((c) => ({ id: c.id, slug: c.slug, set: { uuid: c.uuid } })),
+        );
+        for (const c of unminted) {
+          const onDisk = merged?.chapters.find((m) => m.id === c.id && m.slug === c.slug);
+          if (onDisk?.uuid) c.uuid = onDisk.uuid;
+        }
       } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
@@ -792,7 +818,7 @@ async function scanBook(
      every chapter is actually analysed; that's the signal the resume
      button needs to be honest about what's still pending.
 
-     Plan 286 spec 2.2 — "analysed" is `analysisCompleteFor` (a final roster,
+     Plan 287 spec 2.2 — "analysed" is `analysisCompleteFor` (a final roster,
      a current take per chapter, takes persisted), not an own-key count. It
      gates only a book that has never reached Confirm (`reachedConfirm`,
      decision F): a confirmed or generated book is never demoted by it. */
@@ -946,6 +972,31 @@ export async function findBookByBookId(bookId: string): Promise<{
   return findBookBy((state) => state.bookId === bookId);
 }
 
+/** Locate the folder of a book with no PARSEABLE state - `unreadable` (state files
+    exist, none parse) or `not_analysed` (a manuscript, no state) - by its bookId.
+    Such a row's id is derived from its folder path, not from state, so
+    `findBookByBookId` (which matches parseable state) can never find it. Walks
+    the SAME real directory listing the scan does and only compares the derived id
+    with the caller's, so the caller's string never becomes a path segment. */
+export async function findStatelessBookDirByBookId(bookId: string): Promise<string | null> {
+  ensureWorkspace();
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        if (makeBookId(authorName, seriesName, titleName) !== bookId) continue;
+        /* scanBook inspects the SANITISED folder (bookDirByDisplay); judge and
+           remove the same one, so skip a listed name that sanitises to another
+           folder (`Vol..1` -> `Vol_1`, #3625 delta review 3). */
+        const listed = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (bookDirByDisplay(authorName, seriesName, titleName) !== listed) continue;
+        const book = await scanBook(authorName, seriesName, titleName);
+        if (book?.status === 'unreadable' || book?.status === 'not_analysed') return listed;
+      }
+    }
+  }
+  return null;
+}
+
 /** Locate a book by its manuscriptId — used to re-hydrate the in-memory
     manuscript record after a server restart so the analysis route can
     resume from cache. */
@@ -980,7 +1031,7 @@ export async function listAllChangeLogs(): Promise<BookChangeLogEvents[]> {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(dir)).catch(() => null);
+        const state = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
         if (!state) continue;
         const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(
           () => null,
@@ -1006,6 +1057,27 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
   title: string;
   state: BookStateJson;
 } | null> {
+  /* A heal that waited behind a writer which moved the book folder (a state
+     PUT renaming it) reports `gone`: the dir it was handed no longer exists,
+     so locate again rather than return the old `bookDir` — a caller writing
+     there would `mkdir` the pre-rename folder back (#2165's split book). */
+  let found = await findBookByOnce(predicate);
+  for (let attempt = 0; found?.gone && attempt < 2; attempt++) {
+    found = await findBookByOnce(predicate);
+  }
+  return found?.located ?? null;
+}
+
+async function findBookByOnce(predicate: (state: BookStateJson) => boolean): Promise<{
+  located: {
+    bookDir: string;
+    author: string;
+    series: string;
+    title: string;
+    state: BookStateJson;
+  };
+  gone: boolean;
+} | null> {
   ensureWorkspace();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
@@ -1027,8 +1099,11 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
              upgrade. Cheap on books that have already been upgraded:
              the helper short-circuits to a no-op once every chapter
              carries audioModelKey. */
-          const { state } = await backfillAudioModelKeysFromSegments(dir, raw);
-          return { bookDir: dir, author: authorName, series: seriesName, title: titleName, state };
+          const { state, gone } = await backfillAudioModelKeysFromSegments(dir, raw);
+          return {
+            located: { bookDir: dir, author: authorName, series: seriesName, title: titleName, state },
+            gone: gone === true,
+          };
         }
       }
     }
@@ -1062,6 +1137,131 @@ export async function collectBooks(): Promise<Array<{ bookDir: string; state: Bo
   return out;
 }
 
+/* The chapter fields a scan self-heal may fill (#3400). */
+const HEALED_KEYS = ['audioModelKey', 'audioRenderedAt', 'duration', 'audioEngines', 'uuid'] as const;
+
+type ChapterHealPatch = {
+  id: number;
+  slug: string;
+  /** The chapter's uuid when the heal read it (undefined before a mint). */
+  uuid?: string;
+  set: Partial<BookStateJson['chapters'][number]>;
+  /** `set` was derived from the chapter's segments file: re-derive it under
+   *  the lock instead of trusting the copy computed before the wait. */
+  fromSegments?: boolean;
+};
+
+/** Persist self-heal fills as a locked, fresh-read merge (#3400). A heal reads
+ *  state.json outside any lock and used to write it back whole, reverting a
+ *  concurrent writer's chapter list (a restructure rewrites it under
+ *  `withBookLock`). Here the book lock is taken (inline when this async
+ *  context already holds it — see book-lock.ts), state.json is re-read, and
+ *  each patch is applied only to a chapter that still has the same id + slug
+ *  (and uuid, when both carry one), and only for fields still unset — so a
+ *  concurrent mint or fill is never overwritten. Returns the merged state
+ *  (null when there were no patches or the file could not be read) and `gone`
+ *  when the file could not be read under the lock. */
+async function persistHealPatches(
+  bookDir: string,
+  lockKey: string,
+  patches: ChapterHealPatch[],
+): Promise<{ merged: BookStateJson | null; gone: boolean }> {
+  if (patches.length === 0) return { merged: null, gone: false };
+  return withBookLock(lockKey, async () => {
+    let changed = false;
+    /* #3700 -- the fresh read + write sit inside the `state-json` leaf lock
+       (`updateStateJsonLocked`), nested inside the book lock taken above. The
+       callback only reads the segments file; it takes no lock. */
+    const result = await updateStateJsonLocked(stateJsonPath(bookDir), async (fresh) => {
+      const chapters: BookStateJson['chapters'] = [];
+      for (const ch of fresh.chapters) {
+        const patch = patches.find(
+          (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
+        );
+        if (!patch) {
+          chapters.push(ch);
+          continue;
+        }
+        /* The identity match above is id + slug + uuid, which a merge that keeps
+           the primary chapter's three leaves intact while it drops its audio.
+           So a segments-derived fill is re-derived from the file as it is NOW,
+           under the lock: one read before the wait would stamp the old take's
+           model / render date onto a chapter whose audio was just deleted. */
+        let source = patch.set;
+        if (patch.fromSegments) {
+          source = (await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.set ?? {};
+        }
+        const fill: Partial<typeof ch> = {};
+        for (const key of HEALED_KEYS) {
+          if (source[key] === undefined) continue;
+          const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
+          if (unset) Object.assign(fill, { [key]: source[key] });
+        }
+        if (Object.keys(fill).length === 0) {
+          chapters.push(ch);
+          continue;
+        }
+        changed = true;
+        chapters.push({ ...ch, ...fill });
+      }
+      return changed ? { ...fresh, chapters } : null;
+    });
+    /* Absent under the lock = the file is gone (the folder was moved by a
+       writer we queued behind) -- the caller must re-locate. */
+    if (!result) return { merged: null, gone: true };
+    return { merged: result, gone: false };
+  });
+}
+
+/** What `ch`'s segments file says the chapter's state.json fields should be, as
+ *  a fill-only patch, plus the file's measured seconds. Null when there is no
+ *  segments file. Takes no lock: the caller decides where it reads (the locked
+ *  merge in `persistHealPatches` re-reads it). */
+async function deriveSegmentsHeal(
+  bookDir: string,
+  ch: BookStateJson['chapters'][number],
+): Promise<{ durationSec: number; set: Partial<BookStateJson['chapters'][number]> } | null> {
+  const meta = await readJson<SegmentsJsonForScan>(
+    join(audioDir(bookDir), `${ch.slug}.segments.json`),
+  );
+  if (!meta) return null;
+  const durationSec =
+    typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec) ? meta.durationSec : 0;
+  const needsModelKey =
+    !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
+  const needsRenderedAt =
+    !ch.audioRenderedAt && typeof meta.synthesizedAt === 'string' && meta.synthesizedAt.length > 0;
+  /* Duration backfill: legacy chapters and chapters rendered via code
+     paths that pre-date generation.ts's state.json update block sit at
+     the analysis-seeded '00:00' even after their MP3 is on disk. The
+     segments file always carries the real PCM-measured durationSec, so
+     the same loop that backfills modelKey + renderedAt can repair
+     duration without an extra read. Treat empty + '00:00' as equally
+     unset - both come from `hydrateFromBookState`'s `c.duration ??
+     '00:00'` fallback and the analysis seed. */
+  const needsDuration =
+    (!ch.duration || ch.duration === '00:00') &&
+    typeof meta.durationSec === 'number' &&
+    Number.isFinite(meta.durationSec) &&
+    meta.durationSec > 0;
+  /* Engine breakdown backfill (false-drift fix). Recompute from the render
+     snapshots so a legacy chapter gains the mixed-engine detail. New field,
+     so a simple presence gate - never overwrites an existing breakdown. */
+  const breakdown = meta.characterSnapshots
+    ? engineBreakdownFromSnapshots(meta.characterSnapshots)
+    : {};
+  const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
+  return {
+    durationSec,
+    set: {
+      ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
+      ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
+      ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
+      ...(needsEngines ? { audioEngines: breakdown } : {}),
+    },
+  };
+}
+
 /** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
     in `state.chapters` by reading the corresponding `audio/<slug>.segments.json`
     file. Used by both the library-scan path (where the segments read is
@@ -1078,54 +1278,19 @@ export async function collectBooks(): Promise<Array<{ bookDir: string; state: Bo
 export async function backfillAudioModelKeysFromSegments(
   bookDir: string,
   state: BookStateJson,
-): Promise<{ state: BookStateJson; totalSec: number }> {
+): Promise<{ state: BookStateJson; totalSec: number; gone?: boolean }> {
   let totalSec = 0;
   let backfillNeeded = false;
   const next: BookStateJson['chapters'] = [...state.chapters];
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
     if (ch.excluded) continue;
-    const segPath = join(audioDir(bookDir), `${ch.slug}.segments.json`);
     try {
-      const meta = await readJson<SegmentsJsonForScan>(segPath);
-      if (!meta) continue;
-      if (typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec)) {
-        totalSec += meta.durationSec;
-      }
-      const needsModelKey =
-        !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
-      const needsRenderedAt =
-        !ch.audioRenderedAt &&
-        typeof meta.synthesizedAt === 'string' &&
-        meta.synthesizedAt.length > 0;
-      /* Duration backfill: legacy chapters and chapters rendered via code
-         paths that pre-date generation.ts's state.json update block sit at
-         the analysis-seeded '00:00' even after their MP3 is on disk. The
-         segments file always carries the real PCM-measured durationSec, so
-         the same loop that backfills modelKey + renderedAt can repair
-         duration without an extra read. Treat empty + '00:00' as equally
-         unset — both come from `hydrateFromBookState`'s `c.duration ??
-         '00:00'` fallback and the analysis seed. */
-      const needsDuration =
-        (!ch.duration || ch.duration === '00:00') &&
-        typeof meta.durationSec === 'number' &&
-        Number.isFinite(meta.durationSec) &&
-        meta.durationSec > 0;
-      /* Engine breakdown backfill (false-drift fix). Recompute from the render
-         snapshots so a legacy chapter gains the mixed-engine detail. New field,
-         so a simple presence gate — never overwrites an existing breakdown. */
-      const breakdown = meta.characterSnapshots
-        ? engineBreakdownFromSnapshots(meta.characterSnapshots)
-        : {};
-      const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
-      if (needsModelKey || needsRenderedAt || needsDuration || needsEngines) {
-        next[i] = {
-          ...ch,
-          ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
-          ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
-          ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
-          ...(needsEngines ? { audioEngines: breakdown } : {}),
-        };
+      const heal = await deriveSegmentsHeal(bookDir, ch);
+      if (!heal) continue;
+      totalSec += heal.durationSec;
+      if (Object.keys(heal.set).length > 0) {
+        next[i] = { ...ch, ...heal.set };
         backfillNeeded = true;
       }
     } catch {
@@ -1135,8 +1300,30 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...upgraded, language: upgraded.language ?? null });
-      return { state: upgraded, totalSec };
+      /* #3400 — merge into a fresh read under the book lock rather than
+         rewriting `state` (read long before, outside any lock): a chapter
+         restructure that landed meanwhile must keep its chapter list. Only the
+         fields this pass filled are applied, to chapters that still exist. */
+      const patches: ChapterHealPatch[] = [];
+      for (let i = 0; i < state.chapters.length; i++) {
+        if (next[i] === state.chapters[i]) continue;
+        const set: Partial<BookStateJson['chapters'][number]> = {};
+        for (const key of HEALED_KEYS) {
+          if (next[i][key] !== state.chapters[i][key]) Object.assign(set, { [key]: next[i][key] });
+        }
+        patches.push({
+          id: state.chapters[i].id,
+          slug: state.chapters[i].slug,
+          uuid: state.chapters[i].uuid,
+          set,
+          fromSegments: true,
+        });
+      }
+      const { merged, gone } = await persistHealPatches(bookDir, state.bookId ?? bookDir, patches);
+      /* The state merged under the lock, not `upgraded`: a caller that waited
+         behind a restructure must start from the post-restructure file, or its
+         own write lands after it with the old chapter list (pass-7 1). */
+      return { state: merged ?? upgraded, totalSec, ...(gone ? { gone } : {}) };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call
          will try again. Return the upgraded shape in-memory so the

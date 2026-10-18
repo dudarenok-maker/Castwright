@@ -17,6 +17,7 @@
 
 import { useMemo, useEffect, useRef, useState, type JSX } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
+import { RESTRUCTURING_REASON, selectBookEditsLocked } from '../store/restructure-lock';
 import {
   selectActiveGenerationView,
   selectInFlightEntryIds,
@@ -588,6 +589,9 @@ function BookGroup({
   onSkipFallback,
 }: BookGroupProps) {
   const fallbackEngineName = useAppSelector((s) => selectFallbackEngineName(s, bookId));
+  // #3400 pass 7 — cancelling a chapter entry writes a hold keyed by chapter id,
+  // which a restructure of this book renumbers.
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
 
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
@@ -821,8 +825,10 @@ function BookGroup({
                   </button>
                   <button
                     onClick={() => onCancel(entry.id)}
+                    disabled={restructuring}
+                    title={restructuring ? RESTRUCTURING_REASON : undefined}
                     aria-label="Cancel entry"
-                    className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
+                    className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                     data-testid={`queue-entry-${entry.id}-cancel`}
                   >
                     <IconTrash className="w-4 h-4" />

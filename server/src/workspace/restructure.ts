@@ -85,6 +85,41 @@ export interface RenameOp {
   title: string;
 }
 
+/** #3400 — carry the merged-away tombstones (`"chapterId:sentenceId"`) through
+    a restructure. A key survives, re-keyed to its chapter's new id with the
+    same sentence id, only when the op left that chapter's sentence ids
+    unchanged: every remap entry from the old chapter lands in ONE new chapter
+    at the same sentence id, and no other old chapter lands there too (a merge).
+    Anything else (a merge/split member, a chapter renumbered by a gap, a chapter
+    with no live sentence to prove it by) has no correct new key and is dropped.
+    The client mirrors this rule (src/lib/restructure-tombstones.ts). */
+export function carryMergedAwayKeys(
+  keys: readonly string[],
+  remap: readonly SentenceRemap[],
+): string[] {
+  const newIdByOld = new Map<number, number | null>();
+  const oldIdsByNew = new Map<number, Set<number>>();
+  for (const r of remap) {
+    const prior = newIdByOld.get(r.oldChapterId);
+    const keeps = r.newSentenceId === r.oldSentenceId;
+    newIdByOld.set(
+      r.oldChapterId,
+      keeps && (prior === undefined || prior === r.newChapterId) ? r.newChapterId : null,
+    );
+    let olds = oldIdsByNew.get(r.newChapterId);
+    if (!olds) oldIdsByNew.set(r.newChapterId, (olds = new Set()));
+    olds.add(r.oldChapterId);
+  }
+  const out: string[] = [];
+  for (const key of keys) {
+    const [chapter, sentence] = key.split(':');
+    const newId = newIdByOld.get(Number(chapter));
+    if (newId == null || oldIdsByNew.get(newId)!.size !== 1) continue;
+    out.push(`${newId}:${sentence}`);
+  }
+  return out;
+}
+
 /* -- helpers -------------------------------------------------------- */
 
 function chapterSlug(id: number, title: string): string {
@@ -93,6 +128,31 @@ function chapterSlug(id: number, title: string): string {
 
 function sortById<T extends { id: number }>(arr: readonly T[]): T[] {
   return [...arr].sort((a, b) => a.id - b.id);
+}
+
+/** Plan 286 — old chapter ids whose A/B review entries no longer pair with
+    the live take after a restructure: every old chapter whose slug is an
+    audio op's `from`, plus every old chapter whose id now maps to a
+    different slug or to no chapter at all. A rename's `newChapterId` is not
+    added separately — the old chapter with that id either has its own op or
+    changed slug, so it is already covered. Sorted, unique. */
+export function touchedChapterIds(
+  oldChapters: BookStateJson['chapters'],
+  newChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+): number[] {
+  const touched = new Set<number>();
+  const oldBySlug = new Map(oldChapters.map((c) => [c.slug, c]));
+  for (const op of audioOps) {
+    const old = oldBySlug.get(op.from);
+    if (old) touched.add(old.id);
+  }
+  const newById = new Map(newChapters.map((c) => [c.id, c]));
+  for (const old of oldChapters) {
+    const neu = newById.get(old.id);
+    if (!neu || neu.slug !== old.slug) touched.add(old.id);
+  }
+  return [...touched].sort((a, b) => a - b);
 }
 
 /** Map each surviving old chapter id to its new id (one-to-one or
@@ -240,7 +300,15 @@ function remapSentences(
     - content-changed chapters: drop audioModelKey + audioRenderedAt
     - renumbered-only chapters: preserve them (the file will be renamed,
       content still valid)
-    Excluded flag and duration carry through. */
+    Excluded flag and duration carry through. So do the other per-chapter
+    fields (#3400): `audioEngines`, `audioQa` and the last-failure record
+    describe the audio file, so they follow `audioModelKey` (carried only for a
+    renumbered-only chapter); `held` is the user's queue choice, not a property
+    of the audio, so it carries for every chapter that has a source. A chapter
+    built from several sources (merge) or the second half of a split is held
+    when ANY source was held — the conservative choice: a wrongly-held chapter
+    is one click ("Generate this chapter") from queued, while a wrongly-queued
+    one burns a GPU render the user opted out of. */
 function buildNewStateChapters(
   oldState: BookStateJson,
   newHints: readonly ChapterHint[],
@@ -280,12 +348,33 @@ function buildNewStateChapters(
     };
     if (hint.excluded) base.excluded = true;
     if (oldChapter?.duration) base.duration = oldChapter.duration;
+    const anySourceHeld = [...fates.values()].some(
+      (f) =>
+        (f.newId === newId || f.splitSecondHalfNewId === newId) &&
+        oldState.chapters.find((c) => c.id === f.oldId)?.held,
+    );
+    if (anySourceHeld) base.held = true;
+
+    // The title source follows the primary old chapter regardless of
+    // `contentChanged`: `hint.title` is that chapter's title (merge without
+    // an explicit title takes its first member's), so an app-made title
+    // stays app-made and a manuscript heading stays a manuscript heading.
+    // The second half of a split has no primary old chapter → no flag.
+    if (oldChapter?.titleSynthesized) base.titleSynthesized = true;
 
     const contentChanged = fate?.contentChanged ?? true;
     if (!contentChanged && oldChapter) {
       // Preserve audio metadata — file will be renamed, content valid
       if (oldChapter.audioModelKey) base.audioModelKey = oldChapter.audioModelKey;
       if (oldChapter.audioRenderedAt) base.audioRenderedAt = oldChapter.audioRenderedAt;
+      if (oldChapter.audioEngines) base.audioEngines = oldChapter.audioEngines;
+      if (oldChapter.audioQa) base.audioQa = oldChapter.audioQa;
+      if (oldChapter.generationState) base.generationState = oldChapter.generationState;
+      if (oldChapter.generationError) base.generationError = oldChapter.generationError;
+      if (oldChapter.generationErrorCode) base.generationErrorCode = oldChapter.generationErrorCode;
+      if (oldChapter.generationRemediation) {
+        base.generationRemediation = oldChapter.generationRemediation;
+      }
       // Preserve the user's rename override — title carried verbatim
       // from old chapter via `hint.title` above, so the override is
       // still meaningful and the refresh-titles passes must continue
@@ -340,21 +429,53 @@ function buildAudioOps(
 
 /* -- post-process passes ------------------------------------------ */
 
-/* Detector for auto-generated "Chapter N" titles (bare or with subtitle).
-   These were assigned by the parser when no real heading was present; they
-   must re-derive against the chapter's new id after structural changes so
-   the visible list doesn't drift from the underlying sequence. Captures
-   the optional subtitle in group 2 for round-tripping. User-customised
-   titles (anything not matching this shape) are preserved verbatim. */
-const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
+/* Shape of a "Chapter N" title (bare or with subtitle). Only chapters the
+   app itself titled (`titleSynthesized: true`) are ever renumbered; the
+   regex is the second gate, extracting the optional subtitle in group 2
+   for round-tripping. A chapter without the flag — a manuscript heading,
+   a user title, or any legacy chapter — is preserved verbatim even when
+   its title looks generic. */
+export const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
 
+/** A user-supplied title is never app-made: mark it overridden and drop
+    `titleSynthesized` so no later restructure renumbers it. */
+function withExplicitTitle(
+  c: BookStateJson['chapters'][number],
+): BookStateJson['chapters'][number] {
+  const { titleSynthesized: _drop, ...rest } = c;
+  return { ...rest, titleOverridden: true };
+}
+
+/** Backfill `titleSynthesized` on chapters of a book imported before the flag
+    existed (#3628). A chapter with NO `titleSynthesized` key is flagged only
+    when the book's chapter count equals the current parse's, its stored title
+    equals the parse's title at the same position, the parse marks that
+    position app-made, and it is not `titleOverridden`. A chapter that already
+    has the key (including `false`) is never touched. Returns `state` itself
+    when nothing changes. */
+export function backfillTitleSynthesized(
+  state: BookStateJson,
+  parsedTitles: readonly string[],
+  parsedTitleSynthesized: readonly boolean[],
+): BookStateJson {
+  if (parsedTitles.length !== state.chapters.length) return state;
+  let changed = false;
+  const chapters = state.chapters.map((c, i) => {
+    if (Object.hasOwn(c, 'titleSynthesized') || c.titleOverridden) return c;
+    if (c.title !== parsedTitles[i] || parsedTitleSynthesized[i] !== true) return c;
+    changed = true;
+    return { ...c, titleSynthesized: true };
+  });
+  return changed ? { ...state, chapters } : state;
+}
 function renumberGenericTitlesInChapters(
   chapters: BookStateJson['chapters'],
 ): { chapters: BookStateJson['chapters']; renumbered: number } {
   let renumbered = 0;
   const next = chapters.map((ch) => {
+    if (ch.titleSynthesized !== true) return ch; // manuscript/user title — preserve
     const match = GENERIC_TITLE_RE.exec(ch.title.trim());
-    if (!match) return ch; // user-custom title — preserve
+    if (!match) return ch;
     const subtitle = match[2]?.trim();
     const newTitle = subtitle ? `Chapter ${ch.id} — ${subtitle}` : `Chapter ${ch.id}`;
     if (newTitle === ch.title) return ch;
@@ -377,13 +498,17 @@ function renumberGenericTitlesInChapters(
    Excluded chapters are not pruned even when empty — preserving the
    soft-hide invariant. Excluded chapters with sentences attached are
    kept as well. */
-function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResult {
+function pruneEmptyChaptersInResult(result: RestructureResult): {
+  result: RestructureResult;
+  /** pre-prune chapter id → post-prune id; absent = pruned. Identity when nothing pruned. */
+  idRemap: Map<number, number> | null;
+} {
   // Pre-analysis books have NO sentences at all — every chapter would
   // look "empty" by our metric. Skip the pass entirely in that case so
   // we don't collapse a freshly imported book down to zero chapters.
   // The empty-chapter symptom only matters post-analysis when SOME
   // chapters have content and others don't.
-  if (result.sentences.length === 0) return result;
+  if (result.sentences.length === 0) return { result, idRemap: null };
 
   const sentenceCountByChapter = new Map<number, number>();
   for (const s of result.sentences) {
@@ -393,7 +518,7 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
   const pruned = result.state.chapters.filter(
     (c) => !c.excluded && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
   );
-  if (pruned.length === 0) return result;
+  if (pruned.length === 0) return { result, idRemap: null };
 
   const survivors = result.state.chapters.filter((c) => !pruned.includes(c));
 
@@ -436,32 +561,6 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
     return { ...r, newChapterId };
   });
 
-  // Audio ops: keep deletes for pruned chapters that had audio (they'll
-  // be cleaned up); rewrite rename ops that target a renumbered survivor.
-  const additionalDeletes: AudioOp[] = pruned
-    .filter((c) => c.audioRenderedAt)
-    .map((c) => ({ kind: 'delete' as const, from: c.slug }));
-
-  const adjustedAudioOps: AudioOp[] = [
-    ...result.audioOps.map((op) => {
-      if (op.kind === 'rename') {
-        const newId = idRemap.get(op.newChapterId);
-        if (newId === undefined) {
-          // Rename target was pruned — degrade to delete
-          return { kind: 'delete' as const, from: op.from };
-        }
-        const newChapter = renumberedChapters.find((c) => c.id === newId);
-        return {
-          ...op,
-          newChapterId: newId,
-          to: newChapter?.slug ?? op.to,
-        };
-      }
-      return op;
-    }),
-    ...additionalDeletes,
-  ];
-
   const msg = `Removed ${pruned.length} empty chapter${pruned.length === 1 ? '' : 's'} (${pruned
     .map((c) => c.title)
     .slice(0, 3)
@@ -469,53 +568,96 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
   console.warn(`[restructure] ${msg}`);
 
   return {
-    state: { ...result.state, chapters: renumberedChapters },
-    hints: renumberedHints,
-    sentences: renumberedSentences,
-    remap: updatedRemap,
-    audioOps: adjustedAudioOps,
-    warnings: [...result.warnings, msg],
+    result: {
+      state: { ...result.state, chapters: renumberedChapters },
+      hints: renumberedHints,
+      sentences: renumberedSentences,
+      remap: updatedRemap,
+      // Stale after the renumber — postProcessRestructure re-derives the audio
+      // ops from the final slugs using `idRemap`.
+      audioOps: result.audioOps,
+      warnings: [...result.warnings, msg],
+    },
+    idRemap,
   };
 }
 
-/* Combined post-process: prune empties → renumber generic titles.
-   Order matters: pruning may shift ids, after which generic titles must
+/* Combined post-process: prune empties → renumber app-made generic titles.
+   Order matters: pruning may shift ids, after which app-made titles must
    re-derive against the new ids. Renumbering also recomputes slugs for
    any title that changed.
 
-   Audio ops referencing a chapter whose generic title got rewritten
-   would technically need their `to` slug updated too — but in practice,
-   when a chapter is auto-titled "Chapter N", its audio file is keyed off
-   the same generic title, so the rename op's `to` already matches. The
-   one edge case is a chapter that was auto-titled at parse time, then
-   manually renamed by the user, then auto-titled-again here — but the
-   regex detector intentionally excludes manually-renamed titles, so this
-   case can't arise. */
+   The audio ops are re-derived from the FINAL slugs after both passes
+   (#3400): a chapter whose slug moved only in a pass has no op from the
+   caller, yet its files must follow it. Only chapters flagged
+   `titleSynthesized` are renumbered — an explicit title (rename, merge
+   `mergedTitle`) clears the flag — so a user-chosen title is never rewritten. */
 function postProcessRestructure(result: RestructureResult): RestructureResult {
-  const pruned = pruneEmptyChaptersInResult(result);
+  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
-  if (titled.renumbered === 0) return pruned;
+  if (titled.renumbered === 0 && idRemap === null) return pruned;
 
-  // Re-key audio ops whose rename target slug shifted along with the
-  // title change. The chapter id is unchanged, but the slug now reflects
-  // the new title — update the `to` field.
-  const renumberedById = new Map(titled.chapters.map((c) => [c.id, c]));
-  const adjustedAudioOps: AudioOp[] = pruned.audioOps.map((op) => {
-    if (op.kind === 'rename') {
-      const ch = renumberedById.get(op.newChapterId);
-      if (ch && ch.slug !== op.to) {
-        return { ...op, to: ch.slug, newChapterTitle: ch.title };
-      }
+  // Re-derive the audio ops from the FINAL slugs (#3400). The ops the
+  // caller built only know the pre-pass slugs; the prune renumber and the
+  // generic-title retitle can move a chapter's slug further, and a chapter
+  // whose slug changed ONLY there had no rename op at all — its files were
+  // orphaned at the old slug. A chapter whose audio metadata survived
+  // (audioRenderedAt) keeps its files: rename them from where they live now
+  // (the caller's rename `from`, else the pre-pass slug — a chapter with no
+  // op has an unchanged slug) to the final slug. Deletes pass through; a
+  // pruned chapter's audio is deleted from where it lives, not from its
+  // renumbered slug.
+  const finalById = new Map(titled.chapters.map((c) => [c.id, c]));
+  const renameFromByPreId = new Map<number, string>();
+  for (const op of result.audioOps) {
+    if (op.kind === 'rename') renameFromByPreId.set(op.newChapterId, op.from);
+  }
+  const deletes = result.audioOps.filter((op) => op.kind === 'delete');
+  const renames: AudioOp[] = [];
+  for (const pre of result.state.chapters) {
+    if (!pre.audioRenderedAt) continue;
+    const origSlug = renameFromByPreId.get(pre.id) ?? pre.slug;
+    const finalId = idRemap ? idRemap.get(pre.id) : pre.id;
+    const fin = finalId === undefined ? undefined : finalById.get(finalId);
+    if (!fin) {
+      // Pruned. A pre-existing rename op for it already degraded to a delete
+      // of its `from`; a no-op chapter has none, so add it (deduped below).
+      deletes.push({ kind: 'delete', from: origSlug });
+      continue;
     }
-    return op;
-  });
+    if (fin.slug !== origSlug) {
+      renames.push({
+        kind: 'rename',
+        from: origSlug,
+        to: fin.slug,
+        newChapterId: fin.id,
+        newChapterTitle: fin.title,
+      });
+    }
+  }
+  const seenDeletes = new Set<string>();
+  const adjustedAudioOps: AudioOp[] = [
+    ...deletes.filter((op) => {
+      if (seenDeletes.has(op.from)) return false;
+      seenDeletes.add(op.from);
+      return true;
+    }),
+    ...renames,
+  ];
+
+  if (titled.renumbered === 0) return { ...pruned, audioOps: adjustedAudioOps };
 
   const msg = `Renumbered ${titled.renumbered} auto-generated chapter title${titled.renumbered === 1 ? '' : 's'} against new positions.`;
   console.warn(`[restructure] ${msg}`);
 
   return {
     state: { ...pruned.state, chapters: titled.chapters },
-    hints: pruned.hints,
+    // Hints get the renumbered titles too, so the in-memory manuscript record
+    // agrees with state.json (same shape as applyRefreshTitles).
+    hints: pruned.hints.map((h) => {
+      const ch = finalById.get(h.id);
+      return ch ? { ...h, title: ch.title } : h;
+    }),
     sentences: pruned.sentences,
     remap: pruned.remap,
     audioOps: adjustedAudioOps,
@@ -615,7 +757,7 @@ export function applyMerge(
   // refresh-titles passes leave it alone.
   const newStateChapters = mergedTitleSupplied
     ? newStateChaptersRaw.map((c) =>
-        c.id === mergedNewId ? { ...c, titleOverridden: true } : c,
+        c.id === mergedNewId ? withExplicitTitle(c) : c,
       )
     : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
@@ -778,7 +920,7 @@ export function applySplit(
   // refresh-titles passes leave it alone.
   const newStateChapters = newTitleSupplied
     ? newStateChaptersRaw.map((c) =>
-        c.id === secondHalfNewId ? { ...c, titleOverridden: true } : c,
+        c.id === secondHalfNewId ? withExplicitTitle(c) : c,
       )
     : newStateChaptersRaw;
   const { sentences: newSentences, remap, warnings } = remapSentences(
@@ -836,6 +978,10 @@ export interface RefreshTitlesOptions {
       length) → skip the parser-aligned rewrite and only run the
       first-line promotion pass below. */
   parsedTitles: readonly string[];
+  /** Parallel to `parsedTitles`: true where the parser made that title up
+      (no heading in the manuscript). A replaced chapter carries
+      `titleSynthesized: true` only when its parsed title is flagged. */
+  parsedTitleSynthesized?: readonly boolean[];
   /** When true, opportunistically promote a chapter's first non-dialogue
       sentence to its title if the chapter's current title still matches
       the generic auto-generated pattern. Skipped per-chapter when the
@@ -867,24 +1013,31 @@ export function applyRefreshTitles(
   }
 
   // First pass: parser-aligned rewrite (when chapter counts match).
-  // Only fires for chapters whose current title still matches the
-  // generic auto-generated pattern OR equals the parsed title for the
-  // same parser order — user-customised titles ("The Verdict") are
+  // Only fires for chapters the app itself titled (titleSynthesized) whose
+  // current title still matches the generic auto-generated pattern —
+  // manuscript headings and user-customised titles ("The Verdict") are
   // never clobbered by re-parsing.
   let parserAligned = 0;
   let stagedChapters = state.chapters.map((c, i) => {
     if (!parsedAligned) return c;
     // Hard gate: the user has manually renamed this chapter, so the
     // heuristic title-refresh MUST leave it alone regardless of what
-    // the source manuscript currently parses to. GENERIC_TITLE_RE
-    // below is the legacy backup gate (catches chapters that pre-date
-    // the override flag).
+    // the source manuscript currently parses to.
     if (c.titleOverridden) return c;
+    // Only an app-made title may be replaced; an unflagged chapter holds a
+    // manuscript heading (or a legacy title) and is left alone.
+    if (c.titleSynthesized !== true) return c;
     const candidate = opts.parsedTitles[i];
     if (!candidate || candidate === c.title) return c;
     if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
     parserAligned++;
-    return { ...c, title: candidate, slug: chapterSlug(c.id, candidate) };
+    const { titleSynthesized: _drop, ...rest } = c;
+    return {
+      ...rest,
+      title: candidate,
+      slug: chapterSlug(c.id, candidate),
+      ...(opts.parsedTitleSynthesized?.[i] === true ? { titleSynthesized: true } : {}),
+    };
   });
   if (parserAligned > 0) {
     warnings.push(
@@ -892,10 +1045,9 @@ export function applyRefreshTitles(
     );
   }
 
-  // Second pass: first-line promotion for any chapter whose title still
-  // matches the generic pattern. Uses the GENERIC_TITLE_RE detector to
-  // gate "is this title auto-generated and therefore eligible for
-  // replacement?" — user-customised titles are skipped.
+  // Second pass: first-line promotion for any app-made chapter title
+  // (titleSynthesized) that still matches the generic pattern.
+  // Manuscript headings and user-customised titles are skipped.
   let firstLinePromoted = 0;
   if (opts.useFirstLine) {
     // Build per-chapter sentence map once.
@@ -913,6 +1065,7 @@ export function applyRefreshTitles(
     stagedChapters = stagedChapters.map((c) => {
       // Same hard override gate as the parser-aligned pass above.
       if (c.titleOverridden) return c;
+      if (c.titleSynthesized !== true) return c;
       if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
       const chapterSentences = sentencesByChapter.get(c.id);
       const firstSentence = chapterSentences?.[0]?.text?.trim();
@@ -922,8 +1075,10 @@ export function applyRefreshTitles(
       if (/[.!]$/.test(firstSentence)) return c;
       if (!opts.looksLikeTitle(firstSentence)) return c;
       firstLinePromoted++;
+      // The first line comes from the manuscript, so the title is no longer app-made.
+      const { titleSynthesized: _drop, ...rest } = c;
       return {
-        ...c,
+        ...rest,
         title: firstSentence,
         slug: chapterSlug(c.id, firstSentence),
       };
@@ -1119,10 +1274,9 @@ export function applyRename(
   }
 
   const newChapter = {
-    ...oldChapter,
+    ...withExplicitTitle(oldChapter),
     title: cleanTitle,
     slug: newSlug,
-    titleOverridden: true,
   };
   const newStateChapters = state.chapters.map((c, i) => (i === idx ? newChapter : c));
 

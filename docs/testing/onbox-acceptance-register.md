@@ -102,31 +102,23 @@ The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
 summary strip lies. `npm run register:build` generates the summary strip and all
 its derived figures; `npm run check:onbox-register` verifies the row IDs are
-unique across the document and that each group's `next-id` marker sits at or
-above the shared allocation floor (never that a row ID itself sits below the
-floor — the floor gates the NEXT id a group may mint, not the ids already in
-use), and that each group's glance-table count matches the rows in its body
-section. Both fail CI when rows are added, removed, or miscounted, so
+unique across the document and that each group's `next-id` marker (and the
+`BLK` / `UNC` marker of the Blocked and Unconfirmed sections, once they carry
+one) sits at or above the shared allocation floor (never that a row ID itself
+sits below the floor — the floor gates the NEXT id a group may mint, not the
+ids already in use), and that each group's glance-table count matches the rows
+in its body section. Both fail CI when rows are added, removed, or miscounted, so
 **adding or removing a row here and missing the live view build fails CI**.
 Know its edges, because three of them are wide:
 
-- **A wording-only edit to a numbered Group row does not fail — but the same
-  edit to a Blocked/Unconfirmed row does.** Rewording a Group row (`A12`,
-  `E9`, …), recording a run result, changing a hardware note or a criteria
-  link — the most common edit this register gets — changes nothing either
-  check compares for a Group row, since those are matched by ID. The live
-  view mirrors that prose in its own row bodies and will silently fall behind
-  (the generator does not rewrite a row's title if you changed only the
-  body; it preserves hand-authored titles). Blocked and Unconfirmed rows are
-  matched by TITLE, not ID. A Blocked row's title must match EXACTLY (after
-  normalisation) — rewording one WITHOUT the matching live-view edit makes
-  `register:build`/`--check` fail with a clean, actionable "no shell title
-  matches" error (not a crash) naming the mismatched title. An Unconfirmed
-  row's title matches by PREFIX, though — lengthening it (adding text) fails
-  the same way, but *shortening* it (or any edit that keeps the new title a
-  prefix of the unchanged live-view iname) still matches and passes
-  silently, exactly like the numbered-Group case above; only the failure
-  mode changed shape, not the coverage gap for that one direction.
+- **A wording-only edit to ANY row does not fail.** Rewording a row (`A12`,
+  `E9`, `BLK101`, `UNC101`, …), recording a run result, changing a hardware
+  note or a criteria link — the most common edit this register gets — changes
+  nothing either check compares, since every row, Blocked and Unconfirmed
+  included, is matched by ID. The live view mirrors that prose in its own row
+  bodies and will silently fall behind (the generator does not rewrite a
+  row's title if you changed only the body; it preserves hand-authored
+  titles). Mirror the edit into the live view yourself.
 - **The markdown's own `## At a glance` table is hand-maintained input, not
   generated output — only the LIVE VIEW's mirrored glance table and strip are
   generated.** `register:build` reads the markdown's `## At a glance` table
@@ -248,13 +240,12 @@ comparison, see the edge list above). The merge step that closes this, run
      has.
    - **in no history this checkout has**: FAILS as `unknown-provenance`.
 
-   **Not covered: the Blocked and Unconfirmed sections.** Their rows carry no
-   ID (`—`), so this comparison does not check them at all. Another lane's
-   Blocked or Unconfirmed row on the live page is dropped silently when you
-   publish, and `--build-union` cannot carry one. Compare those two sections
-   with the saved live page by eye before you publish. Tracked in #3587; the
-   design decision owed there is what identifies a title-keyed row, which has
-   no allocate-once ID.
+   Blocked and Unconfirmed rows carry `BLK` / `UNC` IDs, so they are compared,
+   carried and unioned exactly like lettered rows. A live page published
+   before #3587 still has legacy `—` rows in those two sections; they have no
+   ID, so the comparison cannot see them, and `--against-published` prints an
+   advisory (non-blocking) warning naming the count. Read those sections on
+   the live page by hand until a publish replaces it.
 
    A row ID you share with the live page under a different title FAILS as
    `row-id-collision` (unless the page is your own earlier publish and its
@@ -617,6 +608,22 @@ setup rather than repeatedly loading and evicting models.
 > `main`. Copy an existing group's bare `<!-- next-id: X101 -->` line — no
 > extra caveat comment needed.
 
+> **Blocked and Unconfirmed rows allocate the same way.** Each of those two
+> sections has its own `next-id` marker directly under its heading
+> (`<!-- next-id: BLK… -->`, `<!-- next-id: UNC… -->`), floor 101. A new
+> Blocked row is a `### <ID> · <title>` heading and a new Unconfirmed row is
+> a `- **<ID> · <title>** (…)` bullet, where `<ID>` is the ID named by that
+> section's own next-id marker (e.g. `BLK107` / `UNC103` when this note was
+> written; take the marker's current value); bump the marker in the same commit.
+> IDs are allocate-once and never reused, exactly like lettered rows, and
+> `register:build` rejects a Blocked or Unconfirmed row that has none. These
+> rows never count toward `**N owed.**`, a lettered group's glance count or the
+> strip's Owed tile. They DO have their own `— | **Blocked**` / `— |
+> **Unconfirmed**` glance-table cell: bump it by hand when you add or remove a
+> row — it drives the strip's Blocked/Unconfirmed tile, and
+> `check:onbox-register` fails ("glance table says N, body has M") if it
+> disagrees with the body.
+
 > **Adding a new row to an existing group? Allocate from its `next-id`
 > marker.** Take the marker's current value as the new row's ID, then bump
 > the marker by one in the same commit (e.g. `<!-- next-id: A101 -->` becomes
@@ -715,7 +722,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -725,17 +732,49 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**68 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-17 (#3084 W3d, task 3d.10), 64 → 67.** Rows **A114**
-> (long silent prefill completes on an endpoint), **A115** (same-card eviction of
-> an endpoint for a Qwen load) and **A116** (fallback to a smaller context leaves
+> **Last change: 2026-10-17 (#3084 W3d, task 3d.10), 65 → 68.** Rows **A115**
+> (long silent prefill completes on an endpoint), **A116** (same-card eviction of
+> an endpoint for a Qwen load) and **A117** (fallback to a smaller context leaves
 > room to answer) added, and row **A113** extended with the real-chapter
 > structured-output checks, from #3084 PR 3d's run sheet
-> (`3084-openai-analyzer-onbox-acceptance.md` §6–§9). Group A 35 → 38. `next-id`
-> bumped A114 → A117 in the same change. Rows are owed; not run here.
+> (`3084-openai-analyzer-onbox-acceptance.md` §6–§9). Group A 36 → 39. `next-id`
+> bumped A115 → A118 in the same change. Rows are owed; not run here.
+>
+> **Prior change: 2026-10-17 (plan 286, #3400/#3397), 64 → 65.** Added **A114** —
+> the revisions server-ownership cutover: accept/reject/dismiss move to
+> per-op server routes, pending comes only from the server, and every render
+> records or drops a chapter's A/B state itself, closing the #3397 gap A9's
+> body documented (a take finishing while you were away from its book coming
+> back stuck or without an A/B prompt). A9's own "known gap (#3397)" sentences
+> now point here instead of restating the gap as open. Group A 35 → 36.
+> `next-id` bumped A114 → A115 in the same change.
+>
+> **Prior change: 2026-10-16 (#3524), 64 → 64.** Row **A112**'s text corrected, no
+> row added or removed and the owed count unchanged: the audition-voice
+> precondition now says `scoreBook` takes it from a chapter rendered in the
+> character's current cast voice (not the first chapter in book order), and
+> the closing "Known limit" is replaced — an in-book centroid recorded from a
+> voice the character no longer has is now dropped too (a legacy in-book row
+> with no recorded voice is still kept). A character reassigned but not yet
+> re-rendered now gets a marker row from the scoring pass (it leaves the QA
+> card's "pending" state), and the "current voice" engine is the engine actually rendered (the
+> character's own engine, else the scoring run's model key — only for a
+> character that run rendered lines for — else the engine stamped on its most
+> recently rendered lines). The Reassign step now says not to
+> run Resume scoring before the repair (a scoring pass rewrites the character's
+> rows `inconclusive`, leaving nothing to observe) and checks the marker row as a
+> separate step afterwards. Behaviour proven by mocked unit
+> tests; A112 still owns the real-ECAPA hardware check.
+>
+> **Prior change: 2026-10-16 (#3587), 64 → 64.** Allocate-once IDs assigned to the
+> Blocked rows (**BLK101**–**BLK106**) and the Unconfirmed bullets (**UNC101**–**UNC102**),
+> with a `next-id` marker under each section heading (BLK107, UNC103). IDs allocated
+> once (#3587); no row added or removed. Owed count unchanged at 64; Blocked stays 6,
+> Unconfirmed stays 2.
 >
 > **Prior change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
 > structured output — Test action records match real model behaviour) added
@@ -1803,7 +1842,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A117 -->
+<!-- next-id: A118 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2659,18 +2698,18 @@ revisions history of its own — its Status pill must show no pending revisions,
 not book A's; and start a multi-chapter Fix-audio batch on book A, then open
 book B before the batch finishes — book B must show none of book A's takes.
 Leaving the book mid-batch — for a different book or for any non-book view
-(Library, Voices, Admin, Settings, Help, New book) — is a known gap (#3397,
-design owed): the batch's enqueue and playable-flip are skipped while no book,
-or a different book, is active, so a take that finishes while you're away
-comes back stuck "rendering" or without an A/B prompt. Record what was
-observed there rather than treating it as an A9 fail. One more step, added
+(Library, Voices, Admin, Settings, Help, New book) — was a known gap (#3397):
+the batch's enqueue and playable-flip were skipped while no book, or a
+different book, was active, so a take that finished while you were away came
+back stuck "rendering" or without an A/B prompt. Closed server-side by plan
+286 (revisions server ownership) — see register row A114. One more step, added
 2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions
 slice's hydrate gating: with a take pending and at least one Revision History
 entry on a book, start a multi-chapter Fix-audio batch, then go to Library and
 back to the book while it is still running — the earlier pending take and
 Revision History are still there, and after the next chapter completes they're
-still on disk (reload); record separately what happened to the batch takes
-that finished while you were on the Library (the #3397 gap above). *Merged*
+still on disk (reload); the #3397 gap above (batch takes finishing while you
+were on the Library) is now closed — see register row A114. *Merged*
 2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
@@ -2718,10 +2757,11 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > but that echo is harmless, not load-bearing — nothing reads it from a
 > poll.) Known remaining gap: a batch chapter that finishes while you're
 > away from the book — on a different book or on any non-book view, such as
-> the Library — leaves that take stuck "rendering," or without an A/B
-> prompt, when you return; it no longer lands in another book at all
-> (#3397, design owed). The on-box re-run above is **still owed** — the row
-> stays open.
+> the Library — left that take stuck "rendering," or without an A/B
+> prompt, when you returned; it no longer landed in another book at all
+> (#3397). **Closed by plan 286** (revisions server ownership — the server now
+> records or drops A/B state on every render) — see register row A114. The
+> on-box re-run above is **still owed** — the row stays open.
 
 > **2026-09-24 — two more ways a pending take could go missing, fixed
 > (PR #3395 review pass 3).** The line above claiming `pending` is "seeded
@@ -2754,7 +2794,8 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > leaving the book's revisions unsaveable for the rest of the visit. Leaving
 > a book sends its queued writes at once, and the re-read on return waits
 > for any still in flight, so an accept made just before a Library round trip
-> is not read back stale and erased. Not covered: the #3397 gap above. The
+> is not read back stale and erased. Not covered: the #3397 gap above —
+> closed by plan 286, see register row A114. The
 > on-box re-run above is **still owed** — the row stays open.
 
 > **2026-10-01 — review pass 5 (PR #3395).** A write recorded for a book
@@ -5986,12 +6027,14 @@ embedder. Neither test touches a real sidecar or a real ECAPA model.
   that character carrying a `voice-mismatch` / `fixable: true` row in its
   `<slug>.render-integrity.json`;
 - the character's `auditionVoice.voiceName` in that same centroids row equals
-  the character's snapshot voice in **both** X and Y. `scoreBook` takes the
-  audition voice from the character's FIRST chapter in book order
-  (`aggregate.ts`), so after an earlier partial re-render (or a voice change)
-  the two can differ — and the control then correctly drops the reference,
-  which would misread as a Fail. If they differ, re-render so they match
-  before starting;
+  the character's snapshot voice in **both** X and Y, and that voice is the
+  character's **current** cast voice. `scoreBook` takes the audition voice from
+  a chapter rendered in the character's current cast voice (`aggregate.ts`,
+  #3524), so after a voice change the row only matches once such a chapter
+  exists; lines still in an older voice are written `inconclusive`, not scored.
+  If the row's `voiceName` is not the character's current voice, re-render so
+  they match before starting, or the control will correctly drop the reference
+  and misread as a Fail;
 - **Render-integrity QA (voice match)** (`qa.speaker.enabled`, env
   `SEG_SPK_ENABLED`) switched **on** *before the chapters are rendered* — it
   defaults off, and it is what makes `scoreBook` run at all, writing the
@@ -6062,9 +6105,21 @@ Network tab (that request → EventStream/Response) when the button was used.
   **Pass:** that line (`acousticOnly: true` in `qa_scan`) gets **no**
   `progress` frame and appears in `qa_repair_complete`'s `stillSuspect` — the
   stale `audition` centroid was dropped, not reused. An inconclusive verdict
-  here is the designed outcome, not a regression. Known limit: an in-book
-  centroid is still judged against the old voice (#3517) — do not expect it to
-  switch.
+  here is the designed outcome, not a regression. After #3524 an
+  in-book centroid row that recorded a voice the character no longer has is
+  dropped too, just like an audition one; a legacy in-book row with no
+  recorded voice is still kept until a line is re-rendered in the new voice and
+  a scoring pass rebuilds it, so do not expect that one to switch. Do
+  NOT run Resume scoring, or render anything, between the reassign and this
+  repair: a scoring pass in this state rewrites every row of the character
+  `inconclusive`, so Y's line would no longer be `fixable` and `qa_scan`
+  would flag nothing to observe.
+- **Marker row, after the repair.** Only now run **Resume scoring** from the QA
+  card (still no re-render). **Pass:** the character's row in
+  `render-integrity.centroids.json` has `noCurrentVoiceReference: true`, every
+  one of its lines is `inconclusive` in the `<slug>.render-integrity.json`
+  files, and the QA card no longer counts the character as pending (no Resume
+  scoring button for it). The repair treats that row as no centroid.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
@@ -6118,7 +6173,7 @@ outcome matches what the model does.
 
 This row gates Gemini's `schema` default.
 
-### A114 · Long silent prefill completes on an endpoint ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **slower card of a 2-card box, llama-swap with a ≥64k-context model**
+### A115 · Long silent prefill completes on an endpoint ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **slower card of a 2-card box, llama-swap with a ≥64k-context model**
 
 The OpenAI transport starts its idle watchdog only after the first delta and bounds the
 call with the endpoint's request ceiling (default 30 min). Automated tests use a fake
@@ -6131,7 +6186,7 @@ fallback fires before the first token.
   the chapter completes. Record time to first token and total time.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Long silent prefill".
 
-### A115 · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
+### A116 · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
 
 `withCapacityRetry` POSTs the unload URL of every idle endpoint on the denied card (or
 `any`): once per model whose request was sent to the endpoint and not unloaded since, with
@@ -6189,7 +6244,7 @@ is never unloaded under a live run.
   the total time lost, because this is the per-synth-op multiplication the unit bound hides.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
 
-### A116 · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
+### A117 · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
 
 After a fallback switch, chunks sized for the primary's larger context reach a smaller one. The
 pre-send guard (Task 3d.4b) measures each body against the target pass's budget, so every prompt
@@ -6213,6 +6268,54 @@ the context: a context shift, an early stop, or an error.
   copy (or, for an escalation window, the skip warning is logged), and the target's own log shows
   no request for it.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Fallback to a smaller context".
+
+### A114 · Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**
+
+`revisions.json` moves from a client-written cache to a server-owned one:
+accept/reject/dismiss go through per-op routes instead of a raw `PUT /state`,
+pending comes only from the server, and every render records or drops a
+chapter's A/B state itself — closing the #3397 gap A9 above left open (a
+Fix-audio or regen take finishing while you were on another book, or any
+non-book view, used to come back stuck "rendering" or without an A/B prompt;
+it now doesn't).
+
+**What to observe, concretely**, against a real rendered book with a real
+sidecar:
+
+1. Splice a character's lines (Fix audio) → switch to a different book
+   before it finishes → come back: the A/B prompt is there and playable
+   (closes the #3397 gap).
+2. **Commit selection** (accept) → the chapter's `.previous.mp3` is gone and
+   Revision History shows "Accepted".
+3. Re-splice the same chapter, this time **Reject** → the earlier take is
+   live again, Revision History shows "Rejected".
+4. Reject while a generation is running on that book → refused with "This
+   chapter is busy — try again when it finishes", the pending entry
+   unchanged.
+5. A real **profile-regen preview**: Approve fans the new take out to the
+   rest of the book; a second preview, Reject restores the original take.
+6. A **restructure** (merge two chapters, one of them carrying a pending
+   take) → that take disappears from the Revisions list.
+7. An **upgraded book's legacy entry** (pending from before this update) can
+   be accepted on one chapter and rejected on another.
+8. A **legacy stuck entry** ("Rendering…" from before the update,
+   `.previous.mp3` still on disk) is now reviewable and shows **Recovered
+   from before the update**, with the A card reading "The take kept before
+   this chapter's last render" (never "the original" — OD20). Reject puts
+   that kept take back live — record which take that turned out to be, since
+   it may predate the stuck take rather than being the one it was rendered
+   against.
+9. A **preview that finishes while you are on another book**: the "Preview
+   ready in ‹book title›" toast appears; returning to the book opens the
+   preview player by itself (OD27). Close it with the back arrow — the
+   Status pill shows it as pending and re-opens it (OD28).
+
+*Needs:* the GPU box, a real sidecar, and a real rendered book (no mock mode
+— the mock-mode equivalents of 1-9 are pinned by `e2e/revision-ops.spec.ts`,
+`e2e/revisions-book-switch.spec.ts` and `e2e/profile-regen-preview-recorded.spec.ts`,
+plan 286 Task 30). *Criteria:* plan 286's "Manual acceptance walkthrough" and
+the nine steps above; issues #3400 and #3397; open decisions OD20, OD27,
+OD28, OD29, OD30, OD31.
 
 ## Group B — local Ollama analyzer only
 
@@ -7155,8 +7258,8 @@ exists. *Criteria:* spec §On-box acceptance
 `runStepProcess`'s timeout path is unit-tested against a real (but tiny and fast)
 process tree: a fixture npm script that never exits is killed via
 `taskkill /PID <pid> /T /F` and classified `timedOut: true`, never retried as a
-crash (`scripts/tests/verify-cache.test.mjs`'s `runStepProcess`/`runPipeline`
-timeout mutation tests). What no unit test can prove is the thing the design
+crash (`scripts/tests/verify-cache.run-step.test.mjs`'s `runStepProcess` and
+`scripts/tests/verify-cache.pipeline.test.mjs`'s `runPipeline` timeout tests). What no unit test can prove is the thing the design
 doc calls out as **load-bearing**: `taskkill /T` walks *live* parent-PID links
 at the moment it runs, so a fork whose parent already died before that walk
 reaches it is invisible to `/T` — exactly the shape of the two 390-minute
@@ -7797,13 +7900,15 @@ that is NOT a chapter-order-dependent prefix.
 
 ## Blocked — hardware not available
 
-### AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))
+<!-- next-id: BLK107 -->
+
+### BLK101 · AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))
 
 Waves A–G were built and merged **dormant** — the code path exists but has never run
 against real ROCm hardware. A dormant capability, not an active bug. This box is
 dual-NVIDIA; this will not move until AMD/ROCm hardware exists.
 
-### ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
+### BLK102 · ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
 
 Design doc §On-box acceptance, criterion 5: "no marker is written" on AMD.
 `planOrtSwap('amd', …)` resolves to plain `onnxruntime` (`accelerator-profile.mjs`),
@@ -7820,7 +7925,7 @@ injected `runPip`/marker seam, just never against a real ROCm→CPU fallback. Th
 is dual-NVIDIA; this will not move until AMD/ROCm hardware exists. Run sheet §7 in
 `docs/testing/ort-marker-onbox-acceptance.md` has the recipe ready for when it does.
 
-### CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)
+### BLK103 · CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)
 
 Formerly step 7 of B2 (per-model analyzer keep-alive). A `RAM_HEAVY_MODELS`
 clamp is meant to override a configured positive keep-alive back to `0` when
@@ -7831,7 +7936,7 @@ risking other lanes' concurrent work — not attempted. This box is
 dual-NVIDIA; this will not move until a CPU-only box exists, or one where
 GPU visibility can safely be disabled.
 
-### ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
+### BLK104 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
 
 **1. What is dormant.** The cross-build half of the ops-36 design — whether
 L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and
@@ -7865,7 +7970,7 @@ not satisfy the row's intent** — the row means a different environment, not
 a different binary on the same one. Recorded here as a neutral decision so a
 future reader can reverse it deliberately rather than stumble into it.
 
-### ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
+### BLK105 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
 
 **1. What is dormant.** The below-floor preflight exit (`npm run test:server`
 must exit 1 against ffmpeg 4.4, printing the host OS's upgrade command); the
@@ -7889,7 +7994,7 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
 
-### ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
+### BLK106 · ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
 
 **1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
 hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
@@ -7946,15 +8051,17 @@ model sitting unused on the same card. Criteria live in issue #2813 and this row
 
 ## Unconfirmed — not debts until substantiated
 
+<!-- next-id: UNC103 -->
+
 Kept separate on purpose. Listing a suspicion as debt is how a register stops being
 trusted.
 
-- **fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
+- **UNC101 · fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
   beyond a generic "Live-GPU acceptance" line in plan 194 that is about cloning
   generally (Wave 3's concern), not marked outstanding the way 267/268/264/216/263
   are. Closed bugs #1802/#1833/#1836 show live "My voices" use, consistent with it
   being exercised informally. Not confirmed either way.
-- **Ollama concurrency (K>1) real-VRAM validation** — PR #1707 fixed a case where K
+- **UNC102 · Ollama concurrency (K>1) real-VRAM validation** — PR #1707 fixed a case where K
   never took effect and ships `peak==K` telemetry so a future run self-verifies. The
   UI half is B1's K=4 step. If a separate `n_slots=1` physics check is owed, its
   written criteria were not found in this repo — do not double-count it.

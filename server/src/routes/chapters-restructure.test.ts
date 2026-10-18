@@ -16,7 +16,7 @@
  * imports so paths.ts picks up WORKSPACE_DIR, supertest against the real
  * router. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -31,6 +31,15 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #3628 — a passthrough spy so a test can assert the legacy-title backfill
+   does not parse the manuscript when no chapter could need it. */
+const parseManuscriptSpy = vi.hoisted(() => vi.fn());
+vi.mock('../parsers/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../parsers/index.js')>();
+  parseManuscriptSpy.mockImplementation(actual.parseManuscript);
+  return { ...actual, parseManuscript: parseManuscriptSpy };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -47,6 +56,11 @@ let audioRoot: string;
 let app: Express;
 let bookId: string;
 let cachePath: string;
+
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, dropPendingForChapters: vi.fn(real.dropPendingForChapters) };
+});
 
 /* Three short chapters; chapter 1 + 2 have rendered audio, chapter 3
  * doesn't (mirrors a real partially-generated book). */
@@ -129,11 +143,10 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-restructure-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ chaptersRestructureRouter }, { bookStateRouter }, { makeBookId }] = await Promise.all([
-    import('./chapters-restructure.js'),
-    import('./book-state.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { chaptersRestructureRouter } = await import('./chapters-restructure.js');
+  const { bookStateRouter } = await import('./book-state.js');
+  const { revisionOpsRouter } = await import('./revision-ops.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   cachePath = join(CACHE_DIR, `${MANUSCRIPT_ID}.json`);
 
@@ -148,6 +161,7 @@ beforeAll(async () => {
   // handler when needed, and exercise the restructure POSTs.
   app.use('/api/books', bookStateRouter);
   app.use('/api/books', chaptersRestructureRouter);
+  app.use('/api/books', revisionOpsRouter);
 });
 
 afterAll(() => {
@@ -785,11 +799,11 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
-          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
-          { id: 5, title: 'Chapter 5', slug: '05-chapter-5' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4', titleSynthesized: true },
+          { id: 5, title: 'Chapter 5', slug: '05-chapter-5', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -836,6 +850,121 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     expect(renumberWarning).toBeDefined();
   });
 
+  it('merge [2,3] on rendered "Chapter N" titles keeps the shifted chapter\'s audio (#3400)', async () => {
+    seedDigitTitledBook();
+    for (const slug of [
+      '01-chapter-1',
+      '02-chapter-2',
+      '03-chapter-3',
+      '04-chapter-4',
+      '05-chapter-5',
+    ]) {
+      seedAudio(slug);
+      writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-${slug}`);
+    }
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    for (const c of st.chapters) {
+      c.audioModelKey = 'kokoro-v1';
+      c.audioRenderedAt = '2026-01-01T00:00:00.000Z';
+    }
+    writeFileSync(stPath, JSON.stringify(st));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+
+    // Old chapter 4 is now chapter 3 (slug 03-chapter-3): its audio must exist.
+    expect(readState().chapters[2].slug).toBe('03-chapter-3');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.mp3'), 'utf8')).toBe('audio-04-chapter-4');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.previous.mp3'), 'utf8')).toBe(
+      'previous-04-chapter-4',
+    );
+  });
+
+  function seedRenderedChapters(slugs: string[]): void {
+    for (const slug of slugs) {
+      seedAudio(slug);
+      writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-${slug}`);
+    }
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    for (const c of st.chapters) {
+      c.audioModelKey = 'kokoro-v1';
+      c.audioRenderedAt = '2026-01-01T00:00:00.000Z';
+    }
+    writeFileSync(stPath, JSON.stringify(st));
+  }
+
+  it('merge [4,5] with an empty chapter 2: survivors keep their OWN audio, merged chapter gets none (#3400)', async () => {
+    seedDigitTitledBook();
+    // plan 70a Part F's state: chapter 2 has no sentences, so the prune pass drops it.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 3, 4, 5].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `s${c}.` })),
+      }),
+    );
+    const olds = ['01-chapter-1', '02-chapter-2', '03-chapter-3', '04-chapter-4', '05-chapter-5'];
+    seedRenderedChapters(olds);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [4, 5] });
+    expect(res.status).toBe(200);
+
+    const st = readState();
+    expect(st.chapters.map((c) => c.slug)).toEqual(['01-chapter-1', '02-chapter-2', '03-chapter-3']);
+    // new chapter 2 is old chapter 3: its audio (and .previous take) moved with it
+    expect(readFileSync(join(audioRoot, '02-chapter-2.mp3'), 'utf8')).toBe('audio-03-chapter-3');
+    expect(readFileSync(join(audioRoot, '02-chapter-2.previous.mp3'), 'utf8')).toBe(
+      'previous-03-chapter-3',
+    );
+    // the merged chapter (new 3) is content-changed: no stale audio, no rendered stamp
+    expect(existsSync(join(audioRoot, '03-chapter-3.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '03-chapter-3.previous.mp3'))).toBe(false);
+    expect(st.chapters[2].audioRenderedAt).toBeUndefined();
+    expect(st.chapters[1].audioRenderedAt).toBeDefined();
+    expect(existsSync(join(audioRoot, '04-chapter-4.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '05-chapter-5.mp3'))).toBe(false);
+  });
+
+  it('exclude: chapters retitled only by the generic-title pass keep their audio at the new slug (#3400)', async () => {
+    seedDigitTitledBook();
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    ['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 3', 'Chapter 4'].forEach((t, i) => {
+      st.chapters[i].title = t;
+      st.chapters[i].slug = `${String(i + 1).padStart(2, '0')}-${t.toLowerCase().replace(/ /g, '-')}`;
+    });
+    writeFileSync(stPath, JSON.stringify(st));
+    const olds = st.chapters.map((c: { slug: string }) => c.slug) as string[];
+    seedRenderedChapters(olds);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [5], excluded: true });
+    expect(res.status).toBe(200);
+
+    expect(readState().chapters.map((c) => c.slug)).toEqual([
+      '01-prologue',
+      '02-chapter-2',
+      '03-chapter-3',
+      '04-chapter-4',
+      '05-chapter-5',
+    ]);
+    expect(readFileSync(join(audioRoot, '01-prologue.mp3'), 'utf8')).toBe('audio-01-prologue');
+    expect(readFileSync(join(audioRoot, '02-chapter-2.mp3'), 'utf8')).toBe('audio-02-chapter-1');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.mp3'), 'utf8')).toBe('audio-03-chapter-2');
+    expect(readFileSync(join(audioRoot, '04-chapter-4.mp3'), 'utf8')).toBe('audio-04-chapter-3');
+    expect(readFileSync(join(audioRoot, '05-chapter-5.mp3'), 'utf8')).toBe('audio-05-chapter-4');
+    expect(readFileSync(join(audioRoot, '05-chapter-5.previous.mp3'), 'utf8')).toBe(
+      'previous-05-chapter-4',
+    );
+    expect(existsSync(join(audioRoot, '02-chapter-1.mp3'))).toBe(false);
+  });
+
   it('preserves user-customized chapter titles during the renumber pass', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
@@ -854,10 +983,10 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
           { id: 2, title: 'The Verdict', slug: '02-the-verdict' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
-          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -965,9 +1094,9 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1 — The Beginning', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2 — The Middle', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3 — The End', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1 — The Beginning', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2 — The Middle', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3 — The End', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1086,8 +1215,8 @@ describe('POST /:bookId/chapters/exclude (plan 70b)', () => {
         chapters: [
           // Chapter 1 has a non-generic title — should be preserved.
           { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1140,9 +1269,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1208,8 +1337,8 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1316,9 +1445,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           // titleOverridden looks generic but is sticky.
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true, titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1507,5 +1636,909 @@ describe('merge/split propagate titleOverridden (plan 78)', () => {
     const sticky = after.chapters.find((c) => c.title === 'Sticky One');
     expect(sticky?.id).toBe(3);
     expect(sticky?.titleOverridden).toBe(true);
+  });
+});
+
+/* -- plan 286: restructure drops stale A/B entries ------------------ */
+
+describe('plan 286 — restructure drops stale A/B entries', () => {
+  const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const srv = (chapterId: number, id: string) => ({ id, chapterId, characterId: 'narr', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' });
+  afterEach(() => rmSync(revPath(), { recursive: true, force: true }));
+
+  it('a merge of chapters 2+3 drops their entries and keeps chapter 1\'s', async () => {
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [srv(1, 'r1'), srv(2, 'r2')], dismissed: [], acceptedSelections: {}, timeline: {} }));
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    const disk = JSON.parse(readFileSync(revPath(), 'utf8'));
+    expect(disk.pending.map((p: { id: string }) => p.id)).toEqual(['r1']);
+  });
+
+  it('a failing drop still answers 200 and leaks no path', async () => {
+    /* A rejection whose message embeds the path: an EISDIR fixture's message carries
+       none, so asserting its absence would prove nothing (Invariant 8). */
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.dropPendingForChapters).mockRejectedValueOnce(Object.assign(
+      new Error(`EPERM: operation not permitted, rename '${revPath()}.tmp'`), { code: 'EPERM' }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const errorCalls = err.mock.calls.length; // before mockRestore, which clears mock.calls in vitest 5
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain(workspaceRoot);
+    expect(errorCalls).toBeGreaterThan(0);
+  });
+});
+
+/* -- #3400: a stale entry surviving a failed drop never acts on another chapter -- */
+
+describe('#3400 — a failed restructure drop leaves an entry that is refused, not applied elsewhere', () => {
+  const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const UUIDS = ['uuid-ch-1', 'uuid-ch-2', 'uuid-ch-3'];
+  /* A server-recorded entry for chapter 1, carrying the identity finalize stamps on it. */
+  const entryForCh1 = {
+    id: 'revision:1:1', chapterId: 1, characterId: 'narr', playable: true, hasPreviousAudio: true,
+    segments: [], origin: 'server', chapterUuid: UUIDS[0], renderedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const failDropOnce = async () => {
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.dropPendingForChapters).mockRejectedValueOnce(Object.assign(
+      new Error(`EPERM: operation not permitted, rename '${revPath()}.tmp'`), { code: 'EPERM' }));
+    return vi.spyOn(console, 'error').mockImplementation(() => {});
+  };
+  beforeEach(() => {
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    state.chapters.forEach((c: { uuid?: string }, i: number) => { c.uuid = UUIDS[i]; });
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(state));
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [entryForCh1], dismissed: [], acceptedSelections: {}, timeline: {} }));
+  });
+  afterEach(() => rmSync(revPath(), { recursive: true, force: true }));
+
+  for (const op of ['accept', 'reject'] as const) {
+    it(`reorder + failed drop: ${op} answers revision_not_found and leaves the id's new chapter's audio untouched`, async () => {
+      const err = await failDropOnce();
+      const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 3, 1] });
+      err.mockRestore();
+      expect(re.status).toBe(200);
+      // Id 1 now names the old chapter 2 (renumbered); it holds a leftover .previous (rewrite-chapter-slugs does not move them).
+      const slug = readState().chapters[0].slug;
+      expect(readState().chapters[0].uuid).toBe(UUIDS[1]);
+      writeFileSync(join(audioRoot, `${slug}.previous.mp3`), 'OTHER-CHAPTERS-OLD-TAKE');
+      const live = readFileSync(join(audioRoot, `${slug}.mp3`), 'utf8');
+
+      const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh1.id}/${op}`).send({});
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('revision_not_found');
+      expect(readFileSync(join(audioRoot, `${slug}.mp3`), 'utf8')).toBe(live);
+      expect(existsSync(join(audioRoot, `${slug}.previous.mp3`))).toBe(true);
+    });
+  }
+
+  it('merge + failed drop: the surviving chapter keeps its uuid but its render changed, so reject is refused', async () => {
+    const err = await failDropOnce();
+    const re = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [1, 2] });
+    err.mockRestore();
+    expect(re.status).toBe(200);
+    const merged = readState().chapters[0];
+    expect(merged.uuid).toBe(UUIDS[0]);
+    writeFileSync(join(audioRoot, `${merged.slug}.previous.mp3`), 'PRE-MERGE-TAKE');
+
+    const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh1.id}/reject`).send({});
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('revision_not_found');
+    expect(readFileSync(join(audioRoot, `${merged.slug}.previous.mp3`), 'utf8')).toBe('PRE-MERGE-TAKE');
+  });
+
+  it("control: an untouched chapter's entry still rejects normally", async () => {
+    writeFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'ORIGINAL');
+    const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh1.id}/reject`).send({});
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(audioRoot, '01-chapter-one.mp3'), 'utf8')).toBe('ORIGINAL');
+  });
+});
+
+/* -- merged-away tombstones (#3400) --------------------------------- */
+
+describe('restructure carries mergedAwayKeys where sentence ids are unchanged (#3400)', () => {
+  /* Each chapter ends at sentence 2 and has a trailing tombstone at 3, so the
+     chapter's live ids are gap-free and an op that leaves it alone keeps them. */
+  function seedTombstones(keys: string[], sentences?: unknown[]): void {
+    const base = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8'),
+    ) as { sentences: unknown[] };
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: sentences ?? base.sentences, mergedAwayKeys: keys }),
+    );
+  }
+  function readKeys(): string[] {
+    const e = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8'),
+    ) as { mergedAwayKeys?: string[] };
+    return [...(e.mergedAwayKeys ?? [])].sort();
+  }
+
+  it('reorder re-keys each tombstone to its chapter new id', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    // old 3 -> 1, old 1 -> 2, old 2 -> 3
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+  });
+
+  it('reorder re-keys to DIFFERENT ids when the chapter moves (not a no-op)', async () => {
+    seedTombstones(['1:5'], [
+      { id: 1, chapterId: 1, characterId: 'narr', text: 'a' },
+      { id: 2, chapterId: 1, characterId: 'narr', text: 'b' },
+      { id: 3, chapterId: 1, characterId: 'narr', text: 'c' },
+      { id: 4, chapterId: 1, characterId: 'narr', text: 'd' },
+      { id: 1, chapterId: 2, characterId: 'narr', text: 'e' },
+      { id: 1, chapterId: 3, characterId: 'narr', text: 'f' },
+    ]);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:5']);
+  });
+
+  it('merge drops the merged chapters tombstones and keeps the untouched chapter', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3']);
+  });
+
+  it('merge re-keys a shifted later chapter', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:3']);
+  });
+
+  it('split drops the split chapter and re-keys the chapters after it', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/split`).send({ chapterId: 2, afterSentenceId: 1 });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '4:3']);
+  });
+
+  it('exclude and rename keep every tombstone', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const ex = await request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: true });
+    expect(ex.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+    const rn = await request(app).post(`/api/books/${bookId}/chapters/1/rename`).send({ title: 'Opening' });
+    expect(rn.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+  });
+
+  it('drops a tombstone in a chapter whose live ids the op renumbered (a gap shifts them)', async () => {
+    // chapter 1 has ids 1,3 live (2 merged away): the remap renumbers 3 -> 2,
+    // so a surviving "1:2" would shadow the live sentence.
+    seedTombstones(['1:2', '2:3'], [
+      { id: 1, chapterId: 1, characterId: 'narr', text: 'a' },
+      { id: 3, chapterId: 1, characterId: 'narr', text: 'c' },
+      { id: 1, chapterId: 2, characterId: 'narr', text: 'e' },
+      { id: 2, chapterId: 2, characterId: 'narr', text: 'f' },
+      { id: 1, chapterId: 3, characterId: 'narr', text: 'g' },
+    ]);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [1, 2, 3] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:3']);
+  });
+
+  it('leaves manuscript-edits.json without a mergedAwayKeys field when it had none', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    expect('mergedAwayKeys' in readEdits()).toBe(false);
+  });
+});
+
+/* -- state / manuscript saves vs a restructure (#3400) ------------------ */
+
+describe('book-state saves take the book lock a restructure holds (#3400)', () => {
+  const RUNS = 24;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /* Start the POST at t=0 and the PUT at `offsetMs` (negative = PUT first). */
+  async function race(
+    offsetMs: number,
+    put: () => Promise<unknown>,
+  ): Promise<void> {
+    const post = (async () => {
+      if (offsetMs < 0) await sleep(-offsetMs);
+      return request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    })();
+    const putP = (async () => {
+      if (offsetMs > 0) await sleep(offsetMs);
+      return put();
+    })();
+    const [m, p] = await Promise.all([post, putP]);
+    expect((m as { status: number }).status).toBe(200);
+    expect((p as { status: number }).status).toBe(204);
+  }
+
+  async function reset(): Promise<void> {
+    seedState();
+    seedManuscriptEdits();
+    const raw = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    raw.prosodyAnnotated = true;
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(raw));
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+  }
+
+  it('a state PUT racing a merge never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await race((i % 8) - 3, () =>
+        request(app)
+          .put(`/api/books/${bookId}/state`)
+          .send({ slice: 'state', patch: { prosodyAnnotated: false } }),
+      );
+      const state = readState() as { chapters: unknown[]; prosodyAnnotated?: boolean };
+      expect(state.chapters, `run ${i}`).toHaveLength(2);
+      expect(state.prosodyAnnotated, `run ${i}`).toBe(false);
+    }
+  });
+
+  /* What the lock can and cannot guarantee for a manuscript PUT (pass-7 1).
+     The PUT replaces manuscript-edits.json WHOLESALE, so serialising it only
+     decides who writes last: a PUT built BEFORE the restructure that lands
+     AFTER it puts the pre-restructure chapter ids back, lock or no lock. In the
+     app the client guard (no edits while a restructure is in flight) prevents
+     that; the server cannot. So the claim pinned here is serial equivalence,
+     not "never lost". */
+  const putBody = (i: number) =>
+    readEdits().sentences.map((s) =>
+      s.chapterId === 1 && s.id === 1 ? { ...s, text: `Edited ${i}.` } : s,
+    );
+
+  it('a manuscript PUT that lands BEFORE a merge is re-keyed by it: edits and state agree', async () => {
+    await reset();
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences: putBody(0) } });
+    expect(put.status).toBe(204);
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(merge.status).toBe(200);
+    const stateIds = readState().chapters.map((c) => c.id);
+    const edits = readEdits().sentences;
+    expect(stateIds).toEqual([1, 2]);
+    for (const s of edits) expect(stateIds).toContain(s.chapterId);
+    expect(edits.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe('Edited 0.');
+  });
+
+  it('a stale manuscript PUT that lands AFTER a merge replaces the file wholesale (the limit the client guard covers)', async () => {
+    await reset();
+    const stale = putBody(0);
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences: stale } });
+    expect(readState().chapters).toHaveLength(2);
+    expect(readEdits().sentences.map((s) => s.chapterId)).toContain(3);
+  });
+
+  it('a manuscript PUT racing a merge ends in one of the two serial states, never a mix', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      const body = putBody(i);
+      await race((i % 8) - 3, () =>
+        request(app)
+          .put(`/api/books/${bookId}/state`)
+          .send({ slice: 'manuscript', patch: { sentences: body } }),
+      );
+      const stateIds = readState().chapters.map((c) => c.id);
+      const edits = readEdits().sentences;
+      expect(stateIds, `run ${i}`).toEqual([1, 2]);
+      const putThenMerge =
+        edits.every((s) => stateIds.includes(s.chapterId)) &&
+        edits.find((s) => s.chapterId === 1 && s.id === 1)?.text === `Edited ${i}.`;
+      const mergeThenPut = JSON.stringify(edits) === JSON.stringify(body);
+      expect(putThenMerge || mergeThenPut, `run ${i}: ${JSON.stringify(edits)}`).toBe(true);
+    }
+  });
+});
+
+/* -- held / exclude POSTs vs a restructure (#3400, pass 7) ---------------- */
+
+describe('held / exclude POSTs take the book lock a restructure holds (#3400)', () => {
+  const RUNS = 24;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function reset(): Promise<void> {
+    seedState();
+    seedManuscriptEdits();
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+  }
+
+  /* Start the merge at t=0 and the other POST at `offsetMs` (negative = it
+     goes first). Both must answer 200. */
+  async function raceMerge(offsetMs: number, other: () => Promise<{ status: number }>) {
+    const merge = (async () => {
+      if (offsetMs < 0) await sleep(-offsetMs);
+      return request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    })();
+    const o = (async () => {
+      if (offsetMs > 0) await sleep(offsetMs);
+      return other();
+    })();
+    const [m, p] = await Promise.all([merge, o]);
+    expect(m.status).toBe(200);
+    expect(p.status).toBe(200);
+  }
+
+  /* The merged chapter list survives, and manuscript-edits.json agrees with it
+     (pass-7 probe 1: the reverted state kept 3 chapters against edits keyed to 2). */
+  function expectMergedEndState(run: number) {
+    const ids = readState().chapters.map((c) => c.id);
+    expect(ids, `run ${run}`).toEqual([1, 2]);
+    for (const s of readEdits().sentences) expect(ids, `run ${run}`).toContain(s.chapterId);
+  }
+
+  it('a held POST racing a merge of 2+3 never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await raceMerge((i % 8) - 3, () =>
+        request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true }),
+      );
+      expectMergedEndState(i);
+    }
+  });
+
+  it('an exclude POST racing a merge of 2+3 never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await raceMerge((i % 8) - 3, () =>
+        request(app).post(`/api/books/${bookId}/chapters/1/exclude`).send({ excluded: true }),
+      );
+      expectMergedEndState(i);
+    }
+  });
+
+  it('three parallel exclude POSTs on one book all land (the reparse dialog shape)', async () => {
+    for (let i = 0; i < 8; i++) {
+      await reset();
+      const res = await Promise.all(
+        [1, 2, 3].map((id) =>
+          request(app).post(`/api/books/${bookId}/chapters/${id}/exclude`).send({ excluded: true }),
+        ),
+      );
+      expect(res.map((r) => r.status)).toEqual([200, 200, 200]);
+      expect(
+        readState().chapters.map((c) => c.excluded),
+        `run ${i}`,
+      ).toEqual([true, true, true]);
+    }
+  });
+});
+
+/* -- per-chapter fields a restructure used to drop (#3400, pass 7) -------- */
+
+describe('restructure carries held / audioEngines / audioQa / failure fields', () => {
+  type Ch = Record<string, unknown> & { id: number };
+  const chapters = () => readState().chapters as unknown as Ch[];
+  function patchChapters(fn: (c: Ch[]) => void): void {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    const s = JSON.parse(readFileSync(p, 'utf8'));
+    fn(s.chapters);
+    writeFileSync(p, JSON.stringify(s));
+  }
+
+  it('hold chapter 1, merge 2+3: chapter 1 stays held (probe 5)', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(chapters()[0].held).toBe(true);
+    expect(chapters()[1].held).toBeUndefined();
+  });
+
+  it('merge: the merged chapter is held when ANY source chapter was (the conservative choice)', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/3/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true]);
+  });
+
+  it('untouched chapters keep audioEngines, audioQa and the failure record through a merge', async () => {
+    const qa = { status: 'ok', reasons: [], measuredLufs: -20, truePeakDb: -2, durationSec: 5, expectedSec: 5, checkedAt: 'x' };
+    patchChapters((c) => {
+      c[0].audioEngines = { kokoro: 2 };
+      c[0].audioQa = qa;
+      c[0].generationState = 'failed';
+      c[0].generationError = 'boom';
+      c[0].generationErrorCode = 'E1';
+      c[0].generationRemediation = 'retry';
+    });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const c1 = chapters()[0];
+    expect(c1.audioEngines).toEqual({ kokoro: 2 });
+    expect(c1.audioQa).toEqual(qa);
+    expect([c1.generationState, c1.generationError, c1.generationErrorCode, c1.generationRemediation]).toEqual([
+      'failed',
+      'boom',
+      'E1',
+      'retry',
+    ]);
+  });
+
+  it('a merged chapter drops the audio-describing fields (its audio is gone) but keeps no stale failure', async () => {
+    patchChapters((c) => {
+      c[1].audioEngines = { kokoro: 1 };
+      c[1].generationState = 'failed';
+    });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const merged = chapters()[1];
+    expect(merged.audioEngines).toBeUndefined();
+    expect(merged.generationState).toBeUndefined();
+  });
+
+  it('reorder: held follows the chapter to its new id', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true, undefined]);
+  });
+
+  it('split: both halves of a held chapter are held, the others unchanged', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/2/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/split`).send({ chapterId: 2, afterSentenceId: 1 });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true, true, undefined]);
+  });
+});
+
+/* -- #3625: state.json writes wait on the per-book state lock ------------- */
+
+describe('POST /:bookId/chapters/merge — state lock (#3625)', () => {
+  const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+  const statePathNow = () => join(bookDir, '.audiobook', 'state.json');
+
+  /* Locks a failing assertion left held; released in afterEach so one red case
+     cannot starve the next one into a lock timeout. */
+  const openHolds: Array<() => void> = [];
+  afterEach(() => {
+    while (openHolds.length) openHolds.pop()!();
+  });
+
+  async function holdLock(): Promise<{ release: () => void; held: Promise<void> }> {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    openHolds.push(release);
+    return { release, held };
+  }
+
+  const sendMerge = (ids: number[]) =>
+    request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: ids })
+      .then((r) => r);
+
+  it('waits on the lock: state.json is unchanged while held, restructured after release', async () => {
+    const { release, held } = await holdLock();
+    const pending = sendMerge([2, 3]);
+    await settle(200);
+    // Compare the chapter list, not the bytes: findBookByBookId's own lazy
+    // migration may re-serialise the file before the restructure's lock wait.
+    expect(readState().chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    release();
+    await held;
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(readState().chapters.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it('derives the restructure from a read taken inside the lock (stale-snapshot)', async () => {
+    const { release, held } = await holdLock();
+    const pending = sendMerge([1, 2]);
+    await settle(200);
+    // A concurrent writer stamps the surviving chapter 3 while the merge waits.
+    const cur = readState();
+    cur.chapters[2].audioRenderedAt = '2026-09-09T09:09:09.000Z';
+    writeFileSync(statePathNow(), JSON.stringify(cur));
+    release();
+    await held;
+    const res = await pending;
+    expect(res.status).toBe(200);
+    const after = readState();
+    expect(after.chapters).toHaveLength(2);
+    expect(after.chapters[1].slug).toBe('02-chapter-three');
+    expect(after.chapters[1].audioRenderedAt).toBe('2026-09-09T09:09:09.000Z');
+  });
+});
+
+describe('#3628 — titleSynthesized does not outlive the title it describes', () => {
+  it('a chapter retitled through PUT /state is no longer renumbered by a later restructure', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const seeded = JSON.parse(readFileSync(statePath, 'utf8'));
+    seeded.chapters[1] = { ...seeded.chapters[1], title: 'Chapter 2', titleSynthesized: true };
+    seeded.chapters[2] = { ...seeded.chapters[2], title: 'Chapter 3', titleSynthesized: true };
+    writeFileSync(statePath, JSON.stringify(seeded));
+
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: {
+          chapters: readState().chapters.map((c) => (c.id === 3 ? { ...c, title: 'Chapter 9' } : c)),
+        },
+      });
+    expect(put.status).toBe(204);
+    expect(
+      (JSON.parse(readFileSync(statePath, 'utf8')).chapters[2] as { titleSynthesized?: boolean })
+        .titleSynthesized,
+    ).toBeUndefined();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [1], excluded: true });
+    expect(res.status).toBe(200);
+    const titles = readState().chapters.map((c) => c.title);
+    expect(titles[1]).toBe('Chapter 2'); // still app-made: kept (and renumbered to its own id)
+    expect(titles[2]).toBe('Chapter 9'); // user-retitled: left alone
+  });
+});
+
+describe('#3628 — refresh-titles hands the parser\'s app-made flags to the transform', () => {
+  it('a re-derived title the parser itself made up stays flagged', async () => {
+    // No heading in the manuscript: the parser titles the lone chapter "Chapter 1" (app-made).
+    writeFileSync(join(bookDir, 'manuscript.md'), 'Just some opening prose here.\nAnd more of it.\n');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 7', slug: '01-chapter-7', titleSynthesized: true }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'Just some opening prose here.' }],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+
+    const ch = readState().chapters[0] as { title: string; titleSynthesized?: boolean };
+    expect(ch.title).toBe('Chapter 1');
+    expect(ch.titleSynthesized).toBe(true);
+  });
+});
+
+describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before a restructure', () => {
+  // Parses to [Chapter 1 (app-made: prose before any heading), Prologue, Epilogue].
+  const LEGACY_MANUSCRIPT =
+    'Opening prose here.\n\nPrologue\n\nProse two.\n\nEpilogue\n\nProse three.\n';
+
+  function seedLegacy(titles: string[], extra: Record<number, object> = {}): void {
+    writeFileSync(join(bookDir, 'manuscript.md'), LEGACY_MANUSCRIPT);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: titles.map((t, i) => ({
+          id: i + 1,
+          title: t,
+          slug: `0${i + 1}-x`,
+          ...(extra[i + 1] ?? {}),
+        })),
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2, 3].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+  }
+
+  const reorder = () =>
+    request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 1, 3] });
+
+  it('a title that still matches the import is recognised as app-made and renumbered', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    // Old chapter 1 is now id 2: renumbered because the backfill flagged it.
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2', 'Epilogue']);
+  });
+
+  it('a user-edited title is not backfilled', async () => {
+    seedLegacy(['Chapter 1 — My Own Subtitle', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual([
+      'Prologue',
+      'Chapter 1 — My Own Subtitle',
+      'Epilogue',
+    ]);
+  });
+
+  it('a chapter-count mismatch causes no backfill', async () => {
+    seedLegacy(['Chapter 1', 'Prologue']);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+    // The manuscript parses to 3 chapters, the book has 2: no backfill.
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    expect(res.status).toBe(200);
+    expect(readState().chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  // The backfill is the only caller that passes `sourcePath` (the hydrate path doesn't).
+  const backfillParses = () =>
+    parseManuscriptSpy.mock.calls.filter(([arg]) => (arg as { sourcePath?: string }).sourcePath).length;
+
+  it('a book with no generic-looking titles does not parse the manuscript', async () => {
+    seedLegacy(['Opening', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(0);
+  });
+
+  it('control: a generic-looking keyless title still triggers the parse', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(1);
+  });
+
+  it('the legacy-title parse runs OUTSIDE the state-json lock (#3700)', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    let lockFreeDuringParse: boolean | undefined;
+    parseManuscriptSpy.mockClear();
+    const actualImpl = parseManuscriptSpy.getMockImplementation()!;
+    parseManuscriptSpy.mockImplementation(async (arg: { sourcePath?: string }) => {
+      if (arg.sourcePath) {
+        // A short-budget acquire: it times out iff the restructure still holds the lock.
+        lockFreeDuringParse = await withStateJsonLock(statePath, async () => true, 50).catch(() => false);
+      }
+      return actualImpl(arg);
+    });
+    try {
+      expect((await reorder()).status).toBe(200);
+    } finally {
+      parseManuscriptSpy.mockImplementation(actualImpl);
+    }
+    expect(lockFreeDuringParse, 'parse never ran').toBeDefined();
+    expect(lockFreeDuringParse).toBe(true);
+  });
+
+  it('an explicit titleSynthesized: false is preserved', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue'], { 1: { titleSynthesized: false } });
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
+  });
+});
+
+/* -- analysis running (restructure refused) ------------------------- */
+
+describe('restructure while an analysis job runs', () => {
+  async function registerJob(kind: 'main' | 'subset') {
+    const { __testRegisterJobForTest } = await import('./analysis.js');
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: MANUSCRIPT_ID,
+      kind,
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as import('./analysis.js').AnalysisJob;
+    __testRegisterJobForTest(job);
+    return job;
+  }
+
+  async function finish(job: import('./analysis.js').AnalysisJob) {
+    const { endJob } = await import('./analysis.js');
+    endJob(job, { kind: 'result' });
+  }
+
+  // The scan that locates the book may heal derived fields (uuid, duration); a restructure would change id/title/slug.
+  const stateBefore = () => JSON.stringify(readState().chapters.map((c) => ({ id: c.id, title: c.title, slug: c.slug })));
+  const editsBefore = () => readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8');
+
+  const ROUTES: Array<[string, string, unknown]> = [
+    ['merge', 'chapters/merge', { chapterIds: [2, 3] }],
+    ['split', 'chapters/split', { chapterId: 2, afterSentenceId: 1 }],
+    ['reorder', 'chapters/reorder', { order: [3, 1, 2] }],
+    ['exclude', 'chapters/exclude', { chapterIds: [2], excluded: true }],
+    ['rename', 'chapters/2/rename', { title: 'Renamed' }],
+    ['refresh-titles', 'chapters/refresh-titles', {}],
+  ];
+
+  for (const kind of ['main', 'subset'] as const) {
+    it.each(ROUTES)(`409s %s while a ${kind} job runs and touches nothing`, async (_n, path, body) => {
+      const job = await registerJob(kind);
+      try {
+        const s = stateBefore();
+        const e = editsBefore();
+        const res = await request(app).post(`/api/books/${bookId}/${path}`).send(body as object);
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('analysis_running');
+        expect(res.body.error).toMatch(/analysis/i);
+        expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+        expect(stateBefore()).toBe(s);
+        expect(editsBefore()).toBe(e);
+      } finally {
+        await finish(job);
+      }
+    });
+  }
+
+  it('succeeds once the job has ended', async () => {
+    const job = await registerJob('main');
+    const refused = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(refused.status).toBe(409);
+    await finish(job);
+    const ok = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(ok.status).toBe(200);
+  });
+
+  it('refuses an analysis start while a restructure holds the book', async () => {
+    const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+    const { mainStartRefusalForTest, subsetRefusalForTest } = await import('./analysis.js');
+    expect(beginRestructure(MANUSCRIPT_ID)).toBe(true);
+    try {
+      expect(mainStartRefusalForTest(MANUSCRIPT_ID)?.error).toBe('chapters_restructuring');
+      expect(subsetRefusalForTest(MANUSCRIPT_ID)?.error).toBe('chapters_restructuring');
+    } finally {
+      endRestructure(MANUSCRIPT_ID);
+    }
+    expect(mainStartRefusalForTest(MANUSCRIPT_ID)).toBeNull();
+  });
+});
+
+/* #3400 pass 8 -- the gate claim `applyRestructure` takes is released on EVERY
+   exit path. A leaked claim would refuse every analysis start for the book
+   until a restart, and nothing else would clear it. */
+describe('the restructure claim is released on every exit path (#3400)', () => {
+  it('releases after a successful restructure', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+  });
+
+  it('releases after a transform refusal (400)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [98, 99] });
+    expect(res.status).toBe(400);
+    expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+  });
+
+  it('releases when the manuscript is not on disk (404)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const manuscript = join(bookDir, 'manuscript.md');
+    rmSync(manuscript, { force: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(404);
+      expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+    } finally {
+      writeFileSync(manuscript, MANUSCRIPT_BODY);
+    }
+  });
+
+  it('releases when a write throws (500)', async () => {
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    rmSync(editsPath, { force: true });
+    mkdirSync(editsPath); // a directory where the file belongs: the read / write throws
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(500);
+      expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
+    } finally {
+      err.mockRestore();
+      rmSync(editsPath, { recursive: true, force: true });
+    }
+  });
+});
+
+/* #3400 pass 8 -- the `manuscript` slice of the book-state PUT is taken under
+   the book lock. The race tests above accept both serial outcomes and their
+   offsets never produce the interleaving the lock prevents, so pin it
+   deterministically: a holder owns the lock, the PUT must not have written
+   while it does. */
+describe('the manuscript slice of the state PUT waits for the book lock (#3400)', () => {
+  it('writes nothing while a restructure-style holder owns the lock, then lands', async () => {
+    const { withBookLock } = await import('../workspace/book-lock.js');
+    /* Locate once first so the scan's own self-heal writes (uuid mint), which
+       take this lock themselves, are already done: otherwise a mutant that
+       locates OUTSIDE the lock would still be held back by the heal. */
+    const { findBookByBookId } = await import('../workspace/scan.js');
+    await findBookByBookId(bookId);
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const before = readFileSync(editsPath, 'utf8');
+    const sentences = readEdits().sentences.map((s) =>
+      s.chapterId === 1 && s.id === 1 ? { ...s, text: 'Edited while held.' } : s,
+    );
+
+    let release!: () => void;
+    let entered!: () => void;
+    const holderIn = new Promise<void>((r) => (entered = r));
+    const holder = withBookLock(bookId, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await holderIn;
+
+    const put = request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences } })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(editsPath, 'utf8')).toBe(before);
+
+    release();
+    await holder;
+    const res = await put;
+    expect(res.status).toBe(204);
+    expect(readEdits().sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe(
+      'Edited while held.',
+    );
   });
 });

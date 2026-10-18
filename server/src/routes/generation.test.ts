@@ -118,7 +118,7 @@ vi.mock('../tts/language.js', async (importOriginal) => {
 });
 
 /* Plan 285 — passthrough spy so a test can (1) assert generation passes NO
-   `review` to finalize in PR 1 and (2) force `reviewRecorded:false` to prove
+   review request (`review: null`) to finalize and (2) force `reviewOutcome:'failed'` to prove
    it reaches chapter_complete. Every other test still runs the real write. */
 vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
@@ -1981,6 +1981,93 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
     expect(state.chapters.find((c) => c.id === 2)!.generationState).toBeUndefined();
   });
 
+  /* #3625 — the failure stamp is reachable while state.json is torn:
+     `findBookByBookId` returns the recovered `.bak.1` state but leaves the main
+     file torn (it writes only for a segments backfill, and these chapters already
+     carry uuids). The in-lock read must recover too, or the stamp is lost. */
+  it('stamps generationState:"failed" through a torn state.json with a good .bak.1', async () => {
+    const fs = await import('node:fs');
+    const good = JSON.stringify({
+      bookId,
+      manuscriptId: MANUSCRIPT_ID,
+      title: TITLE,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-one', uuid: 'u-1' },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-two', uuid: 'u-2' },
+      ],
+      language: 'en',
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    fs.writeFileSync(`${statePath()}.bak.1`, good);
+    fs.writeFileSync(statePath(), good.slice(0, 40));
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"boom"}');
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+    expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+    fs.rmSync(`${statePath()}.bak.1`, { force: true });
+  });
+
+  /* #3625 — the failure stamp is a state.json read-modify-write, so it must
+     wait on the per-book state lock: held by the test, the stamp must not land;
+     released, it must. (No timeout-direction test: a lock timeout here is
+     swallowed by the persist catch exactly as a disk fault is — the failure was
+     already delivered over SSE.) */
+  it('waits on the state lock before stamping generationState:"failed"', async () => {
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"boom"}');
+    };
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let acquired!: () => void;
+    const acquiredSignal = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    const holder = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await held;
+    });
+    try {
+      await acquiredSignal;
+      const resPromise = request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+      resPromise.then(
+        () => {},
+        () => {},
+      );
+      /* Give the run a real chance to fail the chapter and attempt the stamp. */
+      await new Promise((r) => setTimeout(r, 400));
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).not.toBe(
+        'failed',
+      );
+
+      release();
+      await holder;
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+  }, 30_000);
+
   it('clears generationState + generationError on a subsequent successful render', async () => {
     /* First fail chapter 1 so the failure is persisted. */
     synthesiseImpl = async () => {
@@ -2330,6 +2417,34 @@ describe('triggerScoring (srv-36 hardening)', () => {
     }
   });
 });
+describe('POST /api/books/:bookId/generation — run key reaches the score pass (#3524)', () => {
+  it("hands scoreBook the chapter just finalized and the run's own model key", async () => {
+    // Only the speaker-QA gate is forced on: the real finalize (loudnorm etc.)
+    // reads other config keys and must keep their real values.
+    const realConfigValue = configModule.configValue;
+    const configSpy = vi
+      .spyOn(configModule, 'configValue')
+      .mockImplementation(((key: string) =>
+        key === 'qa.speaker.enabled' ? true : realConfigValue(key as never)) as typeof realConfigValue);
+    const scoreBookSpy = vi.spyOn(aggregateModule, 'scoreBook');
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+      expect(res.status).toBe(200);
+      // afterChapterFinalized is not awaited by the route (#1029).
+      await vi.waitFor(() => expect(scoreBookSpy).toHaveBeenCalled());
+      const args = scoreBookSpy.mock.calls[0];
+      expect(args[2]).toEqual(['01-chapter-one']);
+      expect(args[3]).toMatchObject({ runModelKey: 'gemini-2.5-flash' });
+      await __awaitScoringSettled(bookId);
+    } finally {
+      configSpy.mockRestore();
+      scoreBookSpy.mockRestore();
+    }
+  });
+});
+
 /* ── Task 3 (#2515) — the requireBookStateLanguage catch must emit a
    classified, chapter-scoped failure tick (errorCode 'language-unset' + idle)
    instead of a bare errorReason, matching the pattern Task 2 applied to the
@@ -2452,7 +2567,7 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
   });
 });
 
-describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
+describe('plan 285/286 — finalize review plumbing', () => {
   afterEach(async () => {
     const fs = await import('node:fs');
     const audioRoot = join(bookDir, 'audio');
@@ -2465,14 +2580,14 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
       .split('\n')
       .find((l) => l.startsWith('data: ') && l.includes(`"type":"chapter_complete","chapterId":${chapterId},`));
 
-  it('passes no `review` to finalize and threads reviewRecorded onto the live chapter_complete', async () => {
+  it('plan 286 — passes review:null to finalize without review', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (
       await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
     ).finalizeChapterAudioWrite;
     const spy = vi.mocked(fin.finalizeChapterAudioWrite);
     spy.mockClear();
-    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
 
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
@@ -2480,18 +2595,19 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect(res.status).toBe(200);
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toBeNull();
     const done = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
     expect(done, `expected chapter_complete ch1, got ${res.text}`).toBeTruthy();
-    expect(done!.reviewRecorded).toBe(false);
+    expect(done!.reviewOutcome).toBe('failed');
   });
 
-  it('the chapter_complete line carries no reviewRecorded when finalize returns none', async () => {
+  it('plan 286 — a plain chapter_complete carries reviewOutcome none (review:null drops the chapter entry)', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
     const line = completeLine(res.text, 1);
     expect(line, res.text).toBeTruthy();
+    expect(JSON.parse(line!.slice('data: '.length)).reviewOutcome).toBe('none');
     expect(line).not.toContain('reviewRecorded');
   });
 
@@ -2510,7 +2626,7 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     }
   });
 
-  it('reviewChapter:true only on the chapter rendered with review — never a replay — and finalize still gets no review', async () => {
+  it('reviewChapter:true only on the chapter rendered with review — never a replay — and finalize gets the job review', async () => {
     const fs = await import('node:fs');
     const audioRoot = join(bookDir, 'audio');
     fs.mkdirSync(audioRoot, { recursive: true });
@@ -2530,7 +2646,7 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect(ch2, `expected replayed chapter_complete ch2, got ${res.text}`).toBeTruthy();
     expect(ch1!.reviewChapter).toBe(true);
     expect(ch2).not.toHaveProperty('reviewChapter');
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toEqual(REVIEW);
   });
 
   it('the chapter_complete line carries no reviewChapter without review', async () => {

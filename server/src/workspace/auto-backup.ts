@@ -19,9 +19,10 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
-import { findBookByBookId } from './scan.js';
+import { withLocatedBook } from './book-state-update.js';
 import { writeJsonAtomic } from './state-io.js';
-import { writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { withStateJsonLock } from './file-lock.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
@@ -96,8 +97,20 @@ export async function backupBook(
   book: { bookId: string; bookDir: string },
   opts: BackupBookOpts,
 ): Promise<string | null> {
-  const src = stateJsonPath(book.bookDir);
-  if (!existsSync(src)) return null;
+  /* #3625 pass 6 - the recovering read, not `existsSync` + a raw read: a
+     rotating write renames main away before its rename-in, so a plain read
+     inside that window found no state.json and skipped the book. In the window
+     (or for a stranded book) this reads `.bak.1`, the state before the write.
+     A corrupt main recovers from its newest parseable backup too; only when
+     nothing parses (a SyntaxError) is there no snapshot worth keeping. */
+  let value: unknown;
+  try {
+    value = await readStateJsonWithRecovery(stateJsonPath(book.bookDir));
+  } catch (err) {
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+  if (!value) return null;
 
   if (opts.minIntervalMs && opts.minIntervalMs > 0) {
     const existing = await listBackups(book.bookId);
@@ -105,17 +118,6 @@ export async function backupBook(
       const newest = new Date(existing[0].createdAt).getTime();
       if (opts.now.getTime() - newest < opts.minIntervalMs) return null;
     }
-  }
-
-  const raw = await readFile(src, 'utf8');
-  let value: unknown;
-  /* Validate it parses before keeping it as a "good" snapshot — a corrupt
-     state.json isn't worth preserving (the in-place .bak chain already
-     guards the live file). */
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
   }
 
   const dir = bookBackupsDir(book.bookId);
@@ -154,11 +156,11 @@ async function enumerateBooks(): Promise<Array<{ bookId: string; bookDir: string
       const seriesDir = join(authorDir, series);
       for (const title of await dirsIn(seriesDir)) {
         const bookDir = join(seriesDir, title);
-        const sp = stateJsonPath(bookDir);
-        if (!existsSync(sp)) continue;
         try {
-          const parsed = JSON.parse(await readFile(sp, 'utf8')) as { bookId?: unknown };
-          if (typeof parsed.bookId === 'string' && parsed.bookId) {
+          /* The recovering read (#3625 pass 6): a book mid-write has no main
+             state.json for a moment, and must not drop out of the sweep. */
+          const parsed = (await readStateJsonWithRecovery(stateJsonPath(bookDir))) as { bookId?: unknown } | null;
+          if (parsed && typeof parsed.bookId === 'string' && parsed.bookId) {
             out.push({ bookId: parsed.bookId, bookDir });
           }
         } catch {
@@ -201,38 +203,55 @@ export class BackupRestoreError extends Error {}
     filename / missing book / missing or corrupt snapshot. */
 export async function restoreBackup(bookId: string, file: string): Promise<void> {
   if (!STAMP_RE.test(file)) throw new BackupRestoreError('invalid backup filename');
-  const found = await findBookByBookId(bookId);
-  if (!found) throw new BackupRestoreError('book not found');
-  const bookDir = found.bookDir;
-  const backupsDir = bookBackupsDir(bookId);
-  const snapPath = join(backupsDir, sanitizeIdSegment(safeSegment(file)));
-  assertContained(backupsDir, snapPath);
-  if (!existsSync(snapPath)) throw new BackupRestoreError('backup not found');
-  const raw = await readFile(snapPath, 'utf8');
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new BackupRestoreError('backup is corrupt');
-  }
-  if (typeof value !== 'object' || value === null) {
-    throw new BackupRestoreError('backup is corrupt');
-  }
-  /* #2246 Tasks 4+5 — a restore whose snapshot has no `language` must land on
-     disk as an explicit `language: null` (key present), and routing through
-     writeStateJsonAtomic also stamps the schema (restore previously wrote
-     unstamped state.json — a second defect fixed in the same change). A
-     snapshot that does carry a language round-trips unchanged.
+  /* #3400 — locate + write under the book lock: a restore must not interleave
+     with a chapter restructure's writes, and the folder it writes to must be the
+     one the book is in when the lock is held. */
+  const located = await withLocatedBook(bookId, async (found) => {
+    const bookDir = found.bookDir;
+    const backupsDir = bookBackupsDir(bookId);
+    const snapPath = join(backupsDir, sanitizeIdSegment(safeSegment(file)));
+    assertContained(backupsDir, snapPath);
+    if (!existsSync(snapPath)) throw new BackupRestoreError('backup not found');
+    const raw = await readFile(snapPath, 'utf8');
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new BackupRestoreError('backup is corrupt');
+    }
+    if (typeof value !== 'object' || value === null) {
+      throw new BackupRestoreError('backup is corrupt');
+    }
+    /* #2246 Tasks 4+5 — a restore whose snapshot has no `language` must land on
+       disk as an explicit `language: null` (key present), and routing through
+       writeStateJsonAtomic also stamps the schema (restore previously wrote
+       unstamped state.json — a second defect fixed in the same change). A
+       snapshot that does carry a language round-trips unchanged.
 
-     Routing through writeStateJsonAtomic is intentional and adopts the house
-     STATE_BACKUP_KEEP depth of 3 for state.json backups (changed from the
-     prior local override of 5). Three slots cover the realistic recovery
-     window: the last completed write, the one before it, and one earlier. */
-  const parsed = value as BookStateJson;
-  await writeStateJsonAtomic(stateJsonPath(bookDir), {
-    ...parsed,
-    language: parsed.language ?? null,
+       Routing through writeStateJsonAtomic is intentional and adopts the house
+       STATE_BACKUP_KEEP depth of 3 for state.json backups (changed from the
+       prior local override of 5). Three slots cover the realistic recovery
+       window: the last completed write, the one before it, and one earlier. */
+    const parsed = value as BookStateJson;
+    /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+       per-book state-json leaf lock (inside the book lock) so it can't
+       interleave with a render's stamp. */
+    await withStateJsonLock(stateJsonPath(bookDir), async () => {
+      /* #3700 review pass 3 — the book may have been deleted or moved after
+         `bookDir` was resolved above. The write below would recreate the old
+         folder with the same bookId, so an absent state.json is "book not
+         found": write nothing. A stranded main (absent, `.bak.1` beside it:
+         a write died between its renames, #3625) is still the book, so the
+         restore goes ahead. */
+      const sp = stateJsonPath(bookDir);
+      if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
+      await writeStateJsonAtomic(stateJsonPath(bookDir), {
+        ...parsed,
+        language: parsed.language ?? null,
+      });
+    });
   });
+  if (!located) throw new BackupRestoreError('book not found');
 }
 
 /* ── Scheduler ──────────────────────────────────────────────────────────── */

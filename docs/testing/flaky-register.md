@@ -35,6 +35,35 @@ it never gates a merge.
 
 _Otherwise empty — no other tests are currently quarantined or tracked here._
 
+<!-- Graduated 2026-10-17: `server/src/routes/generation.test.ts` ::
+"two GENUINELY concurrent chapter renders leave rerecordRtf/verifyRtf null for
+both ..." (#3700). The row recorded a suspected race between the HTTP 200 and the
+per-chapter stats record; that was WRONG, and this note exists so the next
+investigator does not re-suspect it. `recordChapterThroughput` runs
+synchronously before the response, so stats cannot lag the 200. The cross-os
+log (run 38104373985, job 114366627758) shows the real cause one line above the
+failure: chapter 1 FAILED with `ENOENT ... state.json` from
+`finalize-chapter-write.ts` (`readJson`), and the route still answers 200 for a
+failed chapter (failure rides the SSE stream), so no chapter-1 stats record was
+ever written -> `byChapter.get(1)` undefined.
+
+It was a PRODUCT race, not a test bug: finalizeChapterAudioWrite's state.json
+stamp (and generation.ts's failure-path persist) was an UNLOCKED
+read-modify-write, so two sibling chapters of one book finalizing together raced
+(Windows: the read lands in the rename-over window -> ENOENT, failing the
+chapter; elsewhere: a lost update dropping the first chapter's stamp). The
+comment above it claimed "keyed by chapter id so concurrent sibling writes can't
+clobber each other" - false for a whole-file rewrite.
+
+Fixed by serialising both read-through-write blocks under a per-state.json leaf
+lock (`withStateJsonLock`, workspace/file-lock.ts). Regression:
+`server/src/audio/finalize-chapter-write-concurrent-state.test.ts` FORCES the
+interleaving (parks the first state.json read until a second read is issued),
+red before the fix (chapter stamp lost), green after. The original generation
+test is unchanged and stays as the route-level check. Every other state.json
+read-modify-write site now takes the same lock too (`state-json-lock.guard.test.ts`
+fails the build on a new unlocked one). -->
+
 <!-- Graduated 2026-08-12: `server/src/routes/script-review.test.ts` ::
 "cancel immediately removes the job from the registry, so a same-scope retry
 starts fresh instead of joining the doomed job" (#2262). Its row recorded the

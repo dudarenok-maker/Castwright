@@ -18,7 +18,7 @@ import type { LibraryCharacterRecord } from './library-cast-scan.js';
 import { scanLibraryCharacters } from './library-cast-scan.js';
 import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
-import { readJson } from './state-io.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import type { BookStateJson } from './scan.js';
 import { bookStateLanguageOrNull } from './scan.js';
 
@@ -55,7 +55,7 @@ async function findBookStateForBookId(targetBookId: string): Promise<BookStateJs
         .filter((d) => d.isDirectory())
         .map((d) => d.name);
       for (const titleName of titles) {
-        const state = await readJson<BookStateJson>(
+        const state = await readStateJsonWithRecovery(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
         );
         if (state?.bookId === targetBookId) return state;
@@ -138,7 +138,7 @@ export async function scanSeriesCharacters(
       })
         .filter((d) => d.isDirectory())
         .map((d) => d.name)) {
-        const state = await readJson<BookStateJson>(
+        const state = await readStateJsonWithRecovery(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
         );
         if (!state?.bookId) continue;

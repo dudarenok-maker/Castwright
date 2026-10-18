@@ -21,6 +21,8 @@ import {
   formatReport,
   buildVitestArgs,
   classifyRunResult,
+  runVitestJson,
+  unparseableRunNotice,
   buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
@@ -28,7 +30,7 @@ import {
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
 } from '../quarantine-health.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -1150,6 +1152,75 @@ test('classifyRunResult: unparsable stdout -> crashed, not a silent zero-result 
   assert.deepEqual(result.testResults, []);
 });
 
+// --- vitest 5 writes the JSON report to a FILE, not stdout (#3626) ---------
+//
+// vitest 5's `--reporter=json` no longer prints the report to stdout; it
+// writes it to `server/.vitest/json/output.json` by default and prints only
+// `JSON report written to <path>`. The script must name its own output file
+// (outside the repo) and read that, or every row lands in `unknown`.
+
+test('buildVitestArgs names the JSON output file when given one', () => {
+  const args = buildVitestArgs(undefined, ['a.test.ts'], '/tmp/x/report.json');
+  assert.ok(args.includes('--outputFile.json=/tmp/x/report.json'), JSON.stringify(args));
+  assert.equal(args[args.length - 1], 'a.test.ts', 'file list stays last');
+});
+
+test('classifyRunResult reads the report text it is handed (the file) over a stdout that is only the vitest 5 "written to" line', () => {
+  const r = { error: undefined, signal: null, status: 0, stdout: 'JSON report written to /x/output.json', stderr: '' };
+  const report = JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] });
+  const result = classifyRunResult(r, report);
+  assert.equal(result.runOutcome, 'ok');
+  assert.equal(result.testResults.length, 1);
+});
+
+test('classifyRunResult: vitest 5 stdout alone (no report file) is unparseable and flagged as such, not ok', () => {
+  const r = { error: undefined, signal: null, status: 0, stdout: 'JSON report written to /x/output.json', stderr: '' };
+  const result = classifyRunResult(r);
+  assert.equal(result.runOutcome, 'crashed');
+  assert.equal(result.unparseable, true);
+});
+
+test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', () => {
+  let outPath;
+  const fakeSpawn = (command) => {
+    const m = /--outputFile\.json=([^"]+)"/.exec(command);
+    assert.ok(m, `no --outputFile.json in: ${command}`);
+    outPath = m[1];
+    writeFileSync(outPath, JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] }));
+    return { error: undefined, signal: null, status: 0, stdout: `JSON report written to ${outPath}`, stderr: '' };
+  };
+  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  assert.equal(result.runOutcome, 'ok');
+  assert.equal(result.testResults.length, 1);
+  assert.ok(!outPath.startsWith(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')), 'report must live outside the repo');
+  assert.ok(!existsSync(outPath), 'temp report must be removed afterwards');
+});
+
+test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', () => {
+  const fakeSpawn = () => ({ error: undefined, signal: null, status: 1, stdout: '', stderr: 'boom' });
+  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  assert.equal(result.runOutcome, 'crashed');
+  assert.equal(result.unparseable, true);
+});
+
+test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', () => {
+  let outPath;
+  const fakeSpawn = (command) => {
+    outPath = /--outputFile\.json=([^"]+)"/.exec(command)[1];
+    throw new Error('spawn exploded');
+  };
+  assert.throws(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
+  assert.ok(outPath, 'fake spawn must have been reached');
+  assert.ok(!existsSync(dirname(outPath)), 'temp dir must be removed even when spawn throws');
+});
+
+test('unparseableRunNotice is silent at zero and loud (names the count) otherwise', () => {
+  assert.equal(unparseableRunNotice(0), null);
+  const n = unparseableRunNotice(3);
+  assert.match(n, /3/);
+  assert.match(n, /3 invocation\(s\) could not be parsed/i);
+});
+
 // --- classifyRunResult: maxBuffer overflow / OOM misdiagnosis (finding 2) --
 //
 // Measured against the real spawnSync shapes: a maxBuffer overflow AND a
@@ -1299,7 +1370,7 @@ test('buildParseFailureMessage and reportParseFailure reach $GITHUB_STEP_SUMMARY
     try {
       const { rmSync } = await import('node:fs');
       rmSync(summaryPath, { force: true });
-      rmSync(tempDir, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   }
 });
@@ -1414,10 +1485,84 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
     try {
       rmSync(summaryPath, { force: true });
       rmSync(registerPath, { force: true });
-      rmSync(tempDir, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   }
 });
+
+// Drives main() with a fake spawn whose vitest output cannot be read (#3626):
+// every run must be flagged, the summary and ::error line must say so, and the
+// step must exit non-zero rather than concluding green with all rows `unknown`.
+for (const [label, stdout] of [
+  ['unparseable stdout', 'not json at all'],
+  ['payload with no testResults array', '{}'],
+]) {
+  test(`main() end-to-end: ${label} from vitest fails loud (#3626)`, async () => {
+    const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { main } = await import('../quarantine-health.mjs');
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-main-test-'));
+    const registerPath = join(tempDir, 'test-register.md');
+    const summaryPath = join(tempDir, 'summary.md');
+    // One frontend and one server row, no tracking issue (so no `gh` call).
+    writeFileSync(
+      registerPath,
+      `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+| \`srv case\` | \`server/src/routes/foo.test.ts\` | timing | flaky | — | Quarantined |
+`,
+      'utf8',
+    );
+
+    // No report file is ever written, so classifyRunResult falls back to stdout.
+    let calls = 0;
+    const fakeSpawn = () => {
+      calls++;
+      return { status: 0, stdout, stderr: '' };
+    };
+
+    const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+    const originalActions = process.env.GITHUB_ACTIONS;
+    const originalExitCode = process.exitCode;
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logged = [];
+    try {
+      process.env.GITHUB_STEP_SUMMARY = summaryPath;
+      process.env.GITHUB_ACTIONS = 'true';
+      process.exitCode = 0;
+      console.log = (...a) => logged.push(a.join(' '));
+      console.error = () => {};
+
+      main(registerPath, fakeSpawn);
+
+      assert.equal(process.exitCode, 1, 'unparseable vitest output must exit non-zero');
+      const written = readFileSync(summaryPath, 'utf8');
+      // Frontend run + both server configs, every planned run: all counted.
+      assert.ok(calls >= 3, 'frontend and both server configs should have run');
+      assert.ok(
+        written.includes(`**Runner problem: vitest output for ${calls} invocation(s) could not be parsed**`),
+        `summary should count all ${calls} unparseable runs`,
+      );
+      assert.ok(
+        logged.some((l) => l.startsWith('::error title=quarantine-health::')),
+        'a GitHub Actions ::error annotation should be printed',
+      );
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+      else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+      if (originalActions === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = originalActions;
+      process.exitCode = originalExitCode;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
   // The budget check (`budgetExceeded`, called BEFORE starting each run)

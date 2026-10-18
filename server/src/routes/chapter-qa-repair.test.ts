@@ -61,6 +61,11 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
    verified for this fix) their outputs happen to coincide on every input reachable
    through this route today; only the "was the real one called" signal would have
    caught the old local copy. */
+// #3524 — the Qwen in-book tests need Qwen reported installed so the repair doesn't skip as engine-unavailable.
+vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../workspace/user-settings.js')>()),
+  getLastKnownQwenInstallState: () => 'ready',
+}));
 vi.mock('../tts/model-keys.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../tts/model-keys.js')>();
   return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
@@ -473,7 +478,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
   });
 
-  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto qa_repair_complete', async () => {
+  it('plan 286 — passes review:null to finalize and threads reviewOutcome onto qa_repair_complete', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
     const fin = await import('../audio/finalize-chapter-write.js');
@@ -482,7 +487,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     ).finalizeChapterAudioWrite;
     const spy = vi.mocked(fin.finalizeChapterAudioWrite);
     spy.mockClear();
-    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
 
     const { bookId: id } = await scaffoldVerdictBook('Review Dark Story');
     const res = await request(app)
@@ -490,10 +495,10 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
       .send({ dryRun: false, modelKey: 'kokoro-v1' });
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toBeNull();
     const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
     expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
-    expect(done!.reviewRecorded).toBe(false);
+    expect(done!.reviewOutcome).toBe('failed');
   });
 
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
@@ -1544,6 +1549,166 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(synthesiseChapterMock).toHaveBeenCalled();
     expect((done!.repaired as number[]).includes(1)).toBe(true);
     expect((done!.stillSuspect as number[]).includes(1)).toBe(false);
+  });
+
+  /* #3524 — the in-book reference is only kept when it was built from the
+     character's CURRENT cast voice. The cast resolves castor to 'castor-alden-B'
+     (current); the row's `inBookVoiceName` is what the in-book anchors were
+     filtered to at scoring time. The centroid is aligned with the mocked
+     embedSegment (axis 1, cosine ~1.0 ≥ cleanMean), so a KEPT row accepts the
+     take (repaired) while a DROPPED row means "no centroid" → the acoustic-only
+     candidate is skipped before synth → stillSuspect. */
+  async function scaffoldInBookCentroidBook(
+    bookTitle: string,
+    inBookVoiceName: string | undefined,
+    engine: 'kokoro' | 'qwen' = 'kokoro',
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const engineModelKey = engine === 'qwen' ? 'qwen3-tts-0.6b' : 'kokoro-v1';
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    // The cast was reassigned to 'castor-alden-B'; the snapshot is stale (still A).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          {
+            id: 'castor',
+            name: 'Castor',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices:
+              engine === 'qwen'
+                ? { qwen: { name: 'castor-alden-B', libraryUuid: 'b' }, coqui: { name: 'Ana Florence' } }
+                : { kokoro: { name: 'castor-alden-B' } },
+          },
+        ],
+      }),
+    );
+    const chapterPcm = Buffer.concat([tone(1.0, 12000), tone(1.0, 12000)]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: engineModelKey,
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        characterSnapshots: {
+          castor: { voiceEngine: engine, resolvedVoiceName: 'castor-alden-A', modelKey: engineModelKey },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(1),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+          ...(inBookVoiceName === undefined ? {} : { inBookVoiceName }),
+        },
+      }),
+    );
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  async function runInBookRepair(title: string, inBookVoiceName: string | undefined, engine: 'kokoro' | 'qwen' = 'kokoro') {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — signal-QA clean
+      sampleRate: SR,
+    }));
+    const { bookId: id } = await scaffoldInBookCentroidBook(title, inBookVoiceName, engine);
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: engine === 'qwen' ? 'qwen3-tts-0.6b' : 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    return done!;
+  }
+
+  it('#3524 — drops a stale in-book centroid built from the OLD voice after a cast reassignment (no re-render)', async () => {
+    const done = await runInBookRepair('Stale InBook Story', 'castor-alden-A');
+    // Row built from OLD voice A, cast now B → dropped → "no centroid" → skipped before synth.
+    expect((done.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done.repaired as number[]).includes(1)).toBe(false);
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+  });
+
+  it('#3524 — keeps an in-book centroid whose inBookVoiceName matches the current cast voice', async () => {
+    const done = await runInBookRepair('Matching InBook Story', 'castor-alden-B');
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((done.repaired as number[]).includes(1)).toBe(true);
+    expect((done.stillSuspect as number[]).includes(1)).toBe(false);
+  });
+
+  it('#3524 — Qwen: keeps an in-book centroid built from the current Qwen voice, drops one from the old voice', async () => {
+    const kept = await runInBookRepair('Qwen Matching InBook Story', 'qwen-b', 'qwen');
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((kept.repaired as number[]).includes(1)).toBe(true);
+    const dropped = await runInBookRepair('Qwen Stale InBook Story', 'qwen-a', 'qwen');
+    expect((dropped.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((dropped.repaired as number[]).includes(1)).toBe(false);
+  });
+
+  it('#3524 — keeps a legacy in-book centroid with no inBookVoiceName (pre-#3524 row)', async () => {
+    const done = await runInBookRepair('Legacy InBook Story', undefined);
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((done.repaired as number[]).includes(1)).toBe(true);
+    expect((done.stillSuspect as number[]).includes(1)).toBe(false);
   });
 
 });

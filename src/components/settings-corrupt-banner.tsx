@@ -11,13 +11,36 @@
    completeTour) and setup complete (routes/index.tsx's SetupRoute) — read
    `corruptSettingsFile` off their responses and dispatch
    accountActions.setCorruptSettingsFile. So any successful save makes the
-   banner go away on its own. */
+   banner go away on its own.
+
+   It also carries the sibling "can't be read right now" state
+   (account.settingsFileUnreadable, #3625): a locked or permission-denied file
+   is not corrupt — nothing was reset — but saves are refused and the values
+   shown may be defaults, so it gets its own words. The flag comes off the
+   settings GET, so it clears on the next load once the file reads again. */
 
 import { useAppSelector } from '../store';
 
 export function SettingsCorruptBanner() {
   const corrupt = useAppSelector((s) => s.account.corruptSettingsFile);
-  if (!corrupt) return null;
+  const unreadable = useAppSelector((s) => s.account.settingsFileUnreadable);
+  if (!corrupt && !unreadable) return null;
+  if (!corrupt) {
+    return (
+      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 mt-2">
+        <p
+          role="alert"
+          className="inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
+        >
+          <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0" />
+          <span>
+            Your settings file can't be read right now, so changes won't be saved.
+            Close any program that might be locking it, then reload Castwright.
+          </span>
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="max-w-[1500px] mx-auto px-3 sm:px-6 mt-2">
       <p

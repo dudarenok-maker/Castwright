@@ -45,7 +45,6 @@ describe('UI_PERSIST_WHITELIST', () => {
       'regenCharacterCtx',
       'previewRegen',
       'staleAudio',
-      'showRevisionPlayer',
       'showDriftReport',
       'driftReportCharacterFilter',
       'driftReportScope',
@@ -74,6 +73,12 @@ describe('UI_PERSIST_WHITELIST', () => {
         String(key),
       );
     }
+  });
+
+  it('plan 286 — openRevision and revisionOpInFlight are not persisted', () => {
+    expect(UI_PERSIST_WHITELIST).not.toContain('openRevision');
+    expect(UI_PERSIST_WHITELIST).not.toContain('revisionOpInFlight');
+    expect(UI_PERSIST_WHITELIST).not.toContain('revisionOpsInFlight');
   });
 });
 

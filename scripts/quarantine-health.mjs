@@ -155,21 +155,26 @@
 
    Non-blocking by design: this ALWAYS exits 0 for test outcomes (any bucket,
    including "never-passes" and "unknown") — that's the whole point, the lane
-   must never gate a merge. The one case that exits non-zero is the register
-   file itself being unreadable (ENOENT/permission error) — a genuinely broken
-   setup, not a test-outcome verdict. Even then nothing depends on this
+   must never gate a merge. Three cases exit non-zero, all a genuinely broken
+   setup rather than a test-outcome verdict: the register file being unreadable
+   (ENOENT/permission error); a register whose rows fail to parse
+   (reportParseFailure); or a vitest run whose JSON report could not be parsed
+   (#3626: vitest 5 writes the report to a file, so the script names a temp
+   `--outputFile.json` and reads that — the report also carries a loud "Runner
+   problem" line and CI gets an `::error` annotation). Even then nothing depends on this
    script's exit code: it isn't wired into verify.yml or any required check,
-   and the workflow step also sets `continue-on-error: true` as a second
-   layer.
+   and the workflow JOB also sets `continue-on-error: true` as a second
+   layer (the step/job shows red but the run concludes success).
 
    Run: `node scripts/quarantine-health.mjs`
    Override run count for local iteration: `QUARANTINE_HEALTH_RUNS=2 node scripts/quarantine-health.mjs`
    Writes to stdout always; also appends to $GITHUB_STEP_SUMMARY when set (CI). */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -903,8 +908,12 @@ export const JOB_CAP_MS = 30 * 60 * 1000;
 // vitest.config.ts / server/vitest.config.ts's `retry: 1` (plan 45) so each
 // of the RUNS is one real attempt, not a best-of-two — see the header
 // comment's `--retry=0` paragraph.
-export function buildVitestArgs(config, files) {
+// vitest 5 writes the JSON report to a file (default server/.vitest/json/output.json,
+// inside the repo) and prints only `JSON report written to <path>` on stdout,
+// so the caller names its own `outputFile` (outside the repo) and reads that (#3626).
+export function buildVitestArgs(config, files, outputFile) {
   const args = ['vitest', 'run', '--reporter=json', '--passWithNoTests', '--retry=0'];
+  if (outputFile) args.push(`--outputFile.json=${outputFile}`);
   if (config) args.push('--config', config);
   args.push(...files);
   return args;
@@ -914,7 +923,11 @@ export function buildVitestArgs(config, files) {
 // result-shaped objects, no real process spawn needed) into 'ok' /
 // 'timed-out' / 'crashed', distinguishing a runner failure from a legitimate
 // zero-match JSON payload. See the header comment's "Runner failures" section.
-export function classifyRunResult(r) {
+// `reportText` is the JSON report read from vitest 5's output file; when absent
+// (older vitest) the report is taken from stdout. Output that cannot be parsed
+// is tagged `unparseable: true` so main() can flag it rather than let every
+// row quietly land in `unknown` (#3626).
+export function classifyRunResult(r, reportText) {
   if (r.error) {
     // `r.error.code` is the ONLY reliable discriminator here — a real
     // timeout and a maxBuffer overflow both kill the child with SIGTERM
@@ -951,19 +964,34 @@ export function classifyRunResult(r) {
   }
   let json;
   try {
-    json = JSON.parse(r.stdout ?? '');
+    json = JSON.parse(reportText ?? r.stdout ?? '');
   } catch (err) {
-    return { runOutcome: 'crashed', testResults: [], errorMessage: `could not parse vitest JSON output: ${err.message}` };
+    return {
+      runOutcome: 'crashed',
+      testResults: [],
+      unparseable: true,
+      errorMessage: `could not parse vitest JSON output: ${err.message}`,
+    };
   }
   if (!json || !Array.isArray(json.testResults)) {
-    return { runOutcome: 'crashed', testResults: [], errorMessage: 'vitest JSON payload had no testResults array' };
+    return {
+      runOutcome: 'crashed',
+      testResults: [],
+      unparseable: true,
+      errorMessage: 'vitest JSON payload had no testResults array',
+    };
   }
   return { runOutcome: 'ok', testResults: json.testResults };
 }
 
-function runVitestJson(cwd, config, files) {
+export function runVitestJson(cwd, config, files, spawn = spawnSync) {
   if (files.length === 0) return { runOutcome: 'ok', testResults: [] };
-  const args = buildVitestArgs(config, files);
+  // The report goes to a private temp dir (outside the repo, removed in the
+  // finally below, which also covers a spawn that throws) so a run never
+  // leaves an untracked server/.vitest/ behind.
+  const tmp = mkdtempSync(join(tmpdir(), 'quarantine-health-'));
+  const outputFile = join(tmp, 'report.json');
+  const args = buildVitestArgs(config, files, outputFile);
   // npx is a .cmd shim on Windows; Node refuses to spawn a .cmd directly
   // (EINVAL) unless routed through a shell (same idiom as
   // scripts/run-golden-audio.mjs). Passed as ONE pre-quoted command string
@@ -976,21 +1004,32 @@ function runVitestJson(cwd, config, files) {
   // node_modules/npm/bin/npx-cli.js relative to the wrong place and crashed
   // with MODULE_NOT_FOUND), verified against this repo's node_modules.
   const command = `npx ${args.map((a) => `"${a}"`).join(' ')}`;
-  const r = spawnSync(command, {
-    cwd,
-    encoding: 'utf8',
-    shell: true,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: VITEST_RUN_TIMEOUT_MS,
-    windowsHide: true,
-    // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
-    // it.skip into a real it — without it every quarantined test reports
-    // 'skipped' here and would misclassify as never-passes for EVERY test,
-    // register-wide. Real env var, not a vitest `env:` config key (mirrors
-    // `cross-env RUN_QUARANTINE=1` in the `test:quarantine` script).
-    env: { ...process.env, RUN_QUARANTINE: '1' },
-  });
-  const result = classifyRunResult(r);
+  let r;
+  let reportText;
+  try {
+    r = spawn(command, {
+      cwd,
+      encoding: 'utf8',
+      shell: true,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: VITEST_RUN_TIMEOUT_MS,
+      windowsHide: true,
+      // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
+      // it.skip into a real it — without it every quarantined test reports
+      // 'skipped' here and would misclassify as never-passes for EVERY test,
+      // register-wide. Real env var, not a vitest `env:` config key (mirrors
+      // `cross-env RUN_QUARANTINE=1` in the `test:quarantine` script).
+      env: { ...process.env, RUN_QUARANTINE: '1' },
+    });
+    try {
+      reportText = readFileSync(outputFile, 'utf8');
+    } catch {
+      // No report file: classifyRunResult falls back to stdout, then flags it.
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  const result = classifyRunResult(r, reportText);
   if (result.runOutcome !== 'ok') {
     console.error(`quarantine-health: vitest run in ${cwd} ${result.runOutcome}: ${result.errorMessage}`);
     if (r.stderr) console.error(r.stderr);
@@ -1007,13 +1046,21 @@ function checkIssueState(issueNumber) {
   return state || null;
 }
 
+// Loud line for runs whose vitest JSON could not be parsed (pure — unit-tested).
+// Without it a broken report path degrades every row to `unknown` and the job
+// still concludes green (#3626). null when there is nothing to flag.
+export function unparseableRunNotice(count) {
+  if (count === 0) return null;
+  return `**Runner problem: vitest output for ${count} invocation(s) could not be parsed**, so affected rows are reported \`unknown\` — this is a broken harness, not a verdict on the tests.`;
+}
+
 export function emit(report) {
   console.log(report);
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
 }
 
-export function main(registerPath = REGISTER_PATH) {
+export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
   let markdown;
   try {
     markdown = readFileSync(registerPath, 'utf8');
@@ -1053,6 +1100,7 @@ export function main(registerPath = REGISTER_PATH) {
 
   const perRunOutcomes = [];
   const perRunFailedDomains = [];
+  let unparseableRuns = 0;
   let abortedEarly = false;
   let budgetExhausted = false;
   // See the header comment's wall-clock-budget paragraph (re-review finding
@@ -1073,18 +1121,20 @@ export function main(registerPath = REGISTER_PATH) {
       const outcomes = [];
       const failedDomains = new Set();
       if (frontendFiles.length) {
-        const fe = runVitestJson(ROOT, undefined, frontendFiles);
+        const fe = runVitestJson(ROOT, undefined, frontendFiles, spawn);
         if (fe.runOutcome !== 'ok') failedDomains.add('frontend');
+        if (fe.unparseable) unparseableRuns++;
         outcomes.push(...flattenVitestJson(fe));
       }
       if (serverFiles.length) {
-        const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles);
-        const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles);
+        const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles, spawn);
+        const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles, spawn);
         // Two distinct flags, not one 'server' flag — see aggregate()'s
         // comment (re-review finding 5): a config crashing must not discard
         // the OTHER config's good results for the files it owns.
         if (serverMain.runOutcome !== 'ok') failedDomains.add('server-main');
         if (serverSlow.runOutcome !== 'ok') failedDomains.add('server-slow');
+        unparseableRuns += Number(Boolean(serverMain.unparseable)) + Number(Boolean(serverSlow.unparseable));
         outcomes.push(...flattenVitestJson(serverMain), ...flattenVitestJson(serverSlow));
       }
       perRunOutcomes.push(outcomes);
@@ -1113,9 +1163,18 @@ export function main(registerPath = REGISTER_PATH) {
   } else if (budgetExhausted) {
     finalReport += `\n\n**Stopped after ${perRunOutcomes.length}/${RUNS} planned run(s)** — starting another run would have risked exceeding the ${RUN_LOOP_WALL_CLOCK_BUDGET_MS / 60000}-minute wall-clock budget; see the job log.`;
   }
+  const notice = unparseableRunNotice(unparseableRuns);
+  if (notice) finalReport += `\n\n${notice}`;
   emit(finalReport);
-  // Always exit 0 for test outcomes, including "never-passes" and "unknown"
-  // — this lane is non-blocking by design (see the header comment).
+  if (notice) {
+    // A harness that cannot read vitest's report is a broken setup, not a
+    // test-outcome verdict (same class as an unreadable register): exit
+    // non-zero so the step shows red instead of a green job of all-`unknown`.
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=quarantine-health::${notice}`);
+    process.exitCode = 1;
+  }
+  // Otherwise always exit 0 for test outcomes, including "never-passes" and
+  // "unknown" — this lane is non-blocking by design (see the header comment).
 }
 
 // Only run when invoked directly (not when imported by tests). See

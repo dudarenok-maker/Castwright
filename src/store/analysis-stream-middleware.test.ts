@@ -1194,6 +1194,22 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 
+  it('a chapters_restructuring refusal is quiet too: no halt, no toast, snapshot restored from the server', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce(null);
+    lastCall().reject(
+      new AnalysisError('The chapters of this book are being changed. Try again in a moment.', 'chapters_restructuring'),
+    );
+    await settle();
+    expect(captured[0]?.signal.aborted).toBe(true);
+    expect(getAnalysisStateMock).toHaveBeenCalledWith('b1');
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+    expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+  });
+
   it('a snapshot dispatched while the refusal re-read is pending is not overwritten by the server one', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));

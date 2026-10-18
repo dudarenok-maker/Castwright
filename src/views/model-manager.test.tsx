@@ -892,6 +892,40 @@ describe('ModelManagerView — per-model keep-alive control', () => {
   });
 });
 
+describe('ModelManagerView - unreadable settings file (#3625)', () => {
+  const KEEPALIVE = 'keepalive-ollama:qwen36-castwright:latest';
+  const withAnalyzerRow = () =>
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [...INVENTORY.items, { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 0, keepAliveIsOverride: true }],
+    });
+
+  it('keep-alive edits and the reset pill send no PUT while the file is unreadable', async () => {
+    withAnalyzerRow();
+    putUserSettings.mockClear();
+    renderManager({ settingsFileUnreadable: true, analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 60 } });
+    const field = (await screen.findByTestId(KEEPALIVE)) as HTMLInputElement;
+    expect(field).toBeDisabled();
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.blur(field);
+    const reset = screen.getByTestId('keepalive-reset-ollama:qwen36-castwright:latest');
+    expect(reset).toBeDisabled();
+    fireEvent.click(reset);
+    expect(putUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('offers Retry, which re-fetches the settings and re-enables keep-alive once they read', async () => {
+    withAnalyzerRow();
+    vi.mocked(api.getUserSettings).mockResolvedValue({ ...SETTINGS_FIXTURE, settingsFileUnreadable: false });
+    renderManager({ settingsFileUnreadable: true });
+    const field = await screen.findByTestId(KEEPALIVE);
+    expect(field).toBeDisabled();
+    fireEvent.click(screen.getByTestId('model-manager-settings-retry'));
+    await waitFor(() => expect(screen.getByTestId(KEEPALIVE)).toBeEnabled());
+    expect(screen.queryByTestId('model-manager-settings-retry')).toBeNull();
+  });
+});
+
 describe('ModelManagerView — back-to-Admin breadcrumb', () => {
   it('renders the back-to-Admin button', async () => {
     renderManager();

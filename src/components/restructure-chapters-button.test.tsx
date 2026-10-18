@@ -26,4 +26,14 @@ describe('RestructureChaptersButton', () => {
     fireEvent.click(screen.getByTestId('open-restructure'));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it('is disabled with a visible reason when disabledReason is set', () => {
+    const onClick = vi.fn();
+    render(<RestructureChaptersButton onClick={onClick} disabledReason="Unavailable while an analysis is running." />);
+    const btn = screen.getByTestId('open-restructure');
+    expect(btn).toBeDisabled();
+    expect(screen.getByTestId('open-restructure-reason')).toHaveTextContent('Unavailable while an analysis is running.');
+    fireEvent.click(btn);
+    expect(onClick).not.toHaveBeenCalled();
+  });
 });

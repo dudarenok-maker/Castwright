@@ -6,10 +6,15 @@
  *   1. For each chapter: read its embeddings sibling (skip if null) + segments file.
  *   2. Across all chapters, gather per-character anchor-eligible vectors
  *      (gate-passing AND per-segment renderedFallbackEngine unset AND
- *       stochastic-configured — qwen or coqui).
+ *       stochastic-configured — qwen or coqui AND, for a character with a
+ *       current cast.json voice, the line was rendered in that voice — #3524).
  *   3. buildCentroid per character; compute clean cosine spread; persist via writeCentroids.
  *   4. Score every embedding row for every chapter; write one
- *      `<slug>.render-integrity.json` per chapter.
+ *      `<slug>.render-integrity.json` per chapter. A row rendered under a voice
+ *      the character no longer has is `inconclusive`, not scored against the
+ *      current-voice reference, and a character with no line in its current
+ *      voice yet gets no reference at all — a marked `noCurrentVoiceReference`
+ *      row, every line inconclusive (#3524).
  *
  * Idempotent: safe to re-run; verdict + centroid files are overwritten each call.
  * Skips Kokoro-configured characters entirely (deterministic engine, no drift risk).
@@ -24,7 +29,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
-import { bookStateLanguage, type BookStateJson } from '../../workspace/scan.js';
+import { bookStateLanguage } from '../../workspace/scan.js';
+import { readStateJsonWithRecovery } from '../../workspace/state-migrate.js';
 import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
 import { writeAttempted, attemptedPath, mergeVerdictRows, type VerdictRow } from './verdicts-io.js';
@@ -44,9 +50,11 @@ import {
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
 import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
-import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
+import { canonicalModelKeyForEngine, engineForModelKey, type TtsEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
+import { currentCastVoiceName, currentCharacterEngine } from './current-voice.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
+import { resolveCharacterQwenTier } from '../../tts/per-character-engine.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
 import { loadCastIdHistory } from '../../store/cast-id-history.js';
 
@@ -64,6 +72,12 @@ interface SegmentsEntry {
   /** Per-SEGMENT fallback engine — the field we extend in segments-io.ts.
    *  Null / absent = rendered in the configured engine (anchor-eligible). */
   renderedFallbackEngine?: string | null;
+  /** #3524 — the voice this line was rendered in: `baseVoiceName` is the
+   *  pre-emotion-variant stamp and wins over `voiceName` (precedent:
+   *  `renderedSegmentVoices` in segments-io.ts). Both absent on a legacy
+   *  segment, which falls back to its chapter snapshot's `resolvedVoiceName`. */
+  voiceName?: string;
+  baseVoiceName?: string;
   /** #3362 pass-4 fix (🟠D) — the canonical id THIS render resolved
    *  `characterId` to, stamped by finalize-chapter-write.ts. See
    *  `resolveRowCharId`'s own doc comment just below for how this is used
@@ -90,6 +104,11 @@ interface SegmentsFileView {
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
+    /** ISO time this character was last fully rendered (see CharacterSnapshot.renderedAt). */
+    renderedAt?: string;
+    /** Engine / tier of that same full render, frozen with `renderedAt` (see CharacterSnapshot.renderedEngine). */
+    renderedEngine?: string;
+    renderedModelKey?: TtsModelKey;
   }>;
 }
 
@@ -101,7 +120,7 @@ export const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
  *  readers across the codebase (both `scoreBook`'s internal `ChapterData`
  *  and `qa-report.ts`'s `SegmentsFile`) to satisfy it without adapting. */
 export interface EngineClassificationSource {
-  characterSnapshots?: Record<string, { voiceEngine?: string }>;
+  characterSnapshots?: Record<string, { voiceEngine?: string; renderedEngine?: string }>;
 }
 
 /**
@@ -144,8 +163,12 @@ export function resolveConfiguredEngineByChar(
   const configuredEngineByChar = new Map<string, string>();
   for (const source of orderedSources) {
     for (const [charId, snap] of Object.entries(source.characterSnapshots ?? {})) {
-      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
-        configuredEngineByChar.set(charId, snap.voiceEngine);
+      /* #3524 — the FROZEN engine of the last full render: a partial write rebuilds `voiceEngine`
+         from its own engine, so a Fix on Kokoro in the first chapter would otherwise reclassify
+         the character as `kokoro` and drop it from scoring (and from the QA card's roster). */
+      const engine = snap.renderedEngine ?? snap.voiceEngine;
+      if (!configuredEngineByChar.has(charId) && engine) {
+        configuredEngineByChar.set(charId, engine);
       }
     }
   }
@@ -240,6 +263,9 @@ interface CharacterReference {
    *  current chapter audio). Carried on the persisted row so a match-checked
    *  reuse rewrites the same identity back instead of silently dropping it. */
   auditionVoice?: AuditionVoiceRef;
+  /** #3524 — the cast.json voice an 'in-book' reference's anchors were filtered
+   *  to. Set only when the character had a current voice; see CharacterCentroid. */
+  inBookVoiceName?: string;
   /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
    *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
    *  so pre-fix rows can be detected and rebuilt with the new logic. */
@@ -264,8 +290,27 @@ type ReferenceOutcome =
 
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
+/** #3676 — a 'too-short' ref that records the voice it was computed under, so the persisted
+ *  row can be told apart from one computed under a since-reassigned voice. With no voice info
+ *  it stays voiceless (TOO_SHORT_REF). */
+function tooShortRefFor(voiceInfo: AuditionCharacter | undefined): CharacterReference {
+  return voiceInfo ? { ...TOO_SHORT_REF, auditionVoice: auditionVoiceOf(voiceInfo) } : TOO_SHORT_REF;
+}
+
+function auditionVoiceOf(voiceInfo: AuditionCharacter): AuditionVoiceRef {
+  return { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned };
+}
+
+/** Whether a recorded voice identity equals the character's CURRENT render identity
+ *  (voiceName / modelKey / cloned / strict language). Shared by the audition and too-short
+ *  reuse gates. language is compared STRICTLY: a recorded language — or the absence of one —
+ *  must equal the current voice's language. */
+function sameVoiceIdentity(recorded: AuditionVoiceRef | undefined, voiceInfo: AuditionCharacter): boolean {
+  return recorded != null && recorded.voiceName === voiceInfo.voiceName && recorded.modelKey === voiceInfo.modelKey && recorded.cloned === voiceInfo.cloned && recorded.language === voiceInfo.language;
+}
+
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, bandMethod: row.bandMethod };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, inBookVoiceName: row.inBookVoiceName, bandMethod: row.bandMethod };
 }
 
 /** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
@@ -283,12 +328,9 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
   // percentile-derived to sigma-derived bands. Once rebuilt, rows carry bandMethod
   // and can be reused on subsequent passes.
   if (row.bandMethod === undefined) return false;
-  // language is compared STRICTLY: a recorded language — or the absence of one —
-  // must equal the current voice's language. A legacy row that recorded no language
-  // while the book now has one is a mismatch -> rebuild once, then it records the
-  // language and stabilises.
-  const langMatch = r.language === voiceInfo.language;
-  return r.voiceName === voiceInfo.voiceName && r.modelKey === voiceInfo.modelKey && r.cloned === voiceInfo.cloned && langMatch;
+  // A legacy row that recorded no language while the book now has one is a mismatch
+  // -> rebuild once, then it records the language and stabilises.
+  return sameVoiceIdentity(r, voiceInfo);
 }
 
 /**
@@ -300,9 +342,11 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
  * a prior audition/too-short result the moment enough real anchors exist
  * (srv-36 hardening, spec §2).
  *
- * Too-thin/bimodal path: if `persisted` is already a terminal `'too-short'`
- * row, that state is ABSORBING — return it verbatim, never call
- * `auditionCentroid` again. If `persisted` is a successful `'audition'` row
+ * Too-thin/bimodal path: if `persisted` is a `'too-short'` row computed under
+ * the character's CURRENT voice (or there is no current voice info at all), it is
+ * returned verbatim — `auditionCentroid` is not called again. A too-short row
+ * recorded under a DIFFERENT voice, or a legacy one recording none while voice info
+ * now exists, is re-auditioned (#3676). If `persisted` is a successful `'audition'` row
  * whose recorded identity still matches the character's current voice, reuse
  * it verbatim — no new renders; a recorded identity that DIFFERS means the
  * voice (or language/clone context) was reassigned and the stale reference
@@ -313,6 +357,8 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
  * function's three outcomes 1:1 (see `ReferenceOutcome`'s doc comment).
  *
  * @param anchorVecs  Anchor-eligible embedding vectors collected from the book.
+ * @param inBookVoiceName  #3524 — the current cast voice `anchorVecs` were filtered to
+ *                    (undefined = no current voice, unfiltered); recorded on an in-book ref.
  * @param voiceInfo   Optional voice info for Option-B (absent when no snapshot).
  * @param persisted   This character's prior-run row from centroids.json, if any.
  * @param auditionOpts  Test-only synth/embed fn overrides, forwarded to auditionCentroid.
@@ -321,6 +367,7 @@ async function resolveCharacterReference(
   anchorVecs: Float32Array[],
   voiceInfo: AuditionCharacter | undefined,
   persisted: CharacterCentroid | undefined,
+  inBookVoiceName: string | undefined,
   auditionOpts?: Pick<AuditionCentroidOpts, 'synthFn' | 'embedFn'>,
 ): Promise<ReferenceOutcome> {
   const result = buildCentroid(anchorVecs);
@@ -333,10 +380,10 @@ async function resolveCharacterReference(
     const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
     const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
     const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book' } };
+    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}) } };
   }
 
-  if (persisted?.referenceKind === 'too-short') {
+  if (persisted?.referenceKind === 'too-short' && !persisted.noCurrentVoiceReference && (!voiceInfo || sameVoiceIdentity(persisted.auditionVoice, voiceInfo))) {
     return { status: 'too-short', ref: persistedAsRef(persisted) };
   }
   if (
@@ -348,9 +395,9 @@ async function resolveCharacterReference(
   }
   // A character with NO current voice info (no resolvedVoiceName in any snapshot →
   // voiceInfo undefined) is NOT trusted — neither a persisted audition row nor a
-  // stale in-book reference is reused. It falls to too-short (inconclusive), and
-  // that too-short state is absorbing from here on, until the in-book path supplies
-  // anchors or a reassignment provides snapshot voice info.
+  // stale in-book reference is reused. It falls to too-short (inconclusive); that
+  // voiceless row is reused until the in-book path supplies anchors or a reassignment
+  // provides snapshot voice info, at which point the audition runs (#3676).
   if (!voiceInfo) {
     return { status: 'too-short', ref: TOO_SHORT_REF };
   }
@@ -362,7 +409,7 @@ async function resolveCharacterReference(
   });
 
   if (audition === null) return { status: 'transient-failure' };
-  if (audition.kind === 'too-short') return { status: 'too-short', ref: TOO_SHORT_REF };
+  if (audition.kind === 'too-short') return { status: 'too-short', ref: tooShortRefFor(voiceInfo) };
 
   const centroidArr = Array.from(audition.centroid);
   const cosines = audition.embeddings
@@ -395,7 +442,7 @@ async function resolveCharacterReference(
   // pools that matched the tight-pool condition, percentile for the fallback or
   // non-synthetic cases). Pre-fix rows lack this field entirely, allowing us to
   // detect and rebuild them with the current band-computation logic.
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: auditionVoiceOf(voiceInfo) } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
@@ -438,7 +485,7 @@ async function readCastJson(bookDir: string): Promise<CastCharacter[] | null> {
  *  under, which is what keeps the audition comparable to the chapter. */
 async function readBookLanguage(bookDir: string): Promise<string | undefined> {
   try {
-    const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
     return state ? bookStateLanguage(state) : undefined;
   } catch {
     return undefined;
@@ -508,6 +555,11 @@ export async function scoreBook(
     /** Test-only — forwarded to every auditionCentroid call this run. */
     __testSynthFn?: AuditionCentroidOpts['synthFn'];
     __testEmbedFn?: AuditionCentroidOpts['embedFn'];
+    /** #3524 — the model key of the render run this pass follows. Its engine is the
+        default engine for a character with no `ttsEngine` of its own. Omitted by Resume
+        scoring (no run): the engine then comes from the character's most recently
+        rendered lines. */
+    runModelKey?: TtsModelKey;
   },
 ): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }> {
   const NO_TIERS = { usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 };
@@ -523,6 +575,11 @@ export async function scoreBook(
     attributes?: string[];
     /** Per-character render tier — the audition renders under this. */
     modelKey?: TtsModelKey;
+    /** ISO time of this character's last fresh render (absent on legacy snapshots). */
+    renderedAt?: string;
+    /** Engine / tier of that same full render, frozen with `renderedAt`. */
+    renderedEngine?: string;
+    renderedModelKey?: TtsModelKey;
   };
 
   type ChapterData = {
@@ -664,11 +721,96 @@ export async function scoreBook(
   const bookLanguage = await readBookLanguage(bookDir);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
+  /* #3524 — "the engine actually rendered", the fallback engine for a character with no
+     `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
+     render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
+     non-fallback lines (the snapshot's frozen `renderedEngine` / `renderedModelKey`, stamped with `renderedAt` by that
+     full render, so a later partial write's own engine never replaces it). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
+     which only a FULL chapter render moves (a qa-repair/Fix-audio/refinalize/gain-remix/A-B
+     reject keeps it, even for lines it re-records) —
+     never the file's mtime, which any partial write refreshes; a legacy snapshot
+     with no stamp sorts oldest and book order breaks ties (the later chapter wins), else, for
+     a character rendered only on a fallback engine, its configured engine.
+     The server's saved default plays no part: a session-picker run, a non-English retarget
+     and a remote sidecar's boot-time install state all make it diverge from what rendered. */
+  const runEngine: TtsEngine | undefined = opts?.runModelKey ? engineForModelKey(opts.runModelKey) : undefined;
+  const stampedByChar = new Map<string, { engine: TtsEngine; modelKey?: TtsModelKey; renderedAt: string }>();
+  for (const cd of chapterData) {
+    for (const row of cd.embRows) {
+      const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
+      if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
+      const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
+      const snap = id !== undefined ? cd.snapshots[id] : undefined;
+      // The FROZEN engine / tier (a partial write rebuilds voiceEngine / modelKey from its own
+      // engine); a legacy snapshot with no frozen fields falls back to them.
+      const stampedEngine = snap?.renderedEngine ?? snap?.voiceEngine;
+      if (id === undefined || !snap || !stampedEngine) continue;
+      const renderedAt = snap.renderedAt ?? '';
+      const prior = stampedByChar.get(id);
+      if (!prior || renderedAt >= prior.renderedAt) {
+        stampedByChar.set(id, { engine: stampedEngine as TtsEngine, modelKey: snap.renderedModelKey ?? snap.modelKey, renderedAt });
+      }
+    }
+  }
+  /* The run key speaks ONLY for characters with lines in the chapters this run just
+     finalized — every other character resolves from its own stamped lines, so a one-chapter
+     run on another engine cannot replace an un-rendered character's real reference. */
+  const runRenderedChars = new Set<string>();
+  for (const cd of chapterData) {
+    if (!justFinalized.has(cd.slug)) continue;
+    for (const row of cd.embRows) {
+      const id = resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots);
+      if (id !== undefined) runRenderedChars.add(id);
+    }
+  }
+  const defaultEngineFor = (charId: string): TtsEngine | undefined =>
+    (runRenderedChars.has(charId) ? runEngine : undefined) ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
+  /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
+     live row through castResolver, then the helper shared with
+     chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
+     cast row, an undesigned voice → '', or no engine known), and that character
+     keeps first-chapter-wins with no filtering. */
+  const currentVoiceNameFor = (charId: string): string | undefined => {
+    const current = castResolver.resolve(charId)?.character;
+    if (!current) return undefined;
+    return currentCastVoiceName(current, defaultEngineFor(charId), bookLanguage);
+  };
+  const currentVoiceByChar = new Map<string, string | undefined>();
+  const currentVoiceFor = (charId: string): string | undefined => {
+    if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
+    return currentVoiceByChar.get(charId);
+  };
+  /* #3524 — the voice a line was rendered in: `baseVoiceName ?? voiceName ??`
+     the chapter snapshot's `resolvedVoiceName`; `undefined` when unknown. Shared
+     by the anchor pool, the old-voice scoring rule and the no-current-line skip. */
+  const lineVoiceOf = (
+    seg: { baseVoiceName?: string | null; voiceName?: string | null } | undefined,
+    snapshots: Record<string, { resolvedVoiceName?: string } | undefined>,
+    charId: string,
+  ): string | undefined => seg?.baseVoiceName ?? seg?.voiceName ?? snapshots[charId]?.resolvedVoiceName;
+  const matchedCurrentVoice = new Set<string>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
-      // Collect voice info for Option-B (first chapter's snapshot wins).
-      if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
-        const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
+      /* Collect voice info for Option-B. #3524: for a character with a current
+         cast voice, the FIRST chapter (book order) whose snapshot
+         `resolvedVoiceName` equals that voice wins, so a partial re-render
+         after a voice change builds/keeps the audition from the new voice, not
+         ch1's stale one. First-chapter-wins remains for (a) a character with no
+         current voice known, and (b) a character whose lines are stamped in the
+         current voice while no chapter snapshot names it. A character with a
+         current voice and NO line in it never reaches the audition (see the
+         character loop). */
+      const currentVoice = currentVoiceFor(charId);
+      const isCurrentVoiceMatch =
+        currentVoice !== undefined && !matchedCurrentVoice.has(charId) && snap.resolvedVoiceName === currentVoice;
+      if (
+        (!voiceInfoByChar.has(charId) || isCurrentVoiceMatch) &&
+        (snap.renderedEngine ?? snap.voiceEngine) &&
+        snap.resolvedVoiceName &&
+        STOCHASTIC_ENGINES.has((snap.renderedEngine ?? snap.voiceEngine)!)
+      ) {
+        if (isCurrentVoiceMatch) matchedCurrentVoice.add(charId);
+        const engine = (snap.renderedEngine ?? snap.voiceEngine) as import('../../tts/model-keys.js').TtsEngine;
         // Render the Option-B audition under the SAME tier this character ACTUALLY
         // rendered in — NOT a hardcoded 0.6B. canonicalModelKeyForEngine returns a
         // Qwen request key VERBATIM, so the old 'qwen3-tts-0.6b' placeholder forced
@@ -679,7 +821,7 @@ export async function scoreBook(
         // buildCharacterSnapshots) so an elevated Qwen char in a non-Qwen-default book
         // isn't under-tiered by the chapter run-default; fall back to the chapter-level
         // modelKey, then 0.6B for legacy segments with neither stamp.
-        const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
+        const renderKey: TtsModelKey = snap.renderedModelKey ?? snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
         const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         const castChar = castResolver.resolve(charId)?.character;
         voiceInfoByChar.set(charId, {
@@ -719,7 +861,13 @@ export async function scoreBook(
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
+  // AND (#3524) for a character with a current cast.json voice, the line was
+  // rendered in that voice — `baseVoiceName ?? voiceName ?? the chapter
+  // snapshot's resolvedVoiceName`; a line whose voice is unknown is not an
+  // anchor. A character with no current voice keeps today's unfiltered pool.
   const anchorVecsByChar = new Map<string, Float32Array[]>();
+  // #3524 — characters with a current voice that have at least one rendered line in it.
+  const hasCurrentVoiceLine = new Set<string>();
   for (const charId of stochasticChars) anchorVecsByChar.set(charId, []);
 
   for (const cd of chapterData) {
@@ -733,12 +881,54 @@ export async function scoreBook(
       const rowCharId = resolveRowCharId(seg, row.characterId, cd.snapshots);
       if (rowCharId === undefined || !stochasticChars.has(rowCharId)) continue;
 
+      const rowCurrentVoice = currentVoiceFor(rowCharId);
+      if (rowCurrentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, rowCharId) === rowCurrentVoice) {
+        hasCurrentVoiceLine.add(rowCharId);
+      }
+
       // Anchor-eligible: no per-segment fallback (use the per-segment field,
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
       const hasFallback = seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '';
       if (!hasFallback) {
+        const currentVoice = currentVoiceFor(rowCharId);
+        if (currentVoice !== undefined) {
+          if (lineVoiceOf(seg, cd.snapshots, rowCharId) !== currentVoice) continue;
+        }
         anchorVecsByChar.get(rowCharId)!.push(row.vec);
       }
+    }
+  }
+
+  /* #3524 — the audition's voice comes from the cast, not from a chapter snapshot:
+     a partial re-record leaves its chapter's last-wins snapshot on the OLD voice
+     while the re-recorded lines are stamped NEW, so when any rendered line carries
+     the current voice, the audition (and the #3676 re-audition's identity match)
+     is built for it — in the current voice's engine and tier (the engine actually
+     rendered, and the character's elevate-only Qwen tier), not the old snapshot's. */
+  for (const charId of hasCurrentVoiceLine) {
+    const info = voiceInfoByChar.get(charId);
+    const currentVoice = currentVoiceFor(charId);
+    const castChar = castResolver.resolve(charId)?.character;
+    if (!info || currentVoice === undefined || !castChar) continue;
+    const engine = currentCharacterEngine(castChar, defaultEngineFor(charId), bookLanguage);
+    if (!engine) continue;
+    /* Tier: a Qwen audition renders at the tier the render itself stamps — the
+       character's elevate-only pin over the run key (for a character the run rendered),
+       else the key of the snapshot that supplied the stamped engine, else the old snapshot's —
+       via the same resolveCharacterQwenTier buildCharacterSnapshots uses, so a 1.7B
+       pin is never auditioned on the 0.6B base (8 GB OOM; non-comparable speaker space). */
+    const baseKey = canonicalModelKeyForEngine(
+      engine,
+      (runRenderedChars.has(charId) ? opts?.runModelKey : undefined) ?? stampedByChar.get(charId)?.modelKey ?? info.modelKey,
+    );
+    const modelKey = engine === 'qwen' ? resolveCharacterQwenTier(castChar, baseKey) : baseKey;
+    if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
+      voiceInfoByChar.set(charId, {
+        ...info,
+        voiceName: currentVoice,
+        modelKey,
+        cloned: hasClonedProvenance(castChar, engine),
+      });
     }
   }
 
@@ -762,7 +952,11 @@ export async function scoreBook(
   });
   opts?.onRosterKnown?.(orderedChars.length);
 
-  /** Returns the number of `voice-mismatch` rows written for this character
+  /** #3524 — for a character with a current cast voice, a row whose line voice is
+   *  not that voice (unknown included) is written `inconclusive`, never scored
+   *  against `ref` and not counted below.
+   *
+   *  Returns the number of `voice-mismatch` rows written for this character
    *  this call — accumulated by the caller into a run-total mismatch count
    *  (round-2 plan-review fix: `scoring_complete`'s `mismatchCount` must be
    *  a real count, not the hardcoded 0 an earlier draft shipped, which
@@ -771,6 +965,7 @@ export async function scoreBook(
    *  result). */
   async function scoreAndMergeCharacter(charId: string, ref: CharacterReference): Promise<number> {
     const configuredEngine = configuredEngineByChar.get(charId) ?? '';
+    const currentVoice = currentVoiceFor(charId);
     let mismatchCount = 0;
     for (const cd of chapterData) {
       const rowsForChar: VerdictRow[] = [];
@@ -798,6 +993,22 @@ export async function scoreBook(
           });
           continue;
         }
+        // #3524 — a line rendered under a voice the character no longer has is not
+        // scored against the current-voice reference (unknown voice counts as old).
+        // A fallback-engine line is stamped with the FALLBACK engine's voice — not a
+        // voice choice (as in renderedSegmentVoices) — so it keeps scoring acoustically.
+        if (
+          currentVoice !== undefined &&
+          (renderedFallback == null || renderedFallback === '') &&
+          lineVoiceOf(seg, cd.snapshots, charId) !== currentVoice
+        ) {
+          rowsForChar.push({
+            characterId: charId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
+            cosine: 0, severity: 'inconclusive', fixable: false,
+            expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
+          });
+          continue;
+        }
         const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
         const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
         const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
@@ -819,10 +1030,27 @@ export async function scoreBook(
     const anchorVecs = anchorVecsByChar.get(charId)!;
     const persisted = centroidsMap[charId];
 
+    /* #3524 — a character with a current voice but no line rendered in it yet
+       gets no new reference (resolveCharacterReference would audition from, or
+       persist an absorbing too-short row for, a voice it no longer has): it gets a
+       `noCurrentVoiceReference` marker row instead (so it leaves `charactersPending`
+       and is never reused as a reference), its pending entry is cleared, and every
+       row is inconclusive. The next pass with a current-voice line rebuilds it. */
+    if (currentVoiceFor(charId) !== undefined && !hasCurrentVoiceLine.has(charId)) {
+      delete pendingMap[charId];
+      centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF, noCurrentVoiceReference: true };
+      await writeCentroids(bookDir, Object.values(centroidsMap));
+      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      scoredCount++;
+      opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
+      continue;
+    }
+
     const outcome = await resolveCharacterReference(
       anchorVecs,
       voiceInfoByChar.get(charId),
       persisted,
+      currentVoiceFor(charId),
       { synthFn: opts?.__testSynthFn, embedFn: opts?.__testEmbedFn },
     );
 
@@ -830,12 +1058,19 @@ export async function scoreBook(
       const prior = pendingMap[charId] ?? 0;
       if (prior + 1 < MAX_PENDING_ATTEMPTS) {
         pendingMap[charId] = prior + 1;
+        /* #3524 — a no-current-voice marker row would hide this mid-retry character
+           from `charactersPending` (and the Resume affordance); the retry is not over. */
+        if (persisted?.noCurrentVoiceReference) {
+          delete centroidsMap[charId];
+          await writeCentroids(bookDir, Object.values(centroidsMap));
+        }
         continue; // genuinely unresolved this run — nothing written, retried next trigger
       }
       delete pendingMap[charId];
-      centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF };
+      const cappedRef = tooShortRefFor(voiceInfoByChar.get(charId));
+      centroidsMap[charId] = { characterId: charId, ...cappedRef };
       await writeCentroids(bookDir, Object.values(centroidsMap));
-      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      totalMismatches += await scoreAndMergeCharacter(charId, cappedRef);
       scoredCount++;
       opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
       continue;

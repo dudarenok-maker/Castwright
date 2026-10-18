@@ -47,6 +47,15 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* Plan 286 Task 4 — a hoisted passthrough mock so the two plan-286 tests below
+   can force the reset arm to reject. Same idiom as the state-io mock above:
+   defaults to the real implementation, so every other test in this file is
+   unaffected. */
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, resetRevisions: vi.fn(real.resetRevisions) };
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 const CACHE_DIR = join(SERVER_ROOT, 'handoff', 'cache');
@@ -130,6 +139,24 @@ beforeEach(() => {
   }
   if (existsSync(cachePath)) rmSync(cachePath, { force: true });
 });
+
+/* A12 / plan 286 — one sentinel per sibling arm of applyReparse's Promise.all. */
+function seedSiblingSentinels() {
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [] }));
+  mkdirSync(join(bookDir, 'audio'), { recursive: true });
+  writeFileSync(join(bookDir, 'audio', '01-chapter-one.mp3'), 'LIVE');
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(cachePath, '{}');
+}
+/* The 500 arrives when the reset arm rejects; wait until every sibling
+   arm's last fs effect has landed, so none outlives the test. */
+async function awaitSiblingArms() {
+  await vi.waitFor(() => {
+    expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
+    expect(existsSync(join(bookDir, 'audio'))).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+  });
+}
 
 describe('reparse handler — preserves manuscript-edits.json', () => {
   it('keeps the edits file on disk after reparse', async () => {
@@ -229,11 +256,11 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(/schema=2/);
-      /* FIRST, deliberately: applyReparse writes state.json synchronously in
-         sequence (before its Promise.all), so this is the one check that is
-         deterministically red when the preflight is missing. The cast/audio
-         deletions run as Promise.all siblings and may still be in flight when
-         the 500 returns. */
+      /* FIRST, deliberately: applyReparse writes state.json in a book-locked
+         step AFTER its Promise.all has settled (#3400 pass 8), so the state
+         is untouched on a 500 either way. The cast/audio deletions run as
+         Promise.all siblings and may still be in flight when the 500 returns
+         when the preflight is missing. */
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(existsSync(castPath)).toBe(true);
       expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
@@ -248,6 +275,51 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
       rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
       rmSync(revisionsPath, { force: true });
     }
+  });
+
+  /* Plan 286 (Task 4, invariant 8) — a resetRevisions failure that names a path
+     must never reach the client. The arm logs the raw error and re-throws a
+     fixed sentence; both handlers answer (e as Error).message. */
+  it('plan 286 — a revisions reset failure naming a path answers a fixed sentence', async () => {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    vi.mocked(resetRevisions).mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "EPERM: operation not permitted, rename 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json.tmp'",
+        ),
+        { code: 'EPERM' },
+      ),
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    await awaitSiblingArms();
+    const logged = err.mock.calls.flat().map(String).join(' ');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Couldn't reset this book's A/B review history." });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+    expect(logged).toContain('SECRET-WORKSPACE'); // the raw error is logged
+  });
+
+  /* A lock timeout is NOT a path leak: it must keep the curated contention
+     sentence the routes already answer. Red evidence is mutation 3, which flips
+     this test alone. */
+  it('plan 286 — a lock timeout on the reset still answers the curated contention body', async () => {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    vi.mocked(resetRevisions).mockRejectedValueOnce(
+      new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000),
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    await awaitSiblingArms();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
   });
 });
 
@@ -336,6 +408,30 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(res.status).toBe(200);
 
     expect(existsSync(carryoverPath())).toBe(false);
+  });
+
+  it('persists titleSynthesized on the made-up leading chapter only (#3628)', async () => {
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      'Opening words before any heading.\n\n## Prologue\n\nThe prologue body has a few sentences of narrative content in it.\n\n## Chapter 1\n\nFirst body.\n',
+    );
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+      expect(res.status).toBe(200);
+
+      const after = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')) as {
+        chapters: Array<{ title: string; titleSynthesized?: boolean }>;
+      };
+      const [lead, ...headed] = after.chapters;
+      expect(lead.title).toBe('Chapter 1');
+      expect(lead.titleSynthesized).toBe(true);
+      expect(headed.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1']);
+      for (const ch of headed) {
+        expect('titleSynthesized' in ch).toBe(false);
+      }
+    } finally {
+      writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    }
   });
 
   it('preserves the excluded flag across reparse (id match — typical case)', async () => {
@@ -1121,4 +1217,40 @@ describe('reparse handler — #2099 round-2 finding 1: a non-parse cast.json rea
       spy.mockImplementation(actual.readJson);
     }
   });
+});
+
+describe('#3625 — reparse waits on the state lock', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  async function hold() {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('does not write state.json while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await hold();
+    try {
+      const p = request(app).post(`/api/books/${bookId}/reparse`).then((r) => r);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(readFileSync(statePath(), 'utf8')).toBe(before);
+      release();
+      const [res] = await Promise.all([p, held]);
+      expect(res.status).toBe(200);
+      expect(JSON.parse(readFileSync(statePath(), 'utf8')).castConfirmed).toBe(false);
+    } finally {
+      release();
+      await held;
+    }
+  });
+
 });

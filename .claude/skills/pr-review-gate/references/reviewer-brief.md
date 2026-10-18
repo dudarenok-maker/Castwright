@@ -269,6 +269,173 @@ recite:
     detached job, name the condition it may run under; ask what stops it when
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
+27. **A sync-to-async conversion that drops error handling the sync API did
+    implicitly** — `scripts/lib/bounded-spawn.mjs`, PR #3705 gate pass 2:
+    `spawnSync` with `input` absorbed a stdin write failure (EPIPE/EOF, a
+    child that exits without draining) into `r.error` and still returned the
+    child's own status; the async `child.stdin.end(input)` raised it as an
+    unhandled `'error'` event that crashed the host (`write EOF`). Fixed with
+    a stdin `'error'` handler that ignores the benign codes and rejects on
+    the rest. Checkable: for every sync call replaced by an async one, list
+    what the sync version returned or swallowed instead of throwing (`r.error`,
+    a status, a buffered result) and confirm the async path handles each, with
+    a test where the child exits before reading its input.
+28. **A timeout that cannot fire because the wait it bounds blocks the event
+    loop** — PR #3705 gate pass 1: the e2e test's bound was a node:test
+    `{ timeout }` and then an async spawn bound, both wrapped around a
+    blocking `spawnSync` git call, so no timer could run until the call
+    returned and a hang produced silence, not the named failure; fixed by
+    making the spawn itself async (`boundedSpawn`). Checkable: for every
+    timeout or deadline, find the call it is meant to bound and confirm that
+    call yields to the event loop; a bound around a `*Sync` call is decorative
+    unless it is the call's own `timeout` option.
+29. **A lock keyed by a path resolved BEFORE acquisition** — PR #3706 pass 2
+    (#3700): `state-json:<book dir>/state.json` was keyed by the folder a
+    request had resolved before it queued. Once the holder moves or deletes
+    that folder (a folder-renaming PUT, a DELETE), every waiter acquires a key
+    naming a path that is no longer the book, and queuing makes that certain
+    rather than a race. Waiters then either wrote their stale snapshot back
+    (resurrecting a deleted book, or leaving two folders with one bookId) or
+    answered 200 for a write that never happened (a reparse wiping the moved
+    book's analysis cache by manuscript id). Checkable: for every lock whose
+    key is derived from a path or id resolved earlier, ask what the holder may
+    move or delete while you wait, and what each waiter does when the thing it
+    re-reads is absent; test by holding the key, moving or deleting the
+    target, then releasing, and assert a refusal with nothing written.
+    The same hazard runs the other way, for the lock HOLDER: its steps after
+    the lock is released, against a path it resolved before it (a change-log
+    write, a cast delete, a slug rewrite), land in a folder a queued
+    folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
+30. **An op list computed before a later pass changes its keys, then patched
+    only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
+    PR #3594 gate pass 3: the audio rename ops were computed from the first
+    slug transform, then the prune renumber and the generic-title retitle
+    changed more slugs but only patched ops that already existed, so a chapter
+    renamed ONLY by a later pass kept its stale audio, `.previous` takes and
+    sidecars (a merged chapter could even play another chapter's audio); fixed
+    in 0c6d9a2b by moving files with the slugs the post-passes change.
+    Checkable: list every later pass that changes a key the op list is keyed
+    on, and for each ask whether an entry renamed ONLY by that pass gets an
+    op; test with a fixture where the later pass is the sole renamer.
+31. **A reference-identity check used to mean "unchanged since X" in a store
+    where every write replaces the reference** — `src/views/restructure.tsx`
+    (`applyResponse`), PR #3594 gate pass 4: the sentence remap skipped when
+    the book's sentences were no longer the same array as at click time, but
+    under Immer any same-book write replaces the array, so the skip fired on
+    unrelated writes (a background emotion-detection run) and the work it
+    dropped was never retried, saving sentences with stale chapter ids; fixed
+    in 3723e4f6 with a `hydrateSeq` counter that moves only on a re-hydrate. Checkable: for every `===` /
+    `Object.is` guard on store state, ask what ELSE replaces that reference;
+    then ask whether the work the guard drops is retried. Test by making an
+    unrelated write between capture and use.
+32. **A debounced save that captures its payload when the action fires, racing
+    a server-side rewrite of the same file, where the client's in-memory
+    correction is never itself saved** — `src/views/restructure.tsx` and the
+    persistence middleware, PR #3594 gate pass 5: a manuscript edit queued
+    before (or during) a restructure was built from the old chapter ids and
+    sent one debounce later, so it landed AFTER the route's own rewrite of
+    `manuscript-edits.json` and put the old ids back on disk, while the client
+    fixed up only its in-memory sentences and never saved them. Fixed in
+    2fc93b50 by flushing and awaiting the book's queued saves before the
+    request, and saving the remapped state after the response. Checkable: for
+    every server route that rewrites a file the client also saves, ask what a
+    save queued before the rewrite does when it lands after it, and whether the
+    client re-saves its corrected state. Test with a slow or debounced PUT
+    queued around the rewrite and assert on the final disk state.
+33. **A cancellation that sends a cleanup write at the same moment as the
+    operation that caused it, through a route whose read-modify-write of the
+    same file is not under the operation's lock** —
+    `src/components/detect-emotions-button.tsx` (`markUnfinished`), PR #3594
+    gate pass 6: starting a chapter restructure aborted a running emotion run
+    synchronously, and the abort path sent `PUT /state {prosodyAnnotated:false}`
+    in the same tick as the restructure's own `POST`. The state PUT read,
+    patched and rewrote `state.json` without the lock the restructure held, so
+    in 8 of 20 runs the pre-merge chapter list was written back over the
+    restructure's. The compensating write was sent BY the cancellation the
+    operation itself triggers, so it overlaps the operation by construction.
+    Fixed in 982a59d9 (the state and manuscript PUT slices take the book lock)
+    and c3c63f90 (the client holds the mark until the restructure ends).
+    Checkable: for every write an abort or cancel path sends, name the server
+    write it can overlap and whether both routes take the same lock. Test with
+    both requests against the real routes, started in the same tick, and assert
+    on the files.
+34. **A read path that "heals" by rewriting a whole file from an unlocked
+    earlier read, so every reader is a potential writer** —
+    `server/src/workspace/scan.ts` (segments backfill, srv-35 uuid mint), PR
+    #3594 gate pass 6: `findBookByBookId` and `scanLibrary` read `state.json`,
+    derived missing chapter fields from the audio sidecars, and rewrote the
+    entire file. Any locate, including the one the state PUT does, could revert
+    a concurrent locked writer's chapter list with its stale copy. Fixed in
+    27c1297c: the heal re-reads under the book lock and fills only unset fields
+    of chapters whose id and slug still match; 9490ed06 pins the re-read-to-write
+    window with a lock-respecting writer. Checkable: for every function a read
+    path calls that writes, ask what lock it holds across its read and its
+    write, and whether it writes back its own earlier snapshot or a fresh one
+    merged field by field. Test by landing a locked writer between the re-read
+    and the write, and assert it survives.
+35. **A lock added to a read path's write makes the caller wait, but the caller
+    keeps its pre-wait snapshot, so its own later write is guaranteed to land
+    last** — `server/src/workspace/scan.ts` (`backfillAudioModelKeysFromSegments`
+    returning `{ state: upgraded }`), PR #3594 gate pass 7: 27c1297c made the
+    segments heal queue on the book lock behind an in-flight restructure and
+    merge correctly once it had the lock, then returned the read from BEFORE the
+    wait plus the fills, discarding the fresh merged state. Every caller that
+    wrote `state.json` from the located state then wrote the pre-restructure
+    chapter list, and wrote it after the restructure by construction: the
+    revert went from 11 of 40 runs to 40 of 40. The lock turned a race into a
+    certainty. Fixed in 07f97a6d (the heal returns the state it merged under the
+    lock and re-locates a book that moved). Checkable: wherever a lock is added
+    to a function that returns state, ask which snapshot it returns, and whether
+    a caller that waited on the lock starts from the post-wait file. Test with
+    the caller's own write after the wait, and assert on the end state.
+36. **A refusal the caller cannot see, so the writes that go with it record an
+    edit that never happened** — `src/store/restructure-guard-middleware.ts`
+    (returned `undefined` for a refused action), PR #3594 gate pass 7: Script
+    Review Apply marked ops resolved in the server ledger that were never
+    applied, Reassign lines logged a `boundary_move` per chapter and closed as
+    done, and re-upload Apply cleared the title overrides and navigated to
+    Listen, all because the manuscript action they dispatched was dropped
+    without a signal. A silent refusal is not safe just because the refused
+    action is harmless: the caller's other writes assume it succeeded. Fixed in
+    bdf0d7d6: the surfaces disable with a reason and check the live flag before
+    any side write, and the guard toasts. Checkable: for every middleware or
+    guard that drops an action, list its dispatch sites and what each does next;
+    a dropped dispatch must be visible to the caller or checked before the
+    caller's side writes. Test against the real store with the guard on, and
+    assert that nothing was resolved, logged, or closed.
+37. **A write moved later to fix an ordering race strands the side effects that
+    ran before it when a step in between fails** -- `server/src/routes/
+    book-state.ts` (replace-manuscript), PR #3594 gate pass 8: 39bfe13f moved
+    the `state.json` record behind the cast / audio / revisions work so it could
+    be taken under the book lock, but the route had already written the new
+    manuscript file and unlinked the old one. A rejection from any of those arms
+    now left `state.json` naming the deleted file, so the book could not be
+    hydrated after a restart, while the 500 suggested nothing had happened.
+    Fixed in 858e37d4 (the old file is unlinked only after the record lands, and
+    the new one is removed if it never did). Checkable: when a diff moves a
+    write later, list every side effect that now runs before it (file writes,
+    deletes, renames, cache wipes) and ask what is left on disk if each step in
+    between throws; test with a rejecting step and assert that what
+    `state.json` names exists. The same shape applies to moving a write earlier.
+38. **A write staged against a location resolved before the lock, committed by a
+    step that re-resolves the location inside the lock** -- `server/src/routes/
+    book-state.ts` (replace-manuscript / reparse), PR #3594 gate pass 9:
+    572f26fa moved the upload's write into the locked step but built its paths
+    from the `bookDir` the route resolved before any lock, while the locked step
+    re-located the book by id and recorded `manuscriptFile` against the new
+    folder. A folder-renaming write that landed during the destructive arms left
+    the record in one folder and the file in another (409 after a restart, or a
+    silently lost same-extension upload). 47c23fc2's in-step refusal
+    (absent-book 404 when the located folder differs) was not enough: the
+    destructive arms had already run, so the moved book lost its cast, audio and
+    cache and the user got a false "Book not found". Fixed in pass 10 by refusing
+    the rename up front (409 while a ref-counted reparse marker is set); the
+    in-step check stays as a backstop. Checkable:
+    for every locked step that locates the target again, list each earlier side
+    effect and path that was derived from the pre-lock location and ask whether
+    the two can name different places; test by forcing the move between the two
+    (hold one of the earlier steps open) and assert nothing was installed and
+    the moved book is untouched.
 
 ### Keeping the catalogue current
 

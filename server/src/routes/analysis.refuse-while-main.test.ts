@@ -81,7 +81,11 @@ vi.mock('../workspace/book-dir-guard.js', async () => {
     withVerifiedBookDir: async (...args: Parameters<typeof actual.withVerifiedBookDir>) => {
       const gate = (globalThis as G).__rwm_resolve_gate as Promise<void> | undefined;
       if (gate) await gate;
-      return actual.withVerifiedBookDir(...args);
+      const p = actual.withVerifiedBookDir(...args);
+      /* A case can collect every resolution a route starts, to await them as a
+         positive barrier rather than guessing how long a write takes. */
+      ((globalThis as G).__rwm_wvbd_calls as Promise<unknown>[] | undefined)?.push(p);
+      return p;
     },
   };
 });
@@ -919,16 +923,28 @@ describe('writers, draining and busy release (#3435 decision A)', () => {
     const abortedSignal = seed.job.controller.signal;
     vi.advanceTimersByTime(30_000);
     /* Let endJob's own paused snapshot land, then remove it so a /pause write would show. */
-    for (let i = 0; i < 200 && !existsSync(statePath); i++) await ioTicks(5);
+    /* Bounded by REAL time, not a tick count: the snapshot's write fsyncs, and a
+       slow runner disk (the required Windows leg, #3694) can outlast any fixed
+       number of setImmediate turns while setTimeout is faked. Date stays real. */
+    for (const deadline = Date.now() + 10_000; Date.now() < deadline && !existsSync(statePath); ) {
+      await ioTicks(5);
+    }
     expect(existsSync(statePath)).toBe(true);
     await ioTicks(20);
     rmSync(statePath, { force: true });
     const app = express();
     app.use(express.json());
     app.use('/api/manuscripts', analysisRouter);
+    const wvbdCalls: Promise<unknown>[] = [];
+    g.__rwm_wvbd_calls = wvbdCalls;
     const res = await supertest(app).post(`/api/manuscripts/${seed.manuscriptId}/analysis/pause`).send({});
     expect(res.body).toEqual({ ok: true, paused: false });
-    await ioTicks(50);
+    /* Positive barrier, not a tick count: any snapshot /pause started has resolved
+       its book dir (recorded above), and the state path's write queue has drained,
+       so a wrong write has landed however slow the fsync is (#3694). */
+    await Promise.allSettled(wvbdCalls);
+    const { enqueuePathOp } = await import('../workspace/state-io.js');
+    await enqueuePathOp(statePath, async () => {});
     expect(existsSync(statePath)).toBe(false);
     expect(seed.job.controller.signal).toBe(abortedSignal);
     /* The deadline was armed by endJob and is not re-armed by /pause: 30 s more drops it. */
@@ -1165,6 +1181,107 @@ describe('refusals (#3435 decision A)', () => {
     } finally {
       releaseWork(draining);
     }
+  });
+
+  describe('a restructure in flight refuses a job start (chapters_restructuring)', () => {
+    const MESSAGE = 'The chapters of this book are being changed. Try again in a moment.';
+
+    it('main POST: early check → 409, no job registered; after endRestructure the start proceeds', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const a = await app();
+      expect(beginRestructure('m_restructuring_main')).toBe(true);
+      try {
+        const res = await supertest(a).post('/api/manuscripts/m_restructuring_main/analysis').send({});
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'chapters_restructuring', message: MESSAGE });
+        expect(snapshotInFlightAnalysis('m_restructuring_main')).toBeNull();
+      } finally {
+        endRestructure('m_restructuring_main');
+      }
+      const after = await supertest(a).post('/api/manuscripts/m_restructuring_main/analysis').send({});
+      expect(after.status).toBe(200);
+      expect(sseErrors(after.text).map((e) => e.code)).toEqual(['unknown_manuscript']);
+    });
+
+    it('main POST: the late check (restructure claimed while the POST awaits hydrate) → SSE error frame, no job', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const seed = await seedBook('late-restructure-main', [1]);
+      g.__rwm_phase0_selection = buildSelection(stubAnalyzer({}), 'phase0-model');
+      const hydrate = gate();
+      const entered = gate();
+      g.__rwm_hydrate_gate = async () => {
+        entered.open();
+        await hydrate.promise;
+      };
+      try {
+        const pending = supertest(await app())
+          .post(`/api/manuscripts/${seed.manuscriptId}/analysis`)
+          .send({})
+          .then((x) => x);
+        await entered.promise;
+        expect(beginRestructure(seed.manuscriptId)).toBe(true);
+        hydrate.open();
+        const res = await pending;
+        expect(res.status).toBe(200);
+        expect(sseErrors(res.text)).toEqual([{ kind: 'error', code: 'chapters_restructuring', message: MESSAGE }]);
+        expect(snapshotInFlightAnalysis(seed.manuscriptId)).toBeNull();
+      } finally {
+        endRestructure(seed.manuscriptId);
+        delete g.__rwm_hydrate_gate;
+      }
+    });
+
+    it('subset POST: early check → 409; the late check → SSE error frame, no job; after endRestructure it proceeds', async () => {
+      const supertest = (await import('supertest')).default;
+      const { beginRestructure, endRestructure } = await import('../workspace/restructure-gate.js');
+      const { snapshotInFlightAnalysis } = await import('./analysis.js');
+      const a = await app();
+      /* Early. */
+      expect(beginRestructure('m_restructuring_subset')).toBe(true);
+      try {
+        const res = await supertest(a)
+          .post('/api/manuscripts/m_restructuring_subset/analysis/chapters')
+          .send({ chapterIds: [1] });
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'chapters_restructuring', message: MESSAGE });
+      } finally {
+        endRestructure('m_restructuring_subset');
+      }
+      /* Late. */
+      const seed = await seedBook('late-restructure-subset', [1]);
+      const hydrate = gate();
+      const entered = gate();
+      g.__rwm_hydrate_gate = async () => {
+        entered.open();
+        await hydrate.promise;
+      };
+      try {
+        const pending = supertest(a)
+          .post(`/api/manuscripts/${seed.manuscriptId}/analysis/chapters`)
+          .send({ chapterIds: [1] })
+          .then((x) => x);
+        await entered.promise;
+        expect(beginRestructure(seed.manuscriptId)).toBe(true);
+        hydrate.open();
+        const res = await pending;
+        expect(res.status).toBe(200);
+        expect(sseErrors(res.text)).toEqual([{ kind: 'error', code: 'chapters_restructuring', message: MESSAGE }]);
+        expect(snapshotInFlightAnalysis(seed.manuscriptId)).toBeNull();
+      } finally {
+        endRestructure(seed.manuscriptId);
+        delete g.__rwm_hydrate_gate;
+      }
+      /* Released. */
+      const after = await supertest(a)
+        .post('/api/manuscripts/m_restructuring_subset/analysis/chapters')
+        .send({ chapterIds: [1] });
+      expect(after.status).toBe(200);
+      expect(sseErrors(after.text).map((e) => e.code)).toEqual(['unknown_manuscript']);
+    });
   });
 
   it('control: a Retry when no main job exists runs exactly as today', async () => {

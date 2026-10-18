@@ -39,7 +39,8 @@ import {
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
   requireBookStateLanguage,
@@ -125,6 +126,10 @@ export async function triggerScoring(ctx: {
       against scoreBook's own precise usedQwenTiers — safe there because
       resume never runs concurrently with an in-flight sibling render. */
   keep?: { keep06: boolean; keep17: boolean };
+  /** #3524 — the model key of the render run this pass follows; scoring resolves a
+      character's current engine from it (see scoreBook's `runModelKey`). Omitted by the
+      resume route, which has no run. */
+  runModelKey?: TtsModelKey;
 }): Promise<void> {
   if (!configValue('qa.speaker.enabled')) return;
   if (scoringInFlight.has(ctx.bookId)) return;
@@ -157,6 +162,7 @@ export async function triggerScoring(ctx: {
   let finalCharactersOnRoster = 0;
   const run = (async () => {
     const result = await scoreBook(ctx.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
+      runModelKey: ctx.runModelKey,
       onRosterKnown: (total) => {
         finalCharactersOnRoster = total;
         broadcastToBook(ctx.bookId, { type: 'scoring_started', charactersOnRoster: total });
@@ -233,6 +239,8 @@ export async function afterChapterFinalized(ctx: {
       NOT derived from the finalized-chapters-only score pass, which can't see
       an in-flight sibling chapter's tier (the Finding-2 race). */
   keep: { keep06: boolean; keep17: boolean };
+  /** #3524 — the run's model key, forwarded to `triggerScoring`. */
+  runModelKey?: TtsModelKey;
 }) {
   /* This guard is intentionally DUPLICATED with `triggerScoring`'s own
      `qa.speaker.enabled` check below, rather than relocated there (round-3
@@ -257,7 +265,7 @@ export async function afterChapterFinalized(ctx: {
      own attempted stamp entirely if its trigger is coalesced away. */
   await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
 
-  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep });
+  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep, runModelKey: ctx.runModelKey });
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -384,9 +392,11 @@ interface RunningJob {
       gate (renders straight through) for a confirmed entry, so a confirm →
       re-claim → re-enter cycle doesn't re-prompt. Default false. */
   fallbackConfirmed: boolean;
-  /** Plan 285 — the request's A/B review intent (null when absent). Stamps
-      `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
-      to finalize (PR 2). */
+  /** Plan 285/286 — the request's A/B review intent (null when absent). Stamps
+      `reviewChapter: true` on THIS job's live chapter_complete, and is passed
+      to finalize for the chapter actually rendered with review (a job with
+      `review` renders exactly one chapter; replayed chapters never finalize,
+      so no per-chapter guard is needed). */
   review: ReviewRequest | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
@@ -1045,7 +1055,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
   const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
-    /* Plan 286 — overlay: keeps a `[]` take and an excluded chapter's take. */
+    /* Plan 287 — overlay: keeps a `[]` take and an excluded chapter's take. */
     await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
       excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
     }).catch((e) => {
@@ -1427,7 +1437,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Bug E: drop from in-flight before continuing so the aggregate
          stays accurate when the next chapter is added. */
       job.runInProgress.delete(chapter.id);
-      /* Plan 286 decision C — a `[]` take is a finished analysis (decision B),
+      /* Plan 287 decision C — a `[]` take is a finished analysis (decision B),
          so say why it produced no audio. With no failure record the chapter
          had no words to attribute; with one, attribution ran and found no
          lines. No own key at all is the incomplete-cache case. */
@@ -1900,7 +1910,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         audioModelKey: renderedModelKey,
         audioEngines,
-        reviewRecorded,
+        reviewOutcome,
       } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
@@ -1944,6 +1954,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            fail-closed, the same direction `isAudioCurrent` takes everywhere
            else. */
         castHistorySeq: castIdHistory.seq ?? 0,
+        // Plan 286 — null when absent; a reviewed job renders exactly one chapter.
+        review: job.review,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
@@ -1969,6 +1981,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
         justFinalized: { id: chapter.id, slug: chapter.slug },
         keep: usedQwenTiers,
+        runModelKey: modelKey,
       });
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
@@ -2105,8 +2118,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
            badge the moment the Done pill flips, without a state.json reload. */
         audioQa,
-        /* Plan 285 — present only when finalize was asked to record review state. */
-        ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+        /* Plan 285/286 — present only when finalize was asked to record review state. */
+        ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
         /* Plan 285 — only the chapter actually rendered with `review`; the
            replay loop above never carries it. */
         ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),
@@ -2263,29 +2276,38 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          synthesis failure the user needs to see. */
       try {
         const statePath = stateJsonPath(bookDir);
-        const prev = await readJson<BookStateJson>(statePath);
-        if (prev) {
-          const next: BookStateJson = {
-            ...prev,
-            chapters: prev.chapters.map((c) =>
-              c.id === chapter.id
-                ? {
-                    ...c,
-                    generationState: 'failed',
-                    generationError: errorReason,
-                    /* fs-19 — persist the structured class + remediation so a
-                       reloaded failed chapter re-hydrates with its "what to do"
-                       line, not just the reason. */
-                    generationErrorCode: errorCode,
-                    generationRemediation: remediation,
-                  }
-                : c,
-            ),
-            updatedAt: new Date().toISOString(),
-          };
-          await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-        }
+        /* #3700 — same per-book state.json lock as finalizeChapterAudioWrite's
+           success-path stamp: a failing chapter must not clobber (or be
+           clobbered by) a sibling's concurrent state.json write. */
+        await withStateJsonLock(statePath, async () => {
+          const prev = await readStateJsonWithRecovery(statePath);
+          if (prev) {
+            const next: BookStateJson = {
+              ...prev,
+              chapters: prev.chapters.map((c) =>
+                c.id === chapter.id
+                  ? {
+                      ...c,
+                      generationState: 'failed',
+                      generationError: errorReason,
+                      /* fs-19 — persist the structured class + remediation so a
+                         reloaded failed chapter re-hydrates with its "what to do"
+                         line, not just the reason. */
+                      generationErrorCode: errorCode,
+                      generationRemediation: remediation,
+                    }
+                  : c,
+              ),
+              updatedAt: new Date().toISOString(),
+            };
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+          }
+        });
       } catch (persistErr) {
+        /* #3625 — a state-lock timeout is deliberately swallowed here, like a
+           disk fault: `chapter_failed` already went out over SSE, and this stamp
+           is only a reload annotation. The raw error (with the lock key) stays in
+           the log and never reaches a client. */
         console.warn(
           `[generation] failed to persist error state for chapter ${chapter.id}:`,
           persistErr,
