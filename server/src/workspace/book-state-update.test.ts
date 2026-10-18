@@ -76,3 +76,41 @@ describe('withLocatedBook', () => {
     expect(seen).toBe('After');
   });
 });
+
+/* #3400 pass 9 -- `underBookLock` is for a pre-check that may reach the
+   workspace scan, whose heals take the book lock AND the `state-json` leaf lock
+   (`persistHealPatches` -> `updateStateJsonLocked`). The leaf lock is not
+   re-entrant, so the hook must run BEFORE `updateStateAtDir` takes it: run
+   inside it, a hook that heals the same book would wait on its own caller for the
+   whole acquisition budget. Observable here by taking the leaf lock from inside
+   the hook with a short budget: free => it resolves, held => it times out. */
+describe('updateStateAtDir underBookLock', () => {
+  it('runs inside the book lock but before the state-json leaf lock is held', async () => {
+    const { updateStateAtDir } = await import('./book-state-update.js');
+    const { withStateJsonLock } = await import('./file-lock.js');
+    const bookDir = join(workspaceRoot, 'books', 'tester', 'myseries', 'locate');
+    const statePath = paths.stateJsonPath(bookDir);
+
+    const order: string[] = [];
+    let leafFreeInHook: boolean | null = null;
+    const wrote = await updateStateAtDir(
+      bookDir,
+      (s) => {
+        order.push('mutate');
+        return { ...s, title: 'Mutated' };
+      },
+      {
+        underBookLock: async () => {
+          order.push('hook');
+          leafFreeInHook = await withStateJsonLock(statePath, async () => true, 150).catch(
+            () => false,
+          );
+        },
+      },
+    );
+
+    expect(wrote).toBe(true);
+    expect(order).toEqual(['hook', 'mutate']);
+    expect(leafFreeInHook).toBe(true);
+  });
+});
