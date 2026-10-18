@@ -97,11 +97,11 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   },
   'routes/generation.ts': {
     count: 1,
-    why: 'generation finalize: not blocked by the restructure lock (#3625 owns it).',
+    why: 'generation failure persist: holds only the state-json leaf lock, not the book lock, so it can stamp a chapter id a concurrent restructure just renumbered (design owed, #3625; the lost-stamp half was fixed by #3700).',
   },
   'audio/finalize-chapter-write.ts': {
     count: 1,
-    why: 'generation finalize: not blocked by the restructure lock (#3625 owns it).',
+    why: 'render finalize: holds only the state-json leaf lock, not the book lock, so its stamp can land on a chapter id a concurrent restructure just renumbered (design owed, #3625; the lost-stamp half was fixed by #3700).',
   },
 };
 
