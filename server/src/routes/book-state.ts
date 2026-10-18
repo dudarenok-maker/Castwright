@@ -1491,6 +1491,13 @@ async function applyReparse(
        was located before it, and a sibling render's stamp can land in between.
        `installManuscript` is the `beforeWrite`: it runs inside that lock, only
        once state.json is known present and the mutation produced a change. */
+    /* #3400 pass 9 -- the destructive arms above, the change log and the
+       upload paths all used the `bookDir` this request started with. A
+       folder-renaming write that landed meanwhile moved the book: recording the
+       new chapters (and `manuscriptFile`) in the NEW folder would leave the
+       record and the file in different folders. Refuse like an absent book:
+       nothing installed, state.json untouched. */
+    if (fresh.bookDir !== bookDir) return null;
     let undoInstall: (() => Promise<void>) | undefined;
     let newChapters: BookStateJson['chapters'] = [];
     let nextState: BookStateJson | null;
