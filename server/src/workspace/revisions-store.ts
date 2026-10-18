@@ -32,6 +32,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import { audioDir, revisionsJsonPath, stateJsonPath } from './paths.js';
 import { withKeyLock } from './file-lock.js';
 import { hasPreviousAudio as previousAudioExists } from './preserve-previous-audio.js';
@@ -250,9 +251,9 @@ async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null>
     (the snapshot alone then decides, as before). */
 async function readLiveChapters(bookDir: string): Promise<ChapterRef[]> {
   try {
-    const path = stateJsonPath(bookDir);
-    if (!existsSync(path)) return [];
-    const state = await readJson<{ chapters?: unknown }>(path);
+    /* The recovering read: a rotating write renames main to `.bak.1` before the new file lands, and
+       a plain read in that window would see no state and drop a sibling's entry. */
+    const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
     return Array.isArray(state?.chapters) ? (state.chapters as ChapterRef[]) : [];
   } catch {
     return [];
