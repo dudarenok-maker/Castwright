@@ -751,7 +751,8 @@ async function runScriptReviewJob(
   let lastEmittedProgress = 0;
   /* #3084 P30 — the fallback target is marked busy only once the review switches to it, and stays
      marked until the review ends (the finally below). A local target behind a non-local primary
-     takes the Ollama review pin; no unload at the end, since the primary never loaded Ollama. */
+     takes the Ollama review pin and is unloaded at the end like a local primary: the target
+     loaded the model under keep_alive -1, so it would otherwise sit resident forever. */
   let releaseFallbackRun: () => void = () => {};
   let pinnedLocalFallback = false;
   const switchToFallback = (reason: string): void => {
@@ -1103,13 +1104,12 @@ async function runScriptReviewJob(
   } finally {
     releaseEndpointRun();
     releaseFallbackRun(); // #3084 P30 — release the fallback target's run mark, if it ever activated
-    if (pinnedLocalFallback) clearReviewBusy(located.bookDir);
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
     /* Release the run-scoped analyzer pin: clear this run's busy ref and, once
        no analysis/other review still needs the model (ref-counted), evict it
        (keep_alive:0) so the pinned model doesn't sit resident forever.
        Best-effort — a failed evict just leaves it to idle per its own value. */
-    if (pinnedLocal) {
+    if (pinnedLocal || pinnedLocalFallback) {
       clearReviewBusy(located.bookDir);
       if (!isAnyAnalyzerRunBusy()) {
         void unloadResidentOllama().catch(() => {

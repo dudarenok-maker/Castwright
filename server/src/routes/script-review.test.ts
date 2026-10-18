@@ -1238,7 +1238,7 @@ describe('POST /api/books/:bookId/script-review', () => {
     }
   });
 
-  it('#3084 P30 — once an endpoint review falls back to local, the Ollama review pin holds until the end, then releases without an unload', async () => {
+  it('#3084 P30 — once an endpoint review falls back to local, the Ollama review pin holds until the end, then releases and unloads what the target loaded', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
     reviewOn('qwen3.5:4b');
@@ -1253,7 +1253,7 @@ describe('POST /api/books/:bookId/script-review', () => {
       await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
       expect(busyAfterSwitch).toBe(true);
       expect(isAnyAnalyzerRunBusy()).toBe(false);
-      expect(unloadResidentOllamaMock).not.toHaveBeenCalled();
+      expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1);
     } finally {
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
