@@ -261,7 +261,7 @@ vi.mock('../workspace/state-io.js', async () => {
     writeJsonAtomic: async (...args: Parameters<typeof actual.writeJsonAtomic>) => {
       if (
         (globalThis as Record<string, unknown>).__analysis_test_state_write_throws === true &&
-        String(args[0]).endsWith('state.json')
+        /[\\/]state\.json$/.test(String(args[0]))
       ) {
         throw new Error('EPERM: state.json write failed');
       }

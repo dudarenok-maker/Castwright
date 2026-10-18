@@ -38,7 +38,7 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
     ...orig,
     writeJsonAtomic: (async (...args: Parameters<typeof orig.writeJsonAtomic>) => {
       const fire = hooks.beforeNextWrite;
-      if (fire && String(args[0]).endsWith('state.json')) {
+      if (fire && /[\\/]state\.json$/.test(String(args[0]))) {
         hooks.beforeNextWrite = undefined;
         await fire();
       }
