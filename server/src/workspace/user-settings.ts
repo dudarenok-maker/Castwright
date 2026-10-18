@@ -1060,15 +1060,24 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
          write nothing), a marker this process kept after its own failed write,
          or a dead marker NEWER than this process's last sighting of a present
          main (`mainSeenAt`). A stranded recovery whose markers are all dead
-         writes the recovered settings back to main and drops the markers.
-         A dead marker OLDER than that sighting was already there while main
-         was whole, so it cannot explain the absence: that is a delete (I2).
+         writes the recovered settings back to main and drops the markers; one
+         served under a live marker writes nothing and commits a stamp that
+         forces the next read to re-decide, so it is written back once the
+         marker dies.
+         THE WARM CASE (#3625 pass 7, owner decision): a dead marker that was
+         already present at that sighting is NOT attributed. It may have been a
+         write in flight then (the marker is created before main is renamed
+         away), so a sibling that began its save before our last sighting and
+         then crashed looks the same on disk as a stale marker followed by a
+         delete. DELETE WINS: it is a reset (I2). The accepted cost: that
+         sibling's save is lost.
          THE COLD CASE (#3625 pass 6, owner decision): at boot there is no
          sighting, and a dead marker beside a missing main is ambiguous between
          a crash mid-save (I3) and a stale marker followed by a delete (I2).
          DELETE WINS: it is a reset to defaults, and the backups are dropped
          like any reset's.
-     I4  Any uncertainty (a readdir error, unknown marker state) refuses writes
+     I4  Any uncertainty (a readdir error, a marker stat error other than
+         ENOENT, unknown marker state) refuses writes
          rather than serving defaults. (It is handled like a non-parse read
          error: the last-known settings stay, `readUnverified` is set.) */
 
@@ -1127,9 +1136,9 @@ export async function readUserSettings(): Promise<UserSettings> {
 let writeGeneration = 0;
 
 /** When this process last saw the settings file present (a read that parsed
-    main, or a write that landed it); `null` until it has. A write-in-flight
-    marker older than this was already on disk while main was whole, so it
-    cannot explain a later absence (I2/I3). */
+    main, or a write that landed it); `null` until it has. A dead
+    write-in-flight marker older than this is not attributed to a later
+    absence: owner decision, delete wins (I3's warm case). */
 let mainSeenAt: number | null = null;
 
 type ReadOutcome = {
@@ -1196,7 +1205,11 @@ async function performUserSettingsRead(): Promise<UserSettings> {
            deliberate delete of main AND every backup, so it falls through to
            the reset below (I2). */
         stranded = true;
-        readStamp = null;
+        /* Not `null`: an absent main matches a `null` stamp, so a strand served
+           under a live marker (no write-back below) would be served from the
+           cache forever and never re-decided once the marker dies (#3625 pass 7).
+           A successful write-back overwrites this. */
+        readStamp = STAMP_FORCE_REREAD;
         raw = await readFromDisk(true);
         /* I3: every marker is dead (no live writer can rename-in over us), so
            write the recovered settings back to main - the recovery happens

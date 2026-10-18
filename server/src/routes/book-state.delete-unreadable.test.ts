@@ -223,6 +223,43 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(healthyDir)).toBe(true);
   });
 
+  /* Pass 7 🟡2 (mutation M5b): a state that stops parsing while the DELETE waits
+     on the lock is still the folder resolved a moment ago, and is removed. The
+     state's bookId differs from the folder-derived id, so the stateless fallback
+     cannot remove it instead: only the in-lock branch can. */
+  it('removes the folder when its state (main and every backup) is torn while the DELETE waits on the lock', async () => {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const title = 'Torn While Waiting';
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    const statePath = join(dir, '.audiobook', 'state.json');
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        bookId: 'torn-while-waiting-id',
+        manuscriptId: 'm_torn_waiting',
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    let release!: () => void;
+    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    const del = request(app).delete('/api/books/torn-while-waiting-id').then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    writeFileSync(statePath, '{ torn');
+    writeFileSync(`${statePath}.bak.1`, '{ torn');
+    release();
+    await held;
+    const res = await del;
+    expect(res.status).toBe(204);
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(healthyDir)).toBe(true);
+  });
+
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {
     const res = await request(app).delete('/api/books/no-such-book');
     expect(res.status).toBe(204);

@@ -25,6 +25,8 @@ const hooks = vi.hoisted(() => ({
   /** Runs after the real read has returned its bytes, before the caller sees them. */
   readFileAfter: null as null | ((path: string) => Promise<void>),
   readdirFails: false,
+  /** An errno code `statSync` throws for a write-in-flight marker, or null. */
+  markerStatFails: null as null | string,
 }));
 
 vi.mock('node:fs/promises', async () => {
@@ -52,6 +54,12 @@ vi.mock('node:fs', async () => {
       if (hooks.readdirFails) throw Object.assign(new Error('EPERM: readdir denied'), { code: 'EPERM' });
       return actual.readdirSync(...args);
     }) as typeof actual.readdirSync,
+    statSync: ((...args: Parameters<typeof actual.statSync>) => {
+      if (hooks.markerStatFails && String(args[0]).includes('.writing-')) {
+        throw Object.assign(new Error(`${hooks.markerStatFails}: simulated stat`), { code: hooks.markerStatFails });
+      }
+      return actual.statSync(...args);
+    }) as typeof actual.statSync,
   };
 });
 
@@ -74,6 +82,7 @@ beforeEach(() => {
   hooks.readFile = null;
   hooks.readFileAfter = null;
   hooks.readdirFails = false;
+  hooks.markerStatFails = null;
   clean();
   mod._resetUserSettingsCache();
 });
@@ -84,6 +93,7 @@ afterEach(() => {
   hooks.readFile = null;
   hooks.readFileAfter = null;
   hooks.readdirFails = false;
+  hooks.markerStatFails = null;
   clean();
   mod._resetUserSettingsCache();
 });
@@ -286,6 +296,28 @@ describe('I2 — a deliberate delete resets to defaults and never resurrects', (
     expect(mod.isUserSettingsFileUnreadable()).toBe(false);
   });
 
+  /* Pass 7 🟠2, probe P-SIB. Owner decision (#3625 pass 7, option a): delete
+     wins here too. A sibling marker that was already present (live) at this
+     process's last sighting of main, followed by main's absence, is a delete.
+     On disk this is indistinguishable from P-I2b, so the accepted cost is
+     exactly this case: a sibling that began its save before our last sighting
+     and then crashed between its renames loses that save. */
+  it('P-SIB: a sibling marker live at our last sighting, then main gone, is a reset (owner decision: delete wins)', async () => {
+    writeFileSync(bak(1), settings({ displayName: 'Older' }));
+    writeFileSync(P, settings({ displayName: 'Mine', allowCloudFallback: false }));
+    foreignMarker(1000); // the sibling's save has begun
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    expect(markers()).toHaveLength(1); // young and foreign: the read's sweep keeps it
+    renameSync(bak(1), bak(2)); // the sibling shifts the chain,
+    renameSync(P, bak(1)); // renames main away, and dies
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + HOUR);
+    expect((await mod.readUserSettings()).displayName).toBe(mod.DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(P)).toBe(false);
+    expect(existsSync(bak(1))).toBe(false);
+    expect(existsSync(bak(2))).toBe(false);
+  });
+
   /* Pass 6 🟠2 (c): reads sweep too, not only writes, so a dead marker beside a
      present main does not wait for the next save. */
   it('a read that finds main present sweeps dead markers, at boot too, and keeps a live one', async () => {
@@ -373,6 +405,44 @@ describe('I3 — a crash mid-write is recovered from backup at most once, then m
     expect(existsSync(P)).toBe(false);
     expect(markers()).toHaveLength(1);
   });
+
+  /* Pass 7 🟠1, probe P-LIVE: a strand served under a live marker wrote nothing
+     and committed a `null` stamp, which an absent main matches, so no later read
+     re-ran the decision once the marker died; the next restart (cold, dead
+     marker) then reset and unlinked the backup. */
+  it('P-LIVE: a strand served under a live marker is written back once the marker dies, before any restart', async () => {
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(realNow - 10_000);
+    writeFileSync(P, settings({ displayName: 'Mine', allowCloudFallback: false }));
+    await mod.readUserSettings(); // warm: this process saw main 10 s ago
+    clock.mockRestore();
+    renameSync(P, bak(1)); // a sibling's rename-away; it is killed before its rename-in
+    foreignMarker(0);
+    expect((await mod.readUserSettings()).displayName).toBe('Mine'); // live: served, nothing written
+    expect(existsSync(P)).toBe(false);
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + HOUR); // the marker dies
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    expect(existsSync(P)).toBe(true);
+    expect(onDisk()).toMatchObject({ displayName: 'Mine', allowCloudFallback: false });
+    vi.restoreAllMocks();
+    mod._resetUserSettingsCache(); // a restart now finds main
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+  });
+
+  /* Pass 7 🟡1 (mutation M10): a process whose only sighting of main is its own
+     save (a first run with no file, then a save) must still attribute a later
+     sibling strand, so the write records the sighting. */
+  it('a process whose only sighting of main is its own save recovers a later sibling strand', async () => {
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(realNow - 2 * HOUR);
+    await mod.writeUserSettings({ displayName: 'v1', allowCloudFallback: false }); // first run: no file before
+    clock.mockRestore();
+    renameSync(P, bak(1)); // a sibling's rename-away, after our save; it died an hour ago
+    foreignMarker(HOUR);
+    expect((await mod.readUserSettings()).displayName).toBe('v1');
+    expect(onDisk()).toMatchObject({ displayName: 'v1', allowCloudFallback: false });
+  });
 });
 
 describe('I4 — uncertainty refuses writes rather than serving defaults', () => {
@@ -395,5 +465,33 @@ describe('I4 — uncertainty refuses writes rather than serving defaults', () =>
     } finally {
       hooks.readdirFails = false;
     }
+  });
+
+  /* Pass 7 🟠3, probe P-STAT: a stat error on a marker read as "marker gone",
+     so a live sibling's strand became a reset that unlinked its backup. */
+  it('an EIO stat on a live marker keeps the last-known settings, refuses writes and deletes no backup', async () => {
+    writeFileSync(P, settings({ displayName: 'Mine', allowCloudFallback: false }));
+    await mod.readUserSettings(); // warm
+    renameSync(P, bak(1)); // the sibling's rename window
+    foreignMarker(0);
+    hooks.markerStatFails = 'EIO';
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    expect(existsSync(bak(1))).toBe(true);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).rejects.toThrow();
+    expect(existsSync(bak(1))).toBe(true);
+  });
+
+  it('an EIO stat on a marker at boot serves no reset: backup kept, unreadable flagged', async () => {
+    writeFileSync(bak(1), settings({ displayName: 'Sibling' }));
+    foreignMarker(0);
+    hooks.markerStatFails = 'EIO';
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    expect(existsSync(bak(1))).toBe(true);
+    hooks.markerStatFails = null;
+    expect((await mod.readUserSettings()).displayName).toBe('Sibling'); // once stat works, the strand is served
   });
 });

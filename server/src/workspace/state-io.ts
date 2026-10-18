@@ -86,7 +86,12 @@ const keptMarkers = new Set<string>();
 
 /** One marker's state: `live` (it may belong to a write still running), `dead`
  *  (with its mtime), or `gone` (vanished while we looked). Live is this process's
- *  own running write, or another's marker younger than STALE_MARKER_MS. */
+ *  own running write, or another's marker younger than STALE_MARKER_MS. Only
+ *  `ENOENT` is `gone`; any other stat error is THROWN (#3625 pass 7, I4), so
+ *  "could not look" never reads as "no write in flight". That includes Windows'
+ *  delete-pending `EPERM`: it cannot be told apart from a real access error on a
+ *  live marker, and reading it as gone resets the settings and unlinks the
+ *  backups, while rethrowing only refuses writes until the next read. */
 function markerState(path: string, name: string): { full: string; state: 'live' | 'dead' | 'gone'; mtimeMs: number } {
   const full = join(dirname(path), name);
   const own = name.startsWith(`${writeMarkerPrefix(path)}${process.pid}-`);
@@ -94,8 +99,9 @@ function markerState(path: string, name: string): { full: string; state: 'live' 
   let mtimeMs: number;
   try {
     mtimeMs = statSync(full).mtimeMs;
-  } catch {
-    return { full, state: 'gone', mtimeMs: Number.NaN };
+  } catch (err) {
+    if (isEnoent(err)) return { full, state: 'gone', mtimeMs: Number.NaN };
+    throw err;
   }
   if (own) return { full, state: 'dead', mtimeMs };
   return { full, state: Date.now() - mtimeMs > STALE_MARKER_MS ? 'dead' : 'live', mtimeMs };
@@ -107,7 +113,8 @@ function markerState(path: string, name: string): { full: string; state: 'live' 
  *  A marker outliving its write turns every later deliberate delete into a
  *  recovery (#3625 delta review 3, I2), so writes, stranded reads and reads
  *  that find main present sweep. `remove: false` only reports. Throws like
- *  `hasWriteInFlightMarker` when the directory cannot be listed. */
+ *  `hasWriteInFlightMarker` when the directory cannot be listed, or a marker
+ *  cannot be stat'd. */
 export function sweepDeadWriteMarkers(path: string, remove = true): boolean {
   let remaining = 0;
   for (const name of listWriteMarkers(path)) {
@@ -127,11 +134,15 @@ export function sweepDeadWriteMarkers(path: string, remove = true): boolean {
  *  (#3625 pass 6). A marker explains it when it is LIVE (a write may be between
  *  its renames right now), when this process kept it after its own failed
  *  write, or when it is dead but NEWER than `mainSeenAtMs`, this process's last
- *  sighting of a present main. A dead marker older than that sighting was
- *  already there while main was whole, so it cannot be why main is gone now;
- *  with no sighting at all (`null`: a cold boot) no dead marker can be
- *  attributed, and the absence reads as a delete. Throws like
- *  `hasWriteInFlightMarker` when the directory cannot be listed. */
+ *  sighting of a present main. A dead marker that was already present at that
+ *  sighting - possibly a write in flight then, since the marker is created
+ *  before main is renamed away - is NOT attributed: owner decision (#3625 pass
+ *  7, "delete wins"), extending the cold rule below. The accepted cost is that a
+ *  sibling which began its save before our last sighting and then crashed
+ *  between its renames loses that save. With no sighting at all (`null`: a cold
+ *  boot) no dead marker can be attributed, and the absence reads as a delete
+ *  (owner decision, #3625 pass 6). Throws like `hasWriteInFlightMarker` when
+ *  the directory cannot be listed, or a marker cannot be stat'd. */
 export function writeMarkersExplainAbsence(path: string, mainSeenAtMs: number | null): boolean {
   for (const name of listWriteMarkers(path)) {
     const { full, state, mtimeMs } = markerState(path, name);
