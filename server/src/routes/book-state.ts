@@ -1515,8 +1515,9 @@ async function applyReparse(
        `installManuscript` is the `beforeWrite`: it runs inside that lock, only
        once state.json is known present and the mutation produced a change. */
     /* #3400 pass 9/10 -- DEFENSIVE BACKSTOP, unreachable through the API: the
-       reparse / replace-manuscript handlers register reparseBusy for the run and
-       the folder-renaming PUT /state answers 409 while it is set. The destructive
+       reparse / replace-manuscript handlers register reparseBusy for the run
+       (re-resolving the folder after marking, so the mark names the live
+       folder) and the folder-renaming PUT /state answers 409 while it is set. The destructive
        arms above and the upload paths all use the `bookDir` this request started
        with, so if the book were moved by some other means (an out-of-band move on
        disk), recording the new chapters here would split the record from the
@@ -1616,6 +1617,35 @@ async function applyReparse(
   return outcome ? outcome.value : null;
 }
 
+/* #3400 pass 10 -- locate the book AND hold its reparse marker, with the two
+   agreeing. The marker is keyed by folder, so a folder-moving rename that
+   completed between the first lookup and the mark would leave the marker on a
+   dead path. Re-resolving after marking closes that: a rename that checked
+   isReparseBusy before our mark either moved the folder before our re-resolve
+   (we see the new folder, drop the stale mark and mark that one) or reaches its
+   post-mkdir re-check after our mark (and is refused). Returns null for an
+   absent book and 'unstable' if the folder keeps moving; in both the marker is
+   NOT held. Otherwise the marker is held on the returned located.bookDir, and
+   no destructive step has run. */
+async function locateAndMarkReparseBusy(
+  bookId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof findBookByBookId>>> | null | 'unstable'> {
+  let located = await findBookByBookId(bookId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!located) return null;
+    const dir = located.bookDir;
+    markReparseBusy(dir);
+    const fresh = await findBookByBookId(bookId);
+    if (fresh && fresh.bookDir === dir) return fresh;
+    clearReparseBusy(dir);
+    located = fresh;
+  }
+  return 'unstable';
+}
+
+const REPARSE_UNSTABLE_409 =
+  'This book was being moved while the manuscript was re-parsed. Try again in a moment.';
+
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
    manuscript so chapter detection picks up parser-rule updates without
    forcing the user to delete and re-upload. Destructive in the sense that
@@ -1634,13 +1664,14 @@ async function applyReparse(
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
   let busyDir: string | undefined;
   try {
-    const located = await findBookByBookId(req.params.bookId);
+    /* #3400 pass 10 -- the marker is held (and confirmed to name the book's
+       current folder) before any destructive step, so the folder-renaming PUT
+       /state refuses (409) for the run's whole life (cleared in the finally
+       below, on every exit). */
+    const located = await locateAndMarkReparseBusy(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
+    if (located === 'unstable') return res.status(409).json({ error: REPARSE_UNSTABLE_409 });
     const { bookDir, state } = located;
-    /* #3400 pass 10 -- registered the moment the folder is known, before any
-       await, so the folder-renaming PUT /state refuses (409) for the run's whole
-       life (cleared in the finally below, on every exit). */
-    markReparseBusy(bookDir);
     busyDir = bookDir;
 
     /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
@@ -1729,11 +1760,11 @@ bookStateRouter.post(
     try {
       if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
       /* #3400 pass 10 -- same marker as reparse above; see there. */
-      markReparseBusy(bookDir);
+      const located = await locateAndMarkReparseBusy(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      if (located === 'unstable') return res.status(409).json({ error: REPARSE_UNSTABLE_409 });
+      const { bookDir, state } = located;
       busyDir = bookDir;
 
       /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route

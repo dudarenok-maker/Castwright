@@ -23,7 +23,32 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const hooks = vi.hoisted(() => ({ hold: undefined as undefined | (() => Promise<void>) }));
+const hooks = vi.hoisted(() => ({
+  hold: undefined as undefined | (() => Promise<void>),
+  /* runs once, right after the NEXT findBookByBookId resolves, before it returns */
+  afterNextFind: undefined as undefined | (() => void),
+}));
+
+/* Resolved per call: the factory result is cached across vi.resetModules(), but
+   the real module reads WORKSPACE_DIR at import, which changes every test. */
+vi.mock('../workspace/scan.js', async () => {
+  const first = await vi.importActual<typeof import('../workspace/scan.js')>('../workspace/scan.js');
+  return {
+    ...first,
+    findBookByBookId: async (id: string) => {
+      const real = await vi.importActual<typeof import('../workspace/scan.js')>(
+        '../workspace/scan.js',
+      );
+      const found = await real.findBookByBookId(id);
+      const h = hooks.afterNextFind;
+      if (h) {
+        hooks.afterNextFind = undefined;
+        h();
+      }
+      return found;
+    },
+  };
+});
 
 vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
@@ -102,6 +127,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   hooks.hold = undefined;
+  hooks.afterNextFind = undefined;
   rmSync(ws, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
 });
@@ -249,5 +275,33 @@ describe('reparse backstop: folder moved on disk during the arms', () => {
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter One']);
     expect(state.castConfirmed).toBe(true);
+  });
+});
+
+/* A folder-moving rename that completes between the handler's first lookup and
+   its marker: the first lookup returns the now-stale folder; the handler must
+   re-resolve after marking and run against the NEW folder. */
+describe('rename completing between the lookup and the marker (#3400 pass 10)', () => {
+  it('reparse: runs against the new folder, nothing left at the old path', async () => {
+    hooks.afterNextFind = () => renameSync(oldDir, newDir);
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    expect(res.status).toBe(200);
+    expect(existsSync(oldDir)).toBe(false);
+    const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter 1']);
+    expect(state.castConfirmed).toBe(false);
+    expect(existsSync(join(newDir, '.audiobook', 'cast.json'))).toBe(false);
+  });
+
+  it('replace-manuscript: installs into the new folder, nothing left at the old path', async () => {
+    hooks.afterNextFind = () => renameSync(oldDir, newDir);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', UPLOAD, 'revised.md');
+    expect(res.status).toBe(200);
+    expect(existsSync(oldDir)).toBe(false);
+    const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Fresh A', 'Fresh B']);
+    expect(readFileSync(join(newDir, 'manuscript.md'), 'utf8')).toContain('Fresh A');
   });
 });
