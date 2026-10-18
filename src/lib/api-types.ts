@@ -11881,7 +11881,9 @@ export interface operations {
              *     Author/Series/Title path is already taken, or an analysis is
              *     currently running for this book and the patch would move its folder
              *     (renaming mid-analysis would split the book's state across two
-             *     directories — retry once the run finishes).
+             *     directories — retry once the run finishes), or a reparse /
+             *     replace-manuscript is currently running for this book and the patch
+             *     would move its folder (#3400 — retry once it finishes).
              */
             409: {
                 headers: {

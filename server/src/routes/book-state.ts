@@ -91,7 +91,12 @@ import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.
    characterId bucketing through it too. (No direct cast-id-history or
    character-id utility import: those are reached through this module.) */
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { isAnalysisBusy } from '../tts/design-lock.js';
+import {
+  isAnalysisBusy,
+  isReparseBusy,
+  markReparseBusy,
+  clearReparseBusy,
+} from '../tts/design-lock.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -1156,6 +1161,15 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
                (castConfirmed, prosody flags, notes, tags: the autosaves the
                persistence middleware fires constantly, including during an
                analysis) must keep returning 204. */
+            if (isReparseBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'The manuscript is being re-parsed for this book. Wait for it to finish before renaming it.',
+                },
+              };
+            }
             if (isAnalysisBusy(bookDir)) {
               return {
                 status: 409,
@@ -1197,6 +1211,15 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
                registration and the rename (a per-book lock, or keying busy state
                on book id rather than path) — out of scope for #2165,
                deliberately, not by oversight. */
+            if (isReparseBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'The manuscript is being re-parsed for this book. Wait for it to finish before renaming it.',
+                },
+              };
+            }
             if (isAnalysisBusy(bookDir)) {
               return {
                 status: 409,
@@ -1491,12 +1514,16 @@ async function applyReparse(
        was located before it, and a sibling render's stamp can land in between.
        `installManuscript` is the `beforeWrite`: it runs inside that lock, only
        once state.json is known present and the mutation produced a change. */
-    /* #3400 pass 9 -- the destructive arms above, the change log and the
-       upload paths all used the `bookDir` this request started with. A
-       folder-renaming write that landed meanwhile moved the book: recording the
-       new chapters (and `manuscriptFile`) in the NEW folder would leave the
-       record and the file in different folders. Refuse like an absent book:
-       nothing installed, state.json untouched. */
+    /* #3400 pass 9/10 -- DEFENSIVE BACKSTOP, unreachable through the API: the
+       reparse / replace-manuscript handlers register reparseBusy for the run and
+       the folder-renaming PUT /state answers 409 while it is set. The destructive
+       arms above and the upload paths all use the `bookDir` this request started
+       with, so if the book were moved by some other means (an out-of-band move on
+       disk), recording the new chapters here would split the record from the
+       file. Refusing like an absent book installs nothing and leaves state.json
+       untouched, BUT the cast / audio / analysis cache / revisions of the book
+       are already gone by this point -- which is why the rename is refused up
+       front rather than relying on this check. */
     if (fresh.bookDir !== bookDir) return null;
     let undoInstall: (() => Promise<void>) | undefined;
     let newChapters: BookStateJson['chapters'] = [];
@@ -1605,10 +1632,16 @@ async function applyReparse(
    Frontend confirms with the user before calling. Returns the fresh state
    so the library / open-book flow can re-hydrate without a second round-trip. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
+  let busyDir: string | undefined;
   try {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
+    /* #3400 pass 10 -- registered the moment the folder is known, before any
+       await, so the folder-renaming PUT /state refuses (409) for the run's whole
+       life (cleared in the finally below, on every exit). */
+    markReparseBusy(bookDir);
+    busyDir = bookDir;
 
     /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
        deleted or rewritten (applyReparse's state write + Promise.all). */
@@ -1675,6 +1708,8 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.status(500).json({
       error: requestFailureMessage(e, (e as Error).message || 'Failed to re-parse manuscript.'),
     });
+  } finally {
+    if (busyDir) clearReparseBusy(busyDir);
   }
 });
 
@@ -1690,12 +1725,16 @@ bookStateRouter.post(
   '/:bookId/replace-manuscript',
   manuscriptUpload.single('file'),
   async (req: Request, res: Response) => {
+    let busyDir: string | undefined;
     try {
       if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
 
       const located = await findBookByBookId(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
       const { bookDir, state } = located;
+      /* #3400 pass 10 -- same marker as reparse above; see there. */
+      markReparseBusy(bookDir);
+      busyDir = bookDir;
 
       /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
          writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
@@ -1776,6 +1815,8 @@ bookStateRouter.post(
           (e as Error).message || 'Failed to replace manuscript.',
         ),
       });
+    } finally {
+      if (busyDir) clearReparseBusy(busyDir);
     }
   },
 );
