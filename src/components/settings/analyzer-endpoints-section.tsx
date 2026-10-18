@@ -381,7 +381,7 @@ export function AnalyzerEndpointsSection() {
             {hostChanged && (
               <div data-testid="endpoint-key-reentry" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 The host changed — re-enter the API key for {editing?.name}. The saved key is only sent to {originOf(editing?.baseUrl ?? '')}.
-                <label className="mt-1 flex items-center gap-2">
+                <label className="mt-1 flex items-center gap-2 min-h-[44px] fine-pointer:min-h-0">
                   <input type="checkbox" data-testid="endpoint-no-key" checked={draft.noKey} onChange={(e) => set('noKey', e.target.checked)} />
                   This server needs no key
                 </label>
@@ -393,11 +393,11 @@ export function AnalyzerEndpointsSection() {
             <div className="flex flex-wrap items-center gap-2">
               <input data-testid="endpoint-context-tokens" type="number" min={512} value={draft.contextTokens} onChange={(e) => set('contextTokens', e.target.value)} className="w-40 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm" />
               <button type="button" data-testid="endpoint-list-models" onClick={() => void listModels()} className="px-3 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">List models</button>
-              <select data-testid="endpoint-detect-flavor" value={detectFlavor} onChange={(e) => setDetectFlavor(e.target.value as 'llama.cpp' | 'llama-swap')} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs">
+              <select data-testid="endpoint-detect-flavor" value={detectFlavor} onChange={(e) => setDetectFlavor(e.target.value as 'llama.cpp' | 'llama-swap')} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">
                 <option value="llama.cpp">llama.cpp</option>
                 <option value="llama-swap">llama-swap</option>
               </select>
-              <select data-testid="endpoint-detect-model" value={detectModel} onChange={(e) => setDetectModel(e.target.value)} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs">
+              <select data-testid="endpoint-detect-model" value={detectModel} onChange={(e) => setDetectModel(e.target.value)} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">
                 <option value="">(no model)</option>
                 {(preview?.models ?? []).map((m) => (
                   <option key={m.model} value={m.model}>{m.model}</option>

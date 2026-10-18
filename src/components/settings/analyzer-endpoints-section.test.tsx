@@ -171,6 +171,17 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     expect(api.putAnalyzerEndpointKey).toHaveBeenCalledWith('lab', null);
   });
 
+  it('#3710 M6 — the Detect selects and the needs-no-key checkbox carry the 44px coarse-pointer target', () => {
+    renderSection({ endpoints: [LAB], keyStatus: { lab: 'set' } });
+    fireEvent.click(screen.getByTestId('endpoint-edit-lab'));
+    for (const id of ['endpoint-detect-flavor', 'endpoint-detect-model']) {
+      expect(screen.getByTestId(id).className, id).toContain('min-h-[44px] fine-pointer:min-h-0');
+    }
+    fireEvent.change(screen.getByTestId('endpoint-base-url'), { target: { value: 'http://10.0.0.5:8080/v1' } });
+    const row = screen.getByTestId('endpoint-no-key').closest('label');
+    expect(row?.className).toContain('min-h-[44px] fine-pointer:min-h-0');
+  });
+
   it('refuses an unload URL on another origin', async () => {
     renderSection();
     fireEvent.click(screen.getByTestId('add-endpoint'));
