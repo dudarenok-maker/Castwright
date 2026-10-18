@@ -31,6 +31,28 @@ const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(()
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
 }));
+/* #3400 pass 10 -- a seam on updateStateAtDir so one case can force the persist's
+   write-target check onto its slow path (see the caller-pin case below). Calls
+   pass straight through; the hook only fires for a call that carries a lock
+   hook (the persist's), when armed. */
+const stateWriteSeam = vi.hoisted(() => ({
+  arm: undefined as undefined | (() => void),
+  fired: 0,
+}));
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...real,
+    updateStateAtDir: (...args: Parameters<typeof real.updateStateAtDir>) => {
+      const opts = args[2];
+      if (stateWriteSeam.arm && (opts?.underBookLock || opts?.beforeWrite)) {
+        stateWriteSeam.fired++;
+        stateWriteSeam.arm();
+      }
+      return real.updateStateAtDir(...args);
+    },
+  };
+});
 vi.mock('./ollama-health.js', () => ({
   detectOllamaDevice: detectOllamaDeviceMock,
   /* endJob calls this for engine:'local' jobs; stub it so it can never make a real HTTP unload. */
@@ -745,6 +767,108 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       }
     },
     30_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '#3400 pass 10 caller pin (%s run): the persist re-verifies its write target BEFORE the state-json leaf lock, so a slow-path heal does not deadlock',
+    async (runKind) => {
+      const seed = await seedRunnableBook();
+      const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+      const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+      const { getManuscript, putManuscript, removeManuscript } = await import('../store/manuscripts.js');
+      const { stateJsonPath } = await import('../workspace/paths.js');
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      /* Armed just before the persist's state write: plant a segments file for the
+         chapter (so the book lookup has a heal patch to persist) and bind the
+         record to a bookId the folder does not carry (so the full-path identity
+         check refuses the candidate and the slow path re-locates the book, whose
+         segments backfill takes the state-json leaf lock). Passed as
+         `underBookLock` that heal runs before the leaf lock is held and
+         succeeds; passed as `beforeWrite` it would wait on the lock its own
+         caller holds. */
+      stateWriteSeam.fired = 0;
+      stateWriteSeam.arm = () => {
+        mkdirSync(join(seed.oldDir, 'audio'), { recursive: true });
+        writeFileSync(
+          join(seed.oldDir, 'audio', '01-chapter-one.segments.json'),
+          JSON.stringify({ modelKey: 'heal-probe', synthesizedAt: '2026-01-01T00:00:00.000Z', durationSec: 3 }),
+        );
+        putManuscript({ ...getManuscript(seed.manuscriptId)!, bookId: 'forces-the-slow-path' });
+      };
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let reboundBookId: string | undefined;
+      let leafLockTimedOut = true;
+      let jobPromise: Promise<void> | undefined;
+      try {
+        if (runKind === 'main') {
+          jobPromise = runMainAnalyzerJob(
+            seed.job,
+            getManuscript(seed.manuscriptId)! as never,
+            seed.phase0Selection,
+            { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
+          );
+        } else {
+          /* The subset-final state write is only reached when stage 1 already
+             exists, so seed it. */
+          await saveAnalysisCache(seed.manuscriptId, {
+            chapters: {},
+            stage1: {
+              characters: [
+                { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+                {
+                  id: 'nova',
+                  name: 'Nova',
+                  role: 'character',
+                  color: '#abc',
+                  evidence: [{ quote: 'The plan is set.' }],
+                },
+              ],
+              chapters: [{ id: 1, title: 'Chapter One' }],
+            },
+          } as never);
+          Object.assign(seed.job, { kind: 'subset', subsetChapterIds: [1] });
+          const rec = getManuscript(seed.manuscriptId)!;
+          jobPromise = runSubsetAnalyzerJob(
+            seed.job,
+            rec as never,
+            seed.phase0Selection,
+            (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection as never,
+            rec.chapterHints,
+            false,
+          );
+        }
+        jobPromise.catch(() => {});
+        await new Promise((r) => setTimeout(r, 300));
+        seed.releasePhase0();
+        await jobPromise.catch(() => {});
+        reboundBookId = getManuscript(seed.manuscriptId)?.bookId;
+        leafLockTimedOut = warnSpy.mock.calls.some((c) => String(c[0]).includes('[state-json-lock]'));
+      } finally {
+        stateWriteSeam.arm = undefined;
+        warnSpy.mockRestore();
+        seed.releasePhase0();
+        if (jobPromise) await jobPromise.catch(() => {});
+        removeManuscript(seed.manuscriptId);
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+
+      expect(stateWriteSeam.fired).toBeGreaterThan(0);
+      const state = JSON.parse(readFileSync(stateJsonPath(seed.oldDir), 'utf8'));
+      /* the terminal state record landed ... */
+      expect(state.analysisProvenance?.scope).toBe(runKind === 'main' ? 'book' : 'subset');
+      /* ... and the slow path ran: it re-hydrated the record, replacing the
+         bogus bookId the seam planted with the folder's real one. */
+      expect(reboundBookId).toBe(state.bookId);
+      /* The heal never waited on a leaf lock its own caller held. Run inside the
+         leaf lock (the mutation) it burns the whole 10s acquisition budget, is
+         swallowed as best-effort by the scan, and leaves only this warning. */
+      expect(leafLockTimedOut).toBe(false);
+    },
+    60_000,
   );
 
 });

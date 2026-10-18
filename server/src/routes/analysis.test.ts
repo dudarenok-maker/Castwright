@@ -249,17 +249,23 @@ vi.mock('../store/analysis-cache.js', async () => {
 /* plan 287 T5 — a case sets this to make the analysis persist's state.json
    write throw, so the persist block's `catch (persistErr)` swallows it.
    Pass-through otherwise. */
-vi.mock('../workspace/state-migrate.js', async () => {
-  const actual = await vi.importActual<typeof import('../workspace/state-migrate.js')>(
-    '../workspace/state-migrate.js',
+vi.mock('../workspace/state-io.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
   );
+  /* Hooked at `writeJsonAtomic` for state.json paths: the persist now writes
+     through `updateStateJsonLocked`, which reaches `writeStateJsonAtomic` by its
+     own module binding, so only the primitive under it can be intercepted. */
   return {
     ...actual,
-    writeStateJsonAtomic: async (...args: Parameters<typeof actual.writeStateJsonAtomic>) => {
-      if ((globalThis as Record<string, unknown>).__analysis_test_state_write_throws === true) {
+    writeJsonAtomic: async (...args: Parameters<typeof actual.writeJsonAtomic>) => {
+      if (
+        (globalThis as Record<string, unknown>).__analysis_test_state_write_throws === true &&
+        /[\\/]state\.json$/.test(String(args[0]))
+      ) {
         throw new Error('EPERM: state.json write failed');
       }
-      return actual.writeStateJsonAtomic(...args);
+      return actual.writeJsonAtomic(...args);
     },
   };
 });

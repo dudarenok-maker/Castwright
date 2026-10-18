@@ -91,3 +91,10 @@ is rejected with the title-only error). The route-level case closes the one
 seam none of the other three touched: `chapter-splice.ts`'s own ownership
 check + `isRerecordableSegment` filter over the raw on-disk array, which had
 zero coverage before this correction.
+
+**Plan 286 (2026-10):** a splice's A/B entry is recorded by the server at
+finalize (`review` with `triggeredBy` `Loudness fix (<first name>)` /
+`Re-record (<first name>)`), so the client no longer enqueues a
+`splice-<book>-<ch>-<char>` entry or flips it playable, so a splice that
+fails leaves no stuck "Rendering…" row. On-box: see the new Group A row (A9's
+#3397 gap now points to it).

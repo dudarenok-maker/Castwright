@@ -8,6 +8,8 @@ import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
+import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { listenProgressActions, type ListenMarker } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
 import { exportsActions } from '../store/exports-slice';
@@ -160,6 +162,7 @@ export function ListenView({
   const bookLanguage = useAppSelector(
     (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
   );
+  const analysisRunning = useAppSelector((s) => selectAnalysisRunningForBook(s, bookId));
   /* fs-51 — per-book performance-QA report card, fetched on mount. */
   const { report: qaReport, loading: qaLoading, error: qaError } = useQaReport(bookId);
   return (
@@ -184,6 +187,7 @@ export function ListenView({
         onOpenExportModal={() => setExportModal({ tab: 'download' })}
         onEnterPreview={onEnterPreview}
         onOpenRestructure={() => dispatch(uiActions.changeView('restructure'))}
+        restructureDisabledReason={analysisRunning ? ANALYSIS_RUNNING_REASON : undefined}
         onReplaceManuscript={() => dispatch(uiActions.startReupload({ bookId }))}
         notes={bookMeta?.notes ?? null}
         language={bookLanguage}

@@ -68,6 +68,7 @@ export function _designChainsSizeForTests(): number {
 
 const analysisBusy = new Map<string, number>(); // bookDir → ref count (main + subset)
 const reviewBusy = new Map<string, number>(); // bookDir → ref count (script-review runs)
+const reparseBusy = new Map<string, number>(); // bookDir -> ref count (reparse / replace-manuscript)
 const designBusy = new Set<string>(); // bookDir of an active bulk-design job
 
 export function markAnalysisBusy(bookDir: string): void {
@@ -80,6 +81,22 @@ export function clearAnalysisBusy(bookDir: string): void {
 }
 export function isAnalysisBusy(bookDir: string): boolean {
   return (analysisBusy.get(bookDir) ?? 0) > 0;
+}
+
+/* #3400 pass 10 -- a reparse / replace-manuscript run for this book. Ref-counted
+   pure predicate like analysisBusy (no lock, never waits); the folder-renaming
+   PUT /state refuses with 409 while it is set, because the run's destructive
+   steps resolve the book folder before the rename could be observed. */
+export function markReparseBusy(bookDir: string): void {
+  reparseBusy.set(bookDir, (reparseBusy.get(bookDir) ?? 0) + 1);
+}
+export function clearReparseBusy(bookDir: string): void {
+  const n = (reparseBusy.get(bookDir) ?? 0) - 1;
+  if (n <= 0) reparseBusy.delete(bookDir);
+  else reparseBusy.set(bookDir, n);
+}
+export function isReparseBusy(bookDir: string): boolean {
+  return (reparseBusy.get(bookDir) ?? 0) > 0;
 }
 
 export function markDesignBusy(bookDir: string): void {

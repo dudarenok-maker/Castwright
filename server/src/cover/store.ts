@@ -11,9 +11,8 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
+import { updateStateAtDir } from '../workspace/book-state-update.js';
+import { coverImagePath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
 import type { CoverCandidate } from './sources/types.js';
 import { firstAvailableCover } from './search.js';
@@ -104,7 +103,8 @@ export async function fetchCoverJpeg(url: string): Promise<Buffer> {
 }
 
 /** Record provenance of the just-downloaded cover onto state.json so a
-    library scan surfaces `coverImageUrl`. */
+    library scan surfaces `coverImageUrl`. Locked read-modify-write (#3400): a
+    chapter restructure holds the same book lock. */
 export async function patchStateCover(
   bookDir: string,
   candidate: Pick<CoverCandidate, 'id' | 'source' | 'coverUrl'>,
@@ -112,42 +112,41 @@ export async function patchStateCover(
       file write, so nothing lands in a book folder that moved or was deleted. */
   beforeWrite?: () => Promise<void>,
 ): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  /* #3700 — read-modify-write under the per-book state-json lock. `false` =
-     state.json absent (deleted/moved while queued): nothing was written. */
-  return withStateJsonLock(path, async () => {
-    const state = await readStateJsonWithRecovery(path);
-    if (!state) return false;
-    if (beforeWrite) await beforeWrite();
-    state.coverImage = {
-      source: candidate.source,
-      candidateId: candidate.id,
-      originalUrl: candidate.coverUrl,
-      fetchedAt: new Date().toISOString(),
-    };
-    state.updatedAt = new Date().toISOString();
-    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-    return true;
-  });
+  /* #3400 + #3700 -- read-modify-write under the per-book lock and the
+     state-json leaf lock (`updateStateAtDir`). `false` = state.json absent
+     (deleted/moved while queued): nothing was written. */
+  return updateStateAtDir(
+    bookDir,
+    (state) => {
+      state.coverImage = {
+        source: candidate.source,
+        candidateId: candidate.id,
+        originalUrl: candidate.coverUrl,
+        fetchedAt: new Date().toISOString(),
+      };
+      state.updatedAt = new Date().toISOString();
+      return state;
+    },
+    { beforeWrite },
+  );
 }
 
-/** Inverse of patchStateCover — DELETE reverts to the procedural gradient.
+/** Inverse of patchStateCover -- DELETE reverts to the procedural gradient.
     `beforeWrite` (the cover-file removal) runs inside the lock once state.json
     is confirmed present; `false` = absent, nothing was removed or written. */
 export async function clearStateCover(
   bookDir: string,
   beforeWrite?: () => Promise<void>,
 ): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  return withStateJsonLock(path, async () => {
-    const state = await readStateJsonWithRecovery(path);
-    if (!state) return false;
-    if (beforeWrite) await beforeWrite();
-    delete state.coverImage;
-    state.updatedAt = new Date().toISOString();
-    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-    return true;
-  });
+  return updateStateAtDir(
+    bookDir,
+    (state) => {
+      delete state.coverImage;
+      state.updatedAt = new Date().toISOString();
+      return state;
+    },
+    { beforeWrite },
+  );
 }
 
 /** Fire-and-forget import hook. Priority-order first hit across all

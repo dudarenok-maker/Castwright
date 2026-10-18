@@ -60,6 +60,16 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   };
 });
 
+/* Plan 286 Task 3 (invariant 8) — a store failure whose message embeds an
+   absolute path. Every path-freedom assertion in this file drives one of
+   these: an `EISDIR` fixture's message carries no path, so asserting its
+   absence would prove nothing. */
+const pathError = () =>
+  Object.assign(
+    new Error("EPERM: operation not permitted, open 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json'"),
+    { code: 'EPERM' },
+  );
+
 const AUTHOR = 'Revision Ops Author';
 const SERIES = 'Standalones';
 const TITLE = 'Revision Ops Book';
@@ -327,6 +337,17 @@ describe('legacy (origin-less) pending entries commit like server ones (#3400)',
     expect(again.status).toBe(200);
     expect(again.body.timeline['1']).toHaveLength(1);
   });
+
+  it('plan 286 (OD20) — a stuck legacy entry (playable:false) is rejected: the kept take returns and the outcome is recorded', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([{ ...legacyEntry(1), playable: false }]);
+    const res = await reject(LEGACY_ID);
+    expect(res.status).toBe(200);
+    expect(readFileSync(live(), 'utf8')).toBe('PREV');
+    expect(res.body.timeline['1']).toMatchObject([{ id: LEGACY_ID, eventKind: 'rejected' }]);
+    expect(disk().pending).toEqual([]);
+  });
 });
 
 describe('POST …/revisions/:revisionId/reject', () => {
@@ -578,5 +599,28 @@ describe('POST …/drift/:driftId/dismiss', () => {
     const res = await dismiss('x');
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+  });
+});
+
+describe('unexpected failures answer fixed sentences (plan 286, invariant 8)', () => {
+  /* All three sites pass `(e as Error).message || '<fallback>'` to
+     requestFailureMessage, which keeps any non-lock message verbatim — so a
+     filesystem error's text (its absolute workspace path included) would reach
+     the client body. Each now answers its own fixed sentence instead; the raw
+     error still goes to the log. */
+  it.each([
+    ['accept', 'begin', () => accept('r1'), 'Failed to accept revision.'],
+    ['reject', 'begin', () => reject('r1'), 'Failed to reject revision.'],
+    ['dismiss', 'dismiss', () => request(app).post(`/api/books/${bookId}/drift/d1/dismiss`), 'Failed to dismiss drift.'],
+  ] as const)('%s', async (_n, which, call, text) => {
+    const store = await import('../workspace/revisions-store.js');
+    if (which === 'begin') vi.mocked(store.beginRevisionOp).mockRejectedValueOnce(pathError());
+    else vi.mocked(store.dismissDriftId).mockRejectedValueOnce(pathError());
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: text });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
 });

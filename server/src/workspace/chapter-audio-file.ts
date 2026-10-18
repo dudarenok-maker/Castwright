@@ -40,9 +40,8 @@ const EXT_PROBE_ORDER: readonly FormatDescriptor[] = [
   { ext: 'ogg', mime: 'audio/ogg', urlSuffix: 'audio.ogg' },
 ];
 
-/** Every audio extension a chapter's audio file can carry — the single source
-    for code that must move or delete a chapter's files by slug
-    (`rewriteChapterSlugs`), so a new format here can't be missed there. */
+/** Every extension a chapter's live audio can carry — the single list the
+    probe above and slug-keyed file movers (rewrite-chapter-slugs) share. */
 export const CHAPTER_AUDIO_EXTS: readonly ChapterAudioExt[] = EXT_PROBE_ORDER.map((d) => d.ext);
 
 export function findChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {

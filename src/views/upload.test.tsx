@@ -32,7 +32,9 @@ vi.mock('../lib/api', () => ({
 
 import { UploadView } from './upload';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
+import { restructureGuardMiddleware } from '../store/restructure-guard-middleware';
+import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { librarySlice } from '../store/library-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -44,8 +46,12 @@ function makeStore(opts: {
   libraryBooks?: LibraryBook[];
   oldSentences?: Sentence[];
   oldSourceText?: string | null;
+  /** install the real restructure guard (first in the chain, like the app store) */
+  guard?: boolean;
 } = {}) {
   const store = configureStore({
+    middleware: (getDefault) =>
+      opts.guard ? getDefault().prepend(restructureGuardMiddleware) : getDefault(),
     reducer: {
       manuscript: manuscriptSlice.reducer,
       ui: uiSlice.reducer,
@@ -288,6 +294,44 @@ describe('UploadView — re-upload mode (plan 74)', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('listen-stub')).toBeInTheDocument();
     });
+  });
+
+  it('Apply is disabled while the book restructures: nothing swapped, overrides kept, no navigation', async () => {
+    const store = makeStore({
+      reuploadingBookId: 'bk_a',
+      libraryBooks: [reuploadBook],
+      oldSentences: oldSentences(['Original sentence.']),
+      oldSourceText: 'Original sentence.',
+      guard: true,
+    });
+    store.dispatch(
+      manuscriptActions.previewReuploadDiff({
+        bookId: 'bk_a',
+        newSourceText: 'Revised sentence.',
+        newSentences: oldSentences(['Revised sentence.']),
+        newWordCount: 2,
+      }),
+    );
+    store.dispatch(uiActions.setRestructuringBook('bk_a'));
+    const spy = vi.spyOn(store, 'dispatch');
+    renderUpload(store);
+    const apply = screen.getByTestId('diff-apply') as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    expect(apply.title).toBe(RESTRUCTURING_REASON);
+    const user = userEvent.setup();
+    await user.click(apply);
+    // The Cmd/Ctrl+Enter shortcut reaches the same handler: it must refuse too.
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    expect(store.getState().manuscript.sourceText).toBe('Original sentence.');
+    expect(store.getState().manuscript.pendingReupload).not.toBeNull();
+    expect(store.getState().ui.reuploadingBookId).toBe('bk_a');
+    expect(screen.queryByTestId('listen-stub')).not.toBeInTheDocument();
+    const types = spy.mock.calls.map((c) => (c[0] as { type?: string })?.type);
+    expect(types).not.toContain('chapters/clearOverrides');
+    expect(types).not.toContain('manuscript/applyReupload');
+    expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain(
+      'restructuring-edit-refused',
+    );
   });
 
   it('Discard restores the OLD manuscript and navigates back to the book', async () => {

@@ -15,9 +15,11 @@
    bulk-reassign-undo-banner.tsx) owns the undo affordance. */
 
 import { useMemo, useRef, useState } from 'react';
+import { useStore } from 'react-redux';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { IconClose } from '../lib/icons';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import type { UnlinkAliasImpactedChapter } from '../lib/api';
@@ -50,6 +52,11 @@ interface Row {
 
 export function ReassignLinesModal({ source, onClose }: Props) {
   const dispatch = useAppDispatch();
+  // #3400 pass 7 — the bulk move is refused while the book restructures; gate
+  // the controls and re-check the live flag before ANY write (the boundary_move
+  // log, the close), so a refused move is never recorded as done.
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const characters = useAppSelector((s) => s.cast.characters);
   const chapters = useAppSelector((s) => s.chapters.chapters);
@@ -161,6 +168,7 @@ export function ReassignLinesModal({ source, onClose }: Props) {
   const canApply = selectedCount > 0 && targetId !== '' && targetId !== sourceCharacterId;
 
   function apply() {
+    if (refuseIfEditsLocked(store.getState, dispatch)) return;
     // Re-validate each selected key against the LIVE store (m9 — drift).
     const liveKeys = new Set(sentences.map((s) => keyOf(s.chapterId, s.id)));
     const requested = [...selected];
@@ -265,7 +273,7 @@ export function ReassignLinesModal({ source, onClose }: Props) {
           )}
           <div className="flex justify-end gap-2">
             <button onClick={() => setConfirming(false)} className="px-4 py-2 rounded-full text-sm font-semibold bg-ink/6 hover:bg-ink/10 min-h-[44px] fine-pointer:min-h-0">Cancel</button>
-            <button onClick={apply} className="px-4 py-2 rounded-full text-sm font-semibold bg-magenta text-white hover:bg-magenta/90 min-h-[44px] fine-pointer:min-h-0">Confirm</button>
+            <button onClick={apply} disabled={editsLocked} title={editsLocked ? RESTRUCTURING_REASON : undefined} className="px-4 py-2 rounded-full text-sm font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:opacity-40 min-h-[44px] fine-pointer:min-h-0">Confirm</button>
           </div>
         </div>
       </>
@@ -369,6 +377,7 @@ export function ReassignLinesModal({ source, onClose }: Props) {
             {/* footer */}
             <div className="sticky bottom-0 bg-white/95 backdrop-blur-md border-t border-ink/10 px-6 py-3 flex flex-wrap items-center justify-end gap-2 rounded-b-3xl">
               {result && <p className="flex-1 text-xs text-ink/60">{result}</p>}
+              {editsLocked && <p className="flex-1 text-xs text-ink/60">{RESTRUCTURING_REASON}</p>}
               <label className="text-sm text-ink/70 flex items-center gap-2">
                 Reassign to
                 <select
@@ -386,7 +395,8 @@ export function ReassignLinesModal({ source, onClose }: Props) {
                 </select>
               </label>
               <button
-                disabled={!canApply}
+                disabled={!canApply || editsLocked}
+                title={editsLocked ? RESTRUCTURING_REASON : undefined}
                 onClick={() => setConfirming(true)}
                 className="px-4 py-2 rounded-full text-sm font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:opacity-40 min-h-[44px] fine-pointer:min-h-0"
               >

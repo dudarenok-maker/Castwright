@@ -5,15 +5,17 @@
    re-opens a book whose in-memory ManuscriptRecord has been lost (server
    restart).
 
-   PUT accepts `{ slice: 'cast'|'manuscript'|'revisions'|'state', patch }` and
+   PUT accepts `{ slice: 'cast'|'manuscript'|'state'|'changeLog', patch }` and
    atomically writes the matching JSON file. Used by the persistence
-   middleware in Phase 5. */
+   middleware in Phase 5. A `'revisions'` slice is refused (400
+   `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { mkdir, readFile, readdir, rm, rmdir, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { safeSegment } from '../util/safe-path.js';
 import {
@@ -27,14 +29,27 @@ import {
   listenStatsJsonPath,
   manuscriptEditsJsonPath,
   queueJsonPath,
-  revisionsJsonPath,
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withKeyLock, withStateJsonLock, requestFailureMessage } from '../workspace/file-lock.js';
+import {
+  withKeyLock,
+  withStateJsonLock,
+  requestFailureMessage,
+  isLockAcquisitionTimeout,
+} from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
+import { withBookLock } from '../workspace/book-lock.js';
+import {
+  assertRevisionsResettable,
+  readRevisions,
+  resetRevisions,
+  revisionsFailureText,
+  toRevisionsState,
+  type RevisionsState,
+} from '../workspace/revisions-store.js';
+import { UnsupportedSchemaError } from '../workspace/schema-migrate.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -42,6 +57,7 @@ import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
+import { withLocatedBook } from '../workspace/book-state-update.js';
 import {
   readStateJsonWithRecovery,
   updateStateJsonLocked,
@@ -52,6 +68,7 @@ import {
   reconcileChapterUuids,
   carryTitleSynthesized,
 } from '../workspace/chapter-uuid.js';
+import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
   getManuscript,
@@ -74,7 +91,12 @@ import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.
    characterId bucketing through it too. (No direct cast-id-history or
    character-id utility import: those are reached through this module.) */
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { isAnalysisBusy } from '../tts/design-lock.js';
+import {
+  isAnalysisBusy,
+  isReparseBusy,
+  markReparseBusy,
+  clearReparseBusy,
+} from '../tts/design-lock.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -295,35 +317,57 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    const { bookDir } = located;
-    const state = await refreshChapterTitles(located.state, bookDir);
-    /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
-       web player's source of truth), persisting once so the Listen view's
-       resume can resolve by uuid. Idempotent. */
-    if (ensureChapterUuids(state)) {
-      /* #3700 — mint + persist against a fresh read inside the state-json lock
-         (ensureChapterUuids mutates in place and is idempotent), then adopt the
-         uuids that actually reached disk so this response matches it. */
-      const persisted = (await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
-        ensureChapterUuids(fresh) ? fresh : null,
-      )) ?? state;
-      for (const ch of state.chapters) {
-        const onDisk = persisted.chapters.find((c) => c.id === ch.id);
-        if (onDisk?.uuid) ch.uuid = onDisk.uuid;
-      }
+    let { bookDir, state } = located;
+    /* #3400 — the title refresh and the uuid mint each rewrite the WHOLE
+       state.json from a read, so when either is owed they re-locate and run
+       under the book lock: a chapter restructure that lands in between keeps
+       its chapter list and the refresh's chapter-count check sees it. #3700 —
+       each write is also a fresh read-modify-write inside the state-json leaf
+       lock (nested inside the book lock), so a sibling render's stamp survives. */
+    if (
+      (state.chapterTitleParserVersion ?? 1) < CHAPTER_TITLE_PARSER_VERSION ||
+      state.chapters.some((c) => !c.uuid)
+    ) {
+      const settled = await withLocatedBook(req.params.bookId, async (fresh) => {
+        const refreshed = await refreshChapterTitles(fresh.state, fresh.bookDir);
+        /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
+           web player's source of truth), persisting once so the Listen view's
+           resume can resolve by uuid. Idempotent. Mint + persist against a
+           fresh read, then adopt the uuids that actually reached disk so this
+           response matches it. */
+        if (ensureChapterUuids(refreshed)) {
+          const persisted =
+            (await updateStateJsonLocked(stateJsonPath(fresh.bookDir), (onDisk) =>
+              ensureChapterUuids(onDisk) ? onDisk : null,
+            )) ?? refreshed;
+          for (const ch of refreshed.chapters) {
+            const onDisk = persisted.chapters.find((c) => c.id === ch.id);
+            if (onDisk?.uuid) ch.uuid = onDisk.uuid;
+          }
+        }
+        return { bookDir: fresh.bookDir, state: refreshed };
+      });
+      if (!settled) return res.status(404).json({ error: 'Book not found.' });
+      ({ bookDir, state } = settled.value);
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs = await readJson<{
-      pending?: unknown[];
-      drift?: unknown[];
-      dismissed?: string[];
-      acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
-      /* Plan 55 — per-chapter timeline. Persisted by the frontend; surfaced
-         on getBookState so the Revision History view can hydrate without an
-         extra round-trip. */
-      timeline?: Record<string, unknown[]>;
-    }>(revisionsJsonPath(bookDir));
+    /* Plan 286 — read through the store: normalised (legacy drift dropped,
+       stale legacy pending dropped), with fileId/rev for the client cache. An
+       unreadable file must not lock the user out of the book: serve null plus a
+       fixed, path-free revisionsError the client toasts once (OD2). */
+    let revs: RevisionsState | null;
+    let revisionsError: string | undefined;
+    try {
+      revs = toRevisionsState(req.params.bookId, await readRevisions(bookDir, state.chapters));
+    } catch (e) {
+      console.error('[book-state] revisions.json unreadable; serving the book without it', e);
+      revs = null;
+      revisionsError = revisionsFailureText(
+        e,
+        "This book's A/B review history couldn't be read, so its pending reviews aren't shown.",
+      );
+    }
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
@@ -423,7 +467,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
     let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
-    /* Plan 286 §3.4 (C18, C20, F) — server facts the analysing view reads
+    /* Plan 287 §3.4 (C18, C20, F) — server facts the analysing view reads
        after a reload or a dropped snapshot: the roster is final
        (`stage1Ready`); the book has not reached Confirm and still needs a main
        resume (`resumeRequired` — never true past Confirm, so no Resume is
@@ -741,6 +785,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscript,
       manuscriptEdits: edits,
       revisions: revs,
+      ...(revisionsError ? { revisionsError } : {}),
       completedSlugs,
       chapterCharacters,
       characterIdAliases,
@@ -862,323 +907,341 @@ const manuscriptPatchSchema = z
 
 bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-
     const body = req.body as {
       slice?: 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
       patch?: unknown;
     };
-    if (!body?.slice || body.patch === undefined) {
-      return res.status(400).json({ error: 'slice and patch are required.' });
-    }
 
-    const { bookDir } = located;
-    switch (body.slice) {
-      case 'cast': {
-        /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
-           `existing` cast that feeds the clone-consent guards) and the write
-           below it must be one atomic span: locking only the write would
-           leave the guards reading a snapshot that a concurrent writer (e.g.
-           POST /voice-library/:voiceUuid/assign) can invalidate between the
-           read and this write, silently erasing whatever it just planted. */
-        await withCastLock(bookDir, async () => {
-          const guarded = await preserveDesignedVoices(bookDir, body.patch);
-          const denormalised = await denormaliseCastReusedVoices(guarded);
-          await writeJsonAtomic(castJsonPath(bookDir), stripDerivedCharacterFields(denormalised));
-        });
-        break;
-      }
-      case 'manuscript': {
-        const parsed = manuscriptPatchSchema.safeParse(body.patch);
-        if (!parsed.success) {
-          return res.status(400).json({ error: `Malformed manuscript patch: ${parsed.error.message}` });
-        }
-        const editsPath = manuscriptEditsJsonPath(bookDir);
-        /* readJson itself already returns null for a missing file — do NOT
-           additionally catch here. A JSON.parse failure on a corrupt/truncated
-           file must propagate to the route's outer catch (500), not collapse
-           to the same "no existing content" null the wipe-guard below relies
-           on to decide whether it's safe to accept an empty sentence list. */
-        const existing = await readJson<{ sentences?: unknown[] }>(editsPath);
-        if (existing?.sentences?.length && parsed.data.sentences.length === 0) {
-          return res.status(409).json({
-            error: 'Refusing to overwrite an analysed manuscript with an empty sentence list.',
+    const applySlice = async ({
+      bookDir,
+    }: NonNullable<Awaited<ReturnType<typeof findBookByBookId>>>): Promise<unknown> => {
+      switch (body.slice) {
+        case 'cast': {
+          /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
+             `existing` cast that feeds the clone-consent guards) and the write
+             below it must be one atomic span: locking only the write would
+             leave the guards reading a snapshot that a concurrent writer (e.g.
+             POST /voice-library/:voiceUuid/assign) can invalidate between the
+             read and this write, silently erasing whatever it just planted. */
+          await withCastLock(bookDir, async () => {
+            const guarded = await preserveDesignedVoices(bookDir, body.patch);
+            const denormalised = await denormaliseCastReusedVoices(guarded);
+            await writeJsonAtomic(castJsonPath(bookDir), stripDerivedCharacterFields(denormalised));
           });
+          break;
         }
-        await writeJsonAtomic(editsPath, parsed.data);
-        break;
-      }
-      case 'revisions':
-        await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
-        break;
-      case 'changeLog':
-        await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
-        break;
-      case 'state': {
-        // Whitelist: only allow updating known editorial fields, not bookId /
-        // manuscriptId / paths.
-        const patch = body.patch as Partial<BookStateJson>;
-        /* #2246 Task 9 — the state slice can now set/clear language. A literal
-           `null` is "stated absence" (distinct from both a value and an absent
-           key) and must survive to disk, so only a non-empty unsupported value
-           is rejected. Mirrors import.ts's unsupported_language contract. */
-        if (patch.language !== undefined && patch.language !== null && typeof patch.language !== 'string') {
+        case 'manuscript': {
+          const parsed = manuscriptPatchSchema.safeParse(body.patch);
+          if (!parsed.success) {
+            return res.status(400).json({ error: `Malformed manuscript patch: ${parsed.error.message}` });
+          }
+          const editsPath = manuscriptEditsJsonPath(bookDir);
+          /* readJson itself already returns null for a missing file — do NOT
+             additionally catch here. A JSON.parse failure on a corrupt/truncated
+             file must propagate to the route's outer catch (500), not collapse
+             to the same "no existing content" null the wipe-guard below relies
+             on to decide whether it's safe to accept an empty sentence list. */
+          const existing = await readJson<{ sentences?: unknown[] }>(editsPath);
+          if (existing?.sentences?.length && parsed.data.sentences.length === 0) {
+            return res.status(409).json({
+              error: 'Refusing to overwrite an analysed manuscript with an empty sentence list.',
+            });
+          }
+          await writeJsonAtomic(editsPath, parsed.data);
+          break;
+        }
+        case 'revisions':
           return res.status(400).json({
-            error: 'unsupported_language',
-            message: `Unsupported language ${JSON.stringify(patch.language)}. Supported languages: ${supportedLanguages()
-              .map((l) => l.code)
-              .join(', ')}.`,
-            supportedLanguages: supportedLanguages(),
+            error: 'revisions_server_owned',
+            message: 'revisions.json is written by the server; use the revision operations.',
           });
-        }
-        if (typeof patch.language === 'string' && patch.language.trim() !== '') {
-          const normalised = normaliseBookLanguage(patch.language);
-          if (!isSupportedLanguage(normalised)) {
+        case 'changeLog':
+          await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
+          break;
+        case 'state': {
+          // Whitelist: only allow updating known editorial fields, not bookId /
+          // manuscriptId / paths.
+          const patch = body.patch as Partial<BookStateJson>;
+          /* #2246 Task 9 — the state slice can now set/clear language. A literal
+             `null` is "stated absence" (distinct from both a value and an absent
+             key) and must survive to disk, so only a non-empty unsupported value
+             is rejected. Mirrors import.ts's unsupported_language contract. */
+          if (patch.language !== undefined && patch.language !== null && typeof patch.language !== 'string') {
             return res.status(400).json({
               error: 'unsupported_language',
-              message: `Unsupported language "${normalised}". Supported languages: ${supportedLanguages()
+              message: `Unsupported language ${JSON.stringify(patch.language)}. Supported languages: ${supportedLanguages()
                 .map((l) => l.code)
                 .join(', ')}.`,
               supportedLanguages: supportedLanguages(),
             });
           }
-        }
-        const pickString = (incoming: unknown, fallback: string): string =>
-          typeof incoming === 'string' && incoming.trim() ? incoming : fallback;
-        const pickNullable = (
-          incoming: unknown,
-          fallback: string | null | undefined,
-        ): string | null => {
-          if (incoming === undefined) return fallback ?? null;
-          if (incoming === null) return null;
-          if (typeof incoming !== 'string') return fallback ?? null;
-          const trimmed = incoming.trim();
-          return trimmed ? trimmed : null;
-        };
-        /* #2246 Task 9 — language: a literal `null` is "stated absence" and must
-           survive to disk as null; an omitted key preserves the stored value
-           (a string stays that string, a null stays null); an empty/whitespace
-           string is not a decision, so it also preserves. A real value was
-           already validated above and is normalised to its BCP-47 primary
-           subtag so it aligns with the registry keys isSupportedLanguage uses. */
-        const pickLanguage = (
-          incoming: unknown,
-          fallback: string | null | undefined,
-        ): string | null | undefined => {
-          if (incoming === undefined) return fallback;
-          if (incoming === null) return null;
-          if (typeof incoming !== 'string') return fallback;
-          const trimmed = incoming.trim();
-          if (!trimmed) return fallback;
-          return normaliseBookLanguage(incoming);
-        };
-        /* Notes preserve interior whitespace verbatim (markdown line breaks
-           matter), unlike pickNullable which trims. Empty / whitespace-only
-           strings still collapse to null so the editor "clear" flow has a
-           clean cleared-value signal. Plan 67. */
-        const pickNotes = (
-          incoming: unknown,
-          fallback: string | null | undefined,
-        ): string | null => {
-          if (incoming === undefined) return fallback ?? null;
-          if (incoming === null) return null;
-          if (typeof incoming !== 'string') return fallback ?? null;
-          return incoming.trim() === '' ? null : incoming;
-        };
-        const pickSeriesPosition = (incoming: unknown, fallback: number | null): number | null => {
-          if (incoming === undefined) return fallback;
-          if (incoming === null) return null;
-          /* Empty string from a cleared number input — treat as null. */
-          if (typeof incoming === 'string' && incoming.trim() === '') return null;
-          const n = typeof incoming === 'number' ? incoming : Number(incoming);
-          if (!Number.isFinite(n)) return fallback;
-          return Math.trunc(n);
-        };
-        const pickStandalone = (incoming: unknown, fallback: boolean): boolean => {
-          if (typeof incoming === 'boolean') return incoming;
-          return fallback;
-        };
-        const pickAudioFormat = (
-          incoming: unknown,
-          fallback: BookStateJson['audioFormat'],
-        ): BookStateJson['audioFormat'] => {
-          if (incoming === undefined) return fallback;
-          if (incoming === 'mp3' || incoming === 'aac-m4a' || incoming === 'opus') return incoming;
-          return fallback;
-        };
-        /* Plan 73 — tags accept the full array on patch; non-string
-           entries are dropped, duplicates collapsed, surrounding
-           whitespace trimmed. Empty string → dropped (the chip editor
-           emits these only on a stray Enter, never on intentional
-           input). Undefined → preserve prior value. */
-        const pickTags = (incoming: unknown, fallback: string[] | undefined): string[] => {
-          if (incoming === undefined) return fallback ?? [];
-          if (!Array.isArray(incoming)) return fallback ?? [];
-          const out: string[] = [];
-          const seen = new Set<string>();
-          for (const entry of incoming) {
-            if (typeof entry !== 'string') continue;
-            const trimmed = entry.trim();
-            if (!trimmed) continue;
-            if (seen.has(trimmed)) continue;
-            seen.add(trimmed);
-            out.push(trimmed);
+          if (typeof patch.language === 'string' && patch.language.trim() !== '') {
+            const normalised = normaliseBookLanguage(patch.language);
+            if (!isSupportedLanguage(normalised)) {
+              return res.status(400).json({
+                error: 'unsupported_language',
+                message: `Unsupported language "${normalised}". Supported languages: ${supportedLanguages()
+                  .map((l) => l.code)
+                  .join(', ')}.`,
+                supportedLanguages: supportedLanguages(),
+              });
+            }
           }
-          return out;
-        };
+          const pickString = (incoming: unknown, fallback: string): string =>
+            typeof incoming === 'string' && incoming.trim() ? incoming : fallback;
+          const pickNullable = (
+            incoming: unknown,
+            fallback: string | null | undefined,
+          ): string | null => {
+            if (incoming === undefined) return fallback ?? null;
+            if (incoming === null) return null;
+            if (typeof incoming !== 'string') return fallback ?? null;
+            const trimmed = incoming.trim();
+            return trimmed ? trimmed : null;
+          };
+          /* #2246 Task 9 — language: a literal `null` is "stated absence" and must
+             survive to disk as null; an omitted key preserves the stored value
+             (a string stays that string, a null stays null); an empty/whitespace
+             string is not a decision, so it also preserves. A real value was
+             already validated above and is normalised to its BCP-47 primary
+             subtag so it aligns with the registry keys isSupportedLanguage uses. */
+          const pickLanguage = (
+            incoming: unknown,
+            fallback: string | null | undefined,
+          ): string | null | undefined => {
+            if (incoming === undefined) return fallback;
+            if (incoming === null) return null;
+            if (typeof incoming !== 'string') return fallback;
+            const trimmed = incoming.trim();
+            if (!trimmed) return fallback;
+            return normaliseBookLanguage(incoming);
+          };
+          /* Notes preserve interior whitespace verbatim (markdown line breaks
+             matter), unlike pickNullable which trims. Empty / whitespace-only
+             strings still collapse to null so the editor "clear" flow has a
+             clean cleared-value signal. Plan 67. */
+          const pickNotes = (
+            incoming: unknown,
+            fallback: string | null | undefined,
+          ): string | null => {
+            if (incoming === undefined) return fallback ?? null;
+            if (incoming === null) return null;
+            if (typeof incoming !== 'string') return fallback ?? null;
+            return incoming.trim() === '' ? null : incoming;
+          };
+          const pickSeriesPosition = (incoming: unknown, fallback: number | null): number | null => {
+            if (incoming === undefined) return fallback;
+            if (incoming === null) return null;
+            /* Empty string from a cleared number input — treat as null. */
+            if (typeof incoming === 'string' && incoming.trim() === '') return null;
+            const n = typeof incoming === 'number' ? incoming : Number(incoming);
+            if (!Number.isFinite(n)) return fallback;
+            return Math.trunc(n);
+          };
+          const pickStandalone = (incoming: unknown, fallback: boolean): boolean => {
+            if (typeof incoming === 'boolean') return incoming;
+            return fallback;
+          };
+          const pickAudioFormat = (
+            incoming: unknown,
+            fallback: BookStateJson['audioFormat'],
+          ): BookStateJson['audioFormat'] => {
+            if (incoming === undefined) return fallback;
+            if (incoming === 'mp3' || incoming === 'aac-m4a' || incoming === 'opus') return incoming;
+            return fallback;
+          };
+          /* Plan 73 — tags accept the full array on patch; non-string
+             entries are dropped, duplicates collapsed, surrounding
+             whitespace trimmed. Empty string → dropped (the chip editor
+             emits these only on a stray Enter, never on intentional
+             input). Undefined → preserve prior value. */
+          const pickTags = (incoming: unknown, fallback: string[] | undefined): string[] => {
+            if (incoming === undefined) return fallback ?? [];
+            if (!Array.isArray(incoming)) return fallback ?? [];
+            const out: string[] = [];
+            const seen = new Set<string>();
+            for (const entry of incoming) {
+              if (typeof entry !== 'string') continue;
+              const trimmed = entry.trim();
+              if (!trimmed) continue;
+              if (seen.has(trimmed)) continue;
+              seen.add(trimmed);
+              out.push(trimmed);
+            }
+            return out;
+          };
 
-        /* When the book is flipped to standalone, the on-disk series folder
-           must be the literal 'Standalones' (see workspace/paths.ts) and
-           seriesPosition is meaningless. We do NOT overwrite state.series —
-           the user-typed label is preserved in state.json so a future
-           "un-standalone" doesn't lose the series name they had. */
-        /* #3700 — the merge below is a whole-file read-modify-write of
-           state.json, so the read (re-read here, fresh from disk, NOT the
-           `located.state` snapshot taken before the lock) and every decision
-           derived from it sit inside the per-book state-json lock together with
-           the write. A sibling chapter render stamping state.json between this
-           handler's scan and its write would otherwise be silently reverted.
-           Leaf lock: nothing in the span takes another lock. */
-        const refusal = await withStateJsonLock(stateJsonPath(bookDir), async () => {
-        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-        /* #3700 review pass 2 — absent means the book was deleted, or moved by a
-           folder-renaming PUT that held this key before us, after this request
-           resolved `bookDir`. Falling back to the stale `located.state` would
-           write it back and resurrect the book (or leave two folders with one
-           bookId). Refuse and write nothing. */
-        if (!state) return { status: 404, body: { error: 'Book not found.' } };
-        const nextIsStandalone = pickStandalone(patch.isStandalone, state.isStandalone);
-        const next: BookStateJson = {
-          ...state,
-          castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid` or `titleSynthesized`, so a
-             wholesale replace would strip them. reconcileChapterUuids
-             carries each uuid across by id (and mints for a genuinely-new
-             chapter); carryTitleSynthesized does the same for the
-             app-made-title flag, ignoring whatever the client sent. */
-          chapters: patch.chapters
-            ? carryTitleSynthesized(
-                reconcileChapterUuids(patch.chapters, state.chapters),
-                state.chapters,
-              )
-            : state.chapters,
-          title: pickString(patch.title, state.title),
-          author: pickString(patch.author, state.author),
-          series: pickString(patch.series, state.series),
-          seriesPosition: nextIsStandalone
-            ? null
-            : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
-          isStandalone: nextIsStandalone,
-          narratorCredit: pickNullable(patch.narratorCredit, state.narratorCredit),
-          genre: pickNullable(patch.genre, state.genre),
-          publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
-          description: pickNullable(patch.description, state.description),
-          notes: pickNotes(patch.notes, state.notes),
-          audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
-          language: pickLanguage(patch.language, state.language),
-          tags: pickTags(patch.tags, state.tags),
-          prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
-            ? (patch as { prosodyEnabled: boolean }).prosodyEnabled
-            : state.prosodyEnabled,
-          prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
-            ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
-            : state.prosodyAnnotated,
-          updatedAt: new Date().toISOString(),
-        };
+          /* When the book is flipped to standalone, the on-disk series folder
+             must be the literal 'Standalones' (see workspace/paths.ts) and
+             seriesPosition is meaningless. We do NOT overwrite state.series —
+             the user-typed label is preserved in state.json so a future
+             "un-standalone" doesn't lose the series name they had. */
+          /* #3700 -- the merge below is a whole-file read-modify-write of
+             state.json, so the read (re-read here, fresh from disk, NOT the
+             snapshot `located` resolved before the lock) and every decision
+             derived from it sit inside the per-book state-json lock together
+             with the write. The book lock (outer) serialises this against a
+             chapter restructure; this leaf lock serialises it against a
+             sibling chapter render's stamp, which takes only this one. Leaf
+             lock: nothing in the span takes another lock, except the rename's
+             second state-json key below. */
+          const refusal = await withStateJsonLock(stateJsonPath(bookDir), async () => {
+          const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+          /* #3700 review pass 2 -- absent means the book was deleted after this
+             request resolved `bookDir` (a folder move is already excluded: the
+             rename PUT holds the book lock we hold). Writing would resurrect
+             the book. Refuse and write nothing. */
+          if (!state) return { status: 404, body: { error: 'Book not found.' } };
+          const nextIsStandalone = pickStandalone(patch.isStandalone, state.isStandalone);
+          const next: BookStateJson = {
+            ...state,
+            castConfirmed: patch.castConfirmed ?? state.castConfirmed,
+            /* srv-35 — the frontend round-trips state.chapters but doesn't
+               track the server-only `uuid` or `titleSynthesized`, so a
+               wholesale replace would strip them. reconcileChapterUuids
+               carries each uuid across by id (and mints for a genuinely-new
+               chapter); carryTitleSynthesized does the same for the
+               app-made-title flag, ignoring whatever the client sent. */
+            chapters: patch.chapters
+              ? carryTitleSynthesized(
+                  reconcileChapterUuids(patch.chapters, state.chapters),
+                  state.chapters,
+                )
+              : state.chapters,
+            title: pickString(patch.title, state.title),
+            author: pickString(patch.author, state.author),
+            series: pickString(patch.series, state.series),
+            seriesPosition: nextIsStandalone
+              ? null
+              : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
+            isStandalone: nextIsStandalone,
+            narratorCredit: pickNullable(patch.narratorCredit, state.narratorCredit),
+            genre: pickNullable(patch.genre, state.genre),
+            publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
+            description: pickNullable(patch.description, state.description),
+            notes: pickNotes(patch.notes, state.notes),
+            audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
+            language: pickLanguage(patch.language, state.language),
+            tags: pickTags(patch.tags, state.tags),
+            prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
+              ? (patch as { prosodyEnabled: boolean }).prosodyEnabled
+              : state.prosodyEnabled,
+            prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
+              ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
+              : state.prosodyAnnotated,
+            updatedAt: new Date().toISOString(),
+          };
 
-        /* On-disk folder layout follows the displayed metadata: Author/Series/
-           Title. When any of those changes (or isStandalone flips), move the
-           folder before writing state.json so the new state lands at its new
-           path atomically. The bookId itself is unchanged — it's persisted
-           inside state.json and findBookByBookId resolves it regardless of
-           where the folder sits. */
-        const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
-        const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
-        if (newDir !== bookDir) {
-          /* #2165 — refuse while an analysis is registered for this book. A
-             running analysis writes follow a rename (layer 2), but the busy
-             key stays pinned by design. Moving the folder out from under a
-             running job would recreate the pre-rename directory and split the
-             book's state across two folders. The rename guard here keeps the
-             two layers synchronized.
+          /* On-disk folder layout follows the displayed metadata: Author/Series/
+             Title. When any of those changes (or isStandalone flips), move the
+             folder before writing state.json so the new state lands at its new
+             path atomically. The bookId itself is unchanged — it's persisted
+             inside state.json and findBookByBookId resolves it regardless of
+             where the folder sits. */
+          const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
+          const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
+          if (newDir !== bookDir) {
+            /* #2165 — refuse while an analysis is registered for this book. A
+               running analysis writes follow a rename (layer 2), but the busy
+               key stays pinned by design. Moving the folder out from under a
+               running job would recreate the pre-rename directory and split the
+               book's state across two folders. The rename guard here keeps the
+               two layers synchronized.
 
-             A pure predicate over a ref-counted in-memory Map — NO lock is
-             taken here, so it cannot interact with the global
-             design → library-voice → cast lock order. Refuse only; never wait.
-             Waiting would hold a request open across a multi-minute run.
+               A pure predicate over a ref-counted in-memory Map — NO lock is
+               taken here, so it cannot interact with the global
+               design → library-voice → cast lock order. Refuse only; never wait.
+               Waiting would hold a request open across a multi-minute run.
 
-             Reported BEFORE the path-collision 409 below on purpose: this one
-             is transient and self-clearing, so naming it first stops the user
-             changing a title they didn't need to change.
+               Reported BEFORE the path-collision 409 below on purpose: this one
+               is transient and self-clearing, so naming it first stops the user
+               changing a title they didn't need to change.
 
-             Deliberately inside this branch — a PUT that moves no folder
-             (castConfirmed, prosody flags, notes, tags: the autosaves the
-             persistence middleware fires constantly, including during an
-             analysis) must keep returning 204. */
-          if (isAnalysisBusy(bookDir)) {
-            return {
-              status: 409,
-              body: {
-                error:
-                  'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
-              },
-            };
-          }
-          if (existsSync(newDir)) {
-            return {
-              status: 409,
-              body: {
-                error:
-                  'A book already exists at that Author/Series/Title path. Pick a different title or series.',
-              },
-            };
-          }
-          /* Make sure the new parent (and grandparent) directories exist
-             before the rename — fs.rename on Windows fails with ENOENT if
-             they don't. */
-          await mkdir(dirname(newDir), { recursive: true });
-          /* #2165 — re-check after the mkdir yield. The guard above reads
-             in-memory state, and there are two `await`s between it and the
-             move; an analysis start that lands in that window would call
-             markAnalysisBusy(record.bookDir) against the PRE-rename path
-             (analysis.ts:2764), and since the busy key is pinned by design,
-             isAnalysisBusy(newDir) would then be false for that run's whole
-             life — silently disabling cast-design.ts:684's analysis-vs-design
-             mutual exclusion for this book.
+               Deliberately inside this branch — a PUT that moves no folder
+               (castConfirmed, prosody flags, notes, tags: the autosaves the
+               persistence middleware fires constantly, including during an
+               analysis) must keep returning 204. */
+            if (isReparseBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'The manuscript is being re-parsed for this book. Wait for it to finish before renaming it.',
+                },
+              };
+            }
+            if (isAnalysisBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+                },
+              };
+            }
+            if (existsSync(newDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'A book already exists at that Author/Series/Title path. Pick a different title or series.',
+                },
+              };
+            }
+            /* Make sure the new parent (and grandparent) directories exist
+               before the rename — fs.rename on Windows fails with ENOENT if
+               they don't. */
+            await mkdir(dirname(newDir), { recursive: true });
+            /* #2165 — re-check after the mkdir yield. The guard above reads
+               in-memory state, and there are two `await`s between it and the
+               move; an analysis start that lands in that window would call
+               markAnalysisBusy(record.bookDir) against the PRE-rename path
+               (analysis.ts:2764), and since the busy key is pinned by design,
+               isAnalysisBusy(newDir) would then be false for that run's whole
+               life — silently disabling cast-design.ts:684's analysis-vs-design
+               mutual exclusion for this book.
 
-             ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
-             itself, it does NOT close it. Check-then-rename is still two
-             operations. Additionally, a writeChecked that resolved the old
-             directory before the rename would still write there afterwards,
-             recreating the pre-rename folder — the original #2165 symptom, at
-             much lower probability since layer 2 now follows the rename.
-             Closing it fully needs a primitive that spans the analysis
-             registration and the rename (a per-book lock, or keying busy state
-             on book id rather than path) — out of scope for #2165,
-             deliberately, not by oversight. */
-          if (isAnalysisBusy(bookDir)) {
-            return {
-              status: 409,
-              body: {
-                error:
-                  'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
-              },
-            };
-          }
-          /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
-             (atomic-rename.ts). Any other failure surfaces immediately. */
-          /* #3700 review — the moved file is addressed by a DIFFERENT lock key
-             (`state-json:<newDir>/state.json`) from the one this span holds
-             (the old path), so a toggle that resolves the book after the rename
-             would read the moved, not-yet-rewritten file and interleave with
-             the write below. Take the new path's key too, around the rename +
-             the write to it, so any writer of either path serialises with this
-             one. Old-held-then-new is the only nesting any caller does (every
-             other state-json caller holds exactly one key), so there is no
-             cycle; a collision on `newDir` was refused above. */
-          await withStateJsonLock(stateJsonPath(newDir), async () => {
+               ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
+               itself, it does NOT close it. Check-then-rename is still two
+               operations. Additionally, a writeChecked that resolved the old
+               directory before the rename would still write there afterwards,
+               recreating the pre-rename folder — the original #2165 symptom, at
+               much lower probability since layer 2 now follows the rename.
+               Closing it fully needs a primitive that spans the analysis
+               registration and the rename (a per-book lock, or keying busy state
+               on book id rather than path) — out of scope for #2165,
+               deliberately, not by oversight. */
+            if (isReparseBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'The manuscript is being re-parsed for this book. Wait for it to finish before renaming it.',
+                },
+              };
+            }
+            if (isAnalysisBusy(bookDir)) {
+              return {
+                status: 409,
+                body: {
+                  error:
+                    'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+                },
+              };
+            }
+            /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
+               (atomic-rename.ts). Any other failure surfaces immediately. */
+            /* #3700 review -- the moved file is addressed by a DIFFERENT lock
+               key (`state-json:<newDir>/state.json`) from the one this span
+               holds (the old path), so a render finalize that resolves the book
+               after the rename would read the moved, not-yet-rewritten file and
+               interleave with the write below. Take the new path's key too,
+               around the rename + the write to it, so any writer of either path
+               serialises with this one. Old-held-then-new is the only nesting
+               any caller does (every other state-json caller holds exactly one
+               key), so there is no cycle; a collision on `newDir` was refused
+               above. */
+            await withStateJsonLock(stateJsonPath(newDir), async () => {
             await renameWithRetry(bookDir, newDir);
             /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
                generation requests find the manuscript file at the new path.
@@ -1200,26 +1263,56 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
                errors are swallowed (orphan empty dirs are cosmetic, not a
                correctness problem). */
             await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
+            });
+            const oldSeriesDir = dirname(bookDir);
+            const oldAuthorDir = dirname(oldSeriesDir);
+            await rmdir(oldSeriesDir).catch(() => {
+              /* not empty or locked → leave it */
+            });
+            await rmdir(oldAuthorDir).catch(() => {
+              /* not empty or locked → leave it */
+            });
+          } else {
+            await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
+          }
+          return null;
           });
-          const oldSeriesDir = dirname(bookDir);
-          const oldAuthorDir = dirname(oldSeriesDir);
-          await rmdir(oldSeriesDir).catch(() => {
-            /* not empty or locked → leave it */
-          });
-          await rmdir(oldAuthorDir).catch(() => {
-            /* not empty or locked → leave it */
-          });
-        } else {
-          await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
+          if (refusal) return res.status(refusal.status).json(refusal.body);
+          break;
         }
-        return null;
-        });
-        if (refusal) return res.status(refusal.status).json(refusal.body);
-        break;
+        default:
+          return res.status(400).json({ error: `Unknown slice: ${body.slice}` });
       }
-      default:
-        return res.status(400).json({ error: `Unknown slice: ${body.slice}` });
+      return undefined;
+    };
+    /* #3400 — the `state` and `manuscript` slices are read-modify-write of
+       state.json / manuscript-edits.json, which a chapter restructure also
+       rewrites under `withBookLock`. They take that lock around the WHOLE
+       span, and the book is located INSIDE it: `findBookByBookId` itself can
+       write state.json (uuid / segments backfill), so a locate outside the
+       lock could write a pre-restructure chapter list over the restructure's.
+       Lock order: the book lock is the outermost per-book lock; these two
+       slices take no other lock. `cast` and `changeLog` stay outside it, so
+       `cast` keeps its own `withCastLock` and never nests under the book
+       lock. */
+    const lockedSlice =
+      (body?.slice === 'state' || body?.slice === 'manuscript') && body.patch !== undefined;
+    let handled: unknown;
+    if (lockedSlice) {
+      handled = await withBookLock(req.params.bookId, async () => {
+        const fresh = await findBookByBookId(req.params.bookId);
+        if (!fresh) return res.status(404).json({ error: 'Book not found.' });
+        return applySlice(fresh);
+      });
+    } else {
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      if (!body?.slice || body.patch === undefined) {
+        return res.status(400).json({ error: 'slice and patch are required.' });
+      }
+      handled = await applySlice(located);
     }
+    if (handled) return handled;
 
     res.status(204).end();
   } catch (e) {
@@ -1260,12 +1353,31 @@ async function applyReparse(
   opts: {
     changeLogType: string;
     changeLogTitle: string;
-    /** Runs inside the state-json lock, after state.json is confirmed present
-     *  and just before it is rewritten — replace-manuscript's upload write, so
-     *  nothing reaches disk for a book that was moved or deleted. */
-    beforeWrite?: () => Promise<void>;
+    manuscriptFile?: string;
+    /** Called inside the locked step, immediately before state.json is
+        written; puts the new manuscript file in place and returns an undo
+        that restores the previous one if the state write then fails. */
+    installManuscript?: () => Promise<() => Promise<void>>;
   },
 ) {
+  /* #3700 review pass 2 -- the destructive arms below (cache wipe by manuscript
+     id, cast / audio / revisions removal) must not run for a book that was
+     moved or deleted after the caller resolved `bookDir`: they would wipe the
+     MOVED book's analysis cache and recreate the old path. The state-json lock
+     is acquired just to read presence AFTER any in-flight holder (a
+     folder-renaming PUT, a DELETE) has finished; the state step at the end
+     checks again under the book + state-json locks. The destructive arms cannot
+     run inside those locks (they take `cast`, which is ordered before `book`),
+     so this is a gate, not an exclusion. Absent => null (the callers answer 409 if the book still exists
+     elsewhere, 404 only if it is gone -- see answerAbsentOrMoved).
+     The read is the recovering one (#3625): a stranded main with a `.bak.1`
+     beside it is still the book. */
+  const present = await withStateJsonLock(
+    stateJsonPath(bookDir),
+    async () => (await readStateJsonWithRecovery(stateJsonPath(bookDir))) !== null,
+  );
+  if (!present) return null;
+
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
     manuscriptEditsJsonPath(bookDir),
   );
@@ -1273,47 +1385,6 @@ async function applyReparse(
     ? existingEdits!.sentences!.length
     : 0;
 
-  /* #3700 — the chapter list is rebuilt from a fresh read inside the
-     state-json lock (excluded carry-over is derived from it), so a sibling
-     render's stamp on a surviving field is not reverted by this write. The
-     caller's `state.manuscriptFile` is carried over explicitly: replace-
-     manuscript sets it in memory before calling and it is not on disk yet. */
-  const nextState = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
-    const prevExcludedIds = new Set<number>(
-      fresh.chapters.filter((c) => c.excluded).map((c) => c.id),
-    );
-    const prevExcludedSlugs = new Set<string>(
-      fresh.chapters.filter((c) => c.excluded).map((c) => c.slug),
-    );
-    const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
-      const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
-      const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
-      return {
-        id: c.id,
-        title: c.title,
-        slug: newSlug,
-        duration: '00:00',
-        excluded: carryover ? true : undefined,
-        titleSynthesized: c.titleSynthesized || undefined,
-      };
-    });
-    return {
-      ...fresh,
-      manuscriptFile: state.manuscriptFile,
-      chapters: newChapters,
-      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      castConfirmed: false,
-      updatedAt: new Date().toISOString(),
-    };
-  }, opts.beforeWrite);
-
-  /* #3700 review pass 2 — absent state.json: the book was deleted or moved
-     after the caller resolved `bookDir`. Return BEFORE the destructive arms
-     below (they would wipe the moved book's analysis cache by manuscript id
-     and recreate the old path). The callers answer 404. */
-  if (!nextState) return null;
-
-  const newChapters = nextState.chapters;
   const carryoverPath = castReuseCarryoverJsonPath(bookDir);
   const ad = audioDir(bookDir);
   await Promise.all([
@@ -1323,10 +1394,9 @@ async function applyReparse(
        the other three arms touches cast.json or the carryover, so there is
        no interleaving hazard, and sequencing this arm first would mean a
        rejection here (e.g. EPERM/EBUSY on the delete) skips the other three
-       — which have already started in the same tick — while state.json above
-       was already rewritten with the new chapter slugs and
-       castConfirmed:false. That is a strictly worse inconsistent state than
-       today. This arm's rm(cast.json) is unguarded (no existsSync check):
+       — which have already started in the same tick. (#3400 pass 8: the
+       state.json rewrite no longer precedes this block; it is the book-locked
+       step after it, so a rejection here leaves state.json untouched.) This arm's rm(cast.json) is unguarded (no existsSync check):
        the read and the delete decision now live inside the lock together, so
        there is no longer an out-of-lock existsSync to desync from the
        in-lock reality — of the three sibling arms below, only the audio arm
@@ -1335,7 +1405,7 @@ async function applyReparse(
        revisions arm resets revisions.json through the store under the
        per-book revisions leaf lock (plan 285), held beside this cast lock,
        never nested in it; clearAnalysisCache's rm is unguarded too, same as
-       this arm's.
+       this arm's (and is repeated inside the book-locked state step below).
 
        Behaviour change vs. main: readJson's bare JSON.parse throws on a
        corrupt (not just missing) cast.json. On main that throw happened
@@ -1393,7 +1463,16 @@ async function applyReparse(
        file is replaced (as the rm did); a newer-schema one was already
        refused by the route's preflight. This arm sits BESIDE the
        withCastLock arm, never inside it. */
-    resetRevisions(bookDir),
+    /* Plan 286 (invariant 8) — this arm's fs error embeds the absolute
+       workspace path, and both handlers answer (e as Error).message. Log it raw;
+       surface a fixed sentence. A lock timeout and a newer-schema refusal pass
+       through unchanged: the handlers' requestFailureMessage curates the first,
+       and the second's text is fixed and path-free. */
+    resetRevisions(bookDir).catch((e: unknown) => {
+      console.error('[book-state] revisions reset failed', e);
+      if (isLockAcquisitionTimeout(e) || e instanceof UnsupportedSchemaError) throw e;
+      throw new Error("Couldn't reset this book's A/B review history.");
+    }),
     existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
   ]);
 
@@ -1416,46 +1495,184 @@ async function applyReparse(
     await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
   }
 
-  const newExcludedById = new Map<number, boolean>();
-  for (const c of newChapters) {
-    if (c.excluded) newExcludedById.set(c.id, true);
-  }
-  const sourceText = parsed.sourceText;
-  const record: ManuscriptRecord = {
-    manuscriptId: state.manuscriptId,
-    format: parsed.format,
-    title: state.title,
-    wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
-    byteSize: Buffer.byteLength(sourceText, 'utf8'),
-    uploadedAt: state.createdAt,
-    sourceText,
-    chapterHints: parsed.chapters.map((c) => ({
-      ...c,
-      excluded: newExcludedById.get(c.id) || undefined,
-    })),
-    bookId: state.bookId,
-    bookDir,
-  };
-  putManuscript(record);
+  /* #3400 pass 8 — the `state.json` write is its OWN book-locked step, taken
+     AFTER the cast / audio / revisions work above (never while holding `cast`:
+     the global order is `cast` -> `book`, see workspace/book-lock.ts). The
+     chapter restructure holds the book lock across its writes; this write used
+     to derive `{ ...state, chapters }` from a read taken before the parse and
+     land unlocked, in the middle of one. Everything the write decides —
+     which chapters carry `excluded`, every other state field — comes from the
+     read taken UNDER the lock, so a concurrent exclude / held / title / cover
+     write is not reverted.
 
-  const wordCountByChapterId = new Map<number, number>();
-  for (const c of parsed.chapters) {
-    const body = (c.body ?? '').trim();
-    wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
-  }
+     The in-memory ManuscriptRecord swap and a SECOND analysis-cache wipe ride in
+     the same hold (the arm above stays, so a sibling's rejection still leaves
+     the cache wiped): a restructure also mutates the record's hints and rebuilds
+     the cache from manuscript-edits.json, so one landing between the first wipe
+     and this step would leave the cache keyed by its chapter ids. Reparse is
+     last, so this wipe is the final word (the serial outcome).
+     The lock is held for this read -> write only. */
+  const outcome = await withLocatedBook(state.bookId, async (fresh) => {
+    /* #3700 -- the chapter list is rebuilt from a read taken inside the
+       state-json leaf lock (nested in the book lock held here): `fresh.state`
+       was located before it, and a sibling render's stamp can land in between.
+       `installManuscript` is the `beforeWrite`: it runs inside that lock, only
+       once state.json is known present and the mutation produced a change. */
+    /* #3400 pass 9/10 -- DEFENSIVE BACKSTOP, unreachable through the API: the
+       reparse / replace-manuscript handlers register reparseBusy for the run
+       (re-resolving the folder after marking, so the mark names the live
+       folder) and the folder-renaming PUT /state answers 409 while it is set. The destructive
+       arms above and the upload paths all use the `bookDir` this request started
+       with, so if the book were moved by some other means (an out-of-band move on
+       disk), recording the new chapters here would split the record from the
+       file. Refusing like an absent book installs nothing and leaves state.json
+       untouched, BUT the cast / audio / analysis cache / revisions of the book
+       are already gone by this point -- which is why the rename is refused up
+       front rather than relying on this check. */
+    if (fresh.bookDir !== bookDir) return null;
+    let undoInstall: (() => Promise<void>) | undefined;
+    let newChapters: BookStateJson['chapters'] = [];
+    let nextState: BookStateJson | null;
+    try {
+      nextState = await updateStateJsonLocked(
+        stateJsonPath(fresh.bookDir),
+        (onDisk) => {
+          const prevExcludedIds = new Set<number>(
+            onDisk.chapters.filter((c) => c.excluded).map((c) => c.id),
+          );
+          const prevExcludedSlugs = new Set<string>(
+            onDisk.chapters.filter((c) => c.excluded).map((c) => c.slug),
+          );
+          newChapters = parsed.chapters.map((c) => {
+            const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+            const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
+            return {
+              id: c.id,
+              title: c.title,
+              slug: newSlug,
+              duration: '00:00',
+              excluded: carryover ? true : undefined,
+              titleSynthesized: c.titleSynthesized || undefined,
+            };
+          });
+          return {
+            ...onDisk,
+            ...(opts.manuscriptFile ? { manuscriptFile: opts.manuscriptFile } : {}),
+            chapters: newChapters,
+            chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+            castConfirmed: false,
+            updatedAt: new Date().toISOString(),
+          };
+        },
+        async () => {
+          undoInstall = await opts.installManuscript?.();
+        },
+      );
+    } catch (writeErr) {
+      await undoInstall?.().catch(() => {});
+      throw writeErr;
+    }
+    /* Absent under the lock: the book was deleted after it was located. Nothing
+       was installed or written; the caller answers 404. */
+    if (!nextState) return null;
 
-  return {
-    state: nextState,
-    chapterCount: newChapters.length,
-    chapterTitles: newChapters.map((c) => c.title),
-    chapters: newChapters.map((c) => ({
-      id: c.id,
-      title: c.title,
-      slug: c.slug,
-      wordCount: wordCountByChapterId.get(c.id) ?? 0,
-      excluded: !!c.excluded,
-    })),
-  };
+    const newExcludedById = new Map<number, boolean>();
+    for (const c of newChapters) {
+      if (c.excluded) newExcludedById.set(c.id, true);
+    }
+    const sourceText = parsed.sourceText;
+    const record: ManuscriptRecord = {
+      manuscriptId: nextState.manuscriptId,
+      format: parsed.format,
+      title: nextState.title,
+      wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
+      byteSize: Buffer.byteLength(sourceText, 'utf8'),
+      uploadedAt: nextState.createdAt,
+      sourceText,
+      chapterHints: parsed.chapters.map((c) => ({
+        ...c,
+        excluded: newExcludedById.get(c.id) || undefined,
+      })),
+      bookId: nextState.bookId,
+      bookDir: fresh.bookDir,
+    };
+    putManuscript(record);
+    await clearAnalysisCache(nextState.manuscriptId);
+
+    const wordCountByChapterId = new Map<number, number>();
+    for (const c of parsed.chapters) {
+      const body = (c.body ?? '').trim();
+      wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
+    }
+
+    return {
+      state: nextState,
+      chapterCount: newChapters.length,
+      chapterTitles: newChapters.map((c) => c.title),
+      chapters: newChapters.map((c) => ({
+        id: c.id,
+        title: c.title,
+        slug: c.slug,
+        wordCount: wordCountByChapterId.get(c.id) ?? 0,
+        excluded: !!c.excluded,
+      })),
+    };
+  });
+  return outcome ? outcome.value : null;
+}
+
+/* #3400 pass 10/11 -- locate the book AND hold its reparse marker, with the two
+   agreeing. The marker is keyed by folder, and a folder-moving rename can
+   interleave with this in four ways:
+     1. it completed before our first lookup: we simply see the new folder;
+     2. it completed between the first lookup and our mark: the marker would sit
+        on a dead path, so we re-resolve AFTER marking and, on a different
+        folder, drop the stale mark and mark the new one (bounded retries);
+     3. it passed its post-mkdir isReparseBusy re-check before our mark landed
+        and moves the folder after our re-resolve: nothing here can see it. The
+        presence gate at the top of applyReparse is what catches it, before any
+        destructive step has run; that gate is LOAD-BEARING for this protocol,
+        and the handlers answer its null truthfully (answerAbsentOrMoved: 409
+        retry when the book still exists elsewhere, 404 only when it is gone);
+     4. it passed BOTH isReparseBusy checks before our mark and its directory
+        rename has not landed yet: the presence gate waits on the old folder's
+        state-json key that the rename holds, then sees the file gone -- the
+        same null as case 3, answered the same way (409 retry, the book is
+        intact at its new folder), before any arm runs.
+   A rename that checked isReparseBusy before our mark and reaches its
+   post-mkdir re-check after it is refused. Returns null for an absent book and
+   'unstable' if the folder keeps moving; in both the marker is NOT held.
+   Otherwise the marker is held on the returned located.bookDir, and no
+   destructive step has run. */
+async function locateAndMarkReparseBusy(
+  bookId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof findBookByBookId>>> | null | 'unstable'> {
+  let located = await findBookByBookId(bookId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!located) return null;
+    const dir = located.bookDir;
+    markReparseBusy(dir);
+    const fresh = await findBookByBookId(bookId);
+    if (fresh && fresh.bookDir === dir) return fresh;
+    clearReparseBusy(dir);
+    located = fresh;
+  }
+  /* The last re-resolve found the book gone: absent, not unstable. */
+  return located ? 'unstable' : null;
+}
+
+const REPARSE_UNSTABLE_409 =
+  'This book was being moved while the manuscript was re-parsed. Try again in a moment.';
+const REPARSE_MOVED_409 =
+  'This book was moved while the manuscript was re-parsed. Try again in a moment.';
+
+/* applyReparse answered null: either the presence gate found no state.json at
+   the folder the request resolved (nothing destructive has run) or the final
+   locked step saw the book elsewhere / gone. Say which, truthfully. */
+async function answerAbsentOrMoved(res: Response, bookId: string) {
+  const now = await findBookByBookId(bookId);
+  if (now) return res.status(409).json({ error: REPARSE_MOVED_409 });
+  return res.status(404).json({ error: 'Book not found.' });
 }
 
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
@@ -1474,10 +1691,17 @@ async function applyReparse(
    Frontend confirms with the user before calling. Returns the fresh state
    so the library / open-book flow can re-hydrate without a second round-trip. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
+  let busyDir: string | undefined;
   try {
-    const located = await findBookByBookId(req.params.bookId);
+    /* #3400 pass 10 -- the marker is held (and confirmed to name the book's
+       current folder) before any destructive step, so the folder-renaming PUT
+       /state refuses (409) for the run's whole life (cleared in the finally
+       below, on every exit). */
+    const located = await locateAndMarkReparseBusy(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
+    if (located === 'unstable') return res.status(409).json({ error: REPARSE_UNSTABLE_409 });
     const { bookDir, state } = located;
+    busyDir = bookDir;
 
     /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
        deleted or rewritten (applyReparse's state write + Promise.all). */
@@ -1535,7 +1759,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       changeLogType: 'reparse',
       changeLogTitle: 'Re-parsed manuscript',
     });
-    if (!payload) return res.status(404).json({ error: 'Book not found.' });
+    if (!payload) return await answerAbsentOrMoved(res, req.params.bookId);
     res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
@@ -1544,6 +1768,8 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.status(500).json({
       error: requestFailureMessage(e, (e as Error).message || 'Failed to re-parse manuscript.'),
     });
+  } finally {
+    if (busyDir) clearReparseBusy(busyDir);
   }
 });
 
@@ -1559,12 +1785,16 @@ bookStateRouter.post(
   '/:bookId/replace-manuscript',
   manuscriptUpload.single('file'),
   async (req: Request, res: Response) => {
+    let busyDir: string | undefined;
     try {
       if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
 
-      const located = await findBookByBookId(req.params.bookId);
+      /* #3400 pass 10 -- same marker as reparse above; see there. */
+      const located = await locateAndMarkReparseBusy(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
+      if (located === 'unstable') return res.status(409).json({ error: REPARSE_UNSTABLE_409 });
       const { bookDir, state } = located;
+      busyDir = bookDir;
 
       /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
          writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
@@ -1580,25 +1810,56 @@ bookStateRouter.post(
       const oldFile = state.manuscriptFile;
 
       safeSegment(newFile);
-      state.manuscriptFile = newFile;
+      const livePath = join(bookDir, newFile);
 
-      /* #3700 review pass 3 — the upload is written by applyReparse's
-         `beforeWrite`, inside the state-json lock and only once state.json is
-         confirmed present, so a book that was moved or deleted while this
-         request queued gets a 404 with NOTHING written (writing it up front
-         overwrote the moved book's same-name manuscript, or orphaned a
-         different-extension file there). */
-      const payload = await applyReparse(bookDir, state, parsed, {
-        changeLogType: 'replace-manuscript',
-        changeLogTitle: 'Replaced manuscript',
-        beforeWrite: () => writeFile(join(bookDir, newFile), req.file!.buffer),
-      });
-      if (!payload) {
-        /* The book vanished or moved mid-request: neither the upload nor
-           state.json was written, and state.json still names the OLD file. */
-        return res.status(404).json({ error: 'Book not found.' });
+      /* #3400 pass 9 -- the upload goes to a temp name nothing reads (scan.ts
+         only treats `manuscript.<ext>` as a manuscript), and is renamed over
+         `newFile` INSIDE applyReparse's locked step, immediately before the
+         state.json write that records it. Until then the book dir is untouched,
+         so every failure earlier than that leaves the original file and the old
+         chapter list in agreement. The rename-then-write order is the one whose
+         crash states are consistent: a process death before the rename leaves
+         old file + old state; a death between the rename and the write leaves
+         new file + old state for a same-extension replace (the one window that
+         remains; a thrown write error is rolled back below via the backup),
+         whereas writing state first would also leave a format change naming a
+         file that does not exist. Names are random so concurrent replaces do
+         not share a temp or backup. */
+      const suffix = randomUUID().slice(0, 8);
+      const tmpPath = join(bookDir, `.manuscript-replacing-${suffix}`);
+      const backupPath = join(bookDir, `.manuscript-previous-${suffix}`);
+
+      let payload: Awaited<ReturnType<typeof applyReparse>>;
+      try {
+        payload = await applyReparse(bookDir, state, parsed, {
+          changeLogType: 'replace-manuscript',
+          changeLogTitle: 'Replaced manuscript',
+          manuscriptFile: newFile,
+          installManuscript: async () => {
+            /* The upload is written here -- inside the state-json lock, once
+               state.json is confirmed present -- so a book moved or deleted
+               while the request queued gets NOTHING written (no orphan temp
+               file travelling with the moved folder). */
+            await writeFile(tmpPath, req.file!.buffer);
+            const hadLive = existsSync(livePath);
+            if (hadLive) await renameWithRetry(livePath, backupPath);
+            try {
+              await renameWithRetry(tmpPath, livePath);
+            } catch (e) {
+              if (hadLive) await renameWithRetry(backupPath, livePath).catch(() => {});
+              throw e;
+            }
+            return async () => {
+              if (hadLive) await renameWithRetry(backupPath, livePath);
+              else await unlink(livePath);
+            };
+          },
+        });
+      } finally {
+        await unlink(tmpPath).catch(() => {});
+        await unlink(backupPath).catch(() => {});
       }
-      /* Only now that state.json names the new file is the old one dead. */
+      if (!payload) return await answerAbsentOrMoved(res, req.params.bookId);
       if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
         await unlink(join(bookDir, oldFile)).catch(() => {});
       }
@@ -1614,6 +1875,8 @@ bookStateRouter.post(
           (e as Error).message || 'Failed to replace manuscript.',
         ),
       });
+    } finally {
+      if (busyDir) clearReparseBusy(busyDir);
     }
   },
 );
@@ -1649,82 +1912,87 @@ bookStateRouter.post(
       }
       const excluded: boolean = rawExcluded;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3400 — locate -> decide -> write under the book lock, so a chapter
+         restructure (which holds it) can't be reverted by this write, and the
+         reparse dialog's parallel toggles each build on the previous one. The
+         audio `rm` stays inside, consistent with what was written. */
+      const outcome = await withLocatedBook(req.params.bookId, async (located) => {
+        const { bookDir, state } = located;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
 
-      let current = state.chapters[idx];
-      let updated = { ...current, excluded: excluded ? true : undefined };
+        let current = state.chapters[idx];
+        let updated = { ...current, excluded: excluded ? true : undefined };
 
-      /* Write state.json first so a crash mid-call leaves the user's
-       choice on disk; audio cleanup is best-effort below. #3700 — the toggle
-       is applied to a fresh read inside the state-json lock, not the
-       `located.state` snapshot, so a sibling render's stamp isn't reverted. */
-      /* #3625 — the chapter can vanish (a restructure) while this waits on the
-         lock: then nothing is written and the answer is 404, not a 200 built
-         from the stale `located.state`. */
-      let chapterGone = false;
-      const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
-        const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-        if (i === -1) {
-          chapterGone = true;
-          return null;
-        }
-        current = fresh.chapters[i];
-        updated = { ...current, excluded: excluded ? true : undefined };
-        return {
-          ...fresh,
-          chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
-          updatedAt: new Date().toISOString(),
-        };
-      });
-      /* #3700 review pass 2 — absent: the book moved/was deleted after we
-         resolved it. Nothing was written, so answer 404 and touch neither the
-         live ManuscriptRecord nor the audio below. */
-      if (!persisted) return res.status(404).json({ error: 'Book not found.' });
-      if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
+        /* Write state.json first so a crash mid-call leaves the user's
+         choice on disk; audio cleanup is best-effort below. #3700 -- the toggle
+         is applied to a fresh read inside the state-json leaf lock (nested in
+         the book lock), not the located snapshot, so a sibling render's stamp
+         isn't reverted. */
+        let chapterGone = false;
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
+          const i = fresh.chapters.findIndex((c) => c.id === chapterId);
+          if (i === -1) {
+            chapterGone = true;
+            return null;
+          }
+          current = fresh.chapters[i];
+          updated = { ...current, excluded: excluded ? true : undefined };
+          return {
+            ...fresh,
+            chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        /* #3700 review pass 2 -- absent: the book was deleted after we located
+           it. Nothing was written, so answer 404 and touch neither the live
+           ManuscriptRecord nor the audio below. */
+        if (!persisted) return res.status(404).json({ error: 'Book not found.' });
+        /* #3625 -- the chapter can vanish while waiting on the lock: nothing is
+           written and the answer is 404, not a 200 built from the stale snapshot. */
+        if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
 
-      /* Propagate to the live ManuscriptRecord if it's loaded. The
-       analysis route reads chapterHints directly from this; without
-       the propagation we'd have to wait for a server restart or a
-       book-state GET to pick up the change. */
-      if (state.manuscriptId) {
-        const rec = getManuscript(state.manuscriptId);
-        if (rec) {
-          rec.chapterHints = rec.chapterHints.map((h) =>
-            h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-          );
-        }
-      }
-
-      /* When newly excluded, delete the chapter's audio + segments so the
-       library / chapter list don't keep counting it as "done". The user
-       can re-include later; audio regenerates from the (still-cached)
-       sentence attribution. */
-      if (excluded) {
-        const audioRoot = audioDir(bookDir);
-        const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-        const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
-          join(audioRoot, `${current.slug}.${ext}`),
-        );
-        for (const p of [segmentsPath, ...audioCandidates]) {
-          if (existsSync(p)) {
-            await rm(p, { force: true }).catch(() => {
-              /* best effort */
-            });
+        /* Propagate to the live ManuscriptRecord if it's loaded. The
+         analysis route reads chapterHints directly from this; without
+         the propagation we'd have to wait for a server restart or a
+         book-state GET to pick up the change. */
+        if (state.manuscriptId) {
+          const rec = getManuscript(state.manuscriptId);
+          if (rec) {
+            rec.chapterHints = rec.chapterHints.map((h) =>
+              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+            );
           }
         }
-      }
 
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        excluded: !!updated.excluded,
+        /* When newly excluded, delete the chapter's audio + segments so the
+         library / chapter list don't keep counting it as "done". The user
+         can re-include later; audio regenerates from the (still-cached)
+         sentence attribution. */
+        if (excluded) {
+          const audioRoot = audioDir(bookDir);
+          const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+          const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
+            join(audioRoot, `${current.slug}.${ext}`),
+          );
+          for (const p of [segmentsPath, ...audioCandidates]) {
+            if (existsSync(p)) {
+              await rm(p, { force: true }).catch(() => {
+                /* best effort */
+              });
+            }
+          }
+        }
+
+        return res.json({
+          id: updated.id,
+          title: updated.title,
+          slug: updated.slug,
+          excluded: !!updated.excluded,
+        });
       });
+      if (!outcome) return res.status(404).json({ error: 'Book not found.' });
     } catch (e) {
       console.error('[book-state] exclude toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
@@ -1757,39 +2025,41 @@ bookStateRouter.post(
       }
       const held: boolean = rawHeld;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3400 — locate -> decide -> write under the book lock (see exclude). */
+      const outcome = await withLocatedBook(req.params.bookId, async (located) => {
+        const { bookDir, state } = located;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
 
-      let updated = { ...state.chapters[idx], held: held ? true : undefined };
+        let updated = { ...state.chapters[idx], held: held ? true : undefined };
 
-      /* #3700 — applied to a fresh read inside the state-json lock. */
-      let chapterGone = false;
-      const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
-        const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-        if (i === -1) {
-          chapterGone = true; // vanished while waiting on the lock (#3625)
-          return null;
-        }
-        updated = { ...fresh.chapters[i], held: held ? true : undefined };
-        return {
-          ...fresh,
-          chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
-          updatedAt: new Date().toISOString(),
-        };
+        /* #3700 -- applied to a fresh read inside the state-json leaf lock. */
+        let chapterGone = false;
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
+          const i = fresh.chapters.findIndex((c) => c.id === chapterId);
+          if (i === -1) {
+            chapterGone = true; // vanished while waiting on the lock (#3625)
+            return null;
+          }
+          updated = { ...fresh.chapters[i], held: held ? true : undefined };
+          return {
+            ...fresh,
+            chapters: fresh.chapters.map((c, j) => (j === i ? updated : c)),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        if (!persisted) return res.status(404).json({ error: 'Book not found.' });
+        if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
+
+        return res.json({
+          id: updated.id,
+          title: updated.title,
+          slug: updated.slug,
+          held: !!updated.held,
+        });
       });
-      if (!persisted) return res.status(404).json({ error: 'Book not found.' });
-      if (chapterGone) return res.status(404).json({ error: 'Chapter not found.' });
-
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        held: !!updated.held,
-      });
+      if (!outcome) return res.status(404).json({ error: 'Book not found.' });
     } catch (e) {
       console.error('[book-state] held toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });

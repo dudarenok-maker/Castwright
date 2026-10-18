@@ -31,8 +31,10 @@ function makeStore({
     regenInitialScope: null,
     regenCharacterCtx: null,
     previewRegen: null,
+    openRevision: null,
+    revisionOpInFlight: false,
+    revisionOpsInFlight: 0,
     staleAudio: null,
-    showRevisionPlayer: false,
     revisionHistoryFor: null,
     showDriftReport: false,
     driftReportCharacterFilter: null,
@@ -52,6 +54,8 @@ function makeStore({
     cloneReadinessGate: null,
     startGenerationPending: false,
     analyzerPhasePicks: {},
+    restructuringBooks: {},
+    restructureEpochs: {},
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

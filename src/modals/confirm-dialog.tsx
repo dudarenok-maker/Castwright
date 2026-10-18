@@ -36,6 +36,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   primaryLabel?: string;
   onPrimaryAction?: () => void;
+  /** Disables the info-mode primary button (e.g. while the book it acts on restructures). */
+  primaryDisabled?: boolean;
   variant?: ConfirmDialogVariant;
   onConfirm?: () => void;
   onClose: () => void;
@@ -51,6 +53,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   primaryLabel,
   onPrimaryAction,
+  primaryDisabled = false,
   variant = 'default',
   onConfirm,
   onClose,
@@ -101,6 +104,7 @@ export function ConfirmDialog({
             {isInfo ? (
               <PrimaryButton
                 variant="dark"
+                disabled={primaryDisabled}
                 onClick={() => {
                   onPrimaryAction?.();
                   onClose();

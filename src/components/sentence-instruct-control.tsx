@@ -15,7 +15,9 @@
    precedent (generation.tsx), so this is an accepted simplification. */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import type { Character } from '../lib/types';
@@ -34,6 +36,9 @@ export function SentenceInstructControl({
   character?: Character;
 }) {
   const dispatch = useAppDispatch();
+  // #3400 pass 7 — see SentenceEmotionControl: disabled + re-checked while restructuring.
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const markStale = useMarkCharacterStaleIfRendered();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(instruct ?? '');
@@ -63,6 +68,7 @@ export function SentenceInstructControl({
   const audible = character?.ttsModelKey === 'qwen3-tts-1.7b';
 
   const commit = (value: string) => {
+    if (refuseIfEditsLocked(store.getState, dispatch)) return;
     dispatch(manuscriptActions.setSentenceInstruct({ chapterId, sentenceId, instruct: value }));
     if (audible && character) markStale({ id: character.id, name: character.name });
     setOpen(false);
@@ -87,6 +93,8 @@ export function SentenceInstructControl({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        disabled={editsLocked}
+        title={editsLocked ? RESTRUCTURING_REASON : undefined}
         className={
           current
             ? `mx-0.5 inline-flex items-center min-h-[20px] px-1.5 rounded-full text-[10px] font-medium ${inaudible ? 'opacity-50 text-ink/40 bg-ink/5' : 'text-purple-deep/70 bg-purple-deep/5'}`

@@ -1049,33 +1049,36 @@ export const SCENES: Scene[] = [
           `chapters/setChapters` progress-bump trick (nothing ever reads it
           back; no interval ever ticks again). Modifying api.ts/hollow-tide.ts
           is out of scope for this task (scenes.ts + docs only), so this scene
-          reaches the exact same end state — the middleware's
-          `revisions/markRevisionPlayable` handler,
-          generation-stream-middleware.ts:165-183 — via the `window.__store__`
-          test hook already wired for e2e (src/main.tsx:56-58; live under
-          `--mode marketing` too, since Vite's DEV flag is command-based, not
-          mode-based). It dispatches the exact action a real completed tick
-          would have dispatched, once the real click flow has genuinely set
-          `ui.previewRegen`. The phantom mock revision the 30s per-book poll
-          seeds for every book is cleared first (same reason
-          profile-regen-preview.spec.ts clears it) so pending[0] is genuinely
-          our stub, not a stray one; the profile drawer is also dismissed
-          first since its sticky footer overlaps the modal's Preview button
-          at this viewport (same fix that real spec uses).
+          reaches the exact same end state — `chapters/previewChapterComplete`
+          (plan 286, Task 24), the action the runner's `chapter_complete`
+          branch dispatches for a real review render — via the
+          `window.__store__` test hook already wired for e2e
+          (src/main.tsx:56-58; live under `--mode marketing` too, since
+          Vite's DEV flag is command-based, not mode-based). The stream is
+          dead under `DEMO_CAPTURE`, so the scene stands in for the
+          completion tick directly, once the real click flow has genuinely
+          set `ui.previewRegen`. The dispatched `reviewOutcome: 'failed'` (a
+          preserved take, no recorded entry) takes the stub path with no
+          refetch; seeding `previousChapterIds` via `__mockRevisions` first
+          makes the stub's previous-audio metadata check succeed, so the A
+          card shows the preserved take rather than "Original audio not
+          preserved". The profile drawer is dismissed first since its sticky
+          footer overlaps the modal's Preview button at this viewport (same
+          fix the real spec uses).
 
        3. Duration side effect. Code review on this task flagged that
           skipping the tick pipeline entirely also skips
           chapters-slice.ts's `applyGenerationTick` `chapter_complete`
           branch (~line 498), which is what stamps `ch.duration` from
           `ev.durationSec` on a real render. Without it, `chapter.duration`
-          is still its seeded '00:00', and build-pending-revision.ts:45-46
+          is still its seeded '00:00', and build-preview-stub.ts:45-46
           reads that SAME field into both `oldDuration` and `newDuration` —
           so the screenshot would show "00:00" on both A and B cards (both
           fields deriving from one still-unset value, not two
           independently-wrong ones). So this scene dispatches a minimal
           `chapters/applyGenerationTick` `chapter_complete` event (just
           `chapterId` + a realistic `durationSec`) BEFORE
-          `revisions/markRevisionPlayable`, mirroring what the real tick
+          `chapters/previewChapterComplete`, mirroring what the real tick
           would have done first. Same "stand in for the tick the dead mock
           stream can't fire" workaround as point 2 above, just for the
           reducer that runs one step earlier in the real pipeline. */
@@ -1094,11 +1097,9 @@ export const SCENES: Scene[] = [
             __store__?: { dispatch: (a: unknown) => void };
           }
         ).__store__;
-        // Dismiss the (overlapping) profile drawer and clear any phantom
-        // pending revision before Preview fires — mirrors
-        // e2e/profile-regen-preview.spec.ts's openPreviewPlayer helper.
+        // Dismiss the (overlapping) profile drawer before Preview fires —
+        // mirrors e2e/profile-regen-preview.spec.ts's openPreviewPlayer helper.
         s?.dispatch({ type: 'ui/setOpenProfileId', payload: null });
-        s?.dispatch({ type: 'revisions/rejectAllPending' });
       });
       await page.getByTestId('regen-character-preview').click({ timeout: 5000 });
       await page.evaluate(() => {
@@ -1125,7 +1126,18 @@ export const SCENES: Scene[] = [
             type: 'chapters/applyGenerationTick',
             payload: { type: 'chapter_complete', chapterId, durationSec: 680 },
           });
-          s?.dispatch({ type: 'revisions/markRevisionPlayable', payload: { chapterId } });
+          (
+            window as unknown as {
+              __mockRevisions?: { seed: (b: string, s: unknown) => void };
+            }
+          ).__mockRevisions?.seed('hollow-tide-2', {
+            previousChapterIds: [chapterId],
+            liveChapterIds: [chapterId],
+          });
+          s?.dispatch({
+            type: 'chapters/previewChapterComplete',
+            payload: { bookId: 'hollow-tide-2', chapterId, reviewOutcome: 'failed' },
+          });
         }
       });
     },
