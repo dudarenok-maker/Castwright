@@ -368,11 +368,24 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
   });
 
   it('DELETE queued behind a folder move deletes the MOVED book (not a 204 for a no-op)', async () => {
-    /* #3711 — the move is now a real in-process rename PUT: it holds book-op,
-       so the DELETE queues behind it on book-op (not on the old state-json key)
-       and resolves the book AFTER the move. (The old premise -- a renameSync
-       under a held key -- is an out-of-process move, which the DELETE no longer
-       re-resolves for; that stays covered by #3706's absent-state refusals.) */
+    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), moveBook);
+    expect(res.status).toBe(204);
+    expect(existsSync(movedDir())).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('DELETE queued behind a folder removal -> 204 and nothing is recreated (#3711)', async () => {
+    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), deleteBook);
+    expect(res.status).toBe(204);
+    expect(existsSync(bookDir)).toBe(false);
+    expect(existsSync(movedDir())).toBe(false);
+  });
+
+  it('DELETE queued behind an in-process rename PUT deletes the MOVED book (book-op ordering)', async () => {
+    /* #3711 — the move is a real in-process rename PUT: it holds book-op, so the
+       DELETE queues behind it on book-op (not on the old state-json key) and
+       resolves the book AFTER the move. The out-of-process variant above is
+       `removeBookFolder`'s own re-resolve under its lock. */
     let renameRes!: Promise<request.Response>;
     let deleteRes!: Promise<request.Response>;
     await withStateJsonLock(statePath, async () => {

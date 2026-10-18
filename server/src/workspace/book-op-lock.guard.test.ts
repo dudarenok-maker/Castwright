@@ -43,7 +43,14 @@
    `no-book-write` / `cross-book-walker` (G2) and the permanent `onlyBookDir`
    exemption (G4).
 
+   G2 also forbids a nested `withBookOp(` / `withBookOps(` inside a `withBookOp*`
+   callback (re-entry on the same id times out at 10s; two books go through ONE
+   `withBookOps`).
+
    BLIND SPOTS (covered by tests and the review catalogue, not the guard):
+     - G1 keys on the FIRST-ARGUMENT IDENTIFIER only: `rm(stagingDir, …)` /
+       `rename(someAlias, …)` over a variable that holds a book folder is
+       invisible, as is a book folder reached through a helper;
      - aliased imports or re-exports;
      - a captured `bookDir` used after a callback returns;
      - a new long job in a file G5 doesn't list;
@@ -424,6 +431,13 @@ function scanHandlers(rel: string, content: string): HandlerScan {
       result.forbidden.push(`${content.slice(i, content.indexOf('(', i) + 1)} inside a withBookOp* callback @ line ${lineOf(content, i)}`);
     }
   }
+  /* A nested lock call sits STRICTLY inside another call's span (the call's own
+     token starts the span, so `start < i` excludes itself). */
+  for (const i of tokenIndexes(content, opaque, BOOK_OP_ANY_RE)) {
+    if (bookOpSpans.some((s) => i > s.start && i <= s.end)) {
+      result.forbidden.push(`${content.slice(i, content.indexOf('(', i) + 1)} nested inside a withBookOp* callback @ line ${lineOf(content, i)}`);
+    }
+  }
 
   if (!content.includes('Router')) return result;
   const lockOrJobSpans = callSpans(content, opaque, BOOK_OP_OR_JOB_RE);
@@ -658,12 +672,15 @@ const PERMANENT_G4B = new Map<string, number>([['routes/voices.ts', 1]]);
 
 const VALID_REASON = /^(?:pending:T(?:[2-9]|10)\b.*|no-book-write|cross-book-walker)$/;
 
-/** Compare `found` (file -> details) against `allow` in BOTH directions. */
+/** Compare `found` (file -> details) against `allow` in BOTH directions.
+ *  `allowPending` is a PARAMETER (default: the real switch) so the negative
+ *  controls can run the `false` path the const would otherwise make unreachable. */
 function diffAllowlist(
   label: string,
   found: Map<string, string[]>,
   allow: Map<string, AllowEntry>,
   permanent: Map<string, number> = new Map(),
+  allowPending: boolean = ALLOW_PENDING,
 ): string[] {
   const problems: string[] = [];
   for (const [rel, details] of found) {
@@ -685,11 +702,39 @@ function diffAllowlist(
     if (!VALID_REASON.test(entry.reason)) {
       problems.push(`${label} ${rel}: invalid allowlist reason "${entry.reason}"`);
     }
-    if (!ALLOW_PENDING && entry.reason.startsWith('pending:')) {
+    if (!allowPending && entry.reason.startsWith('pending:')) {
       problems.push(`${label} ${rel}: pending allowlist entry "${entry.reason}" must not remain`);
     }
   }
   return problems;
+}
+
+/** G5: each long-job file carries its declared minimum of `runBookJob(` tokens.
+ *  A `pending` file may sit below its minimum only while `allowPending`. */
+function checkLongJobs(
+  counts: Map<string, number>,
+  files: ReadonlyMap<string, { min: number; pending: string | null }>,
+  allowPending: boolean,
+): string[] {
+  const problems: string[] = [];
+  for (const [rel, { min, pending }] of files) {
+    const have = counts.get(rel);
+    if (have === undefined) {
+      problems.push(`${rel}: listed in LONG_JOB_FILES but the file does not exist`);
+      continue;
+    }
+    const required = pending && allowPending ? 0 : min;
+    if (have < required) problems.push(`${rel}: expected >= ${required} runBookJob( token(s), found ${have}`);
+    if (pending && !allowPending) problems.push(`${rel}: pending:${pending} must not remain`);
+    if (pending && have >= min) problems.push(`${rel}: now meets its minimum (${min}) — clear its pending marker`);
+  }
+  return problems;
+}
+
+/** Files of allowlist entries still marked `pending:` -- must be empty once `allowPending` is off. */
+function pendingEntries(maps: Array<Map<string, AllowEntry>>, allowPending: boolean): string[] {
+  if (allowPending) return [];
+  return maps.flatMap((m) => [...m].filter(([, e]) => e.reason.startsWith('pending:')).map(([k]) => k));
 }
 
 interface Scanned {
@@ -777,19 +822,7 @@ describe('book-op lock — static guard (#3711)', () => {
   });
 
   it('G5: each long-job file carries its declared minimum of runBookJob( tokens', () => {
-    const problems: string[] = [];
-    for (const [rel, { min, pending }] of LONG_JOB_FILES) {
-      const have = scanned.runBookJobCounts.get(rel);
-      if (have === undefined) {
-        problems.push(`${rel}: listed in LONG_JOB_FILES but the file does not exist`);
-        continue;
-      }
-      const required = pending && ALLOW_PENDING ? 0 : min;
-      if (have < required) problems.push(`${rel}: expected >= ${required} runBookJob( token(s), found ${have}`);
-      if (pending && !ALLOW_PENDING) problems.push(`${rel}: pending:${pending} must not remain`);
-      if (pending && have >= min) problems.push(`${rel}: now meets its minimum (${min}) — clear its pending marker`);
-    }
-    expect(problems).toEqual([]);
+    expect(checkLongJobs(scanned.runBookJobCounts, LONG_JOB_FILES, ALLOW_PENDING)).toEqual([]);
   });
 
   it('G5: runBookJob is the ONLY registration function (book-jobs.ts exports; __addBookJobToken has no other caller)', () => {
@@ -799,8 +832,7 @@ describe('book-op lock — static guard (#3711)', () => {
 
   it('no pending:T<n> allowlist entry remains (flipped on by Task 10)', () => {
     const all = [ALLOW_G1, ALLOW_G2, ALLOW_G3A, ALLOW_G3B, ALLOW_G4A, ALLOW_G4B];
-    const pending = all.flatMap((m) => [...m].filter(([, e]) => e.reason.startsWith('pending:')).map(([k]) => k));
-    expect(ALLOW_PENDING ? [] : pending).toEqual([]);
+    expect(pendingEntries(all, ALLOW_PENDING)).toEqual([]);
   });
 
   it('the scan is real: it sees the known guarded handlers and long-job files', () => {
@@ -881,6 +913,21 @@ describe('book-op lock — static guard (#3711)', () => {
     expect(scanHandlers('x.ts', ok).forbidden).toHaveLength(0);
   });
 
+  it('G2 negative control: a nested withBookOp / withBookOps inside a withBookOp* callback is reported; siblings are not', () => {
+    const nested = 'await withBookOp(a, async () => { await withBookOp(a, async () => {}); });';
+    expect(scanHandlers('x.ts', nested).forbidden).toHaveLength(1);
+    const multi = 'await withBookOp(a, async () => { await withBookOps([a, b], async () => {}); });';
+    expect(scanHandlers('x.ts', multi).forbidden).toHaveLength(1);
+    const inOps = 'await withBookOps([a, b], async () => { await withBookOp(c, async () => {}); });';
+    expect(scanHandlers('x.ts', inOps).forbidden).toHaveLength(1);
+    const siblings = 'await withBookOp(a, async () => {});\nawait withBookOp(b, async () => {});';
+    expect(scanHandlers('x.ts', siblings).forbidden).toHaveLength(0);
+    const prose = 'await withBookOp(a, async () => { /* never withBookOp( inside */ });';
+    expect(scanHandlers('x.ts', prose).forbidden).toHaveLength(0);
+    const declaration = 'export function withBookOp<T>(id: string) {}';
+    expect(scanHandlers('x.ts', declaration).forbidden).toHaveLength(0);
+  });
+
   it('G3a negative control: a resolve before the lock is reported; one inside a callback or via peekBook is not', () => {
     const bad = [
       "bookRouter.post('/:bookId/x', async (req, res) => {",
@@ -949,6 +996,41 @@ describe('book-op lock — static guard (#3711)', () => {
     expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'pending:T2' }]]))).toEqual([]);
     expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]), new Map([['a.ts', 1]]))).toEqual([]);
     expect(diffAllowlist('T', found, new Map(), new Map([['a.ts', 2]]))).toEqual([]);
+  });
+
+  it('allowPending=false negative controls: a pending allowlist entry, a pending G5 file and a leftover pending entry all FAIL', () => {
+    const found = new Map([['a.ts', ['x']]]);
+    const pendingEntry = new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]);
+    // control: while pending is allowed the same fixture is clean
+    expect(diffAllowlist('T', found, pendingEntry, new Map(), true)).toEqual([]);
+    expect(diffAllowlist('T', found, pendingEntry, new Map(), false)).toHaveLength(1);
+    // a permanent reason is clean either way
+    const permanentEntry = new Map([['a.ts', { count: 1, reason: 'no-book-write' }]]);
+    expect(diffAllowlist('T', found, permanentEntry, new Map(), false)).toEqual([]);
+
+    const files = new Map([
+      ['p.ts', { min: 1, pending: 'T4' }],
+      ['q.ts', { min: 2, pending: null }],
+    ]);
+    // pending allowed: p.ts may sit at 0; q.ts below its minimum still fails
+    expect(checkLongJobs(new Map([['p.ts', 0], ['q.ts', 2]]), files, true)).toEqual([]);
+    expect(checkLongJobs(new Map([['p.ts', 0], ['q.ts', 1]]), files, true)).toHaveLength(1);
+    // pending forbidden: a pending file below its minimum fails (have < min), plus the "must not remain" report
+    const off = checkLongJobs(new Map([['p.ts', 0], ['q.ts', 2]]), files, false);
+    expect(off.some((p) => p.includes('expected >= 1'))).toBe(true);
+    expect(off.some((p) => p.includes('must not remain'))).toBe(true);
+    // pending forbidden and the marker cleared: clean
+    const cleared = new Map([
+      ['p.ts', { min: 1, pending: null }],
+      ['q.ts', { min: 2, pending: null }],
+    ]);
+    expect(checkLongJobs(new Map([['p.ts', 1], ['q.ts', 2]]), cleared, false)).toEqual([]);
+    // a file that meets its minimum while still marked pending is reported (allowed or not)
+    expect(checkLongJobs(new Map([['p.ts', 1], ['q.ts', 2]]), files, true)).toHaveLength(1);
+
+    expect(pendingEntries([pendingEntry], false)).toEqual(['a.ts']);
+    expect(pendingEntries([pendingEntry], true)).toEqual([]);
+    expect(pendingEntries([permanentEntry], false)).toEqual([]);
   });
 
   it('prose quoting an unbalanced withBookOp( does not fabricate a lock range', () => {

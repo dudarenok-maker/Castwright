@@ -45,8 +45,8 @@ export interface BookJobLease {
  *     `fn`'s promise settles and the token has been released.
  *
  *  A gone book resolves to `BOOK_GONE` (fn never called, nothing registered). A
- *  timed-out registration rethrows the curated contention error. A caller that
- *  does not await `done` must attach a `.catch` to it. */
+ *  timed-out registration rethrows the curated contention error. `done` already
+ *  has a no-op catch attached, so an un-awaited rejection is not "unhandled". */
 export async function runBookJob<T>(
   bookId: string,
   kind: BookJobKind,
@@ -69,5 +69,11 @@ export async function runBookJob<T>(
       registered.release();
     }
   };
-  return { done: run() };
+  const done = run();
+  /* `done` carries a no-op catch so a caller that fires the job and never awaits
+     `done` cannot crash the process with an unhandled rejection. A caller that
+     DOES await it still sees the rejection (this attaches a handler to `done`,
+     it does not swallow it). */
+  done.catch(() => undefined);
+  return { done };
 }

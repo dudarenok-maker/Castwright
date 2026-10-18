@@ -371,17 +371,21 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
     const outDir = paths.bookDirByDisplay(AUTHOR, paths.STANDALONES_SERIES, 'Race Out');
     const seriesDir = join(workspaceRoot, 'books', AUTHOR, 'Racing Series');
 
-    /* Hold the INTO book's mkdir of the series directory open for a beat, long
-       enough for an unserialised OUT rename to finish and `rmdir` the (by then
-       empty) series -- which would make INTO's rename fail. */
+    /* Park the INTO book's mkdir of the series directory on a gate the test
+       releases, only once the OUT rename has either FINISHED (unserialised: it
+       has `rmdir`ed the by-then empty series, which would make INTO's rename
+       fail) or is QUEUED behind the path claim (serialised). No timer decides
+       the interleave. */
     let mkdirHit!: () => void;
     const hit = new Promise<void>((r) => (mkdirHit = r));
+    let releaseMkdir!: () => void;
+    const mkdirGate = new Promise<void>((r) => (releaseMkdir = r));
     const actualFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     spies.mkdir = async (path, opts) => {
       const made = await actualFsp.mkdir(path, opts as never);
       if (path === seriesDir) {
         mkdirHit();
-        await sleep(250);
+        await mkdirGate;
       }
       return made;
     };
@@ -390,7 +394,17 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
       put(into.bookId, { slice: 'state', patch: { isStandalone: false, series: 'Racing Series' } }),
     );
     await hit;
+    let outSettled = false;
     const outP = fire(put(out.bookId, { slice: 'state', patch: { isStandalone: true } }));
+    void outP.then(
+      () => (outSettled = true),
+      () => (outSettled = true),
+    );
+    await waitUntil(
+      () => outSettled || (keyWaiters()?.('book-path-claim') ?? 0) >= 1,
+      'the OUT rename to finish or queue behind the path claim',
+    );
+    releaseMkdir();
     const [intoRes, outRes] = await Promise.all([intoP, outP]);
 
     expect(intoRes.status).toBe(204);

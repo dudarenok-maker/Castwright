@@ -15,7 +15,26 @@ const faults = vi.hoisted(() => ({
   renameError: null as null | NodeJS.ErrnoException,
   rmAfterStateGoneError: null as null | NodeJS.ErrnoException,
   rmError: null as null | NodeJS.ErrnoException,
+  /* One-shot: the next `readStateJsonWithRecovery(path)` for `path` finishes its
+     read, signals `reached`, then parks until `release` resolves. */
+  readGate: null as null | { path: string; reached: () => void; release: Promise<void> },
 }));
+vi.mock('./state-migrate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./state-migrate.js')>();
+  return {
+    ...actual,
+    readStateJsonWithRecovery: async (p: string) => {
+      const out = await actual.readStateJsonWithRecovery(p);
+      const gate = faults.readGate;
+      if (gate && gate.path === p) {
+        faults.readGate = null;
+        gate.reached();
+        await gate.release;
+      }
+      return out;
+    },
+  };
+});
 vi.mock('./atomic-rename.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./atomic-rename.js')>();
   return {
@@ -52,7 +71,7 @@ function seedBook(
   author: string,
   series: string,
   title: string,
-  opts: { bookId?: string | null; manuscriptId?: string; dirName?: string } = {},
+  opts: { bookId?: string | null; manuscriptId?: string; dirName?: string; chapters?: unknown[] } = {},
 ): { bookId: string; bookDir: string } {
   const bookId = opts.bookId === undefined ? paths.makeBookId(author, series, title) : opts.bookId;
   const bookDir = join(paths.BOOKS_ROOT, author, series, opts.dirName ?? title);
@@ -69,7 +88,7 @@ function seedBook(
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: false,
-      chapters: [],
+      chapters: opts.chapters ?? [],
       createdAt: '2020-01-01T00:00:00.000Z',
       updatedAt: '2020-01-01T00:00:00.000Z',
     }),
@@ -121,6 +140,7 @@ afterEach(() => {
   faults.renameError = null;
   faults.rmAfterStateGoneError = null;
   faults.rmError = null;
+  faults.readGate = null;
   vi.restoreAllMocks();
 });
 
@@ -260,7 +280,29 @@ describe('withBookOp', () => {
   });
 });
 
+const BACKFILL_CHAPTER = { id: 1, title: 'One', slug: '01-one', duration: '0:00', uuid: 'u-1' };
+
+function seedSegments(bookDir: string): void {
+  mkdirSync(join(bookDir, 'audio'), { recursive: true });
+  writeFileSync(
+    join(bookDir, 'audio', '01-one.segments.json'),
+    JSON.stringify({ durationSec: 5, modelKey: 'kokoro-test', synthesizedAt: '2021-01-01T00:00:00.000Z' }),
+  );
+}
+
 describe('resolveBook (via withBookOp / peekBook)', () => {
+  it('applies the same lazy audioModelKey backfill findBookBy applies (handle state is upgraded, and persisted)', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'Backfill', { chapters: [BACKFILL_CHAPTER] });
+    seedSegments(bookDir);
+    const seen = await lock.withBookOp(bookId, async (b) => b.state.chapters[0]);
+    expect(seen).toMatchObject({ audioModelKey: 'kokoro-test', audioRenderedAt: '2021-01-01T00:00:00.000Z' });
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.chapters[0].audioModelKey).toBe('kokoro-test');
+    // control: findBookBy's own backfill agrees on the result
+    const viaScan = await scan.findBookByBookId(bookId);
+    expect(viaScan?.state.chapters[0].audioModelKey).toBe('kokoro-test');
+  });
+
   it('a hintDir carrying a DIFFERENT bookId is rejected and the resolve falls back', async () => {
     const real = seedBook('A', 'S', 'Real');
     const other = seedBook('A', 'S', 'Other');
@@ -340,6 +382,40 @@ describe('peekBook', () => {
 
   it('returns null for a missing book', async () => {
     expect(await lock.peekBook('ghost__standalones__ghost')).toBeNull();
+  });
+
+  it('writes nothing: a peek that read the OLD dir does not write it back into the record or the index after a move', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'PeekRace', { manuscriptId: 'ms-peek-race' });
+    store.putManuscript(record('ms-peek-race', bookId, bookDir));
+    await lock.withBookOp(bookId, async () => undefined); // seeds the index at the OLD dir
+    const newDir = join(paths.BOOKS_ROOT, 'A', 'S', 'PeekRaceMoved');
+    const reached = deferred();
+    const release = deferred();
+    faults.readGate = {
+      path: join(bookDir, '.audiobook', 'state.json'),
+      reached: reached.resolve,
+      release: release.promise,
+    };
+    const peeking = lock.peekBook(bookId); // reads the old dir, then parks
+    await reached.promise;
+    await lock.withBookOp(bookId, async (b) => {
+      await lock.moveBookFolder(b, newDir, (f) => f);
+    });
+    expect(store.getManuscript('ms-peek-race')?.bookDir).toBe(newDir);
+    expect(lock.__bookDirIndexForTest().get(bookId)).toBe(newDir);
+    release.resolve();
+    await peeking;
+    expect(store.getManuscript('ms-peek-race')?.bookDir).toBe(newDir);
+    expect(lock.__bookDirIndexForTest().get(bookId)).toBe(newDir);
+  });
+
+  it('does not backfill (no write): a peek leaves state.json byte-identical', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'PeekNoBackfill', { chapters: [BACKFILL_CHAPTER] });
+    seedSegments(bookDir);
+    const before = readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8');
+    const peeked = await lock.peekBook(bookId);
+    expect(peeked?.state.chapters[0].audioModelKey).toBeUndefined();
+    expect(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')).toBe(before);
   });
 });
 
@@ -495,6 +571,75 @@ describe('sanctioned movers', () => {
     expect(await lock.peekBook(bookId)).toBeNull();
   });
 
+  it('moveBookFolder refuses a newDir outside the books root (and leaves the book in place)', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'Contained');
+    await lock.withBookOp(bookId, async (b) => {
+      for (const bad of [
+        join(workspaceRoot, 'outside'),
+        join(paths.BOOKS_ROOT, '..', 'escaped'),
+        paths.BOOKS_ROOT,
+      ]) {
+        await expect(lock.moveBookFolder(b, bad, (f) => f)).rejects.toThrow(/not under the books root/);
+      }
+    });
+    expect(existsSync(bookDir)).toBe(true);
+    expect(existsSync(join(workspaceRoot, 'outside'))).toBe(false);
+  });
+
+  it('removeBookFolder: state.json absent at the handle dir after queueing (out-of-process move) deletes the MOVED book', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'OopMoved');
+    const moved = join(paths.BOOKS_ROOT, 'A', 'S', 'OopMoved-elsewhere');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    let out: unknown;
+    let removal!: Promise<unknown>;
+    await fileLock.withStateJsonLock(statePath, async () => {
+      removal = lock.withBookOp(bookId, async (b) => {
+        out = await lock.removeBookFolder(b);
+      });
+      await until(() => fileLock.__stateJsonWaitersForTest(statePath) === 1);
+      renameSync(bookDir, moved);
+    });
+    await removal;
+    expect(out).toBe('removed');
+    expect(existsSync(moved)).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('removeBookFolder: state.json absent and the book nowhere (out-of-process delete) resolves "gone" and recreates nothing', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'OopGone');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    let out: unknown;
+    let removal!: Promise<unknown>;
+    await fileLock.withStateJsonLock(statePath, async () => {
+      removal = lock.withBookOp(bookId, async (b) => {
+        out = await lock.removeBookFolder(b);
+      });
+      await until(() => fileLock.__stateJsonWaitersForTest(statePath) === 1);
+      rmSync(bookDir, { recursive: true, force: true });
+    });
+    await removal;
+    expect(out).toBe('gone');
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('a spread copy of a live handle (held:true) and a hand-built {held:true} object are refused by both movers', async () => {
+    const { bookId, bookDir } = seedBook('A', 'S', 'Unforgeable');
+    await lock.withBookOp(bookId, async (b) => {
+      const copy = { ...b };
+      const forged = { bookId, bookDir: b.bookDir, state: b.state, held: true };
+      for (const h of [copy, forged]) {
+        expect(h.held).toBe(true);
+        await expect(lock.moveBookFolder(h, join(paths.BOOKS_ROOT, 'A', 'S', 'Nope2'), (f) => f)).rejects.toThrow(
+          /not held/,
+        );
+        await expect(lock.removeBookFolder(h)).rejects.toThrow(/not held/);
+      }
+      // the genuine handle still works
+      await lock.moveBookFolder(b, join(paths.BOOKS_ROOT, 'A', 'S', 'Unforgeable2'), (f) => f);
+    });
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
   it('a RELEASED handle makes both movers throw', async () => {
     const { bookId } = seedBook('A', 'S', 'Released');
     let captured!: import('./book-op-lock.js').BookHandle;
@@ -546,6 +691,24 @@ describe('withBookPathClaim', () => {
     gate.resolve();
     await Promise.all([first, second]);
     expect(order).toEqual(['first', 'second']);
+  });
+
+  it('a timeout is curated: contention sentence, code kept, no key in the message', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const gate = deferred();
+    let started = false;
+    const holder = lock.withBookPathClaim(async () => {
+      started = true;
+      await gate.promise;
+    });
+    await until(() => started);
+    const err = await lock.withBookPathClaim(async () => 'never', 30).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(fileLock.LOCK_CONTENTION_REQUEST_ERROR);
+    expect((err as NodeJS.ErrnoException).code).toBe(fileLock.LOCK_ACQUISITION_TIMEOUT_CODE);
+    expect(fileLock.isLockAcquisitionTimeout(err)).toBe(true);
+    expect((err as Error).message).not.toContain('book-path-claim');
+    gate.resolve();
+    await holder;
   });
 });
 

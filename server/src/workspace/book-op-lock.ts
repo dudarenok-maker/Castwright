@@ -26,11 +26,12 @@
        resolve (the two-span pattern) and nothing it returns may feed a write.
 
    The movers take a `BookHandle` and throw if `held` is false -- a capability
-   token (the handle is only ever created inside `withBookOp*`), replacing an
-   AsyncLocalStorage order tracker. */
+   token (the handle is only ever created inside `withBookOp*`, and a mover also
+   requires it to be in a module-private WeakSet of live handles, so a copy or a
+   hand-built object is refused), replacing an AsyncLocalStorage order tracker. */
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
   LOCK_ACQUISITION_TIMEOUT_CODE,
   LOCK_CONTENTION_REQUEST_ERROR,
@@ -42,13 +43,14 @@ import { BOOKS_ROOT, STANDALONES_SERIES, ensureWorkspace, makeBookId, parseBookI
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { renameWithRetry } from './atomic-rename.js';
 import { getManuscript, putManuscript } from '../store/manuscripts.js';
-import type { BookStateJson } from './scan.js';
+import { backfillAudioModelKeysFromSegments, type BookStateJson } from './scan.js';
 
 /** Returned by `withBookOp*` / `runBookJob` when the book no longer exists. */
 export const BOOK_GONE: unique symbol = Symbol('BOOK_GONE');
 
 /** What a `withBookOp*` callback receives. `held` is true only while the callback
- *  runs; `bookDir`/`state` track the folder across an in-callback move. */
+ *  runs; `bookDir`/`state` track the folder across an in-callback move. The
+ *  movers also check a private registry, so only the object handed out counts. */
 export interface BookHandle {
   bookId: string;
   bookDir: string;
@@ -174,7 +176,17 @@ async function readOwnedState(dir: string, bookId: string): Promise<BookStateJso
   return raw && raw.bookId === bookId ? raw : null;
 }
 
-function accept(bookId: string, bookDir: string, state: BookStateJson): { bookDir: string; state: BookStateJson } {
+/** The ONLY place a resolve mutates shared state, and only for a LOCKED caller
+ *  (`heal: true`): an unlocked `peekBook` that read the OLD dir just before a
+ *  mover renamed it must not write that dir back into the index or the
+ *  ManuscriptRecord (the #2165 split). */
+async function accept(
+  bookId: string,
+  bookDir: string,
+  state: BookStateJson,
+  heal: boolean,
+): Promise<{ bookDir: string; state: BookStateJson }> {
+  if (!heal) return { bookDir, state };
   bookDirById.set(bookId, bookDir);
   /* Heal a live ManuscriptRecord only when it is THIS book's: twin books can
      share a manuscriptId (a bundle imported under the `rename` strategy keeps
@@ -186,23 +198,31 @@ function accept(bookId: string, bookDir: string, state: BookStateJson): { bookDi
       putManuscript(rec);
     }
   }
-  return { bookDir, state };
+  /* The same lazy engine-drift upgrade `findBookBy` applies, so a route that
+     moved from `findBookByBookId` to `book.state` does not lose it. */
+  const upgraded = await backfillAudioModelKeysFromSegments(bookDir, state);
+  return { bookDir, state: upgraded.state };
 }
 
 /** Resolve a bookId to its folder. A candidate is accepted only if its
  *  `.audiobook/state.json` carries `bookId`. Tried in order: `hintDir`, the
  *  in-memory index, then a full tree walk with today's first-match behaviour
- *  (a second match is logged, server-log only, and the first wins). */
+ *  (a second match is logged, server-log only, and the first wins). `heal`
+ *  (locked callers only) lets the resolve write the index and the record. */
 async function resolveBook(
   bookId: string,
-  hintDir?: string,
+  hintDir: string | undefined,
+  heal: boolean,
+  skipHints = false,
 ): Promise<{ bookDir: string; state: BookStateJson } | null> {
-  for (const candidate of [hintDir, bookDirById.get(bookId)]) {
-    if (!candidate) continue;
-    const state = await readOwnedState(candidate, bookId);
-    if (state) return accept(bookId, candidate, state);
+  if (!skipHints) {
+    for (const candidate of [hintDir, bookDirById.get(bookId)]) {
+      if (!candidate) continue;
+      const state = await readOwnedState(candidate, bookId);
+      if (state) return accept(bookId, candidate, state, heal);
+    }
   }
-  bookDirById.delete(bookId);
+  if (heal) bookDirById.delete(bookId);
   let first: { bookDir: string; state: BookStateJson } | null = null;
   for (const dir of walkBookDirs()) {
     const state = await readOwnedState(dir, bookId);
@@ -216,16 +236,35 @@ async function resolveBook(
       break;
     }
   }
-  return first ? accept(bookId, first.bookDir, first.state) : null;
+  return first ? accept(bookId, first.bookDir, first.state, heal) : null;
 }
 
-/** A read-only resolve that takes NO lock. The only sanctioned pre-lock resolve,
- *  for the two-span pattern; nothing it returns may feed a write. */
+/** A read-only resolve that takes NO lock and WRITES NOTHING (no index update,
+ *  no record heal, no backfill). The only sanctioned pre-lock resolve, for the
+ *  two-span pattern; nothing it returns may feed a write. */
 export async function peekBook(
   bookId: string,
   hintDir?: string,
 ): Promise<{ bookDir: string; state: BookStateJson } | null> {
-  return resolveBook(bookId, hintDir);
+  return resolveBook(bookId, hintDir, false);
+}
+
+/* ---- unforgeable handles ----------------------------------------------------- */
+
+/* A module-private set of the handles `withBookOp*` handed out and has not yet
+   released. A mover accepts a handle only if it is IN this set, so a spread copy
+   (`{ ...book }`, which keeps `held: true`) or a hand-built object is refused. */
+const liveHandles = new WeakSet<BookHandle>();
+
+function makeHandle(bookId: string, resolved: { bookDir: string; state: BookStateJson }): BookHandle {
+  const book: BookHandle = { bookId, ...resolved, held: true };
+  liveHandles.add(book);
+  return book;
+}
+
+function releaseHandle(book: BookHandle): void {
+  book.held = false;
+  liveHandles.delete(book);
 }
 
 /* ---- the locks -------------------------------------------------------------- */
@@ -266,13 +305,13 @@ export function withBookOp<T>(
     withKeyLock(
       `book-op:${bookId}`,
       async () => {
-        const resolved = await resolveBook(bookId, opts.hintDir);
+        const resolved = await resolveBook(bookId, opts.hintDir, true);
         if (!resolved) return BOOK_GONE;
-        const book: BookHandle = { bookId, ...resolved, held: true };
+        const book = makeHandle(bookId, resolved);
         try {
           return await fn(book);
         } finally {
-          book.held = false;
+          releaseHandle(book);
         }
       },
       opts.timeoutMs,
@@ -295,14 +334,14 @@ export async function withBookOps<T>(
     withKeyLock(
       `book-op:${ids[i]}`,
       async () => {
-        const resolved = await resolveBook(ids[i]);
+        const resolved = await resolveBook(ids[i], undefined, true);
         if (!resolved) return BOOK_GONE;
-        const book: BookHandle = { bookId: ids[i], ...resolved, held: true };
+        const book = makeHandle(ids[i], resolved);
         try {
           const all = [...held, book];
           return i === ids.length - 1 ? await fn(all) : await step(i + 1, all);
         } finally {
-          book.held = false;
+          releaseHandle(book);
         }
       },
       opts.timeoutMs,
@@ -321,7 +360,7 @@ export function withBookPathClaim<T>(fn: () => Promise<T>, timeoutMs?: number): 
 /* ---- the sanctioned movers ---------------------------------------------------- */
 
 function assertHeld(book: BookHandle, what: string): void {
-  if (!book.held) {
+  if (!book.held || !liveHandles.has(book)) {
     throw new Error(`${what}: book handle is not held -- a mover must run inside withBookOp`);
   }
 }
@@ -342,6 +381,11 @@ export async function moveBookFolder(
 ): Promise<BookStateJson> {
   assertHeld(book, 'moveBookFolder');
   assertNotBusy(book.bookId);
+  /* A mover is a capability: it must never be steered outside the library. */
+  const relToRoot = relative(BOOKS_ROOT, newDir);
+  if (!relToRoot || relToRoot === '..' || relToRoot.startsWith(`..${sep}`) || isAbsolute(relToRoot)) {
+    throw new Error('moveBookFolder: newDir is not under the books root');
+  }
   const oldDir = book.bookDir;
   return withBookPathClaim(() =>
     withStateJsonLock(stateJsonPath(oldDir), async () => {
@@ -386,24 +430,43 @@ export async function moveBookFolder(
 /** Delete a book's folder. Refuses (BookBusyError) while a long job is
  *  registered. EPERM/EBUSY/EACCES with state.json still present is
  *  BookFolderInUseError; an `rm` that fails after state.json is already gone is
- *  BookPartlyDeletedError (the book has left the library). */
-export async function removeBookFolder(book: BookHandle): Promise<void> {
+ *  BookPartlyDeletedError (the book has left the library).
+ *
+ *  Out-of-process defence (#3706): if, once the state-json lock is held, state.json
+ *  is ABSENT at the handle's dir, the folder was moved or deleted by something
+ *  that does not take book-op while this call queued. Re-resolve by bookId (a full
+ *  walk) and delete the book where it now lives; if it is nowhere, resolve
+ *  `'gone'` (the caller answers an idempotent 204). */
+export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'gone'> {
   assertHeld(book, 'removeBookFolder');
   assertNotBusy(book.bookId);
   const dir = book.bookDir;
-  await withStateJsonLock(stateJsonPath(dir), async () => {
+  const rmFolder = async (target: string): Promise<void> => {
     try {
-      await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch (err) {
-      if (!existsSync(stateJsonPath(dir))) {
+      if (!existsSync(stateJsonPath(target))) {
         bookDirById.delete(book.bookId);
         throw new BookPartlyDeletedError(book.state.title);
       }
       if (isInUse(err)) throw new BookFolderInUseError();
       throw err;
     }
+  };
+  const outcome = await withStateJsonLock(stateJsonPath(dir), async (): Promise<'removed' | 'gone'> => {
+    if (existsSync(stateJsonPath(dir))) {
+      await rmFolder(dir);
+      return 'removed';
+    }
+    const moved = await resolveBook(book.bookId, undefined, false, true);
+    if (!moved) return 'gone';
+    book.bookDir = moved.bookDir;
+    book.state = moved.state;
+    await withStateJsonLock(stateJsonPath(moved.bookDir), () => rmFolder(moved.bookDir));
+    return 'removed';
   });
   bookDirById.delete(book.bookId);
+  return outcome;
 }
 
 /* ---- minting ids ----------------------------------------------------------------- */

@@ -245,6 +245,27 @@ describe('runBookJob', () => {
     await holder;
   });
 
+  it('a rejecting job whose caller never touches `done` is NOT an unhandled rejection; an awaiting caller still sees it', async () => {
+    const { bookId } = seedBook('A', 'S', 'FireAndForget');
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', listener);
+    try {
+      const r = await start(bookId, 'render', async () => {
+        throw new Error('job blew up');
+      });
+      // let the microtask/macrotask queues drain: Node raises 'unhandledRejection' after a tick
+      for (let i = 0; i < 5; i++) await new Promise((res) => setImmediate(res));
+      expect(unhandled).toEqual([]);
+      await expect(r.done).rejects.toThrow('job blew up');
+      expect(jobs.bookJobKinds(bookId)).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+  });
+
   it('exports no other registration function', () => {
     expect(Object.keys(jobs).sort()).toEqual(['bookJobKinds', 'runBookJob']);
   });

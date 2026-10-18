@@ -75,7 +75,13 @@ share a `manuscriptId`: a bundle imported under the `rename` strategy keeps the 
 #### Sanctioned movers
 
 These are the only code allowed to rename or remove a book folder. Each takes a `BookHandle` and throws if
-`book.held` is false. This capability token replaces AsyncLocalStorage (finding f).
+`book.held` is false **or the handle is not in a module-private `WeakSet` of live handles** (so a `{ ...book }`
+copy or a hand-built `{ held: true }` object is refused). This capability token replaces AsyncLocalStorage
+(finding f). `moveBookFolder` also refuses a `newDir` that is not under `BOOKS_ROOT`. `removeBookFolder`
+keeps the out-of-process defence: if, under its state-json lock, `state.json` is absent at the handle's dir,
+it re-resolves the book by id (a full walk) and deletes it where it now lives, or resolves `'gone'` (the
+route answers 204) if it is nowhere. `peekBook` writes nothing (no index update, no record heal, no backfill);
+only the locked resolves heal, and they apply the same lazy `audioModelKey` backfill `findBookBy` does.
 
 **`moveBookFolder(book, newDir, buildNext: (fresh) => BookStateJson)`** runs these steps in order:
 1. Refuses with `BookBusyError(kinds)` if `bookJobKinds(book.bookId)` is non-empty.
@@ -125,6 +131,13 @@ These are the only code allowed to rename or remove a book folder. Each takes a 
 function stays as a wrapper.
 
 ### Busy registry — `server/src/workspace/book-jobs.ts` (new leaf; imports nothing from `routes/`)
+
+**Where the pieces live.** The token registry itself (the `bookId → tokens` map, `bookJobKinds`, and the
+internal `__addBookJobToken`) lives in **`book-op-lock.ts`**, so the movers can read it without a
+`book-op-lock ↔ book-jobs` import cycle. **`book-jobs.ts` owns `runBookJob`**, the only caller of
+`__addBookJobToken` (guard G5 pins that) and the only registration function it exports. `runBookJob`'s `done`
+promise carries a pre-attached no-op catch, so a caller that never awaits it cannot crash the process with an
+unhandled rejection; a caller that does await it still sees the rejection.
 
 **`runBookJob(bookId, kind, fn, opts?)` — the only way to register (coordinator call).**
 
@@ -291,7 +304,7 @@ The frontend already surfaces `error` verbatim.
 
 | Situation | Response |
 |---|---|
-| Rename while a long job is registered | **409** `code:'book_busy'`. For analysis, the sentence stays verbatim (`book-state.ts:1125`). Other kinds: "This book is busy (rendering audio / scoring audio / designing voices / reviewing the script / exporting). Wait for it to finish before renaming it — a rename now would split the book across two folders." It is checked before the path-collision 409, as today. |
+| Rename while a long job is registered | **409** `code:'book_busy'`. For analysis, the sentence stays verbatim (`book-state.ts:1125`). Other kinds: "This book is busy (rendering audio / scoring audio / designing voices / reviewing the script / exporting). Wait for it to finish before renaming it — a rename now would split the book across two folders." It is checked before the path-collision 409 (`code:'book_path_taken'`), as today. |
 | DELETE while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then delete it." *(My call: refuse.)* |
 | DELETE of a gone book | **204** (idempotent, unchanged: `book-state.ts:1787-1790`) *(coordinator call)* |
 | DELETE half-done (`rm` failed after `state.json` was gone) | **409** `code:'book_partly_deleted'` "The book was removed from your library, but some of its files in its folder are still open in another program and were left behind. Close that program and delete the leftover \"<title>\" folder by hand." It does **not** advise a retry *(coordinator call)*. |
