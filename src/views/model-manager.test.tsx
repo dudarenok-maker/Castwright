@@ -78,6 +78,9 @@ vi.mock('../lib/api', () => ({
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
     restartSidecar: vi.fn(),
+    /* AnalyzerEndpointsSection (mounted by ModelSettingsForm) lists GPUs for its
+       per-endpoint device picker. */
+    getGpuDevices: vi.fn().mockResolvedValue({ devices: [], cpu: true }),
     getModelsStatus: vi.fn().mockResolvedValue(MODELS_STATUS),
     getOllamaHealth: vi.fn().mockResolvedValue({
       status: 'reachable',
