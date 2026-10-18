@@ -555,14 +555,14 @@ function allow(rows: Array<[string, number, string]>): Map<string, AllowEntry> {
 }
 
 /* G1: file -> unconverted mover sites. A file that scans clean must not be listed. */
-const ALLOW_G1 = allow([['routes/book-state.ts', 4, 'pending:T2']]);
+const ALLOW_G1 = allow([]);
 /* G2: file -> guarded handlers with no book-op / runBookJob. Final reasons are
    `no-book-write` / `cross-book-walker`. */
 const ALLOW_G2 = allow([
   ['routes/analysis.ts', 3, 'pending:T4'],
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/backup.ts', 2, 'pending:T3'],
-  ['routes/book-state.ts', 9, 'pending:T2 (PUT state, DELETE) + T3 (the other 7)'],
+  ['routes/book-state.ts', 6, 'pending:T3'],
   ['routes/cast-add-from-roster.ts', 1, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],
@@ -603,7 +603,7 @@ const ALLOW_G2 = allow([
 const ALLOW_G3A = allow([
   ['routes/annotate-emotion.ts', 1, 'pending:T5'],
   ['routes/backup.ts', 1, 'pending:T3'],
-  ['routes/book-state.ts', 10, 'pending:T2 + T3'],
+  ['routes/book-state.ts', 6, 'pending:T3'],
   ['routes/cast-add-from-roster.ts', 2, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],

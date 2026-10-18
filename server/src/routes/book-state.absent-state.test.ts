@@ -34,6 +34,7 @@ let bookDir: string;
 let statePath: string;
 let withStateJsonLock: typeof import('../workspace/file-lock.js').withStateJsonLock;
 let waitersFor: typeof import('../workspace/file-lock.js').__stateJsonWaitersForTest;
+let bookOpWaiters: typeof import('../workspace/file-lock.js').__keyWaitersForTest;
 let saveAnalysisCache: typeof import('../store/analysis-cache.js').saveAnalysisCache;
 let loadAnalysisCache: typeof import('../store/analysis-cache.js').loadAnalysisCache;
 
@@ -64,6 +65,7 @@ beforeAll(async () => {
   ]);
   withStateJsonLock = lock.withStateJsonLock;
   waitersFor = lock.__stateJsonWaitersForTest;
+  bookOpWaiters = lock.__keyWaitersForTest;
   saveAnalysisCache = cache.saveAnalysisCache;
   loadAnalysisCache = cache.loadAnalysisCache;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
@@ -366,8 +368,23 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
   });
 
   it('DELETE queued behind a folder move deletes the MOVED book (not a 204 for a no-op)', async () => {
-    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), moveBook);
-    expect(res.status).toBe(204);
+    /* #3711 — the move is now a real in-process rename PUT: it holds book-op,
+       so the DELETE queues behind it on book-op (not on the old state-json key)
+       and resolves the book AFTER the move. (The old premise -- a renameSync
+       under a held key -- is an out-of-process move, which the DELETE no longer
+       re-resolves for; that stays covered by #3706's absent-state refusals.) */
+    let renameRes!: Promise<request.Response>;
+    let deleteRes!: Promise<request.Response>;
+    await withStateJsonLock(statePath, async () => {
+      renameRes = Promise.resolve(
+        request(app).put(`/api/books/${bookId}/state`).send({ slice: 'state', patch: { title: MOVED_TITLE } }),
+      );
+      await waitUntilQueued(statePath);
+      deleteRes = Promise.resolve(request(app).delete(`/api/books/${bookId}`));
+      while (bookOpWaiters(`book-op:${bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
+    });
+    expect((await renameRes).status).toBe(204);
+    expect((await deleteRes).status).toBe(204);
     expect(existsSync(movedDir())).toBe(false);
     expect(existsSync(bookDir)).toBe(false);
   });
