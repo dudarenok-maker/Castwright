@@ -20,7 +20,7 @@ import { _setUserSettingsCacheForTest, _resetUserSettingsCache, USER_SETTINGS_PA
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 import { _resetEndpointBusyForTest, isEndpointBusy } from '../analyzer/analyzer-concurrency.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import { AnalyzerKeyOriginError, AnalyzerTruncatedError } from '../analyzer/errors.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
   buildReviewSentencesInput as BuildReviewSentencesInput,
@@ -55,6 +55,23 @@ const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock,
   unloadResidentOllamaMock: vi.fn(async () => {}),
   selectAnalyzerMock: vi.fn(),
 }));
+
+/* #3710 F5 — lets one test make the manuscript hydrate throw, to exercise a failure between
+   the warm-fail endpoint switch and the review's try/finally. */
+const { hydrateState } = vi.hoisted(() => ({ hydrateState: { throwNext: false } }));
+vi.mock('../store/manuscripts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/manuscripts.js')>();
+  return {
+    ...actual,
+    getOrHydrateManuscript: (...args: Parameters<typeof actual.getOrHydrateManuscript>) => {
+      if (hydrateState.throwNext) {
+        hydrateState.throwNext = false;
+        throw new Error('hydrate exploded');
+      }
+      return actual.getOrHydrateManuscript(...args);
+    },
+  };
+});
 
 const { reviewMarks, reviewReleases } = vi.hoisted(() => ({ reviewMarks: [] as string[][], reviewReleases: { count: 0 } }));
 
@@ -1255,6 +1272,48 @@ describe('POST /api/books/:bookId/script-review', () => {
       expect(isAnyAnalyzerRunBusy()).toBe(false);
       expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1);
     } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  /* #3710 F5 — an Ollama primary whose warm step fails switches to the fallback target. */
+  const warmFailOnto = (fallbackModel: string) => {
+    const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'local', model: 'qwen3.5:9b', fallbackModel }));
+    warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
+  };
+
+  it('#3710 F5 — a warm-fail switch whose target key is bound to another host reports auth, not internal_error', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [spare()] });
+    warmFailOnto('openai:spare::m');
+    selectAnalyzerMock.mockImplementationOnce(() => {
+      throw new AnalyzerKeyOriginError('spare', 'Spare');
+    });
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      const events = parseSse(res.text);
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'auth' }));
+      expect(events.some((e) => e.kind === 'error' && e.code === 'internal_error')).toBe(false);
+      expect(runReview).not.toHaveBeenCalled();
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3710 F5 — a throw between the warm-fail switch and the review loop does not leak the target endpoint mark', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [spare()] });
+    warmFailOnto('openai:spare::m');
+    hydrateState.throwNext = true;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      expect(hydrateState.throwNext).toBe(false);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      hydrateState.throwNext = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
     }

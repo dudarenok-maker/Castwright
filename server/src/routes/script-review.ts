@@ -777,6 +777,10 @@ async function runScriptReviewJob(
     });
   };
 
+  /* The warm-fail switch runs INSIDE the review's try below, not here: it selects the target (which can
+     throw, e.g. a key bound to another host) and takes the target's run mark, and both must be covered
+     by the same finally that releases it. */
+  let warmFailSwitchReason: string | undefined;
   // Warm the analyzer model the first chapter will actually use, so a cold
   // Ollama doesn't hang silently behind chapter 1's first token.
   if (activeSelection.engine === 'local') {
@@ -810,7 +814,7 @@ async function runScriptReviewJob(
       // a setup that works today.
       /* #3084 P30 — name the model that failed and the target the review moves to. */
       const names = fallbackNames(activeSelection, { engine: inferEngineFromModelId(selection.fallbackModel), model: selection.fallbackModel });
-      switchToFallback(`${warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable'} (${names.primary}) — switched to ${names.target}`);
+      warmFailSwitchReason = `${warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable'} (${names.primary}) — switched to ${names.target}`;
     }
   }
 
@@ -842,6 +846,18 @@ async function runScriptReviewJob(
   try {
     releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
     if (pinnedLocal) markReviewBusy(located.bookDir);
+    if (warmFailSwitchReason !== undefined) {
+      try {
+        switchToFallback(warmFailSwitchReason);
+      } catch (err) {
+        /* #3084 P23 — the target's selection error (analyzer-endpoint-missing, auth for a key-origin
+           mismatch, …) gets its coded event, as the primary's selection does above; the finally
+           releases whatever was marked. */
+        send(analyzerSelectionErrorEvent(err));
+        for (const sub of job.subscribers) sub.res.end();
+        return;
+      }
+    }
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
       const chapterId = chapterIds[i];
