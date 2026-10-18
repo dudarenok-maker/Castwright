@@ -37,7 +37,7 @@ import { api } from '../lib/api';
 import { buildPreviewStub } from '../lib/build-preview-stub';
 import { enqueueQueueEntries, type EnqueueInput } from './queue-thunks';
 import type { AppDispatch } from './index';
-import { analyzerSharesTtsDevice, ttsDeviceKeyFor, type TtsReportedDevices } from '../lib/analyzer-endpoints';
+import { analyzerSharesGenerationDevice, type TtsReportedDevices } from '../lib/analyzer-endpoints';
 import type { ConfigValues, TtsModelKey } from '../lib/types';
 import type { StreamRunner } from './generation-stream-runner';
 import { previewChapterComplete, type ChaptersState } from './chapters-slice';
@@ -205,14 +205,14 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
       if (
         analysisSnap != null &&
         analysisSnap.engine !== undefined &&
-        analyzerSharesTtsDevice({
+        analyzerSharesGenerationDevice({
           engine: analysisSnap.engine,
           endpointGpu: analysisSnap.gpu,
-          ttsDeviceKey: ttsDeviceKeyFor(
-            after.account?.resolvedTtsModelKey ?? after.account?.defaultTtsModelKey,
-            after.config?.values,
-            after.config?.ttsReportedDevices ?? null,
-          ),
+          sessionModelKey:
+            after.ui.ttsModelKey ?? after.account?.resolvedTtsModelKey ?? after.account?.defaultTtsModelKey,
+          characters: after.cast?.characters,
+          values: after.config?.values,
+          reported: after.config?.ttsReportedDevices ?? null,
         }) &&
         analysisSnap.bookId === stageBookId &&
         analysisSnap.state !== 'paused' &&

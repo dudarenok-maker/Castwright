@@ -21,6 +21,7 @@ import { librarySlice } from './library-slice';
 import { analysisSlice, analysisActions } from './analysis-slice';
 import { queueSlice } from './queue-slice';
 import { accountSlice } from './account-slice';
+import { configSlice } from './config-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { revisionPlayerMiddleware } from './revision-player-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
@@ -78,6 +79,7 @@ function makeStore(opts: { watcher?: boolean } = {}) {
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
+      config: configSlice.reducer,
       revisions: revisionsSlice.reducer,
       notifications: notificationsSlice.reducer,
       library: librarySlice.reducer,
@@ -222,6 +224,29 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(analysisActions.setActiveStream({ bookId: 'b1', engine: 'openai', gpu: 'any', state: 'running', model: 'openai:lab::m', phase: 'phase1', done: 1, total: 5, lastTickAt: Date.now() } as never));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  it('#3710 F4 — the hold reads the SESSION model (ui.ttsModelKey), not the account default', async () => {
+    const { store } = makeStore();
+    const knob = (key: string, effective: string) => ({ key, effective, source: 'override', locked: false, overridden: true });
+    store.dispatch({
+      type: 'config/fetch/fulfilled',
+      payload: {
+        groups: [],
+        descriptors: [],
+        values: { 'tts.kokoro.device': knob('tts.kokoro.device', 'cpu'), 'tts.qwen.device': knob('tts.qwen.device', 'cuda:0') },
+        cudaEnvShadow: false,
+        envCleanupCandidates: [],
+      },
+    });
+    store.dispatch({ type: 'account/fetch/fulfilled', payload: { defaultTtsModelKey: 'kokoro-v1', resolvedTtsModelKey: 'kokoro-v1' } });
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream({ bookId: 'b1', engine: 'openai', gpu: 'cuda:0', state: 'running', model: 'openai:lab::m', phase: 'phase1', done: 1, total: 5, lastTickAt: Date.now() } as never));
     seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
     store.dispatch(uiSlice.actions.requestStartGeneration());
     await Promise.resolve();

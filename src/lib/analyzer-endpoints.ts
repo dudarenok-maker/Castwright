@@ -82,6 +82,41 @@ export function ttsDeviceKeyFor(
   return undefined;
 }
 
+/** The model key a per-character engine pin synthesises with (Qwen carries its own tier key). */
+const PIN_MODEL_KEY: Record<string, TtsModelKey> = {
+  kokoro: 'kokoro-v1',
+  coqui: 'coqui-xtts-v2',
+  qwen: 'qwen3-tts-0.6b',
+  gemini: 'gemini-2.5-flash',
+};
+
+/** #3710 F4 — whether an analyzer run shares a card with the TTS generation will actually use:
+    the SESSION picker's model (`ui.ttsModelKey`; the account default only when that is unset),
+    plus every model a per-character pin could route a line to. A pin may name a different engine
+    than the session model, so any of them sharing counts (fail closed). */
+export function analyzerSharesGenerationDevice(input: {
+  engine: AnalysisEngine;
+  endpointGpu: string | undefined;
+  sessionModelKey: TtsModelKey | undefined;
+  characters?: ReadonlyArray<{ ttsEngine?: string | null; ttsModelKey?: string | null }> | null;
+  values: ConfigValues | undefined;
+  reported?: TtsReportedDevices | null;
+}): boolean {
+  const keys = new Set<TtsModelKey | undefined>([input.sessionModelKey]);
+  for (const c of input.characters ?? []) {
+    if (!c.ttsEngine) continue;
+    /* An engine with no model key here (piper) is unknown, which ttsDeviceKeyFor fails closed on. */
+    keys.add(c.ttsEngine === 'qwen' && c.ttsModelKey ? (c.ttsModelKey as TtsModelKey) : PIN_MODEL_KEY[c.ttsEngine]);
+  }
+  return [...keys].some((modelKey) =>
+    analyzerSharesTtsDevice({
+      engine: input.engine,
+      endpointGpu: input.endpointGpu,
+      ttsDeviceKey: ttsDeviceKeyFor(modelKey, input.values, input.reported),
+    }),
+  );
+}
+
 /** The gpu tag an analysis snapshot carries for the run's model ids. */
 export function snapshotGpuFor(
   modelIds: readonly string[],
