@@ -60,6 +60,7 @@ import {
   withBookOp,
   withBookPathClaim,
 } from '../workspace/book-op-lock.js';
+import { assertContained } from '../util/safe-path.js';
 import { makeStagingDir } from '../workspace/portable-staging.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
@@ -243,8 +244,19 @@ export async function importPortableBundle(
     /* Staged files, relative to the book folder (state.json first, as before: the
        overwrite path renames them over live files in this order). */
     const stagedRel: string[] = [];
-    const stageFile = async (rel: string, buf: Buffer): Promise<void> => {
+    /* A bundle-supplied name (state.manuscriptFile, an audio/ entry) must land
+       inside `root`. yauzl already refuses `..` entry names, but that is a
+       dependency default this write must not lean on. */
+    const stageFile = async (rel: string, buf: Buffer, root: string = stage): Promise<void> => {
       const dest = join(stage, rel);
+      try {
+        assertContained(root, dest);
+      } catch {
+        throw new InvalidBundleError(
+          'unsafe_path',
+          `Bundle entry "${rel}" escapes the book folder.`,
+        );
+      }
       await mkdir(dirname(dest), { recursive: true });
       await writeFile(dest, buf);
       stagedRel.push(rel);
@@ -312,7 +324,7 @@ export async function importPortableBundle(
       if (!name.startsWith('audio/')) continue;
       const relPath = name.slice('audio/'.length);
       if (!relPath) continue;
-      await stageFile(relative(stage, join(audioRoot, relPath)), buf);
+      await stageFile(relative(stage, join(audioRoot, relPath)), buf, audioRoot);
     }
 
     /* Re-serialise state.json from the in-memory shape instead of writing

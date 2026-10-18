@@ -4000,7 +4000,7 @@ paths:
         '400':
           description: Missing/unknown `slice` or `patch`, or a malformed manuscript patch
         '404':
-          description: Book not found
+          description: Book not found (including a book deleted while this write was queued)
         '409':
           description: |
             Refused (nothing was written). Either the write would have replaced
@@ -4010,6 +4010,65 @@ paths:
             currently running for this book and the patch would move its folder
             (renaming mid-analysis would split the book's state across two
             directories — retry once the run finishes).
+
+            A refusal of a folder move (#3711) carries `{ error, code }` with
+            `code` one of: `book_busy` (a long job — render, analysis, voice
+            design, review or export — holds the book; stop it or wait),
+            `book_path_taken` (the new Author/Series/Title path already holds a
+            book), or `book_folder_in_use` (the folder is open in another
+            program; close it and retry). No body ever carries a path.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [book_busy, book_path_taken, book_folder_in_use]
+
+  /api/books/{bookId}:
+    delete:
+      summary: Delete a book and its folder
+      operationId: deleteBook
+      description: |
+        Removes the book's folder and prunes its queue entries. Holds the
+        book's operation lock, so a writer queued behind it finds the book gone
+        (404) instead of recreating the folder. Idempotent: a book that is
+        already gone answers `204`. Refused with `409` (nothing deleted, except
+        `book_partly_deleted`) while a long job holds the book.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: Book deleted (or already gone)
+        '409':
+          description: |
+            `code` is one of: `book_busy` (a long job holds the book; stop it or
+            wait), `book_folder_in_use` (the folder is open in another program;
+            close it and retry), or `book_partly_deleted` (the book left the
+            library but some files were left behind; delete the leftover folder
+            by hand).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [book_busy, book_folder_in_use, book_partly_deleted]
+        '500':
+          description: Delete failed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/cast/{characterId}/not-linked-to:
     post:

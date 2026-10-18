@@ -154,6 +154,52 @@ describe('POST /api/books/:bookId/cast/tier', () => {
     expect(castA.characters[0].ttsModelKey).toBeUndefined();
   });
 
+  /* #3711 Task 8 -- every standalone resolves to the same synthetic series, and
+     the walker skips standalones, so a standalone pin used to update nothing. */
+  it('persists a standalone pin on the anchor book only', async () => {
+    const standChar = {
+      id: 'char-wren',
+      name: 'Wren',
+      role: 'protagonist',
+      color: 'blue',
+      voiceId: 'v_wren',
+      gender: 'female',
+      ageRange: 'adult',
+      attributes: ['Female', 'Adult'],
+      lines: 40,
+      scenes: 4,
+      ttsEngine: 'qwen',
+    };
+    const paths = await import('../workspace/paths.js');
+    const standId = paths.makeBookId(AUTHOR, 'Standalones', 'Solo One');
+    writeBookOnDisk(workspaceRoot, AUTHOR, 'Standalones', 'Solo One', standId, [standChar], true);
+    writeBookOnDisk(
+      workspaceRoot,
+      AUTHOR,
+      'Standalones',
+      'Solo Two',
+      paths.makeBookId(AUTHOR, 'Standalones', 'Solo Two'),
+      [standChar],
+      true,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${standId}/cast/tier`)
+      .send({ voiceId: 'v_wren', ttsModelKey: 'qwen3-tts-1.7b' });
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toBe(1);
+    expect(
+      readCastFromDisk(workspaceRoot, AUTHOR, 'Standalones', 'Solo One').characters[0].ttsModelKey,
+    ).toBe('qwen3-tts-1.7b');
+    expect(
+      readCastFromDisk(workspaceRoot, AUTHOR, 'Standalones', 'Solo Two').characters[0].ttsModelKey,
+    ).toBeUndefined();
+    // series books sharing the voiceId are untouched too
+    expect(
+      readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_A).characters[0].ttsModelKey,
+    ).toBeUndefined();
+  });
+
   it('400 when voiceId is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookAId}/cast/tier`)

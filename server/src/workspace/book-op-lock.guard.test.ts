@@ -596,7 +596,6 @@ const ALLOW_G2 = allow([
   ['routes/analysis.ts', 1, 'no-book-write'], // POST /:id/analysis/pause: in-memory abort only
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
-  ['routes/cast-tier.ts', 1, 'cross-book-walker'], // walker: book-op per book inside forEachMatchingCastCharacter
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
   ['routes/script-review.ts', 2, 'no-book-write'], // cancel (in-memory abort) + attach (re-attach only)

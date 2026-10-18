@@ -47,34 +47,34 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
   let registered;
   try {
     registered = await runBookJob(req.params.bookId, 'export', async (located) => {
-  try {
-    const result = await buildPortableBundleByBookId(located.state.bookId);
-    const downloadName = `${slugify(located.state.title)}.portable.zip`;
+      try {
+        const result = await buildPortableBundleByBookId(located.state.bookId);
+        const downloadName = `${slugify(located.state.title)}.portable.zip`;
 
-    /* Plan 79 — also write the bundle into <bookDir>/exports/ so the
-       user can pick it up directly from File Explorer alongside the
-       other artifacts. Best-effort: a local-save failure logs a warning
-       but never blocks the HTTP response (the user still gets the
-       streamed download). Atomic via tmp+rename so a partially-written
-       portable.zip can't be picked up mid-write. */
-    await stagePortableLocally(located.bookDir, downloadName, result.buffer).catch((err) => {
-      console.warn('[portable-export] local copy failed (non-fatal)', err);
-    });
+        /* Plan 79 — also write the bundle into <bookDir>/exports/ so the
+           user can pick it up directly from File Explorer alongside the
+           other artifacts. Best-effort: a local-save failure logs a warning
+           but never blocks the HTTP response (the user still gets the
+           streamed download). Atomic via tmp+rename so a partially-written
+           portable.zip can't be picked up mid-write. */
+        await stagePortableLocally(located.bookDir, downloadName, result.buffer).catch((err) => {
+          console.warn('[portable-export] local copy failed (non-fatal)', err);
+        });
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-    res.setHeader('Content-Length', result.buffer.length.toString());
-    res.setHeader('Cache-Control', 'no-cache');
-    res.status(200).send(result.buffer);
-  } catch (e) {
-    console.error('[portable-export] build failed', e);
-    res.status(500).json({
-      error: 'portable_export_failed',
-      /* Fixed sentence: a raw error can name the absolute manuscript path, and
-         this app is served over LAN HTTPS. The raw error is logged above. */
-      message: 'Exporting the bundle failed. See the server log for details.',
-    });
-  }
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        res.setHeader('Content-Length', result.buffer.length.toString());
+        res.setHeader('Cache-Control', 'no-cache');
+        res.status(200).send(result.buffer);
+      } catch (e) {
+        console.error('[portable-export] build failed', e);
+        res.status(500).json({
+          error: 'portable_export_failed',
+          /* Fixed sentence: a raw error can name the absolute manuscript path, and
+             this app is served over LAN HTTPS. The raw error is logged above. */
+          message: 'Exporting the bundle failed. See the server log for details.',
+        });
+      }
     });
   } catch (e) {
     console.error('[portable-export] registration failed', e);
@@ -84,11 +84,7 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
   await registered.done;
 });
 
-async function stagePortableLocally(
-  bookDir: string,
-  filename: string,
-  buf: Buffer,
-): Promise<void> {
+async function stagePortableLocally(bookDir: string, filename: string, buf: Buffer): Promise<void> {
   const exportsRoot = bookExportsDir(bookDir);
   await mkdir(exportsRoot, { recursive: true });
   const finalPath = join(exportsRoot, filename);
@@ -119,8 +115,7 @@ portableImportRouter.post(
        multipart body; default to 'rename' so a double-click on Import
        never silently overwrites. */
     const raw =
-      (req.body?.onConflict as string | undefined) ??
-      (req.query?.onConflict as string | undefined);
+      (req.body?.onConflict as string | undefined) ?? (req.query?.onConflict as string | undefined);
     const onConflict: ConflictStrategy | undefined =
       raw === 'rename' || raw === 'overwrite' || raw === 'fail' ? raw : undefined;
 

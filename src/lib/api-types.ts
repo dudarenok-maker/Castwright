@@ -2639,6 +2639,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a book and its folder
+         * @description Removes the book's folder and prunes its queue entries. Holds the
+         *     book's operation lock, so a writer queued behind it finds the book gone
+         *     (404) instead of recreating the folder. Idempotent: a book that is
+         *     already gone answers `204`. Refused with `409` (nothing deleted, except
+         *     `book_partly_deleted`) while a long job holds the book.
+         */
+        delete: operations["deleteBook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/not-linked-to": {
         parameters: {
             query?: never;
@@ -11623,7 +11647,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book not found */
+            /** @description Book not found (including a book deleted while this write was queued) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -11638,12 +11662,75 @@ export interface operations {
              *     currently running for this book and the patch would move its folder
              *     (renaming mid-analysis would split the book's state across two
              *     directories — retry once the run finishes).
+             *
+             *     A refusal of a folder move (#3711) carries `{ error, code }` with
+             *     `code` one of: `book_busy` (a long job — render, analysis, voice
+             *     design, review or export — holds the book; stop it or wait),
+             *     `book_path_taken` (the new Author/Series/Title path already holds a
+             *     book), or `book_folder_in_use` (the folder is open in another
+             *     program; close it and retry). No body ever carries a path.
              */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code?: "book_busy" | "book_path_taken" | "book_folder_in_use";
+                    };
+                };
+            };
+        };
+    };
+    deleteBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Book deleted (or already gone) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
                 content?: never;
+            };
+            /**
+             * @description `code` is one of: `book_busy` (a long job holds the book; stop it or
+             *     wait), `book_folder_in_use` (the folder is open in another program;
+             *     close it and retry), or `book_partly_deleted` (the book left the
+             *     library but some files were left behind; delete the leftover folder
+             *     by hand).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "book_busy" | "book_folder_in_use" | "book_partly_deleted";
+                    };
+                };
+            };
+            /** @description Delete failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };

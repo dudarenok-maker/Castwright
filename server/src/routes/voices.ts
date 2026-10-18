@@ -1129,14 +1129,22 @@ export async function applyTierToCastFiles(
   voiceId: string,
   ttsModelKey: 'qwen3-tts-1.7b' | null,
   seriesFilter?: { author: string; series: string },
+  /* #3711 -- a standalone book: no filter, write exactly this directory. The
+     caller holds the book's book-op (forEachMatchingCastCharacter's precondition). */
+  onlyBookDir?: string,
 ): Promise<number> {
-  return forEachMatchingCastCharacter(voiceId, seriesFilter, (original) => {
-    // Deliberately NOT calling normaliseCastCharacter() (unlike the sibling
-    // applyOverrideToCastFiles): we touch only ttsModelKey and must not rewrite
-    // the legacy overrideTtsVoice field as a side-effect of a tier pin.
-    const replacement: CastCharacter = { ...original };
-    if (ttsModelKey === null) delete replacement.ttsModelKey;
-    else replacement.ttsModelKey = ttsModelKey;
-    return replacement;
-  });
+  return forEachMatchingCastCharacter(
+    voiceId,
+    seriesFilter,
+    (original) => {
+      // Deliberately NOT calling normaliseCastCharacter() (unlike the sibling
+      // applyOverrideToCastFiles): we touch only ttsModelKey and must not rewrite
+      // the legacy overrideTtsVoice field as a side-effect of a tier pin.
+      const replacement: CastCharacter = { ...original };
+      if (ttsModelKey === null) delete replacement.ttsModelKey;
+      else replacement.ttsModelKey = ttsModelKey;
+      return replacement;
+    },
+    onlyBookDir,
+  );
 }
