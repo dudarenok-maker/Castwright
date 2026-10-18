@@ -431,6 +431,53 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     expect(existsSync(join(s.newDir, '.audiobook', 'analysis-last-outcome.json'))).toBe(true);
     expect(existsSync(join(s.newDir, '.audiobook', 'analysis-state.json'))).toBe(true);
   });
+
+  it('a second endJob call does not shed the first call\'s writes, and its own writes hold the lease', async () => {
+    const s = await seedBook('end-twice');
+    const { endJob, __testRegisterJobForTest } = analysisModule;
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: s.manuscriptId,
+      kind: 'main',
+      bookDir: s.bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    job.settled = new Promise<void>((resolve) => {
+      job.resolveSettled = resolve;
+    });
+    __testRegisterJobForTest(job);
+    const registered = await runBookJob(s.bookId, 'analysis', async () => {
+      await job.settled;
+    });
+    if (registered === BOOK_GONE) throw new Error('book vanished');
+
+    const halted = gate();
+    g.__baj_halted_gate = halted.promise;
+    endJob(job); // clean teardown: only a fast snapshot delete
+    endJob(job, { kind: 'error', code: 'boom', message: 'second ending' }); // gated halted snapshot
+    /* Let the first call's fast write land: pre-fix, `settled` resolves here. */
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    expect((await renameOf(s)).status).toBe(409);
+
+    halted.open();
+    await registered.done;
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+    expect(existsSync(join(s.bookDir, '.audiobook', 'analysis-state.json'))).toBe(true);
+    expect((await renameOf(s)).status).toBe(204);
+    expect(existsSync(s.bookDir)).toBe(false);
+  });
 });
 
 /* Park a rename inside book-op (via the book's state-json lock) and queue the REAL route POST

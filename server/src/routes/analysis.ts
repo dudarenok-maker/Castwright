@@ -3067,7 +3067,15 @@ export function releaseWork(job: AnalysisJob): void {
 /** #3711 — resolve `settled` (and so release the route's `runBookJob` lease) once
     endJob's detached terminal writes have landed, never before. */
 function settleJob(job: AnalysisJob): void {
-  void (job.terminalWrites ?? Promise.resolve()).then(() => job.resolveSettled?.());
+  void (async () => {
+    /* re-check after each wait: a later endJob call may have extended the collection */
+    let seen: Promise<void> | undefined;
+    do {
+      seen = job.terminalWrites;
+      await seen;
+    } while (job.terminalWrites !== seen);
+    job.resolveSettled?.();
+  })();
 }
 
 /* #3435 decision A — the main writer state for a manuscript: 'live' when a
@@ -3687,7 +3695,9 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      finishes. If we clear() first, the callback finds an empty set and
      res.end() is never called, hanging the response forever. */
   if (outcomeWritePromise) terminalWrites.push(outcomeWritePromise);
-  job.terminalWrites = Promise.allSettled(terminalWrites).then(() => undefined);
+  /* A second endJob for the same job APPENDS (it must not replace the first call's
+     collection): settlement waits for every terminal write from every call. */
+  job.terminalWrites = Promise.allSettled([job.terminalWrites, ...terminalWrites]).then(() => undefined);
   const subs = Array.from(job.subscribers);
   job.subscribers.clear();
   const endResponsesCallback = () => {
