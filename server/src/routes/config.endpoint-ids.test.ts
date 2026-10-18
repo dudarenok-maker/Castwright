@@ -46,7 +46,7 @@ describe('PUT /api/config — phase-model overrides (#3084 PR 3d)', () => {
   it('refuses an endpoint model id for analyzer.ollama.model and writes nothing', async () => {
     const res = await request(app).put('/api/config').send({ 'analyzer.ollama.model': 'openai:lab::qwen3:30b' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('analyzer.ollama.model: OpenAI-compatible endpoint models cannot be selected in this build.');
+    expect(res.body.error).toBe('analyzer.ollama.model: An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.');
     expect((await settings.readUserSettings()).configOverrides['analyzer.ollama.model']).toBeUndefined();
   });
 

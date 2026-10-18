@@ -1550,7 +1550,7 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
    `config/ollama-resolved.ts`'s `getResolvedOllamaModel` also returns the knob default for such a
    value — defence in depth, not the only guard. */
 export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.ollama.model'] as const;
-const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
+const ENDPOINT_ID_REFUSAL = 'An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.';
 
 export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }> {
   if (!patch || typeof patch !== 'object') return [];

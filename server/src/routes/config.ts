@@ -132,7 +132,7 @@ configRouter.put('/', async (req, res) => {
     /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
        (coordinator ruling); it does not delete it. */
     if (endpointModelIdRefusals({ configOverrides: { [key]: raw } }).length > 0) {
-      res.status(400).json({ error: `${key}: OpenAI-compatible endpoint models cannot be selected in this build.` });
+      res.status(400).json({ error: `${key}: An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.` });
       return;
     }
     const r = coerceAndValidate(knob, raw);

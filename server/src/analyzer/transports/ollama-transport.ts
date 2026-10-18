@@ -19,11 +19,12 @@
    so on a big prompt the whole prefill counts against that budget. A busy
    but perfectly healthy daemon therefore dies at exactly 302s with a bare
    `TypeError: fetch failed`, which classifyConnectError below reads as
-   "unreachable" — the one condition that reroutes to Gemini. So whenever a
-   Gemini key is present AND allowCloudFallback is on (the two gates in
-   selectAnalyzer, index.ts), a slow local call silently completes in the
-   cloud, which is precisely what the paragraph above says must not happen;
-   with either gate off it instead hard-fails with a wrong diagnosis
+   "unreachable" — the one condition that reroutes to the fallback target.
+   So whenever a usable target is configured (analyzer.fallback.target,
+   resolved by selectAnalyzer in index.ts — Gemini by default, needing its
+   key), a slow local call silently completes there, which is precisely what
+   the paragraph above says must not happen; with the target off or unusable
+   it instead hard-fails with a wrong diagnosis
    ("start the daemon") about a daemon that is running fine. Observed
    2026-08-12: two chapters of a 103k-word book failed cast detection this
    way, both at 302s.

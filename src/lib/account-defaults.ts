@@ -57,8 +57,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      opt-in via the Defaults step. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   analysisEngine: 'local',
-  /* Part 1 — cloud fallback ON by default (opt-out). Flip in lockstep with
-     server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  /* Legacy opt-out flag, ON by default; the fallback target itself is the
+     analyzer.fallback.target knob (Gemini by default; off reads this flag as
+     false). Flip in lockstep with server/src/workspace/user-settings.ts
+     DEFAULT_USER_SETTINGS. */
   allowCloudFallback: true,
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,

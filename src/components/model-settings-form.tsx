@@ -150,8 +150,8 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const effectiveTtsModelKey = account.resolvedTtsModelKey ?? account.defaultTtsModelKey;
   const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
-  /* #3084 PR 3a — bound to the narrow persisted enum (plan row 49, unchanged
-     in 3a): this form's picker only ever offers 'local'/'gemini'. */
+  /* #3084 — the persisted engine enum. The picker offers 'local', 'gemini' and 'openai', and
+     picking an analysis model above also sets it (an endpoint id means 'openai'). */
   const [analysisEngine, setAnalysisEngine] = useState<AnalysisEngine>(account.analysisEngine);
   const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
     account.autoStartSidecar ?? true,

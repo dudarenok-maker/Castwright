@@ -7651,7 +7651,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         throw new Error(
           `User settings save failed (400): ${JSON.stringify({
             error: 'Invalid user settings.',
-            issues: [{ path: ['configOverrides', knob], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
+            issues: [{ path: ['configOverrides', knob], message: 'An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.' }],
           })}`,
         );
       }

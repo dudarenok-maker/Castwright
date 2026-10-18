@@ -3661,7 +3661,9 @@ export interface components {
             /**
              * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (falling
              *     back, one hop, to the analyzer.fallback.target config knob when the
-             *     daemon is unreachable). `gemini` always goes direct. The ANALYZER env no longer selects
+             *     daemon is unreachable). `gemini` always goes direct. `openai` routes through the
+             *     OpenAI-compatible endpoint named by `defaultAnalysisModel` (an `openai:<endpoint>::<model>` id;
+             *     saving such a model also saves this value). The ANALYZER env no longer selects
              *     the engine. See server/src/analyzer/index.ts selectAnalyzer.
              * @enum {string}
              */
