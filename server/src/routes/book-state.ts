@@ -1636,9 +1636,9 @@ async function applyReparse(
         retry when the book still exists elsewhere, 404 only when it is gone);
      4. it passed BOTH isReparseBusy checks before our mark and its directory
         rename has not landed yet: the presence gate waits on the old folder's
-        state-json key that the rename holds, sees the file gone and answers
-        404 before any arm runs. The book is intact (it just moved), and the
-        outcome is the same on main; this PR does not change it.
+        state-json key that the rename holds, then sees the file gone -- the
+        same null as case 3, answered the same way (409 retry, the book is
+        intact at its new folder), before any arm runs.
    A rename that checked isReparseBusy before our mark and reaches its
    post-mkdir re-check after it is refused. Returns null for an absent book and
    'unstable' if the folder keeps moving; in both the marker is NOT held.
