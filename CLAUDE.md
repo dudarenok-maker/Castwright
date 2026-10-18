@@ -604,16 +604,21 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  cover an authoritative write and a best-effort one at once). TWELVE sites fail
   loud *by rethrowing into their job's or request's terminal outcome*: the six
   best-effort `catch` blocks around identity writes, plus the two
   AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
-  journals, which are lineage and must stay best-effort. Swallowing at an
+  journals, which are lineage and must stay best-effort — plus four
+  `state.json` sites under `withStateJsonLock` (#3625): finalize's duration/model/render stamp
+  (`server/src/audio/finalize-chapter-write.ts`), Start fresh's `castConfirmed`
+  un-confirm (`analysis.ts`), and the two analysis persist `state.json` writes
+  (parked in `persistLockTimeout` and rethrown after the remaining writes, like
+  the `cast.json` ones). Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
+  `cast.json` and `state.json` never written at all. ELEVEN handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
@@ -623,7 +628,16 @@ Design rationale:
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  `reviewRecorded: false`, never the lock key; and six `state.json` sites
+  under `withStateJsonLock` (#3625): generation's failure stamp
+  (`routes/generation.ts`), which only annotates a reload after `chapter_failed`
+  already went out over SSE; `refreshChapterTitles` (`routes/book-state.ts`),
+  whose re-derived titles are recomputed on the next read; the sync-manifest
+  chapter-uuid migration (`routes/library-sync-manifest.ts`), whose in-memory
+  uuids still serve the response and re-mint next time; `scan.ts`'s two lazy
+  migrations (uuid mint and segments backfill), which the next scan repeats;
+  and the cover background-fetch hook (`cover/store.ts`), which must never fail
+  an import. A THIRTEENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,

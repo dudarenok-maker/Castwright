@@ -40,7 +40,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
   resolveVoiceAssignment,
   qwenStorageKey,
@@ -266,7 +266,7 @@ async function aggregateVoices(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
@@ -643,7 +643,7 @@ export async function hasClonedSlotAmongMatches(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;
@@ -680,7 +680,7 @@ export async function findClonedVoiceIdsAmongMatches(
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (excludeBookDir && bookDir === excludeBookDir) continue;
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;
@@ -904,7 +904,7 @@ export async function forEachMatchingCastCharacter(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;

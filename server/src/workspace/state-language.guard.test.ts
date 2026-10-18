@@ -285,16 +285,18 @@ function countRawStateWrites(
    — book-state.ts +3 (the rename PUT also keys the new path), chapters-restructure.ts +2, import.ts +1, samples.ts +1,
    auto-backup.ts +1 — not new write sites; the pass-3 absent-state refusals then added
    book-state.ts +2 (DELETE's lock key + presence check) and auto-backup.ts +1
-   (restore's presence check) — reads, not writes). Asserted BOTH
+   (restore's presence check) — reads, not writes; #3625 then added
+   scan-import-folder.ts +1 (the in-lock claim keys the target's state.json)
+   and book-state.ts +1 (DELETE's stateless-folder lock key)). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'cover/store.ts': 2,
   'cover/upload.ts': 2,
-  'import/scan-import-folder.ts': 1,
+  'import/scan-import-folder.ts': 2,
   'routes/analysis.ts': 4,
-  'routes/book-state.ts': 14,
+  'routes/book-state.ts': 15,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,

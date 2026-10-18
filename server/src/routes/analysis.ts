@@ -154,7 +154,7 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
@@ -4544,7 +4544,7 @@ export async function runMainAnalyzerJob(
                (a leaf; nothing inside it takes another lock). */
             const freshStatePath = stateJsonPath(freshBookDir);
             await withStateJsonLock(freshStatePath, async () => {
-              const freshState = await readJson<BookStateJson>(freshStatePath);
+              const freshState = await readStateJsonWithRecovery(freshStatePath);
               if (freshState?.castConfirmed) {
                 await writeStateJsonAtomic(freshStatePath, {
                   ...freshState,
@@ -7169,7 +7169,7 @@ export async function runMainAnalyzerJob(
              per-book state-json lock with the write (a sibling chapter render
              stamps this same file). Leaf lock: nothing inside takes another. */
           await withStateJsonLock(statePath, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             /* Preserve the user-owned flags — analysis owns chapter titles/
                durations, the user owns `excluded` and `held`. Match on id so a
@@ -7180,10 +7180,16 @@ export async function runMainAnalyzerJob(
                workspace/scan.ts. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+               no path regenerates one), so it rides through by id too; the
+               rebuild below would otherwise drop it and the next scan would
+               mint a fresh random uuid for every chapter (#3625). */
+            const prevUuidById = new Map<number, string>();
             const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.uuid) prevUuidById.set(c.id, c.uuid);
               if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
@@ -7200,6 +7206,7 @@ export async function runMainAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
+                  uuid: prevUuidById.get(c.id),
                   titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,
@@ -7977,7 +7984,7 @@ export async function runSubsetAnalyzerJob(
        the result gate, since decision F never demotes it. A state.json that
        belongs to another manuscript (a stale path) counts as not confirmed. */
     const loadDir = liveBookDir(job);
-    const loadState = loadDir ? await readJson<BookStateJson>(stateJsonPath(loadDir)).catch(() => null) : null;
+    const loadState = loadDir ? await readStateJsonWithRecovery(stateJsonPath(loadDir)).catch(() => null) : null;
     const bookReachedConfirm = reachedConfirm(loadState?.manuscriptId === manuscriptId ? loadState : null, cache);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
@@ -9126,17 +9133,23 @@ export async function runSubsetAnalyzerJob(
              per-book state-json lock with the write (a sibling chapter render
              stamps this same file). Leaf lock: nothing inside takes another. */
           await withStateJsonLock(statePath, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             /* Preserve the user-owned `excluded` + `held` flags across the
                subset re-attribution — `held` (the "Not queued" intent) isn't
                re-derivable from disk, so it must ride through here. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+               no path regenerates one), so it rides through by id too; the
+               rebuild below would otherwise drop it and the next scan would
+               mint a fresh random uuid for every chapter (#3625). */
+            const prevUuidById = new Map<number, string>();
             const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.uuid) prevUuidById.set(c.id, c.uuid);
               if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
@@ -9153,6 +9166,7 @@ export async function runSubsetAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
+                  uuid: prevUuidById.get(c.id),
                   titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,

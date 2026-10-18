@@ -355,7 +355,10 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
           responses = r as [{ status: number }, { status: number }];
           return 'settled';
         }),
-        new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+        /* Wall-clock detector: tolerant of an fsyncing runner disk (#3694; 2 s
+           false-tripped), yet under the 10 s lock-acquisition timeout, which would
+           otherwise turn a real deadlock into two 500s before this ever fired. */
+        new Promise((r) => setTimeout(() => r('DEADLOCK'), 8000)),
       ]);
     } finally {
       // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted

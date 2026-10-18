@@ -16,11 +16,9 @@
    - patchStateFraming(bookDir, framing): persists pan + zoom onto the
      existing coverImage record. No-op when no cover is pinned. */
 
-import { readJson } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { stateJsonPath } from '../workspace/paths.js';
-import type { BookStateJson } from '../workspace/scan.js';
 import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
@@ -116,7 +114,7 @@ export async function patchStateLocalCover(
   /* #3700 — read-modify-write under the per-book state-json lock. `false` =
      state.json absent (deleted/moved while queued): nothing was written. */
   return withStateJsonLock(path, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return false;
     if (beforeWrite) await beforeWrite();
     state.coverImage = {
@@ -141,7 +139,7 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
   const path = stateJsonPath(bookDir);
   return withStateJsonLock(path, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return false;
     if (!state.coverImage) return false;
     state.coverImage.framing = clampFraming(framing);

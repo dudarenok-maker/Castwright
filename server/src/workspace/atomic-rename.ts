@@ -13,7 +13,7 @@
    Anything outside this allow-list is a real fault — surface immediately
    so the caller can wrap it with a destination-specific hint. */
 
-import { rename, copyFile } from 'node:fs/promises';
+import { rename } from 'node:fs/promises';
 
 /* Base backoff schedule. The tail was extended (added 1000ms) for the case the
    budget proved too small for: many `writeJsonAtomic` calls racing the SAME
@@ -42,13 +42,11 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   'EIO',
 ]);
 
-/* The shared retry loop — `renameWithRetry` and `copyFileWithRetry` ride the
-   same policy (codes, backoff, jitter) so they cannot drift apart. */
-async function withTransientRetry(op: () => Promise<void>): Promise<void> {
+export async function renameWithRetry(src: string, dest: string): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= RENAME_RETRY_DELAYS_MS.length; attempt++) {
     try {
-      await op();
+      await rename(src, dest);
       return;
     } catch (e) {
       const code = (e as { code?: string }).code;
@@ -59,15 +57,4 @@ async function withTransientRetry(op: () => Promise<void>): Promise<void> {
     }
   }
   throw lastErr;
-}
-
-export async function renameWithRetry(src: string, dest: string): Promise<void> {
-  await withTransientRetry(() => rename(src, dest));
-}
-
-/* Same retry contract as `renameWithRetry`, for a copy that must leave `src`
-   in place (#3700: `rotateBackups` copies `path` -> `path.bak.1` so `path` is
-   never absent). */
-export async function copyFileWithRetry(src: string, dest: string): Promise<void> {
-  await withTransientRetry(() => copyFile(src, dest));
 }

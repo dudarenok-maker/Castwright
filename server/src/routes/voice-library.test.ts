@@ -9,7 +9,7 @@
    the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -1225,6 +1225,31 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(existsSync(artifacts.ptPath)).toBe(true);
   });
 
+  /* #3625 pass 6 (🟠1): a book whose state.json is mid-write (a rotating write
+     between its rename-away and rename-in: main absent, the previous state in
+     `.bak.1`) still counts as a user of the voice. A plain read saw no book,
+     so the 409 was skipped and the voice deleted under that book's cast. */
+  it('still returns 409 when the state.json of the referencing book is mid-write', async () => {
+    const artifacts = await seedFullVoiceArtifacts('used-mid-write');
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-one', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        overrideTtsVoices: { qwen: { name: 'qwen-used-mid-write', libraryUuid: 'used-mid-write' } },
+      },
+    ]);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    renameSync(statePath, `${statePath}.bak.1`); // the rename window
+
+    const res = await request(app).delete('/api/voice-library/used-mid-write');
+
+    expect(res.status).toBe(409);
+    expect(res.body.usage).toEqual([
+      { bookId: 'book-one', bookTitle: 'Book One', characterId: 'char-marlow', characterName: 'Marlow' },
+    ]);
+    expect(existsSync(artifacts.entryDir)).toBe(true);
+  });
+
   it('deletes an unused voice (no confirm needed) and erases every artifact', async () => {
     const artifacts = await seedFullVoiceArtifacts('unused-1');
 
@@ -1462,7 +1487,10 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
         request(app).post(`/api/voice-library/${uuid}/assign`)
           .send({ bookId, characterId: 'alice' }),
       ]).then(() => 'settled'),
-      new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+      /* Tolerant of an fsyncing runner disk (#3694; 2 s false-tripped), yet under
+         the 10 s lock-acquisition timeout, which would otherwise end a real
+         deadlock as two 500s before this fired. */
+      new Promise((r) => setTimeout(() => r('DEADLOCK'), 8000)),
     ]);
     expect(result).toBe('settled');
   });
