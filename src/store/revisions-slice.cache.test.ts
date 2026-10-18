@@ -171,4 +171,3 @@ describe('selectors', () => {
     expect(selectActivePending({ revisions, ui: { stage: { kind: 'books' } } })).toEqual([]);
   });
 });
-

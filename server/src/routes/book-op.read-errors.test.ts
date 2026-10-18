@@ -11,7 +11,11 @@
          "one match", cleared the duplicate verdict and indexed the SECOND twin,
          so every later resolve-by-id wrote the twin the GET does not show;
      (c) `mintBookId` treated an unreadable book's id as free and could mint it
-         again. */
+         again.
+   Pass 3 narrowed (b) and (c) to the uncertainty they carry (owner decision
+   2026-10-18, see book-op.unreadable-sibling.test.ts): an undetected duplicate
+   now resolves to its second twin non-authoritatively, and an unreadable library
+   mints a non-colliding id instead of refusing. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,13 +27,18 @@ import request from 'supertest';
 /* Paths (state.json) whose read throws EBUSY, the way Windows does while another
    process holds the file. Every other read is the real recovering reader. */
 const faulted = vi.hoisted(() => new Set<string>());
+/* Per-path scripted reads: each read of the path takes the next outcome; the
+   LAST outcome sticks. `['ok', 'busy']` = "succeeds once, then throws EBUSY". */
+const scripted = vi.hoisted(() => new Map<string, Array<'ok' | 'busy'>>());
 
 vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/state-migrate.js')>();
   return {
     ...actual,
     readStateJsonWithRecovery: async (path: string) => {
-      if (faulted.has(path)) {
+      const script = scripted.get(path);
+      const next = script ? (script.length > 1 ? script.shift() : script[0]) : 'ok';
+      if (faulted.has(path) || next === 'busy') {
         throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), { code: 'EBUSY' });
       }
       return actual.readStateJsonWithRecovery(path);
@@ -67,6 +76,7 @@ afterAll(() => {
 
 afterEach(() => {
   faulted.clear();
+  scripted.clear();
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   bookOp.__bookDirIndexForTest().clear();
   bookOp.__duplicateBookIdsForTest().clear();
@@ -184,7 +194,12 @@ describe('(a) DELETE never removes a folder whose state read failed', () => {
 describe('(b) a walk that hit a read error is not authoritative', () => {
   const BOOK_ID = 'dup__s__twin';
 
-  it('an EBUSY on the FIRST twin fails the resolve instead of indexing the second', async () => {
+  it('an EBUSY on the FIRST twin of an undetected duplicate: the second is written but never indexed', async () => {
+    /* PR #3714 review pass 3, owner decision 2026-10-18: the walk skips past an
+       unreadable folder, so a duplicate nobody has detected yet resolves to its
+       second twin while the first is faulted (the accepted residual; a KNOWN
+       duplicate still fails -- book-op.unreadable-sibling.test.ts). The answer
+       is non-authoritative: no index write and no duplicate verdict. */
     const twin1 = seedBook('Dup', 'S', 'Twin1', BOOK_ID);
     const twin2 = seedBook('Dup', 'S', 'Twin2', BOOK_ID);
 
@@ -192,9 +207,9 @@ describe('(b) a walk that hit a read error is not authoritative', () => {
     const during = await request(app)
       .put(`/api/books/${BOOK_ID}/state`)
       .send({ slice: 'state', patch: { castConfirmed: false } });
-    expect(during.status).not.toBe(204);
-    expect(JSON.stringify(during.body)).not.toContain(workspaceRoot);
+    expect(during.status).toBe(204);
     expect(bookOp.__bookDirIndexForTest().has(BOOK_ID)).toBe(false);
+    expect(bookOp.__duplicateBookIdsForTest().has(BOOK_ID)).toBe(false);
     faulted.clear();
 
     const put = await request(app)
@@ -238,26 +253,24 @@ describe('(b) a walk that hit a read error is not authoritative', () => {
 });
 
 describe('(c) an unreadable state is never "id free"', () => {
-  it('mintBookId and isBookIdTaken fail closed instead of re-minting an id they could not read', async () => {
+  it('mintBookId and isBookIdTaken never hand out an id the unreadable book could carry', async () => {
     const base = paths.makeBookId('Gamma', 'Saga', 'Book');
-    /* The book holding `base` was renamed away from its path-derived folder. */
+    /* The book holding `base` was renamed away from its path-derived folder, so
+       its path says nothing about its id. */
     const dir = seedBook('Gamma', 'Saga', 'Renamed', base);
     /* Control: readable, the id is taken and the mint steps past it. */
     expect(await bookOp.isBookIdTaken(base)).toBe(true);
-    expect(await bookOp.mintBookId('Gamma', 'Saga', 'Book')).not.toBe(base);
+    expect(await bookOp.mintBookId('Gamma', 'Saga', 'Book')).toBe(`${base}-2`);
 
+    /* PR #3714 review pass 3: unreadable, the mint does not refuse (that blocked
+       every import) but takes a suffix the counter never produces, and
+       `isBookIdTaken` answers "taken" for any id. */
     faulted.add(paths.stateJsonPath(dir));
-    await expect(bookOp.mintBookId('Gamma', 'Saga', 'Book')).rejects.toBeInstanceOf(bookOp.BookStateUnreadableError);
-    await expect(bookOp.isBookIdTaken(base)).rejects.toBeInstanceOf(bookOp.BookStateUnreadableError);
-  });
-
-  it('the curated error carries no path', async () => {
-    const dir = seedBook('Gamma', 'Saga', 'Other', 'gamma__saga__other');
-    faulted.add(paths.stateJsonPath(dir));
-    const err = await bookOp.isBookIdTaken('anything').catch((e: unknown) => e as Error);
-    expect(err).toBeInstanceOf(bookOp.BookStateUnreadableError);
-    expect((err as Error).message).not.toContain(workspaceRoot);
-    expect((err as Error).message).not.toMatch(/EBUSY/);
+    const minted = await bookOp.mintBookId('Gamma', 'Saga', 'Book');
+    expect(minted).not.toBe(base);
+    expect(minted).toMatch(/^gamma__saga__book-u[0-9a-f]{8}$/);
+    expect(await bookOp.isBookIdTaken(base)).toBe(true);
+    expect(await bookOp.isBookIdTaken('anything__else__entirely')).toBe(true);
   });
 });
 
@@ -317,5 +330,117 @@ describe('(e) an unlocked peekBook never moves the duplicate verdict', () => {
     await bookOp.withBookOp(BOOK_ID, async (b) => b.bookDir);
     expect(bookOp.__duplicateBookIdsForTest().has(BOOK_ID)).toBe(false);
     expect(bookOp.__bookDirIndexForTest().get(BOOK_ID)).toBe(twin1);
+  });
+});
+
+describe('(f) the stateless DELETE judges the folder by the bookId it holds (review pass 3, A)', () => {
+  /* A renamed book keeps its id: `Aut/S/New` carries `aut__s__old`. While its
+     state is unreadable the library row shows the PATH-derived id
+     `aut__s__new`, so the request's id says nothing about the running job. */
+  const OLD = 'aut__s__old';
+  const NEW = 'aut__s__new';
+
+  it('refuses when the folder turns unreadable again inside its lock', async () => {
+    const dir = seedBook('Aut', 'S', 'New', OLD);
+    const render = await holdRender(OLD);
+    try {
+      /* The walk reads it (no folder carries `aut__s__new`: BOOK_GONE), the
+         stateless scan maps the EBUSY to `unreadable`, and so does the re-read. */
+      scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
+      const res = await request(app).delete(`/api/books/${NEW}`);
+      expect(res.status).not.toBe(204);
+      expect(existsSync(dir)).toBe(true);
+      expect(bookJobs.bookJobKinds(OLD)).toEqual(['render']);
+      expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    } finally {
+      scripted.clear();
+      await render.finish();
+    }
+  });
+
+  it('refuses book_changed when the in-lock read shows a bookId (even one with a registered job)', async () => {
+    const dir = seedBook('Aut', 'S', 'New', OLD);
+    const render = await holdRender(OLD);
+    try {
+      scripted.set(paths.stateJsonPath(dir), ['ok', 'busy', 'ok']);
+      const res = await request(app).delete(`/api/books/${NEW}`);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_changed');
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      scripted.clear();
+      await render.finish();
+    }
+  });
+});
+
+describe('(g) a state read that flips after the resolve never puts a path in the body (review pass 3, B)', () => {
+  it('DELETE', async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
+    const res = await request(app).delete('/api/books/zed__s__book');
+    expect(res.status).toBe(500);
+    expect(existsSync(dir)).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+  });
+
+  it('a renaming PUT', async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
+    const res = await request(app)
+      .put('/api/books/zed__s__book/state')
+      .send({ slice: 'state', patch: { title: 'Renamed' } });
+    expect(res.status).toBe(500);
+    expect(existsSync(dir)).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+  });
+});
+
+describe('(i) GET /state never puts a path in its 500 body (review pass 3, E)', () => {
+  it('the book turns unreadable after it was located', async () => {
+    const dir = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    /* Owe no title refresh / uuid mint, so the GET does not re-locate (that
+       path reads absence and answers 404) and reaches the series scan. */
+    const st = readState(dir);
+    writeFileSync(
+      paths.stateJsonPath(dir),
+      JSON.stringify({
+        ...st,
+        chapterTitleParserVersion: 999,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: '01-x', uuid: '00000000-0000-4000-8000-000000000001' }],
+      }),
+    );
+    scripted.set(paths.stateJsonPath(dir), ['ok', 'busy']);
+    const res = await request(app).get('/api/books/zed__s__book/state');
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY/);
+  });
+});
+
+describe('(h) a startup sweep survives a per-book throw (review pass 3, D)', () => {
+  /* `Aaa/S/Flip` reads fine for withBookOpAtDir, then its hint read inside
+     withBookOp throws: that book is skipped, and the books after it still run. */
+  function seedFlipThenZed(): string {
+    const flip = seedBook('Aaa', 'S', 'Flip', 'aaa__s__flip');
+    scripted.set(paths.stateJsonPath(flip), ['ok', 'busy']);
+    const zed = seedBook('Zed', 'S', 'Book', 'zed__s__book');
+    writeFileSync(join(zed, '.audiobook', 'change-log.json'), JSON.stringify({ events: [] }));
+    return zed;
+  }
+
+  it('migrateLegacyChangeLogs', async () => {
+    const zed = seedFlipThenZed();
+    const { migrateLegacyChangeLogs } = await import('../workspace/changelog-migrate.js');
+    const result = await migrateLegacyChangeLogs();
+    expect(result.clean).toContain(zed);
+  });
+
+  it('fsckAllBooks', async () => {
+    seedFlipThenZed();
+    const { fsckAllBooks } = await import('../workspace/fsck-orphan-audio.js');
+    await expect(fsckAllBooks()).resolves.toBeDefined();
   });
 });

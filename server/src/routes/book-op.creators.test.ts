@@ -508,4 +508,3 @@ describe('#3711 -- the startup sweeps run per book under book-op', () => {
     expect(existsSync(join(paths.dotAudiobook(dir), 'change-log.legacy.json'))).toBe(true);
   });
 });
-

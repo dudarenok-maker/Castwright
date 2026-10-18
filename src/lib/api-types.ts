@@ -2742,6 +2742,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/reparse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run the parser on the book's on-disk manuscript
+         * @description Re-detects chapters from the stored manuscript file, so parser-rule
+         *     updates apply without a re-upload. Destructive: the analysis cache,
+         *     cast and audio are discarded (chapter slugs can change). The manuscript
+         *     file is untouched and manuscript edits are carried forward by sentence
+         *     id. The slow parse runs without a lock; the commit runs under the
+         *     book's operation lock and re-checks the manuscript's fingerprint, so a
+         *     manuscript that changed meanwhile is refused (`manuscript_changed`).
+         *     Returns the fresh state so the client can re-hydrate without a second
+         *     round-trip.
+         */
+        post: operations["reparseBook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/replace-manuscript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace the book's manuscript with an uploaded revision
+         * @description Uploads a revised manuscript onto an EXISTING book (identity, folder,
+         *     title/author/series and cover are untouched; this is not a re-import).
+         *     The file is parsed from memory, then installed under the book's
+         *     operation lock immediately before the state write that records it, and
+         *     the same re-detect / reset as `reparseBook` runs: analysis cache, cast
+         *     and audio are cleared and designed voices are carried over for
+         *     characters that still match. A different format swaps the stored
+         *     extension. Upload limit 50 MB.
+         */
+        post: operations["replaceManuscript"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/not-linked-to": {
         parameters: {
             query?: never;
@@ -6461,6 +6516,22 @@ export interface components {
              */
             overall: "ok" | "warn" | "fail";
             checks: components["schemas"]["DiagnosticsCheck"][];
+        };
+        ReparseBookResponse: {
+            /** @description The fresh book state (`BookStateJson`); `chapters` is the re-detected list. */
+            state: {
+                [key: string]: unknown;
+            };
+            chapterCount: number;
+            chapterTitles: string[];
+            /** @description Rich chapter records for the re-parse confirmation dialog. */
+            chapters?: {
+                id: number;
+                title: string;
+                slug: string;
+                wordCount: number;
+                excluded: boolean;
+            }[];
         };
         /**
          * @description The OTHER side of a cross-book pair. The source side comes from the
@@ -11964,9 +12035,10 @@ export interface operations {
             /**
              * @description `code` is one of: `book_busy` (a long job holds the book; stop it or
              *     wait), `book_folder_in_use` (the folder is open in another program;
-             *     close it and retry), or `book_partly_deleted` (the book left the
+             *     close it and retry), `book_partly_deleted` (the book left the
              *     library but some files were left behind; delete the leftover folder
-             *     by hand).
+             *     by hand), or `book_changed` (a book with no readable state gained one
+             *     while the delete waited; reload and retry).
              */
             409: {
                 headers: {
@@ -11976,11 +12048,146 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code: "book_busy" | "book_folder_in_use" | "book_partly_deleted";
+                        code: "book_busy" | "book_folder_in_use" | "book_partly_deleted" | "book_changed";
                     };
                 };
             };
             /** @description Delete failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+        };
+    };
+    reparseBook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Re-parsed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReparseBookResponse"];
+                };
+            };
+            /** @description Book not found (including a book deleted while this request was queued) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Refused (nothing was written). `code` is `manuscript_changed` (the
+             *     manuscript changed while it was being prepared; retry), `book_moved`
+             *     (the book was moved while this request was queued; reload and
+             *     retry), or absent (the manuscript file is missing on disk).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code?: "manuscript_changed" | "book_moved";
+                    };
+                };
+            };
+            /**
+             * @description Re-parse failed (including the book's state file being unreadable
+             *     right now, or lock contention). The message never carries a path.
+             */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+        };
+    };
+    replaceManuscript: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReparseBookResponse"];
+                };
+            };
+            /** @description No manuscript file uploaded */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found (including a book deleted while this request was queued) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Refused (nothing was written). `code` is `book_moved` (the book was
+             *     moved while this request was queued; reload and retry).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code?: "book_moved";
+                    };
+                };
+            };
+            /**
+             * @description Parsing or replacing failed (including the book's state file being
+             *     unreadable right now, or lock contention). The message never
+             *     carries a path.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;

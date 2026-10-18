@@ -714,10 +714,12 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twenty-one sites (`book-state` ×4, `voice-library` ×3,
-  `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
-  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  enumerates all thirty-nine call sites (`book-state` ×6, `cast-design` ×4
+  (both arms of its defensive outer plus the job's two terminal `error` events),
+  `voice-library` ×3, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
+  `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
+  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
+  and `resume-scoring`), `exports-portable`, `voices`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since

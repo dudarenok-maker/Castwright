@@ -65,6 +65,7 @@ import {
   bookJobKinds,
   moveBookFolder,
   peekBook,
+  readBookStateOrThrow,
   removeBookFolder,
   withBookOp,
   withBookPathClaim,
@@ -819,7 +820,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to read book state.' });
+    /* #3711 (PR #3714 review pass 3) -- an fs error's message embeds the
+       absolute workspace path (this app is served over LAN): the raw error goes
+       to the log above, the body is a fixed sentence. */
+    res.status(500).json({ error: requestFailureMessage(e, 'Failed to read book state.') });
   }
 });
 
@@ -1344,7 +1348,8 @@ async function applyReparse(
      so this is a gate, not an exclusion. #3711 -- the callers hold `book-op`
      across this whole call, so an in-process rename or delete cannot interleave
      at all; the gate remains as defence against a move made outside the
-     server. Absent => null (the callers answer 404).
+     server. Absent => null (the callers answer `reparseRefusal`: 409
+     `book_moved` if the book now lives elsewhere, else 404).
      The read is the recovering one (#3625): a stranded main with a `.bak.1`
      beside it is still the book. */
   const present = await withStateJsonLock(
@@ -1500,8 +1505,9 @@ async function applyReparse(
        finished book. The destructive arms above and the upload paths all use
        the `bookDir` this request started with, so if the book were moved by
        some other means (an out-of-band move on disk), recording the new
-       chapters here would split the record from the file. Refusing like an
-       absent book installs nothing and leaves state.json untouched, BUT the
+       chapters here would split the record from the file. Refusing (null; the
+       caller answers 409 `book_moved`, see `reparseRefusal`) installs nothing
+       and leaves state.json untouched, BUT the
        cast / audio / analysis cache / revisions of the book are already gone
        by this point. */
     if (fresh.bookDir !== bookDir) return null;
@@ -1594,6 +1600,28 @@ async function applyReparse(
     };
   });
   return outcome ? outcome.value : null;
+}
+
+/* #3711 — `applyReparse` answers null when the book is no longer at the folder
+   this request resolved (its gate or its locked-step backstop). That is "not
+   found" only when the book is nowhere: one moved on disk out of process still
+   exists, so it answers a curated 409 the client can act on. `peekBook` feeds
+   only this status decision, never a write. */
+async function reparseRefusal(
+  bookId: string,
+  bookDir: string,
+): Promise<{ status: number; body: { error: string; code?: string } }> {
+  const now = await peekBook(bookId);
+  if (now && now.bookDir !== bookDir) {
+    return {
+      status: 409,
+      body: {
+        error: 'This book was moved while it was being re-parsed. Reload and try again.',
+        code: 'book_moved',
+      },
+    };
+  }
+  return { status: 404, body: { error: 'Book not found.' } };
 }
 
 /* #3711 — the reparse's slow, write-free span (the manuscript read + parse). It
@@ -1714,7 +1742,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
         changeLogType: 'reparse',
         changeLogTitle: 'Re-parsed manuscript',
       });
-      if (!payload) return { status: 404, body: { error: 'Book not found.' } };
+      if (!payload) return reparseRefusal(book.bookId, bookDir);
       return { status: 200, body: payload };
     });
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -1819,7 +1847,7 @@ bookStateRouter.post(
           /* The book vanished or moved out of process mid-request: neither the
              upload nor state.json was written, and state.json still names the
              OLD file. */
-          return { status: 404, body: { error: 'Book not found.' } };
+          return reparseRefusal(book.bookId, bookDir);
         }
         /* Only now that state.json names the new file is the old one dead. */
         if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
@@ -2093,18 +2121,34 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
          claim (every creator and mover holds it, so nothing can turn the folder
          into a real book or move one into that path meanwhile) and its
          state-json lock. Defence in depth: a long job registered under this id
-         still refuses it (`book_busy`), so a resolve that wrongly came back
-         BOOK_GONE can never delete a book out from under a running job. */
+         refuses it (`book_busy`). The request's id is PATH-derived, so it cannot
+         name a renamed book's job (a rename keeps the id): inside the lock the
+         folder is re-read with a reader that rethrows a read failure (the scan's
+         catch-all maps one to `unreadable`), an unreadable state refuses the
+         delete, and a state that now parses to a real bookId is refused with 409
+         `book_changed` (PR #3714 review pass 3). */
       const kinds = bookJobKinds(req.params.bookId);
       if (kinds.length > 0) throw new BookBusyError(kinds);
       const statelessRemoved = await withBookPathClaim(async () => {
         const statelessDir = await findStatelessBookDirByBookId(req.params.bookId);
         if (!statelessDir) return false;
-        await withStateJsonLock(stateJsonPath(statelessDir), () =>
-          rm(statelessDir, { recursive: true, force: true }),
-        );
-        return true;
+        const changed = await withStateJsonLock(stateJsonPath(statelessDir), async () => {
+          /* A state that now parses to a real bookId is no longer a stateless
+             book: removing it would bypass that id's `book-op` lock, and taking
+             that lock here would invert the lock order. Refuse instead. */
+          const held = await readBookStateOrThrow(statelessDir);
+          if (held?.bookId) return true;
+          await rm(statelessDir, { recursive: true, force: true });
+          return false;
+        });
+        return changed ? ('changed' as const) : true;
       });
+      if (statelessRemoved === 'changed') {
+        return res.status(409).json({
+          error: 'This book changed while it was being deleted. Reload and try again.',
+          code: 'book_changed',
+        });
+      }
       if (statelessRemoved) await pruneQueue();
       res.status(204).end();
       return;

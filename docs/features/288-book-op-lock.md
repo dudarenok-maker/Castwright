@@ -53,7 +53,9 @@ Signature: `withBookOp(bookId, fn: (book: BookHandle) => Promise<T>, opts?: { hi
   at `dir`: with a `bookId` it runs `withBookOp(bookId, ({bookDir}) => fn(bookDir), {hintDir: dir})`, so a
   rename that queued ahead of the sweep hands `fn` the moved folder; a book without a `bookId` runs
   `fn(dir)` unlocked, because no route can move it. `BOOK_GONE` means the book vanished while the sweep
-  queued, and the step is skipped.
+  queued, and the step is skipped. A throw from one book's step (its state turning unreadable under the lock,
+  a lock timeout behind a slow holder) is caught by the sweep loop, logged, and skips that book only; the
+  next startup retries it (PR #3714 review pass 3).
 
 #### `peekBook(bookId, hintDir?)`
 
@@ -61,19 +63,38 @@ Signature: `withBookOp(bookId, fn: (book: BookHandle) => Promise<T>, opts?: { hi
   `null`.
 - It is the only sanctioned pre-lock resolve, for the two-span pattern (below). Nothing it returns may feed a
   write.
-- It writes nothing that a later resolve trusts: no index update, no record heal, no backfill. Its walk does
-  record (or clear) the **duplicate-bookId verdict** (`duplicateBookIds`), an observation of what is on disk
-  whose only effect is to stop the index being written for that id.
+- It writes nothing that a later resolve trusts: no index update, no record heal, no backfill, and no change
+  to the **duplicate-bookId verdict** (`duplicateBookIds`). An unlocked walk can see one twin while a mover
+  has the other mid-rename, so only a locked resolve may add to or clear the verdict; a peek only reads it.
 
 #### `resolveBook(bookId, hintDir?)`
 
 A candidate is accepted only if its `.audiobook/state.json` carries `bookId`. It is read with
 `readStateJsonWithRecovery`. A state that is absent or does not parse is "not this book". Any other read
-failure (`EBUSY`/`EPERM`/`EIO`, which #3625's reader rethrows on purpose) is **not** absence: it fails the
-resolve with the path-free `BookStateUnreadableError` (raw error to the server log) when it hits the hint, the
-index entry, or a walked folder before the first match (PR #3714 review pass 2). After the first match the walk
-returns that match but is not authoritative (it could not prove the id unique). `mintBookId` /
-`isBookIdTaken` fail closed the same way: an unreadable state's id is unknown, so no id is proved free.
+failure (`EBUSY`/`EPERM`/`EIO`/`EISDIR`, which #3625's reader rethrows on purpose) is **not** absence (PR
+#3714 review pass 2), but it fails only what it can change (review pass 3, **owner decision 2026-10-18**):
+- on the hint or the index entry (where the book is believed to live) it fails the resolve with the path-free
+  `BookStateUnreadableError` (raw error to the server log);
+- the walk **skips past** an unreadable folder. A later match is returned **non-authoritatively** (no index
+  write, no duplicate-verdict change) -- the same folder the unlocked `findBookBy` returns at that moment;
+- unless the id is a **known duplicate** (`duplicateBookIds`, or this walk finds a second match): the
+  unreadable folder may be the first twin, so the resolve fails;
+- **no match** after an unreadable folder fails ("gone" is unproved), so DELETE never treats it as gone;
+- an unreadable folder after the first match leaves that match non-authoritative, as before.
+
+**Accepted residual (owner, 2026-10-18):** a legacy duplicate nobody has detected yet (no locked walk has seen
+both twins) whose **first** twin is unreadable resolves to the **second** twin while the fault lasts, so a
+write in that window lands in the second twin (pinned by `book-op.read-errors.test.ts` (b)). The alternative
+-- failing every book that sorts after any unreadable folder, permanently, since such a book can never become
+indexed -- was the pass-3 regression.
+
+`mintBookId` / `isBookIdTaken` never refuse. An unreadable state's id is unknown and **not derivable from its
+path** (a renamed book keeps its old id), so while any state is unreadable no id is proved free:
+`isBookIdTaken` answers "taken" (the bundle importer then mints), and `mintBookId` appends `-u<8 hex>` -- a
+suffix the `-2`, `-3`, ... counter never produces -- instead of the base or a counter id. One unreadable book
+therefore never blocks an unrelated import, at the cost of an uglier id for imports made during the fault
+**(coordinator call)**. `GET /state`'s series lookup (`series-cast-scan.ts`) skips an unreadable sibling the
+same way and rethrows only when it finds no match.
 
 Candidates are tried in order:
 1. `hintDir`.
@@ -126,6 +147,15 @@ mid-rename); only the locked resolves heal, and they apply the same lazy `audioM
 1. Refuses with `BookBusyError` first.
 2. Runs `rm(dir, {recursive})` under `withStateJsonLock(dir)`.
 3. Deletes the index entry.
+
+Both movers' own state reads curate a read failure to `BookStateUnreadableError` (raw error to the log), so
+no 500 body carries the fs error's absolute path (review pass 3).
+
+The DELETE route's **stateless** branch (a book with no parseable state, addressed by its path-derived id)
+re-reads the folder inside its state-json lock with a reader that rethrows a read failure: an unreadable
+state refuses the delete, and a state that now parses to a real `bookId` is refused (`book_busy`) while a long
+job is registered under **that** id, since a renamed book's job is not keyed by the path-derived id (review
+pass 3).
 
 **Errors from the movers** (finding i):
 - `EPERM`/`EBUSY`/`EACCES` → `BookFolderInUseError`. These come after `renameWithRetry`'s own retries.
@@ -768,7 +798,9 @@ redundant and was removed: `markReparseBusy` / `clearReparseBusy` / `isReparseBu
 `REPARSE_UNSTABLE_409` / `REPARSE_MOVED_409` sentences, the `busyDir` clear, and the PUT's
 reparse/analysis 409s (`moveBookFolder`'s `assertNotBusy` covers analysis with `book_busy`).
 These stay, as defence against a move made outside the server: the backstop in `applyReparse`'s
-locked step (`fresh.bookDir !== bookDir → null`, now answered 404), analysis's
+locked step (`fresh.bookDir !== bookDir → null`, now answered 409 `book_moved`, "This book was moved
+while it was being re-parsed. Reload and try again.", when the book still resolves elsewhere, and 404
+only when it is gone), analysis's
 `assertWriteTargetStable`, and `restructure-gate.ts`.
 
 Pinned by `book-state.replace-manuscript-rename.test.ts` (a queued rename waits, then lands at the

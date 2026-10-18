@@ -32,6 +32,7 @@
    token (the handle is only ever created inside `withBookOp*`, and a mover also
    requires it to be in a module-private WeakSet of live handles, so a copy or a
    hand-built object is refused), replacing an AsyncLocalStorage order tracker. */
+import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -198,22 +199,28 @@ function* walkBookDirs(): Generator<string> {
   }
 }
 
+/** Log a state.json read failure in full (its message embeds the absolute
+ *  path) and return the path-free error to throw instead. */
+function unreadableState(err: unknown): BookStateUnreadableError {
+  console.warn('[book-op-lock] state.json read failed', err);
+  return new BookStateUnreadableError();
+}
+
 /** The folder's state, or null when it is absent or does not parse (it carries
  *  no bookId anyone can resolve). Any other read failure (EBUSY / EPERM / EIO,
  *  which #3625's reader rethrows on purpose) is NOT absence: it is logged in
  *  full and rethrown as the path-free `BookStateUnreadableError`. */
-async function readStateOrThrow(dir: string): Promise<BookStateJson | null> {
+export async function readBookStateOrThrow(dir: string): Promise<BookStateJson | null> {
   try {
     return await readStateJsonWithRecovery(stateJsonPath(dir));
   } catch (err) {
     if (err instanceof SyntaxError) return null;
-    console.warn('[book-op-lock] state.json read failed', err);
-    throw new BookStateUnreadableError();
+    throw unreadableState(err);
   }
 }
 
 async function readOwnedState(dir: string, bookId: string): Promise<BookStateJson | null> {
-  const raw = await readStateOrThrow(dir);
+  const raw = await readBookStateOrThrow(dir);
   return raw && raw.bookId === bookId ? raw : null;
 }
 
@@ -263,11 +270,19 @@ function healIndexAndRecord(bookId: string, bookDir: string, state: BookStateJso
  *  record. Without a hint, a duplicated bookId therefore always resolves to the
  *  first match.
  *
- *  A read failure (`BookStateUnreadableError`) is never "not this book": on a
- *  hint or index candidate, or on a walked folder BEFORE the first match (it may
- *  be the first match), it fails the resolve. After the first match the walk
- *  returns that match but is not authoritative -- it could not prove the id is
- *  unique, so it neither clears a duplicate verdict nor writes the index. */
+ *  A read failure (`BookStateUnreadableError`) is never "not this book", but it
+ *  fails only what it can change (PR #3714 review pass 3, owner decision
+ *  2026-10-18):
+ *    - on the hint or the index entry (where the book is believed to live) it
+ *      fails the resolve;
+ *    - the walk skips PAST an unreadable folder. A later match is returned NON-
+ *      authoritatively (no index write, no verdict change) -- the same folder the
+ *      unlocked `findBookBy` returns at that moment, as it skips the fault too;
+ *    - unless the id is a KNOWN duplicate (or this walk finds a second match):
+ *      the unreadable folder may be the first twin, so the resolve fails;
+ *    - no match at all after an unreadable folder fails ("gone" is unproved).
+ *  Accepted residual: a duplicate nobody has detected yet whose FIRST twin is
+ *  unreadable resolves to the second twin for as long as the fault lasts. */
 async function resolveBook(
   bookId: string,
   hintDir: string | undefined,
@@ -288,13 +303,15 @@ async function resolveBook(
   let first: { bookDir: string; state: BookStateJson } | null = null;
   let duplicate = false;
   let unreadable = false;
+  let unreadableBeforeFirst = false;
   for (const dir of walkBookDirs()) {
     let state: BookStateJson | null;
     try {
       state = await readOwnedState(dir, bookId);
     } catch (err) {
-      if (!first || !(err instanceof BookStateUnreadableError)) throw err;
+      if (!(err instanceof BookStateUnreadableError)) throw err;
       unreadable = true;
+      if (!first) unreadableBeforeFirst = true;
       continue;
     }
     if (!state) continue;
@@ -315,6 +332,9 @@ async function resolveBook(
      different id). Only a LOCKED resolve may add to or clear the verdict: an
      unlocked peek can see one twin while a mover has the other mid-rename. */
   if (heal && first && !duplicate && !unreadable) duplicateBookIds.delete(bookId);
+  if (unreadableBeforeFirst && (!first || duplicate || duplicateBookIds.has(bookId))) {
+    throw new BookStateUnreadableError();
+  }
   return first ? accept(bookId, first.bookDir, first.state, heal, !unreadable) : null;
 }
 
@@ -504,7 +524,12 @@ export async function moveBookFolder(
   return withBookPathClaim(() =>
     withBookLock(book.bookId, () =>
     withStateJsonLock(stateJsonPath(oldDir), async () => {
-      const fresh = await readStateJsonWithRecovery(stateJsonPath(oldDir));
+      /* A read failure here would put the raw fs error (with its absolute
+         path) in the route's 500 body: curate it (PR #3714 review pass 3). */
+      const fresh = await readStateJsonWithRecovery(stateJsonPath(oldDir)).catch((err: unknown) => {
+        if (err instanceof SyntaxError) throw err;
+        throw unreadableState(err);
+      });
       if (!fresh) throw new Error('moveBookFolder: state.json is missing');
       const next = buildNext(fresh);
       if (existsSync(newDir)) throw new BookPathTakenError();
@@ -567,7 +592,8 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
   const holdsThisBook = async (target: string): Promise<boolean> => {
     const fresh = await readStateJsonWithRecovery(stateJsonPath(target)).catch((err: unknown) => {
       if (err instanceof SyntaxError) return undefined;
-      throw err;
+      /* Curated: the raw fs error embeds the absolute path (review pass 3). */
+      throw unreadableState(err);
     });
     if (fresh === null) return false;
     return fresh === undefined || fresh.bookId === book.bookId;
@@ -610,35 +636,56 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
 
 /* ---- minting ids ----------------------------------------------------------------- */
 
-/** Every bookId some `state.json` under the books root carries. A state that
- *  cannot be READ fails closed (`BookStateUnreadableError`): its id is unknown,
- *  so no id can be proved free. */
-async function takenBookIds(): Promise<Set<string>> {
+/** Every bookId some readable `state.json` under the books root carries, and
+ *  whether any state could not be READ. An unreadable state's id is unknown --
+ *  and not derivable from its path, since a renamed book keeps its old id -- so
+ *  while one exists no id can be PROVED free (PR #3714 review pass 3). The
+ *  callers answer that without failing: `isBookIdTaken` says "taken" (the
+ *  bundle importer then mints), and `mintBookId` uses a suffix the counter never
+ *  produces. One unreadable book therefore never blocks an unrelated import. */
+async function takenBookIds(): Promise<{ taken: Set<string>; uncertain: boolean }> {
   const taken = new Set<string>();
+  let uncertain = false;
   for (const dir of walkBookDirs()) {
-    const raw = await readStateOrThrow(dir);
+    let raw: BookStateJson | null;
+    try {
+      raw = await readBookStateOrThrow(dir);
+    } catch (err) {
+      if (!(err instanceof BookStateUnreadableError)) throw err;
+      uncertain = true;
+      continue;
+    }
     if (raw?.bookId) taken.add(raw.bookId);
   }
-  return taken;
+  return { taken, uncertain };
 }
 
-/** True if any `state.json` in the workspace carries `bookId`. Called under the
- *  path claim by creators that want to KEEP an incoming id (a portable bundle's)
- *  when it is free. */
+/** True if any `state.json` in the workspace carries `bookId` -- or if one could
+ *  not be read (it might). Called under the path claim by creators that want to
+ *  KEEP an incoming id (a portable bundle's) when it is free. */
 export async function isBookIdTaken(bookId: string): Promise<boolean> {
-  return (await takenBookIds()).has(bookId);
+  const { taken, uncertain } = await takenBookIds();
+  return uncertain || taken.has(bookId);
 }
 
 /** A bookId no `state.json` in the workspace carries. Called under the path
  *  claim by NON-sample creators only. `makeBookId(...)` if free; otherwise
  *  `-2`, `-3`, ... is appended to the TITLE slug so `parseBookId` keeps its
- *  three parts. */
+ *  three parts. While some state is unreadable (it could carry the base or any
+ *  counter id) the suffix is `-u<random hex>` instead, which the counter never
+ *  produces. */
 export async function mintBookId(author: string, series: string, title: string): Promise<string> {
-  const taken = await takenBookIds();
+  const { taken, uncertain } = await takenBookIds();
   const base = makeBookId(author, series || STANDALONES_SERIES, title);
-  if (!taken.has(base)) return base;
+  if (!uncertain && !taken.has(base)) return base;
   const parts = parseBookId(base);
   if (!parts) throw new Error('mintBookId: makeBookId produced an unparseable id');
+  if (uncertain) {
+    for (;;) {
+      const candidate = `${parts.authorSlug}__${parts.seriesSlug}__${parts.titleSlug}-u${randomBytes(4).toString('hex')}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+  }
   for (let n = 2; ; n++) {
     const candidate = `${parts.authorSlug}__${parts.seriesSlug}__${parts.titleSlug}-${n}`;
     if (!taken.has(candidate)) return candidate;

@@ -82,8 +82,15 @@ export async function migrateLegacyChangeLogs(): Promise<MigrateResult> {
   for (const walkedDir of await listBookDirs()) {
     /* #3711 — each book's step runs under its book-op lock, on the folder the
        book lives in NOW, so a rename queued ahead of the sweep cannot leave the
-       migration writing into a vacated path (writeJsonAtomic recreates it). */
-    await withBookOpAtDir(walkedDir, (bookDir) => migrateBook(bookDir, result));
+       migration writing into a vacated path (writeJsonAtomic recreates it).
+       A throw for one book (its state turning unreadable under the lock, a lock
+       timeout behind a slow holder) skips THAT book only; the next startup
+       retries it (PR #3714 review pass 3). */
+    try {
+      await withBookOpAtDir(walkedDir, (bookDir) => migrateBook(bookDir, result));
+    } catch (err) {
+      console.warn('[changelog-migrate] skipping a book this startup', err);
+    }
   }
   return result;
 }

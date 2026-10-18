@@ -469,6 +469,23 @@ recite:
     folder, a partial walk) — and confirm only the former writes it; then
     test by resolving once through the non-authoritative input and asserting
     the next resolve WITHOUT it still answers what the unlocked reader does.
+41. **A fail-closed guard whose scope is wider than its uncertainty — one
+    unreadable, unrelated record blocks every operation** — PR #3714 pass 3
+    (#3711, `book-op-lock.ts` `resolveBook`): pass 2 rightly stopped a
+    `state.json` read error being read as "not this book" (catalogue 1), but
+    the fix failed the whole resolve on ANY unreadable folder the walk passed,
+    including folders that could not change the answer. One `EBUSY` or
+    `EISDIR` sibling then 500'd every autosave, rename, delete, job
+    registration and peek of every book sorting after it, permanently (that
+    book could never become indexed), and blocked every import. The
+    uncertainty was one folder's identity; the failure was the library.
+    Checkable: for each fail-closed branch, name what the unknown input could
+    change about the answer, and confirm the operation fails only when the
+    unknown could change THIS operation's outcome (the target itself, a known
+    twin, an id it might carry); then test with an unreadable record that
+    cannot matter (an unrelated sibling sorting first) and assert the
+    operation still succeeds, alongside the case where it can matter and must
+    still fail.
 
 ### Keeping the catalogue current
 

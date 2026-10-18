@@ -260,4 +260,3 @@ describe('GET /state — revisions read through the store (plan 286)', () => {
     expect(res.body.revisionsError).toMatch(/upgrade the server/i);
   });
 });
-

@@ -229,16 +229,18 @@ describe.each([
 ])(
   'replace-manuscript backstop: folder moved on disk during the arms (%s)',
   (_label, upload, original) => {
-    it('answers 404, installs nothing and leaves state.json and the manuscript file as they were', async () => {
+    it('answers 409 book_moved, installs nothing and leaves state.json and the manuscript file as they were', async () => {
       moveFolderOnDiskDuringArms();
       const res = await request(app)
         .post(`/api/books/${bookId}/replace-manuscript`)
         .attach('file', UPLOAD, upload);
 
       /* An out-of-band move is not something the API can produce (every
-         in-process mover holds book-op); the locked step refuses it like an
-         absent book. */
-      expect(res.status).toBe(404);
+         in-process mover holds book-op); the locked step refuses it. The book
+         still exists in its new folder, so the answer is not "not found". */
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_moved');
+      expect(JSON.stringify(res.body)).not.toContain(ws);
 
       const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
       expect(state.manuscriptFile).toBe(original);
@@ -257,14 +259,32 @@ describe.each([
 );
 
 describe('reparse backstop: folder moved on disk during the arms', () => {
-  it('answers 404 and leaves state.json untouched (the cast is already gone by then)', async () => {
+  it('answers 409 book_moved and leaves state.json untouched (the cast is already gone by then)', async () => {
     moveFolderOnDiskDuringArms();
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_moved');
+    expect(JSON.stringify(res.body)).not.toContain(ws);
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter One']);
     expect(state.castConfirmed).toBe(true);
   });
+});
+
+describe('backstop: book deleted on disk during the arms', () => {
+  it.each(['reparse', 'replace-manuscript'] as const)(
+    '%s: answers 404 (the book is truly gone)',
+    async (route) => {
+      hooks.hold = async () => {
+        rmSync(oldDir, { recursive: true, force: true });
+      };
+      const req = request(app).post(`/api/books/${bookId}/${route}`);
+      const res =
+        route === 'reparse' ? await req.send({}) : await req.attach('file', UPLOAD, 'revised.md');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Book not found.');
+    },
+  );
 });
 
 /* A folder moved on disk AFTER the slow parse and BEFORE the commit: the commit

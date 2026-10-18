@@ -283,6 +283,43 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(healthyDir)).toBe(true);
   });
 
+  /* #3711 pass 4: a stateless book that becomes a real book (a state with a
+     bookId lands) while the DELETE waits on the state-json lock is no longer
+     stateless - removing it would bypass that id's book-op lock. */
+  it('refuses 409 book_changed when the stateless folder gains a real bookId while the DELETE waits', async () => {
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { makeBookId } = await import('../workspace/paths.js');
+    const title = 'Becomes Real';
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    const statePath = join(dir, '.audiobook', 'state.json');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'manuscript.txt'), 'x');
+    let release!: () => void;
+    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    const del = request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, title)}`).then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        bookId: 'now-a-real-book',
+        manuscriptId: 'm_real',
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    release();
+    await held;
+    const res = await del;
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_changed');
+    expect(existsSync(dir)).toBe(true);
+  });
+
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {
     const res = await request(app).delete('/api/books/no-such-book');
     expect(res.status).toBe(204);
