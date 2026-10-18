@@ -14,6 +14,7 @@ import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookOp } from './book-op-lock.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import type { BookStateJson } from './scan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
@@ -51,7 +52,7 @@ async function* walkConfirmedCasts(): AsyncGenerator<{
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
@@ -143,7 +144,11 @@ export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<vo
      book-op at a time (never nested). The book is resolved under its book-op
      and the scope (still a confirmed cast) re-checked on the fresh state, so a
      book deleted since the walk saw it is skipped; a rename queued behind this
-     write lands after it. */
+     write lands after it. Books already written are remembered by their
+     RESOLVED folder, not their bookId: a book renamed into a folder the walk
+     has yet to reach resolves to the folder already written and is skipped,
+     while the twins of a duplicated bookId resolve to different folders and
+     both get the write (PR #3714 review pass 1). */
   const seen = new Set<string>();
   for await (const { bookDir, state } of walkConfirmedCasts()) {
     if (!state.bookId) {
@@ -152,11 +157,11 @@ export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<vo
       await clearBook(bookDir);
       continue;
     }
-    if (seen.has(state.bookId)) continue;
-    seen.add(state.bookId);
     await withBookOp(
       state.bookId,
       async (b) => {
+        if (seen.has(b.bookDir)) return;
+        seen.add(b.bookDir);
         if (!b.state.castConfirmed) return;
         await clearBook(b.bookDir);
       },

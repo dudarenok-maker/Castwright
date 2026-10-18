@@ -468,21 +468,22 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   //
   // #2208 independent review, F3 — `rotate` was considered for this write
   // and DROPPED. `writeJsonAtomic`'s rotate option (see `state-io.ts`)
-  // finishes its pre-write step by renaming the live file to `.bak.1` —
-  // there is a real window, between that rename and the new file landing,
-  // where `device-tokens.json` does not exist at all. `state.json` pairs
-  // that same option with a reader, `readJsonWithRecovery`, which falls
-  // back to `.bak.N` on a corrupt read; this file has no such reader. So a
-  // write that failed after the rotate step (ENOSPC, EACCES, a process
-  // death) would leave NO live file — `loadSync` would then see a missing
-  // file and report `cache = []` with no warning, an authoritative-looking
-  // "zero paired devices" — strictly worse than `main`'s behaviour with no
-  // rotate at all (a failed write there leaves the previous file untouched).
-  // A safe version of this — rotating by copy instead of rename so the live
-  // file is never absent, or giving `loadSync` its own synchronous `.bak.N`
-  // fallback — is a real decision with its own design and test surface, not
-  // a same-diff addition; left for a follow-up rather than shipped as a
-  // writer with no reader.
+  // writes the new bytes to a tmp file first, then renames the live file to
+  // `.bak.1` and renames the tmp onto the vacated name (#3625 reorder). Two
+  // renames apart, `device-tokens.json` does not exist at all — and a crash
+  // in that gap leaves it absent. `state.json` pairs that same option with a
+  // reader, `readJsonWithRecovery` with `recoverMissing`, which falls back to
+  // `.bak.N` on a corrupt OR missing main; this file has no such reader at all.
+  // `loadSync` would see a missing file and report `cache = []` with no
+  // warning, an authoritative-looking "zero paired devices" — strictly
+  // worse than a write with no rotate (which never vacates the live file).
+  // (A failed tmp write or a failed rename-in no longer strands the file:
+  // the tmp is written before anything is rotated, and a failed rename-in
+  // restores `.bak.1` to main.) A safe version of this — giving `loadSync`
+  // its own synchronous `.bak.N` fallback for a missing main — is a real
+  // decision with its own design and test surface, not a same-diff
+  // addition; left for a follow-up rather than shipped as a writer with no
+  // reader.
   //
   // #2208 independent review, second pass — the write itself is wrapped so a
   // WRITE fault (not just the fresh-read fault above) also sets

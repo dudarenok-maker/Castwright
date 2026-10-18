@@ -139,9 +139,16 @@ export function bookJobKinds(bookId: string): BookJobKind[] {
 
 /* ---- resolving a book ------------------------------------------------------ */
 
-/* bookId -> bookDir, maintained by every resolve, the movers and (later) the
-   creators. A HINT only: every use is verified by one state.json read. */
+/* bookId -> bookDir, maintained by an AUTHORITATIVE locked resolve (a walk that
+   found exactly one folder) and the movers. A HINT only: every use is verified by
+   one state.json read. A bookId two folders carry (a legacy duplicate) is never
+   indexed, so resolving it BY ID always walks and gets the first match, the same
+   folder `findBookByBookId` (the unlocked GETs) returns. */
 const bookDirById = new Map<string, string>();
+
+/* bookIds a walk has seen in two folders. A mover never indexes one of these
+   either: after a twin moves, the first match can be the OTHER twin. */
+const duplicateBookIds = new Set<string>();
 
 /** Test-only: the in-memory index. */
 export function __bookDirIndexForTest(): Map<string, string> {
@@ -179,15 +186,29 @@ async function readOwnedState(dir: string, bookId: string): Promise<BookStateJso
 /** The ONLY place a resolve mutates shared state, and only for a LOCKED caller
  *  (`heal: true`): an unlocked `peekBook` that read the OLD dir just before a
  *  mover renamed it must not write that dir back into the index or the
- *  ManuscriptRecord (the #2165 split). */
+ *  ManuscriptRecord (the #2165 split). The index and the record are written only
+ *  for an `authoritative` candidate -- the index's own entry, or a walk's ONLY
+ *  match. A caller's `hintDir` is not authoritative: a sweep or a walker locks
+ *  each walked folder by its hint, and for a duplicated bookId that folder can be
+ *  the second twin, which must not become what every later resolve-by-id (and
+ *  the live record) points at (PR #3714 review pass 1). */
 async function accept(
   bookId: string,
   bookDir: string,
   state: BookStateJson,
   heal: boolean,
+  authoritative: boolean,
 ): Promise<{ bookDir: string; state: BookStateJson }> {
   if (!heal) return { bookDir, state };
-  bookDirById.set(bookId, bookDir);
+  if (authoritative) healIndexAndRecord(bookId, bookDir, state);
+  /* The same lazy engine-drift upgrade `findBookBy` applies, so a route that
+     moved from `findBookByBookId` to `book.state` does not lose it. */
+  const upgraded = await backfillAudioModelKeysFromSegments(bookDir, state);
+  return { bookDir, state: upgraded.state };
+}
+
+function healIndexAndRecord(bookId: string, bookDir: string, state: BookStateJson): void {
+  if (!duplicateBookIds.has(bookId)) bookDirById.set(bookId, bookDir);
   /* Heal a live ManuscriptRecord only when it is THIS book's: twin books can
      share a manuscriptId (a bundle imported under the `rename` strategy keeps
      the bundle's), and healing the other twin's record would repoint it. */
@@ -198,17 +219,15 @@ async function accept(
       putManuscript(rec);
     }
   }
-  /* The same lazy engine-drift upgrade `findBookBy` applies, so a route that
-     moved from `findBookByBookId` to `book.state` does not lose it. */
-  const upgraded = await backfillAudioModelKeysFromSegments(bookDir, state);
-  return { bookDir, state: upgraded.state };
 }
 
 /** Resolve a bookId to its folder. A candidate is accepted only if its
  *  `.audiobook/state.json` carries `bookId`. Tried in order: `hintDir`, the
  *  in-memory index, then a full tree walk with today's first-match behaviour
  *  (a second match is logged, server-log only, and the first wins). `heal`
- *  (locked callers only) lets the resolve write the index and the record. */
+ *  (locked callers only) lets an authoritative resolve write the index and the
+ *  record. Without a hint, a duplicated bookId therefore always resolves to the
+ *  first match. */
 async function resolveBook(
   bookId: string,
   hintDir: string | undefined,
@@ -216,27 +235,37 @@ async function resolveBook(
   skipHints = false,
 ): Promise<{ bookDir: string; state: BookStateJson } | null> {
   if (!skipHints) {
-    for (const candidate of [hintDir, bookDirById.get(bookId)]) {
+    for (const [candidate, authoritative] of [
+      [hintDir, false],
+      [bookDirById.get(bookId), true],
+    ] as const) {
       if (!candidate) continue;
       const state = await readOwnedState(candidate, bookId);
-      if (state) return accept(bookId, candidate, state, heal);
+      if (state) return accept(bookId, candidate, state, heal, authoritative);
     }
   }
   if (heal) bookDirById.delete(bookId);
   let first: { bookDir: string; state: BookStateJson } | null = null;
+  let duplicate = false;
   for (const dir of walkBookDirs()) {
     const state = await readOwnedState(dir, bookId);
     if (!state) continue;
     if (!first) {
       first = { bookDir: dir, state };
     } else {
+      duplicate = true;
+      duplicateBookIds.add(bookId);
+      if (heal) bookDirById.delete(bookId);
       console.warn(
         `[book-op-lock] duplicate bookId "${bookId}" found at both ${first.bookDir} and ${dir}; using the first`,
       );
       break;
     }
   }
-  return first ? accept(bookId, first.bookDir, first.state, heal) : null;
+  /* A full walk that found ONE folder clears an earlier duplicate verdict (the
+     other twin was deleted or renamed to a different id). */
+  if (first && !duplicate) duplicateBookIds.delete(bookId);
+  return first ? accept(bookId, first.bookDir, first.state, heal, true) : null;
 }
 
 /** A read-only resolve that takes NO lock and WRITES NOTHING (no index update,
@@ -418,7 +447,8 @@ export async function moveBookFolder(
           if (isInUse(err)) throw new BookFolderInUseError();
           throw err;
         }
-        bookDirById.set(book.bookId, newDir);
+        if (duplicateBookIds.has(book.bookId)) bookDirById.delete(book.bookId);
+        else bookDirById.set(book.bookId, newDir);
         book.bookDir = newDir;
         if (fresh.manuscriptId) {
           const rec = getManuscript(fresh.manuscriptId);
@@ -442,24 +472,39 @@ export async function moveBookFolder(
 }
 
 /** Delete a book's folder. Refuses (BookBusyError) while a long job is
- *  registered. EPERM/EBUSY/EACCES with state.json still present is
- *  BookFolderInUseError; an `rm` that fails after state.json is already gone is
+ *  registered. EPERM/EBUSY/EACCES with the book's state still readable is
+ *  BookFolderInUseError; an `rm` that fails after the state is already gone is
  *  BookPartlyDeletedError (the book has left the library).
  *
- *  Out-of-process defence (#3706): if, once the state-json lock is held, state.json
- *  is ABSENT at the handle's dir, the folder was moved or deleted by something
- *  that does not take book-op while this call queued. Re-resolve by bookId (a full
- *  walk) and delete the book where it now lives; if it is nowhere, resolve
+ *  Out-of-process defence (#3706): once the state-json lock is held, the folder
+ *  is judged by the RECOVERING reader (#3625), never by main's existence: a
+ *  rotating write leaves `state.json` absent for a window and a crash there
+ *  strands the book on `.bak.1`, which is still this book and is removed. A
+ *  state that no longer parses at all is still the folder resolved under
+ *  book-op and is removed. Only a state that is GONE (no main, no backup) or
+ *  names a DIFFERENT bookId means the folder was moved or replaced by something
+ *  that does not take book-op while this call queued: re-resolve by bookId (a
+ *  full walk) and delete the book where it now lives; if it is nowhere, resolve
  *  `'gone'` (the caller answers an idempotent 204). */
 export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'gone'> {
   assertHeld(book, 'removeBookFolder');
   assertNotBusy(book.bookId);
   const dir = book.bookDir;
+  /* Called under `dir`'s state-json lock, so no in-process rotation is mid-flight. */
+  const holdsThisBook = async (target: string): Promise<boolean> => {
+    const fresh = await readStateJsonWithRecovery(stateJsonPath(target)).catch((err: unknown) => {
+      if (err instanceof SyntaxError) return undefined;
+      throw err;
+    });
+    if (fresh === null) return false;
+    return fresh === undefined || fresh.bookId === book.bookId;
+  };
   const rmFolder = async (target: string): Promise<void> => {
     try {
       await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch (err) {
-      if (!existsSync(stateJsonPath(target))) {
+      const left = await readStateJsonWithRecovery(stateJsonPath(target)).catch(() => undefined);
+      if (left === null) {
         bookDirById.delete(book.bookId);
         throw new BookPartlyDeletedError(book.state.title);
       }
@@ -468,16 +513,19 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
     }
   };
   const outcome = await withStateJsonLock(stateJsonPath(dir), async (): Promise<'removed' | 'gone'> => {
-    if (existsSync(stateJsonPath(dir))) {
+    if (await holdsThisBook(dir)) {
       await rmFolder(dir);
       return 'removed';
     }
     const moved = await resolveBook(book.bookId, undefined, false, true);
-    if (!moved) return 'gone';
+    if (!moved || moved.bookDir === dir) return 'gone';
     book.bookDir = moved.bookDir;
     book.state = moved.state;
-    await withStateJsonLock(stateJsonPath(moved.bookDir), () => rmFolder(moved.bookDir));
-    return 'removed';
+    return withStateJsonLock(stateJsonPath(moved.bookDir), async () => {
+      if (!(await holdsThisBook(moved.bookDir))) return 'gone';
+      await rmFolder(moved.bookDir);
+      return 'removed';
+    });
   });
   bookDirById.delete(book.bookId);
   return outcome;

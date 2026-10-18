@@ -7,7 +7,7 @@
    so a refactor can't silently regress them. The file also covers the
    analysis-side classifiers (classifyAnalysisError + classifyAnalysisFailure). */
 
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { ApiError } from '@google/genai';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
@@ -1337,5 +1337,45 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.userMessage).toContain('high');
     expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
+  });
+});
+
+
+describe('classifyFailure — state-lock timeout from finalize (#3625)', () => {
+  it('curates a LockAcquisitionTimeoutError so the workspace path never reaches userMessage', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const r = classifyFailure(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(r.userMessage).not.toContain('/abs/secret/path');
+    expect(r.remediation).toBe(FAILURE_REMEDIATIONS['lock-contention'].remediation);
+    expect(r.fatal).toBe(false);
+  });
+
+  it('maps the curated timeout `withStateJsonLock` actually throws (#3700: message curated, code kept)', async () => {
+    const { withKeyLock, withStateJsonLock, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const key = '/abs/secret/path/state.json';
+    const holder = withKeyLock(`state-json:${key}`, () => new Promise<void>((r) => setTimeout(r, 200)));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let thrown: unknown;
+    try {
+      await withStateJsonLock(key, async () => undefined, 20).catch((e: unknown) => {
+        thrown = e;
+      });
+    } finally {
+      await holder;
+      warn.mockRestore();
+    }
+    const r = classifyFailure(thrown);
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
+  it('describeSynthesisError of the same error broadcasts only the curated reason', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const { describeSynthesisError } = await import('./generation-error.js');
+    const out = describeSynthesisError(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(out.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(out.errorReason).not.toContain('/abs/secret/path');
   });
 });

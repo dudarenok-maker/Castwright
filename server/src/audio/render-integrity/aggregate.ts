@@ -29,7 +29,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
-import { bookStateLanguage, type BookStateJson } from '../../workspace/scan.js';
+import { bookStateLanguage } from '../../workspace/scan.js';
+import { readStateJsonWithRecovery } from '../../workspace/state-migrate.js';
 import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
 import { writeAttempted, attemptedPath, mergeVerdictRows, type VerdictRow } from './verdicts-io.js';
@@ -484,7 +485,7 @@ async function readCastJson(bookDir: string): Promise<CastCharacter[] | null> {
  *  under, which is what keeps the audition comparable to the chapter. */
 async function readBookLanguage(bookDir: string): Promise<string | undefined> {
   try {
-    const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
     return state ? bookStateLanguage(state) : undefined;
   } catch {
     return undefined;

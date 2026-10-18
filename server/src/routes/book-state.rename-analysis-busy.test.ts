@@ -272,3 +272,38 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
     expect(existsSync(newDir)).toBe(false);
   });
 });
+
+describe('#3625 — PUT /:bookId/state rename waits on the old dir state lock', () => {
+  it('does not move the folder while the lock is held, then renames', async () => {
+    seedBook();
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { stateJsonPath: stateJsonPathForLock } = await import('../workspace/paths.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(stateJsonPathForLock(bookDir), async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    try {
+      const p = request(app)
+        .put(`/api/books/${bookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({ slice: 'state', patch: { title: NEW_TITLE } })
+        .then((r) => r);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(existsSync(bookDir)).toBe(true);
+      expect(existsSync(newDir)).toBe(false);
+      release();
+      const [res] = await Promise.all([p, held]);
+      expect(res.status).toBe(204);
+      expect(existsSync(newDir)).toBe(true);
+      expect(existsSync(bookDir)).toBe(false);
+    } finally {
+      release();
+      await held;
+    }
+  });
+});

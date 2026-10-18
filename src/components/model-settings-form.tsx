@@ -233,8 +233,12 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
 
   const saving = account.status === 'saving';
 
+  /* #3625 — while the settings file is unreadable the fields below hold the
+     built-in defaults, not the user's values: Save must not write them back. */
+  const saveBlocked = !!account.settingsFileUnreadable;
+
   const onSave = async () => {
-    if (sidecarUrlInvalid) return;
+    if (sidecarUrlInvalid || saveBlocked) return;
     const patch: UserSettingsPatch = {
       defaultAnalysisModel,
       defaultTtsEngine,
@@ -502,9 +506,10 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
 
       <div className="flex items-center gap-4 px-6">
         <PrimaryButton
-          variant={dirty && !sidecarUrlInvalid ? 'dark' : 'ghost'}
+          variant={dirty && !sidecarUrlInvalid && !saveBlocked ? 'dark' : 'ghost'}
           onClick={onSave}
           icon={false}
+          disabled={saveBlocked}
         >
           {saving ? 'Saving…' : 'Save changes'}
         </PrimaryButton>

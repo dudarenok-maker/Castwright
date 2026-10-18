@@ -151,7 +151,11 @@ export function AccountView() {
      reason. Once the slice has hydrated at least once (initial fetch or
      a successful save), keep rendering the form even on subsequent
      errors so a save failure doesn't blow the form away. */
-  if (!account.hydrated) {
+  /* #3625 — an unreadable settings file answers 200 with the built-in defaults
+     and `settingsFileUnreadable`, which marks the slice hydrated; rendering the
+     form then would let Save write those defaults over the real file once the
+     lock clears. Treat it as unhydrated, with its own reason. */
+  if (!account.hydrated || account.settingsFileUnreadable) {
     return (
       <div className="max-w-[960px] mx-auto px-6 py-10">
         <div className="mb-8">
@@ -160,7 +164,33 @@ export function AccountView() {
             <MixedHeading regular="Your" bold="defaults" level="h1" />
           </div>
         </div>
-        {account.status === 'error' ? (
+        {account.settingsFileUnreadable ? (
+          <section
+            role="alert"
+            className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-card"
+          >
+            <h2 className="text-base font-semibold text-rose-900">
+              Your settings can't be read right now
+            </h2>
+            <p className="mt-2 text-sm text-rose-900/85">
+              The settings file is locked or unreadable, so the form is hidden — it would show
+              built-in defaults instead of your saved values, and saving them would overwrite your
+              real settings. Close any program that might be locking{' '}
+              <code className="font-mono">user-settings.json</code>, then retry.
+            </p>
+            <div className="mt-4">
+              <PrimaryButton
+                variant="dark"
+                icon={false}
+                onClick={() => {
+                  void dispatch(fetchAccountSettings());
+                }}
+              >
+                Retry
+              </PrimaryButton>
+            </div>
+          </section>
+        ) : account.status === 'error' ? (
           <section
             role="alert"
             className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-card"

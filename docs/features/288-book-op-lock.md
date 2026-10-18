@@ -510,7 +510,8 @@ It uses the same opaque-range tokenizer as `state-json-lock.guard.test.ts`. The 
   The rule:
   - Each must contain `withBookOp(`, `withBookOps(` or `runBookJob(`, or carry an allowlist entry
     `{file, route, reason}`.
-  - The reasons are `no-book-write` and `cross-book-walker`.
+  - The reasons are `no-book-write`, `cross-book-walker` and `job-lease` (the handler writes the
+    book only on behalf of a live job whose lease is held: `POST /:id/analysis/pause`).
   - Inside a `withBookOp*` callback, `runBookJob(`, `withDesignLock(` and `withLibraryVoiceLock(` are
     forbidden.
   - Entries carry `pending:T<n>` during the PR. The final assertion is that none remain.
@@ -699,7 +700,7 @@ It uses the same opaque-range tokenizer as `state-json-lock.guard.test.ts`. The 
   `book-state.rename-analysis-busy.test.ts` (updated), `analysis.rename-midrun.test.ts` (unchanged
   out-of-process defence), and every cast-lock, state-json-lock and voice-library guard/race suite.
   `npm run check:cycles` passes.
-- The guard allowlist holds only `no-book-write` and `cross-book-walker` entries.
+- The guard allowlist holds only `no-book-write`, `cross-book-walker` and `job-lease` entries.
 - **No on-box acceptance is owed.** Every behaviour is provable by fault injection.
 
 ## Out of scope

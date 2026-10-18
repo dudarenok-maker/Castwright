@@ -37,7 +37,7 @@
 
    ALLOWLISTS are keyed on FILE AND COUNT, both directions (a file that scans
    clean must not be listed; a count that drifts either way fails). The
-   allowlist holds only `no-book-write` / `cross-book-walker` (G2) and the
+   allowlist holds only `no-book-write` / `cross-book-walker` / `job-lease` (G2) and the
    permanent `onlyBookDir` exemption (G4); `ALLOW_PENDING` is false, so a
    `pending:T<n>` entry (the reason used while #3711 was converting sites) fails.
 
@@ -54,7 +54,11 @@
      - a new long job in a file G5 doesn't list;
      - an un-awaited book-writing child left outside `done`;
      - a writer reached through a helper (call-graph-blind);
-     - a quick op misclassified as `no-book-write`;
+     - a GET handler that writes: G2 scans only non-GET routes (plus the export /
+       portable GETs), so e.g. `GET /:bookId/state`'s `updateStateJsonLocked`
+       migration write is unguarded (safe today only because an absent state.json
+       is skipped, not written);
+     - a quick op misclassified as `no-book-write` or `job-lease`;
      - the right lock with the wrong id;
      - a `peekBook` result fed into a write.
    Lock IDENTITY is never checked, only PRESENCE. */
@@ -589,9 +593,11 @@ function allow(rows: Array<[string, number, string]>): Map<string, AllowEntry> {
 /* G1: file -> unconverted mover sites. A file that scans clean must not be listed. */
 const ALLOW_G1 = allow([]);
 /* G2: file -> guarded handlers with no book-op / runBookJob. Final reasons are
-   `no-book-write` / `cross-book-walker`. */
+   `no-book-write`, `cross-book-walker`, and `job-lease` (the handler writes the
+   book, but only on behalf of a live job whose `runBookJob` lease is held, so a
+   move is refused for the whole write). */
 const ALLOW_G2 = allow([
-  ['routes/analysis.ts', 1, 'no-book-write'], // POST /:id/analysis/pause: in-memory abort only
+  ['routes/analysis.ts', 1, 'job-lease'], // POST /:id/analysis/pause: writes analysis-state.json (persistTerminalSnapshot) only for a live, un-aborted job, which holds its analysis lease
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
@@ -620,7 +626,7 @@ const ALLOW_G4B = allow([
    for that book, or is that book's registered job). Added to the allowlist count. */
 const PERMANENT_G4B = new Map<string, number>([['routes/voices.ts', 1]]);
 
-const VALID_REASON = /^(?:pending:T(?:[2-9]|10)\b.*|no-book-write|cross-book-walker)$/;
+const VALID_REASON = /^(?:pending:T(?:[2-9]|10)\b.*|no-book-write|cross-book-walker|job-lease)$/;
 
 /** Compare `found` (file -> details) against `allow` in BOTH directions.
  *  `allowPending` is a PARAMETER (default: the real switch) so the negative

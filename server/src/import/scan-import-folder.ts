@@ -364,7 +364,9 @@ export async function importPortableBundle(
         const bookId = await idForNewBook(title, renamedTo === undefined);
         await writeStagedState(bookId, title);
         await mkdir(dirname(bookDir), { recursive: true });
-        await renameWithRetry(stage, bookDir);
+        /* Placed under the target's state-json lock too (#3625: every bundle
+           promotion holds it), so no state.json writer of that path interleaves. */
+        await withStateJsonLock(stateJsonPath(bookDir), () => renameWithRetry(stage, bookDir));
         return {
           bookId,
           targetPath: bookDir,

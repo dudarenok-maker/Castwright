@@ -290,16 +290,19 @@ function countRawStateWrites(
    from 14 to 10 and giving book-op-lock.ts its 10; #3711 task 7 then added
    book-op-lock.ts +1 (withBookOpAtDir's bookId read) and re-staged the bundle
    importer, scan-import-folder.ts 1 to 5 (two staging-dir sites, three
-   overwrite reads/lock keys) — reads and lock keys, not new write sites). Asserted BOTH
+   overwrite reads/lock keys); the merge with #3625 then added book-state.ts +1
+   (DELETE's stateless-folder lock key, 10 to 11) and scan-import-folder.ts +1
+   (the fresh placement keys the target's state.json, 5 to 6) — reads and lock
+   keys, not new write sites). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'cover/store.ts': 2,
   'cover/upload.ts': 2,
-  'import/scan-import-folder.ts': 5,
+  'import/scan-import-folder.ts': 6,
   'routes/analysis.ts': 4,
-  'routes/book-state.ts': 10,
+  'routes/book-state.ts': 11,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,

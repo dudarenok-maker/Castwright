@@ -8,8 +8,10 @@
         → multipart/form-data with `file` carrying the bundle.
         → 201 { bookId, targetPath, importedFiles } on success.
         → 400 with { error, reason } on a malformed bundle.
-        → 409 with { error: 'bundle_conflict', existingPath } when
-              onConflict='fail' and the target already exists.
+        → 409 with { error: 'bundle_conflict', message } when
+              onConflict='fail' and the target already exists (or an
+              overwrite's target stopped being the book it named). The body
+              names no path; the raw conflict goes to the server log.
 
    The POST honours the same 50 MB multipart limit as /api/import (the
    manuscript-upload route) — see server/src/routes/import.ts:40. Bundles
@@ -124,9 +126,14 @@ portableImportRouter.post(
       return res.status(201).json(result);
     } catch (e) {
       if (e instanceof BundleConflictError) {
-        return res
-          .status(409)
-          .json({ error: 'bundle_conflict', existingPath: e.existingPath, message: e.message });
+        /* Fixed sentence: the error's own message and `existingPath` name the
+           absolute workspace path, and this app is served over LAN HTTPS
+           (#3714 review pass 1). The raw conflict is logged. */
+        console.warn('[portable-import] conflict', e.message);
+        return res.status(409).json({
+          error: 'bundle_conflict',
+          message: 'A book with this title already exists in the library.',
+        });
       }
       if (e instanceof BookBusyError) {
         /* #3711 -- an overwrite of a book a long job is registered for. */

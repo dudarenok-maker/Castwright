@@ -154,7 +154,7 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
@@ -2985,6 +2985,12 @@ export interface AnalysisJob {
       hand-built test job. */
   settled?: Promise<void>;
   resolveSettled?: () => void;
+  /** #3711 (PR #3714 review pass 1) — settles when endJob's DETACHED terminal writes
+      (the last-outcome file, the paused/halted snapshot, the snapshot cleanup) have
+      landed. `settled` waits for it too: those writes resolve the book's folder and
+      then write it, so the lease must outlive them or a rename can slip in between
+      and the write recreates the vacated folder. */
+  terminalWrites?: Promise<void>;
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -3054,8 +3060,14 @@ export function releaseWork(job: AnalysisJob): void {
   job.liveWork = (job.liveWork ?? 0) - 1;
   if (job.kind === 'main' && job.ended && job.liveWork <= 0) {
     leaveWriters(job);
-    job.resolveSettled?.();
+    settleJob(job);
   }
+}
+
+/** #3711 — resolve `settled` (and so release the route's `runBookJob` lease) once
+    endJob's detached terminal writes have landed, never before. */
+function settleJob(job: AnalysisJob): void {
+  void (job.terminalWrites ?? Promise.resolve()).then(() => job.resolveSettled?.());
 }
 
 /* #3435 decision A — the main writer state for a manuscript: 'live' when a
@@ -3369,10 +3381,10 @@ async function persistTerminalSnapshot(
   } catch (err) {
     /* #3174 — same slow-path-resolve gap as persistRunningSnapshot above:
        withVerifiedBookDir's re-hydrate can throw before the callback runs.
-       This function is called detached at every call site (`void
-       persistTerminalSnapshot(...)`) except the awaited /pause route,
-       which doesn't rely on a rejection either — it just proceeds either
-       way. Non-fatal — log and continue. */
+       endJob does not await this function (it collects it into
+       `job.terminalWrites`, which only gates the job's `settled`), and the
+       awaited /pause route doesn't rely on a rejection either — it just
+       proceeds either way. Non-fatal — log and continue. */
     console.warn('[analysis-state] terminal snapshot resolve failed', err);
   }
 }
@@ -3559,6 +3571,9 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      book renamed away mid-run must never have this write mkdir the dead
      pre-rename folder back into existence. */
   let outcomeWritePromise: Promise<void> | null = null;
+  /* #3711 — every detached write below is collected here and folded into
+     `job.terminalWrites`, which `settled` waits for (see settleJob). */
+  const terminalWrites: Promise<unknown>[] = [];
   if (job.kind === 'main' && (kind === 'result' || kind === 'error')) {
     const dirForOutcome = liveBookDir(job);
     if (dirForOutcome) {
@@ -3613,7 +3628,7 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
            had no production call site. */
         const dir = liveBookDir(job);
         if (dir) {
-          void (async () => {
+          terminalWrites.push((async () => {
             try {
               const verified = await tryResolveVerifiedBookDir({
                 manuscriptId: job.manuscriptId,
@@ -3630,12 +3645,12 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
                  as resumable (see the comment above) — log and continue. */
               console.warn('[analysis-state] stale snapshot delete failed', err);
             }
-          })();
+          })());
         }
       } else if (kind === 'result') {
         const dir = liveBookDir(job);
         if (dir) {
-          void (async () => {
+          terminalWrites.push((async () => {
             try {
               const verified = await tryResolveVerifiedBookDir({
                 manuscriptId: job.manuscriptId,
@@ -3647,20 +3662,20 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
               /* Non-fatal, as the main delete above. */
               console.warn('[analysis-state] subset snapshot delete failed', err);
             }
-          })();
+          })());
         }
       }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
          endpoint returns paused, and the pill renders the Resume
          affordance. */
-      void persistTerminalSnapshot(job, 'paused', finalEv as { code: string; message?: string });
+      terminalWrites.push(persistTerminalSnapshot(job, 'paused', finalEv as { code: string; message?: string }));
     } else if (kind === 'error') {
       /* Halted on a real failure: attribution_drift, cast_incomplete,
          stage1_shrink_refused, unknown_manuscript, or an upstream
          analyzer error. Persist with haltCode + haltReason so the
          cold-boot pill routes the user to the right banner. */
-      void persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string });
+      terminalWrites.push(persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string }));
     }
   }
   /* #3004 — if an outcome write is in flight, don't end the response
@@ -3671,6 +3686,8 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      async .then() callback cannot run until the current synchronous block
      finishes. If we clear() first, the callback finds an empty set and
      res.end() is never called, hanging the response forever. */
+  if (outcomeWritePromise) terminalWrites.push(outcomeWritePromise);
+  job.terminalWrites = Promise.allSettled(terminalWrites).then(() => undefined);
   const subs = Array.from(job.subscribers);
   job.subscribers.clear();
   const endResponsesCallback = () => {
@@ -3698,12 +3715,12 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      running, else when the last one finishes, or at the drain deadline. */
   if (job.kind !== 'main') {
     releaseBusyAndPin(job);
-    job.resolveSettled?.();
+    settleJob(job);
     return;
   }
   if ((job.liveWork ?? 0) <= 0) {
     leaveWriters(job);
-    job.resolveSettled?.();
+    settleJob(job);
     return;
   }
   /* #3711 — the deadline below releases the busy flag and the pin ONLY. It does not
@@ -4593,7 +4610,7 @@ export async function runMainAnalyzerJob(
                (a leaf; nothing inside it takes another lock). */
             const freshStatePath = stateJsonPath(freshBookDir);
             await withStateJsonLock(freshStatePath, async () => {
-              const freshState = await readJson<BookStateJson>(freshStatePath);
+              const freshState = await readStateJsonWithRecovery(freshStatePath);
               if (freshState?.castConfirmed) {
                 await writeStateJsonAtomic(freshStatePath, {
                   ...freshState,
@@ -7218,7 +7235,7 @@ export async function runMainAnalyzerJob(
              per-book state-json lock with the write (a sibling chapter render
              stamps this same file). Leaf lock: nothing inside takes another. */
           await withStateJsonLock(statePath, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             /* Preserve the user-owned flags — analysis owns chapter titles/
                durations, the user owns `excluded` and `held`. Match on id so a
@@ -7229,10 +7246,16 @@ export async function runMainAnalyzerJob(
                workspace/scan.ts. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+               no path regenerates one), so it rides through by id too; the
+               rebuild below would otherwise drop it and the next scan would
+               mint a fresh random uuid for every chapter (#3625). */
+            const prevUuidById = new Map<number, string>();
             const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.uuid) prevUuidById.set(c.id, c.uuid);
               if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
@@ -7249,6 +7272,7 @@ export async function runMainAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
+                  uuid: prevUuidById.get(c.id),
                   titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,
@@ -8054,7 +8078,7 @@ export async function runSubsetAnalyzerJob(
        the result gate, since decision F never demotes it. A state.json that
        belongs to another manuscript (a stale path) counts as not confirmed. */
     const loadDir = liveBookDir(job);
-    const loadState = loadDir ? await readJson<BookStateJson>(stateJsonPath(loadDir)).catch(() => null) : null;
+    const loadState = loadDir ? await readStateJsonWithRecovery(stateJsonPath(loadDir)).catch(() => null) : null;
     const bookReachedConfirm = reachedConfirm(loadState?.manuscriptId === manuscriptId ? loadState : null, cache);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
@@ -9203,17 +9227,23 @@ export async function runSubsetAnalyzerJob(
              per-book state-json lock with the write (a sibling chapter render
              stamps this same file). Leaf lock: nothing inside takes another. */
           await withStateJsonLock(statePath, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             /* Preserve the user-owned `excluded` + `held` flags across the
                subset re-attribution — `held` (the "Not queued" intent) isn't
                re-derivable from disk, so it must ride through here. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+               no path regenerates one), so it rides through by id too; the
+               rebuild below would otherwise drop it and the next scan would
+               mint a fresh random uuid for every chapter (#3625). */
+            const prevUuidById = new Map<number, string>();
             const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.uuid) prevUuidById.set(c.id, c.uuid);
               if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
@@ -9230,6 +9260,7 @@ export async function runSubsetAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
+                  uuid: prevUuidById.get(c.id),
                   titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,

@@ -50,6 +50,7 @@ import {
   peekBook,
   removeBookFolder,
   withBookOp,
+  withBookPathClaim,
   type BookJobKind,
 } from '../workspace/book-op-lock.js';
 import {
@@ -57,7 +58,7 @@ import {
   sameFingerprint,
   type ManuscriptFingerprint,
 } from '../workspace/manuscript-fingerprint.js';
-import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   readStateJsonWithRecovery,
   updateStateJsonLocked,
@@ -1719,9 +1720,16 @@ bookStateRouter.post(
          choice on disk; audio cleanup is best-effort below. #3700 — the toggle
          is applied to a fresh read inside the state-json lock, not the
          resolve-time snapshot, so a sibling render's stamp isn't reverted. */
+        /* #3625 — the chapter can vanish (a restructure) while this waits on the
+           lock: then nothing is written and the answer is 404, not a 200 built
+           from the stale resolve-time state. */
+        let chapterGone = false;
         const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
           const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-          if (i === -1) return null;
+          if (i === -1) {
+            chapterGone = true;
+            return null;
+          }
           current = fresh.chapters[i];
           updated = { ...current, excluded: excluded ? true : undefined };
           return {
@@ -1734,6 +1742,7 @@ bookStateRouter.post(
            after we resolved it. Nothing was written, so answer 404 and touch
            neither the live ManuscriptRecord nor the audio below. */
         if (!persisted) return { status: 404, body: { error: 'Book not found.' } };
+        if (chapterGone) return { status: 404, body: { error: 'Chapter not found.' } };
 
         /* Propagate to the live ManuscriptRecord if it's loaded. The
          analysis route reads chapterHints directly from this; without
@@ -1821,9 +1830,13 @@ bookStateRouter.post(
         let updated = { ...state.chapters[idx], held: held ? true : undefined };
 
         /* #3700 — applied to a fresh read inside the state-json lock. */
+        let chapterGone = false;
         const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
           const i = fresh.chapters.findIndex((c) => c.id === chapterId);
-          if (i === -1) return null;
+          if (i === -1) {
+            chapterGone = true; // vanished while waiting on the lock (#3625)
+            return null;
+          }
           updated = { ...fresh.chapters[i], held: held ? true : undefined };
           return {
             ...fresh,
@@ -1832,6 +1845,7 @@ bookStateRouter.post(
           };
         });
         if (!persisted) return { status: 404, body: { error: 'Book not found.' } };
+        if (chapterGone) return { status: 404, body: { error: 'Chapter not found.' } };
 
         return {
           status: 200,
@@ -1857,6 +1871,26 @@ bookStateRouter.post(
    before calling. Idempotent: 204 even if the book isn't found, so a
    refresh-then-delete doesn't surface a noisy error. */
 bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
+  /* Plan 102 — prune any queue entries that target the just-deleted book.
+     Same write transaction shape (read → mutate → atomic write) as the
+     directory drop below; runs after the directory is gone so a partial
+     failure can't leave orphaned entries pointing at a still-extant book.
+     Best-effort: if the queue write fails, log + continue — the book is
+     already deleted and the stale entries surface on the next read as
+     "book not found" rather than corrupting the queue. */
+  const pruneQueue = async (): Promise<void> => {
+    try {
+      const queue = await readQueueFile(queueJsonPath());
+      const pruned = pruneByBook(queue, req.params.bookId);
+      if (pruned.entries.length !== queue.entries.length) {
+        await writeQueueFile(queueJsonPath(), pruned);
+      }
+    } catch (queueErr) {
+      console.warn(
+        `[book-state] queue prune failed for ${req.params.bookId}: ${(queueErr as Error).message}`,
+      );
+    }
+  };
   try {
     /* #3711 — the removal holds the book's `book-op` lock (and, inside
        `removeBookFolder`, the state-json lock), so a writer queued behind it
@@ -1877,6 +1911,23 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
       return { state: book.state, partly, removed };
     });
     if (outcome === BOOK_GONE) {
+      /* #3625 — an `unreadable` or `not_analysed` book has no parseable state
+         carrying a bookId, so `withBookOp` cannot resolve it: its row id comes
+         from its folder path, so resolve it the way the scan does. No route can
+         resolve such a book by id, so no `book-op` holder or long job can be
+         writing it; the folder is judged and removed under the workspace path
+         claim (every creator and mover holds it, so nothing can turn the folder
+         into a real book or move one into that path meanwhile) and its
+         state-json lock. */
+      const statelessRemoved = await withBookPathClaim(async () => {
+        const statelessDir = await findStatelessBookDirByBookId(req.params.bookId);
+        if (!statelessDir) return false;
+        await withStateJsonLock(stateJsonPath(statelessDir), () =>
+          rm(statelessDir, { recursive: true, force: true }),
+        );
+        return true;
+      });
+      if (statelessRemoved) await pruneQueue();
       res.status(204).end();
       return;
     }
@@ -1888,24 +1939,7 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
     if (outcome.removed === 'removed' && state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
     }
-    /* Plan 102 — prune any queue entries that target the just-deleted book.
-       Same write transaction shape (read → mutate → atomic write) as the
-       directory drop above; runs after the directory is gone so a partial
-       failure can't leave orphaned entries pointing at a still-extant book.
-       Best-effort: if the queue write fails, log + continue — the book is
-       already deleted and the stale entries surface on the next read as
-       "book not found" rather than corrupting the queue. */
-    try {
-      const queue = await readQueueFile(queueJsonPath());
-      const pruned = pruneByBook(queue, req.params.bookId);
-      if (pruned.entries.length !== queue.entries.length) {
-        await writeQueueFile(queueJsonPath(), pruned);
-      }
-    } catch (queueErr) {
-      console.warn(
-        `[book-state] queue prune failed for ${req.params.bookId}: ${(queueErr as Error).message}`,
-      );
-    }
+    await pruneQueue();
     if (outcome.partly) {
       const refusal = bookOpRefusal(outcome.partly, 'delete')!;
       return res.status(refusal.status).json(refusal.body);
@@ -2017,7 +2051,7 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
        chapter. Falls back to the stored chapterId when the record predates
        uuids or the chapter has since been deleted. */
     if (progress?.chapterUuid) {
-      const current = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+      const current = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
       const match = current?.chapters.find((c) => c.uuid === progress.chapterUuid);
       if (match && match.id !== progress.chapterId) {
         return res.json({ ...progress, chapterId: match.id });
@@ -2116,7 +2150,7 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
        current chapterId) so GET can re-derive the chapterId after a
        restructure. Absent when the chapterId doesn't map to a chapter (or
        a legacy book without uuids) — GET then keeps the stored chapterId. */
-    const stateForUuid = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+    const stateForUuid = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
     const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
     /* fs-15 shelf controls — merge the prior record's shelf flags rather than
        clobbering them: `finished` is sticky (a user "Mark as finished" survives

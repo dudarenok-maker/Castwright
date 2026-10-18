@@ -686,7 +686,9 @@ async function scanBook(
   const stateJson = stateJsonPath(bookDir);
   const castJson = castJsonPath(bookDir);
   const dotDir = dotAudiobook(bookDir);
-  const hasState = existsSync(stateJson);
+  /* A stranded book (main absent, a backup beside it) still has state: the
+     recovering read below returns the backup (#3625). */
+  const hasState = existsSync(stateJson) || existsSync(`${stateJson}.bak.1`);
   const hasCast = existsSync(castJson);
 
   // Folder with neither manuscript nor state — skip as not-a-book.
@@ -696,10 +698,13 @@ async function scanBook(
   let unreadable = false;
   if (hasState) {
     try {
-      state = await readJson<BookStateJson>(stateJson);
+      state = await readStateJsonWithRecovery(stateJson);
     } catch {
       unreadable = true;
     }
+    /* State files exist but none parsed (a stranded book whose backups are all
+       torn): the same total loss as a torn main, so it reads the same. */
+    if (!state) unreadable = true;
   }
 
   const bookId = state?.bookId ?? makeBookId(author, series, title);
@@ -964,6 +969,31 @@ export async function findBookByBookId(bookId: string): Promise<{
   return findBookBy((state) => state.bookId === bookId);
 }
 
+/** Locate the folder of a book with no PARSEABLE state - `unreadable` (state files
+    exist, none parse) or `not_analysed` (a manuscript, no state) - by its bookId.
+    Such a row's id is derived from its folder path, not from state, so
+    `findBookByBookId` (which matches parseable state) can never find it. Walks
+    the SAME real directory listing the scan does and only compares the derived id
+    with the caller's, so the caller's string never becomes a path segment. */
+export async function findStatelessBookDirByBookId(bookId: string): Promise<string | null> {
+  ensureWorkspace();
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        if (makeBookId(authorName, seriesName, titleName) !== bookId) continue;
+        /* scanBook inspects the SANITISED folder (bookDirByDisplay); judge and
+           remove the same one, so skip a listed name that sanitises to another
+           folder (`Vol..1` -> `Vol_1`, #3625 delta review 3). */
+        const listed = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (bookDirByDisplay(authorName, seriesName, titleName) !== listed) continue;
+        const book = await scanBook(authorName, seriesName, titleName);
+        if (book?.status === 'unreadable' || book?.status === 'not_analysed') return listed;
+      }
+    }
+  }
+  return null;
+}
+
 /** Locate a book by its manuscriptId — used to re-hydrate the in-memory
     manuscript record after a server restart so the analysis route can
     resume from cache. */
@@ -998,7 +1028,7 @@ export async function listAllChangeLogs(): Promise<BookChangeLogEvents[]> {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(dir)).catch(() => null);
+        const state = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
         if (!state) continue;
         const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(
           () => null,

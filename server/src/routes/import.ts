@@ -410,8 +410,11 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        state.json write", so a rename into the same path or a twin import cannot
        interleave. The id is `makeBookId(...)` unless a book RENAMED away from
        this path still holds it; then the title slug gets a `-2` suffix, so two
-       books never share an id. */
-    const created = await withBookPathClaim(async () => {
+       books never share an id. Inside the claim, the existing-book check, the
+       folder creation and the state.json write are ONE span under the target's
+       state-json lock (#3625): a second confirm of the same title cannot pass the
+       check and overwrite the first's state.json. */
+    const created = await withBookPathClaim(() => withStateJsonLock(stateJsonPath(bookDir), async () => {
       if (existsSync(bookDir)) return null;
       const bookId = await mintBookId(author, series, title);
       await mkdir(bookDir, { recursive: true });
@@ -447,13 +450,9 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
         language,
       };
-      /* #3700 — every state.json write goes through the per-book lock, a fresh
-         create included, so it can never interleave with a sibling writer. */
-      await withStateJsonLock(stateJsonPath(bookDir), () =>
-        writeStateJsonAtomic(stateJsonPath(bookDir), state),
-      );
+      await writeStateJsonAtomic(stateJsonPath(bookDir), state);
       return bookId;
-    });
+    }));
     if (created === null) {
       const suggestedTitle = `${title} (2)`;
       return res.status(409).json({ error: 'slug_collision', suggestedTitle });

@@ -3591,14 +3591,16 @@ paths:
                   reason: { type: string }
                   message: { type: string }
         '409':
-          description: Target directory already exists and onConflict='fail'
+          description: |
+            Target directory already exists and onConflict='fail' (or an
+            overwrite's target stopped being the book it named). The body
+            names no path.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error: { type: string, enum: [bundle_conflict] }
-                  existingPath: { type: string }
                   message: { type: string }
 
   /api/books/{bookId}/share:
@@ -5452,6 +5454,17 @@ components:
             checkout writing the shared file) or a write succeeds (any of
             the five settings writers). Server-computed — ignored if sent
             on a PUT.
+        settingsFileUnreadable:
+          type: boolean
+          readOnly: true
+          description: |
+            True while the last read of user-settings.json failed with an
+            error that is not a parse failure (EPERM / EBUSY / EIO: another
+            program is locking it, or its permissions deny reading). Nothing
+            is reset and the file is not marked corrupt, but the values shown
+            may be factory defaults and every save is refused until a read
+            succeeds. Server-computed — ignored if sent on a PUT. Always sent
+            by the server; optional in the schema so older fixtures stay valid.
 
     AnalyzerModelRateLimits:
       type: object
@@ -5587,7 +5600,7 @@ components:
       type: object
       description: |
         Partial update payload. Read-only fields (apiKeyStatus,
-        workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+        workspaceRoot, workspaceSource, corruptSettingsFile, settingsFileUnreadable) are ignored.
         Any `geminiApiKey`-shaped field is dropped — the API key only lives
         in server/.env.
         #3141 step 2 — `ollamaUrl`, `analyzerPhase0Model`,

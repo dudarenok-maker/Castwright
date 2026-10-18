@@ -41,7 +41,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
   resolveVoiceAssignment,
   qwenStorageKey,
@@ -267,7 +267,7 @@ async function aggregateVoices(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
@@ -644,7 +644,7 @@ export async function hasClonedSlotAmongMatches(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;
@@ -681,7 +681,7 @@ export async function findClonedVoiceIdsAmongMatches(
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (excludeBookDir && bookDir === excludeBookDir) continue;
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;
@@ -901,14 +901,17 @@ export async function forEachMatchingCastCharacter(
     });
   }
   let updated = 0;
-  /* #3711 -- books already handled, by bookId: a sibling renamed INTO a directory
-     the walk has yet to reach would otherwise be visited a second time. */
+  /* #3711 -- books already handled, by their RESOLVED folder: a sibling renamed
+     INTO a directory the walk has yet to reach resolves to the folder already
+     written and is not visited a second time, while the twins of a duplicated
+     bookId resolve to different folders and both get the write (PR #3714 review
+     pass 1 -- a bookId key skipped the second twin). */
   const seen = new Set<string>();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
         if (seriesFilter) {
           if (state.isStandalone === true) continue;
@@ -946,8 +949,6 @@ export async function forEachMatchingCastCharacter(
           updated += await writeBook(bookDir);
           continue;
         }
-        if (seen.has(state.bookId)) continue;
-        seen.add(state.bookId);
         /* The book's write runs under ITS OWN book-op (one at a time, never
            nested), resolved on the fresh state: the scan above was lock-free, so
            the scope filter is re-applied here and a sibling renamed out of the
@@ -955,6 +956,8 @@ export async function forEachMatchingCastCharacter(
         const bookUpdated = await withBookOp(
           state.bookId,
           async (b) => {
+            if (seen.has(b.bookDir)) return 0;
+            seen.add(b.bookDir);
             if (!b.state.castConfirmed) return 0;
             if (seriesFilter) {
               if (b.state.isStandalone === true) return 0;

@@ -46,6 +46,25 @@ vi.mock('../store/manuscripts.js', async (importOriginal) => {
     },
   };
 });
+/* `__baj_outcome_gate` / `__baj_halted_gate`: park endJob's detached terminal writes
+   (the last-outcome file, the halted snapshot) AFTER their identity check, so a test
+   can observe the lease while they are still pending. */
+vi.mock('../store/analysis-state.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/analysis-state.js')>();
+  return {
+    ...actual,
+    writeAnalysisLastOutcome: async (...args: Parameters<typeof actual.writeAnalysisLastOutcome>) => {
+      const gate = (globalThis as G).__baj_outcome_gate as Promise<void> | undefined;
+      if (gate) await gate;
+      return actual.writeAnalysisLastOutcome(...args);
+    },
+    writeAnalysisState: async (...args: Parameters<typeof actual.writeAnalysisState>) => {
+      const gate = (globalThis as G).__baj_halted_gate as Promise<void> | undefined;
+      if (gate && args[1].state === 'halted') await gate;
+      return actual.writeAnalysisState(...args);
+    },
+  };
+});
 vi.mock('../analyzer/select-analyzer.js', async () => {
   const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
     '../analyzer/select-analyzer.js',
@@ -362,6 +381,55 @@ describe('the analysis lease is released only when the tracked units settle (#37
     expect(bookJobKinds(s.bookId)).toEqual([]);
     expect((await renameOf(s)).status).toBe(204);
     expect(existsSync(s.newDir)).toBe(true);
+  });
+});
+
+describe("the analysis lease covers endJob's detached terminal writes (#3714 review pass 1)", () => {
+  it('a failed run holds the book until its last-outcome file and halted snapshot have landed', async () => {
+    const s = await seedBook('terminal-writes');
+    const outcome = gate();
+    const halted = gate();
+    const entered = gate();
+    g.__baj_outcome_gate = outcome.promise;
+    g.__baj_halted_gate = halted.promise;
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          entered.open();
+          throw new Error('phase 0 failed for this test');
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const run = request(app)
+      .post(`/api/manuscripts/${s.manuscriptId}/analysis`)
+      .send({})
+      .then((r) => r);
+    await entered.promise;
+    await vi.waitFor(() => expect(analysisModule.isAnalysisJobRunning(s.manuscriptId)).toBe(false));
+    /* Both writes are parked past their identity check: the book is still held. */
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    let refused = await renameOf(s);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('book_busy');
+
+    outcome.open();
+    await run;
+    /* The outcome landed, the halted snapshot has not: still held. */
+    await vi.waitFor(() =>
+      expect(existsSync(join(s.bookDir, '.audiobook', 'analysis-last-outcome.json'))).toBe(true),
+    );
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    refused = await renameOf(s);
+    expect(refused.status).toBe(409);
+
+    halted.open();
+    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    expect((await renameOf(s)).status).toBe(204);
+    /* Both files moved with the book; the old folder was not recreated. */
+    expect(existsSync(s.bookDir)).toBe(false);
+    expect(existsSync(join(s.newDir, '.audiobook', 'analysis-last-outcome.json'))).toBe(true);
+    expect(existsSync(join(s.newDir, '.audiobook', 'analysis-state.json'))).toBe(true);
   });
 });
 

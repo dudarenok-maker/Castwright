@@ -12,7 +12,7 @@ import { MixedHeading } from '../components/primitives';
 import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { saveAccountSettings } from '../store/account-slice';
+import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import {
   ModelControlPill,
@@ -111,6 +111,7 @@ function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstal
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
   const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? {});
+  const settingsUnreadable = useAppSelector((s) => !!s.account.settingsFileUnreadable);
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
@@ -130,6 +131,26 @@ export function ModelManagerView() {
           into the GPU.
         </p>
       </div>
+
+      {/* #3625 - while the settings file is unreadable the values below (keep-alive,
+          the form) are boot defaults and saving would overwrite the real file; the
+          editors are disabled, and Retry re-fetches without a full reload. */}
+      {settingsUnreadable && (
+        <section role="alert" className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 shadow-card">
+          <p className="text-sm text-rose-900/85">
+            Your settings can't be read right now, so saving is off until they load. Close any program that might be
+            locking <code className="font-mono">user-settings.json</code>, then retry.
+          </p>
+          <button
+            type="button"
+            data-testid="model-manager-settings-retry"
+            onClick={() => void dispatch(fetchAccountSettings())}
+            className="mt-3 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:bg-ink/5"
+          >
+            Retry
+          </button>
+        </section>
+      )}
 
       {/* ONE side-nav rail over every section (mirrors Account / Advanced).
           The settings form is rendered embedded so it folds its own sections
@@ -589,6 +610,9 @@ function ModelRow({
   onRemove: () => void;
 }) {
   const dispatch = useAppDispatch();
+  /* #3625 - keep-alive saves the WHOLE map; while the settings file is unreadable the
+     map is the boot default, so a save would replace the user's real one. */
+  const settingsUnreadable = useAppSelector((s) => !!s.account.settingsFileUnreadable);
   const [installerOpen, setInstallerOpen] = useState(false);
   const [keepAliveSaved, setKeepAliveSaved] = useState(false);
   const keepAliveSavedTimeoutRef = useRef<number | null>(null);
@@ -658,6 +682,7 @@ function ModelRow({
      input (blur / Enter) and the reset pill all route through here — otherwise
      a save gives no visible signal at all. */
   const saveKeepAlive = (next: Record<string, number>) => {
+    if (settingsUnreadable) return;
     void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(() => {
       setKeepAliveSaved(true);
       if (keepAliveSavedTimeoutRef.current !== null) {
@@ -756,6 +781,7 @@ function ModelRow({
                 type="number"
                 data-testid={`keepalive-${item.id}`}
                 defaultValue={item.keepAliveSeconds ?? 0}
+                disabled={settingsUnreadable}
                 onBlur={(e) => commitKeepAlive(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') commitKeepAlive(e.currentTarget.value);
@@ -768,6 +794,7 @@ function ModelRow({
                 <button
                   type="button"
                   data-testid={`keepalive-reset-${item.id}`}
+                  disabled={settingsUnreadable}
                   onClick={() => {
                     const next = { ...keepAliveMap };
                     delete next[analyzerModel];

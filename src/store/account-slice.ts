@@ -43,6 +43,7 @@ const initialState: AccountState = {
   workspaceRoot: '',
   workspaceSource: 'default',
   corruptSettingsFile: false,
+  settingsFileUnreadable: false,
   status: 'idle',
   error: null,
   hydrated: false,

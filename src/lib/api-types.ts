@@ -3809,6 +3809,16 @@ export interface components {
              *     on a PUT.
              */
             readonly corruptSettingsFile: boolean;
+            /**
+             * @description True while the last read of user-settings.json failed with an
+             *     error that is not a parse failure (EPERM / EBUSY / EIO: another
+             *     program is locking it, or its permissions deny reading). Nothing
+             *     is reset and the file is not marked corrupt, but the values shown
+             *     may be factory defaults and every save is refused until a read
+             *     succeeds. Server-computed — ignored if sent on a PUT. Always sent
+             *     by the server; optional in the schema so older fixtures stay valid.
+             */
+            readonly settingsFileUnreadable?: boolean;
         };
         /**
          * @description #3084 — one model's saved analyzer rate limits. Absent fields fall through:
@@ -3915,7 +3925,7 @@ export interface components {
         };
         /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,
-         *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+         *     workspaceRoot, workspaceSource, corruptSettingsFile, settingsFileUnreadable) are ignored.
          *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
          *     in server/.env.
          *     #3141 step 2 — `ollamaUrl`, `analyzerPhase0Model`,
@@ -11212,7 +11222,11 @@ export interface operations {
                     };
                 };
             };
-            /** @description Target directory already exists and onConflict='fail' */
+            /**
+             * @description Target directory already exists and onConflict='fail' (or an
+             *     overwrite's target stopped being the book it named). The body
+             *     names no path.
+             */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11221,7 +11235,6 @@ export interface operations {
                     "application/json": {
                         /** @enum {string} */
                         error?: "bundle_conflict";
-                        existingPath?: string;
                         message?: string;
                     };
                 };
