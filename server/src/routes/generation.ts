@@ -209,7 +209,13 @@ export async function triggerScoring(ctx: {
   });
   const run = registration
     .then(async (reg): Promise<void> => {
-      if (reg !== BOOK_GONE) await reg.done;
+      /* A book that is gone (deleted, or unresolvable by id) is not scored; say
+         so, or a skipped score pass leaves no trace at all. */
+      if (reg === BOOK_GONE) {
+        console.warn(`[generation] render-integrity score pass skipped: book ${ctx.bookId} not found`);
+        return;
+      }
+      await reg.done;
     })
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))

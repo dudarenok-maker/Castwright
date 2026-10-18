@@ -13,7 +13,7 @@
    `releaseWork`) under the real `runBookJob` and the real rename route. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -46,9 +46,9 @@ vi.mock('../store/manuscripts.js', async (importOriginal) => {
     },
   };
 });
-/* `__baj_outcome_gate` / `__baj_halted_gate`: park endJob's detached terminal writes
-   (the last-outcome file, the halted snapshot) AFTER their identity check, so a test
-   can observe the lease while they are still pending. */
+/* `__baj_outcome_gate` / `__baj_halted_gate` / `__baj_paused_gate`: park endJob's
+   detached terminal writes (the last-outcome file, the halted / paused snapshot) AFTER
+   their identity check, so a test can observe the lease while they are still pending. */
 vi.mock('../store/analysis-state.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-state.js')>();
   return {
@@ -61,6 +61,11 @@ vi.mock('../store/analysis-state.js', async (importOriginal) => {
     writeAnalysisState: async (...args: Parameters<typeof actual.writeAnalysisState>) => {
       const gate = (globalThis as G).__baj_halted_gate as Promise<void> | undefined;
       if (gate && args[1].state === 'halted') await gate;
+      const pausedGate = (globalThis as G).__baj_paused_gate as Promise<void> | undefined;
+      if (pausedGate && args[1].state === 'paused') {
+        (globalThis as G).__baj_paused_parked = true;
+        await pausedGate;
+      }
       return actual.writeAnalysisState(...args);
     },
   };
@@ -475,6 +480,120 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     await registered.done;
     expect(bookJobKinds(s.bookId)).toEqual([]);
     expect(existsSync(join(s.bookDir, '.audiobook', 'analysis-state.json'))).toBe(true);
+    expect((await renameOf(s)).status).toBe(204);
+    expect(existsSync(s.bookDir)).toBe(false);
+  });
+
+  it("two endJob calls while a tracked unit runs: the second call's landing does not shed the first's pending write", async () => {
+    /* PR #3714 review pass 2 -- pins the APPEND (not just the re-check loop): both
+       calls happen while `liveWork > 0`, so settlement is decided only afterwards,
+       from whatever `job.terminalWrites` holds by then. */
+    const s = await seedBook('end-twice-live');
+    const { endJob, takeWork, releaseWork, __testRegisterJobForTest } = analysisModule;
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: s.manuscriptId,
+      kind: 'main',
+      bookDir: s.bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    job.settled = new Promise<void>((resolve) => {
+      job.resolveSettled = resolve;
+    });
+    __testRegisterJobForTest(job);
+    const registered = await runBookJob(s.bookId, 'analysis', async () => {
+      await job.settled;
+    });
+    if (registered === BOOK_GONE) throw new Error('book vanished');
+
+    const paused = gate();
+    const halted = gate();
+    g.__baj_paused_gate = paused.promise;
+    g.__baj_halted_gate = halted.promise;
+    takeWork(job); // a tracked unit still running: neither endJob settles the job
+    endJob(job, { kind: 'error', code: 'aborted', message: 'first ending' }); // gated paused snapshot
+    endJob(job, { kind: 'error', code: 'boom', message: 'second ending' }); // gated halted snapshot
+
+    /* Only the SECOND call's write lands... */
+    halted.open();
+    await vi.waitFor(() =>
+      expect(
+        JSON.parse(readFileSync(join(s.bookDir, '.audiobook', 'analysis-state.json'), 'utf8')).state,
+      ).toBe('halted'),
+    );
+    /* ...and the last unit settles. The first call's paused write is still parked. */
+    releaseWork(job);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    expect((await renameOf(s)).status).toBe(409);
+
+    paused.open();
+    await registered.done;
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+    expect((await renameOf(s)).status).toBe(204);
+    expect(existsSync(s.bookDir)).toBe(false);
+  });
+});
+
+describe('POST /:id/analysis/pause holds the lease until its own paused snapshot lands (#3714 review pass 2)', () => {
+  it('a job that ends on its own while the pause write is parked keeps the book held', async () => {
+    const s = await seedBook('pause-write');
+    const { endJob, __testRegisterJobForTest } = analysisModule;
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: s.manuscriptId,
+      kind: 'main',
+      bookDir: s.bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    job.settled = new Promise<void>((resolve) => {
+      job.resolveSettled = resolve;
+    });
+    __testRegisterJobForTest(job);
+    const registered = await runBookJob(s.bookId, 'analysis', async () => {
+      await job.settled;
+    });
+    if (registered === BOOK_GONE) throw new Error('book vanished');
+
+    const paused = gate();
+    g.__baj_paused_gate = paused.promise;
+    const pauseP = Promise.resolve(
+      request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis/pause`).send({}) as unknown as PromiseLike<request.Response>,
+    );
+    await vi.waitFor(() => expect(g.__baj_paused_parked).toBe(true));
+    /* The job ends on its own (a clean teardown: one fast snapshot delete) while
+       the route's paused write is still parked. */
+    endJob(job);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    expect((await renameOf(s)).status).toBe(409);
+
+    paused.open();
+    expect((await pauseP).status).toBe(200);
+    await registered.done;
+    expect(bookJobKinds(s.bookId)).toEqual([]);
     expect((await renameOf(s)).status).toBe(204);
     expect(existsSync(s.bookDir)).toBe(false);
   });

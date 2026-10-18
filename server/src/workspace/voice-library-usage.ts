@@ -145,10 +145,12 @@ export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<vo
      and the scope (still a confirmed cast) re-checked on the fresh state, so a
      book deleted since the walk saw it is skipped; a rename queued behind this
      write lands after it. Books already written are remembered by their
-     RESOLVED folder, not their bookId: a book renamed into a folder the walk
-     has yet to reach resolves to the folder already written and is skipped,
-     while the twins of a duplicated bookId resolve to different folders and
-     both get the write (PR #3714 review pass 1). */
+     RESOLVED folder, not their bookId: a book that moved, between the
+     lock-free scan and its step, into a folder the walk has yet to reach
+     resolves to the folder already written and is skipped there, while the
+     twins of a duplicated bookId resolve to different folders and both get the
+     write (PR #3714 review pass 1). A book that moves into a later folder AFTER
+     its step is reached and cleared again -- harmless, the clear is idempotent. */
   const seen = new Set<string>();
   for await (const { bookDir, state } of walkConfirmedCasts()) {
     if (!state.bookId) {

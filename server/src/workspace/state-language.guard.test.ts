@@ -293,7 +293,9 @@ function countRawStateWrites(
    overwrite reads/lock keys); the merge with #3625 then added book-state.ts +1
    (DELETE's stateless-folder lock key, 10 to 11) and scan-import-folder.ts +1
    (the fresh placement keys the target's state.json, 5 to 6) — reads and lock
-   keys, not new write sites). Asserted BOTH
+   keys, not new write sites; PR #3714 review pass 2 then folded the resolver's
+   and the id-minter's state reads into one read helper in book-op-lock.ts,
+   11 to 10 -- reads, not writes). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
@@ -313,7 +315,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/active-analyses.ts': 1,
   'workspace/auto-backup.ts': 5,
   'workspace/book-dir-guard.ts': 1,
-  'workspace/book-op-lock.ts': 11,
+  'workspace/book-op-lock.ts': 10,
   'workspace/library-cast-scan.ts': 1,
   'workspace/scan.ts': 4,
   'workspace/series-cast-scan.ts': 2,

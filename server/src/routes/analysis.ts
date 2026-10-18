@@ -3696,7 +3696,10 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      res.end() is never called, hanging the response forever. */
   if (outcomeWritePromise) terminalWrites.push(outcomeWritePromise);
   /* A second endJob for the same job APPENDS (it must not replace the first call's
-     collection): settlement waits for every terminal write from every call. */
+     collection): settlement waits for every terminal write of every call made
+     BEFORE `settled` resolved. A call AFTER that is not covered -- the lease is
+     already released and cannot be re-taken here, so its writes run unleased. No
+     production path ends a job a second time after it has settled. */
   job.terminalWrites = Promise.allSettled([job.terminalWrites, ...terminalWrites]).then(() => undefined);
   const subs = Array.from(job.subscribers);
   job.subscribers.clear();
@@ -7469,8 +7472,13 @@ analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) =
        fetch right after pause is guaranteed to see paused state.
        The analyzer's catch-block fires endJob({code:'aborted'})
        asynchronously, which also writes paused state — that write
-       is idempotent with this one (same phase + state). */
-    await persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
+       is idempotent with this one (same phase + state).
+       #3711 — folded into `job.terminalWrites` synchronously, so the job's
+       `settled` (and the route's lease) waits for it even if the job ends on
+       its own while this write is still landing. */
+    const pausedWrite = persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
+    job.terminalWrites = Promise.allSettled([job.terminalWrites, pausedWrite]).then(() => undefined);
+    await pausedWrite;
     job.controller.abort();
     paused = true;
   }

@@ -46,6 +46,7 @@ import {
   BookFolderInUseError,
   BookPartlyDeletedError,
   BookPathTakenError,
+  bookJobKinds,
   moveBookFolder,
   peekBook,
   removeBookFolder,
@@ -1918,7 +1919,11 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
          writing it; the folder is judged and removed under the workspace path
          claim (every creator and mover holds it, so nothing can turn the folder
          into a real book or move one into that path meanwhile) and its
-         state-json lock. */
+         state-json lock. Defence in depth: a long job registered under this id
+         still refuses it (`book_busy`), so a resolve that wrongly came back
+         BOOK_GONE can never delete a book out from under a running job. */
+      const kinds = bookJobKinds(req.params.bookId);
+      if (kinds.length > 0) throw new BookBusyError(kinds);
       const statelessRemoved = await withBookPathClaim(async () => {
         const statelessDir = await findStatelessBookDirByBookId(req.params.bookId);
         if (!statelessDir) return false;

@@ -597,7 +597,7 @@ const ALLOW_G1 = allow([]);
    book, but only on behalf of a live job whose `runBookJob` lease is held, so a
    move is refused for the whole write). */
 const ALLOW_G2 = allow([
-  ['routes/analysis.ts', 1, 'job-lease'], // POST /:id/analysis/pause: writes analysis-state.json (persistTerminalSnapshot) only for a live, un-aborted job, which holds its analysis lease
+  ['routes/analysis.ts', 1, 'job-lease'], // POST /:id/analysis/pause: writes analysis-state.json (persistTerminalSnapshot) only for a live, un-aborted job, which holds its analysis lease until that write lands (it is folded into job.terminalWrites)
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only

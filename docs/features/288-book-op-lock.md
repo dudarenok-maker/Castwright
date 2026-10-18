@@ -61,11 +61,19 @@ Signature: `withBookOp(bookId, fn: (book: BookHandle) => Promise<T>, opts?: { hi
   `null`.
 - It is the only sanctioned pre-lock resolve, for the two-span pattern (below). Nothing it returns may feed a
   write.
+- It writes nothing that a later resolve trusts: no index update, no record heal, no backfill. Its walk does
+  record (or clear) the **duplicate-bookId verdict** (`duplicateBookIds`), an observation of what is on disk
+  whose only effect is to stop the index being written for that id.
 
 #### `resolveBook(bookId, hintDir?)`
 
 A candidate is accepted only if its `.audiobook/state.json` carries `bookId`. It is read with
-`readStateJsonWithRecovery`.
+`readStateJsonWithRecovery`. A state that is absent or does not parse is "not this book". Any other read
+failure (`EBUSY`/`EPERM`/`EIO`, which #3625's reader rethrows on purpose) is **not** absence: it fails the
+resolve with the path-free `BookStateUnreadableError` (raw error to the server log) when it hits the hint, the
+index entry, or a walked folder before the first match (PR #3714 review pass 2). After the first match the walk
+returns that match but is not authoritative (it could not prove the id unique). `mintBookId` /
+`isBookIdTaken` fail closed the same way: an unreadable state's id is unknown, so no id is proved free.
 
 Candidates are tried in order:
 1. `hintDir`.
@@ -73,8 +81,12 @@ Candidates are tried in order:
 3. A full tree walk.
 
 The walk keeps **today's first-match behaviour**: the same order as `findBookBy`, `scan.ts:1020-1055`. If a
-second match exists, it logs a warning naming both paths. The paths go to the server log only. It then seeds
-the index with the first match **(coordinator call)**.
+second match exists, it logs a warning naming both paths (server log only) and records the id as a
+**duplicate**; a duplicated id is **never indexed**, so every resolve of it by id walks and gets the first
+match. Only an **authoritative** locked resolve writes the index and heals the record: the index's own entry,
+or a walk that found exactly one folder and read every other one. A caller's `hintDir` is not authoritative
+(a sweep or walker hinting the second twin must not make it every later resolve's answer -- PR #3714 review
+pass 1). **(coordinator call)**
 
 A live `ManuscriptRecord` is healed only when `rec.bookId === bookId` **(coordinator call)**. Twin books can
 share a `manuscriptId`: a bundle imported under the `rename` strategy keeps the bundle's `manuscriptId`
@@ -86,10 +98,15 @@ These are the only code allowed to rename or remove a book folder. Each takes a 
 `book.held` is false **or the handle is not in a module-private `WeakSet` of live handles** (so a `{ ...book }`
 copy or a hand-built `{ held: true }` object is refused). This capability token replaces AsyncLocalStorage
 (finding f). `moveBookFolder` also refuses a `newDir` that is not under `BOOKS_ROOT`. `removeBookFolder`
-keeps the out-of-process defence: if, under its state-json lock, `state.json` is absent at the handle's dir,
-it re-resolves the book by id (a full walk) and deletes it where it now lives, or resolves `'gone'` (the
-route answers 204) if it is nowhere. `peekBook` writes nothing (no index update, no record heal, no backfill);
-only the locked resolves heal, and they apply the same lazy `audioModelKey` backfill `findBookBy` does.
+keeps the out-of-process defence: under its state-json lock it judges the handle's dir with the **recovering**
+reader (#3625). A state recovered from `.bak.1` (a stranded rotation) or one that no longer parses at all is
+still this book and is removed. Only a state that is **gone** (no main, no backup) or carries a **different
+bookId** means the folder was moved or replaced out of process: it then re-resolves the book by id (a full
+walk) and deletes it where it now lives, or resolves `'gone'` (the route answers 204) if it is nowhere.
+`peekBook` writes nothing a later resolve trusts (no index update, no record heal, no backfill) and never
+adds to or clears the duplicate verdict (an unlocked walk can see one twin while a mover has the other
+mid-rename); only the locked resolves heal, and they apply the same lazy `audioModelKey` backfill
+`findBookBy` does.
 
 **`moveBookFolder(book, newDir, buildNext: (fresh) => BookStateJson)`** runs these steps in order:
 1. Refuses with `BookBusyError(kinds)` if `bookJobKinds(book.bookId)` is non-empty.
@@ -364,6 +381,10 @@ pre-existing, not a move, and out of scope.
 - **Existing duplicates are not refused** *(coordinator call)*. Resolution keeps today's first-match choice,
   plus a server-log warning naming both paths. They stay editable, renamable and deletable as today. No
   regression.
+  - **Caveat:** a duplicate created **out of process after its id was indexed** (for example a copied folder
+    that sorts earlier) is not seen: the indexed folder still verifies, so resolves keep answering it (no
+    walk runs) until a restart or a removal drops the index entry, while the unlocked first-match GET may show the earlier
+    copy. Repairing duplicates is #3713.
 - **New duplicates cannot be minted:**
   - `import.ts:379` and the bundle importer's fresh and `rename` paths (`scan-import-folder.ts:140,217`) call
     `mintBookId` under the claim.
@@ -462,14 +483,16 @@ What remains is out-of-process moves. That is pre-existing, and #3706's absent-s
 
 **j. `resolveBook` fast path.**
 1. `hintDir` (walkers and sweeps).
-2. Else the index, maintained by every resolve, by the movers and by the creators.
+2. Else the index, written only by an **authoritative** locked resolve (the index's own entry, or a walk
+   that found exactly one folder and read every other one) and by the movers. A duplicated id is never
+   indexed.
 3. Either way, verified by **one** `state.json` read.
 
-It falls back to the O(N) walk only on a miss or a verification failure. An autosave is O(1) after the first
-resolve.
+It falls back to the O(N) walk only on a miss or a verification failure. An autosave of a uniquely-held id is
+O(1) after the first resolve; a **duplicated** id walks on every resolve.
 
-**k. Guard** — see below. The blind spots are listed there. The allowlist ends with only `no-book-write` and
-`cross-book-walker` entries, so no no-op wraps are needed.
+**k. Guard** — see below. The blind spots are listed there. The allowlist ends with only `no-book-write`,
+`cross-book-walker` and `job-lease` entries, so no no-op wraps are needed.
 
 **l. Path-keyed busy registries** (`cast-design.ts:793-799`, `single-design.ts:252`, `analysisBusy`)
 **stay correct**, because the path cannot change while their job is registered.

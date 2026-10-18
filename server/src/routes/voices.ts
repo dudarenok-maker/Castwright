@@ -901,11 +901,15 @@ export async function forEachMatchingCastCharacter(
     });
   }
   let updated = 0;
-  /* #3711 -- books already handled, by their RESOLVED folder: a sibling renamed
-     INTO a directory the walk has yet to reach resolves to the folder already
-     written and is not visited a second time, while the twins of a duplicated
-     bookId resolve to different folders and both get the write (PR #3714 review
-     pass 1 -- a bookId key skipped the second twin). */
+  /* #3711 -- books already handled, by their RESOLVED folder: a sibling that
+     moved, between the lock-free scan and its own step, INTO a directory the
+     walk has yet to reach is written once (where it lives now) and skipped when
+     the walk gets there, while the twins of a duplicated bookId resolve to
+     different folders and both get the write (PR #3714 review pass 1 -- a
+     bookId key skipped the second twin). A book that moves into a later
+     directory AFTER its step is reached again and written a second time: every
+     `mutate` is idempotent, so the file ends the same, but `updated` counts that
+     book twice. */
   const seen = new Set<string>();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {

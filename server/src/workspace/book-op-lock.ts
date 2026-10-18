@@ -101,6 +101,17 @@ export class BookPartlyDeletedError extends Error {
   }
 }
 
+/** A book's state.json could not be READ (EBUSY / EPERM / EIO ...). That says
+ *  nothing about whose book the folder holds, so it is never read as "not this
+ *  book" or "id free": the operation fails instead. The raw error (whose message
+ *  embeds the absolute path) goes to the log; this message carries no path. */
+export class BookStateUnreadableError extends Error {
+  constructor() {
+    super("The book's state file could not be read right now (it may be open in another program). Retry in a moment.");
+    this.name = 'BookStateUnreadableError';
+  }
+}
+
 const IN_USE_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 function isInUse(err: unknown): boolean {
@@ -155,6 +166,11 @@ export function __bookDirIndexForTest(): Map<string, string> {
   return bookDirById;
 }
 
+/** Test-only: the duplicate-bookId verdicts. */
+export function __duplicateBookIdsForTest(): Set<string> {
+  return duplicateBookIds;
+}
+
 function listDirNames(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
@@ -178,8 +194,22 @@ function* walkBookDirs(): Generator<string> {
   }
 }
 
+/** The folder's state, or null when it is absent or does not parse (it carries
+ *  no bookId anyone can resolve). Any other read failure (EBUSY / EPERM / EIO,
+ *  which #3625's reader rethrows on purpose) is NOT absence: it is logged in
+ *  full and rethrown as the path-free `BookStateUnreadableError`. */
+async function readStateOrThrow(dir: string): Promise<BookStateJson | null> {
+  try {
+    return await readStateJsonWithRecovery(stateJsonPath(dir));
+  } catch (err) {
+    if (err instanceof SyntaxError) return null;
+    console.warn('[book-op-lock] state.json read failed', err);
+    throw new BookStateUnreadableError();
+  }
+}
+
 async function readOwnedState(dir: string, bookId: string): Promise<BookStateJson | null> {
-  const raw = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
+  const raw = await readStateOrThrow(dir);
   return raw && raw.bookId === bookId ? raw : null;
 }
 
@@ -227,7 +257,13 @@ function healIndexAndRecord(bookId: string, bookDir: string, state: BookStateJso
  *  (a second match is logged, server-log only, and the first wins). `heal`
  *  (locked callers only) lets an authoritative resolve write the index and the
  *  record. Without a hint, a duplicated bookId therefore always resolves to the
- *  first match. */
+ *  first match.
+ *
+ *  A read failure (`BookStateUnreadableError`) is never "not this book": on a
+ *  hint or index candidate, or on a walked folder BEFORE the first match (it may
+ *  be the first match), it fails the resolve. After the first match the walk
+ *  returns that match but is not authoritative -- it could not prove the id is
+ *  unique, so it neither clears a duplicate verdict nor writes the index. */
 async function resolveBook(
   bookId: string,
   hintDir: string | undefined,
@@ -247,14 +283,22 @@ async function resolveBook(
   if (heal) bookDirById.delete(bookId);
   let first: { bookDir: string; state: BookStateJson } | null = null;
   let duplicate = false;
+  let unreadable = false;
   for (const dir of walkBookDirs()) {
-    const state = await readOwnedState(dir, bookId);
+    let state: BookStateJson | null;
+    try {
+      state = await readOwnedState(dir, bookId);
+    } catch (err) {
+      if (!first || !(err instanceof BookStateUnreadableError)) throw err;
+      unreadable = true;
+      continue;
+    }
     if (!state) continue;
     if (!first) {
       first = { bookDir: dir, state };
     } else {
       duplicate = true;
-      duplicateBookIds.add(bookId);
+      if (heal) duplicateBookIds.add(bookId);
       if (heal) bookDirById.delete(bookId);
       console.warn(
         `[book-op-lock] duplicate bookId "${bookId}" found at both ${first.bookDir} and ${dir}; using the first`,
@@ -262,15 +306,19 @@ async function resolveBook(
       break;
     }
   }
-  /* A full walk that found ONE folder clears an earlier duplicate verdict (the
-     other twin was deleted or renamed to a different id). */
-  if (first && !duplicate) duplicateBookIds.delete(bookId);
-  return first ? accept(bookId, first.bookDir, first.state, heal, true) : null;
+  /* A full walk that found ONE folder, and read every other one, clears an
+     earlier duplicate verdict (the other twin was deleted or renamed to a
+     different id). Only a LOCKED resolve may add to or clear the verdict: an
+     unlocked peek can see one twin while a mover has the other mid-rename. */
+  if (heal && first && !duplicate && !unreadable) duplicateBookIds.delete(bookId);
+  return first ? accept(bookId, first.bookDir, first.state, heal, !unreadable) : null;
 }
 
-/** A read-only resolve that takes NO lock and WRITES NOTHING (no index update,
- *  no record heal, no backfill). The only sanctioned pre-lock resolve, for the
- *  two-span pattern; nothing it returns may feed a write. */
+/** A read-only resolve that takes NO lock and writes nothing a later resolve
+ *  trusts (no index update, no record heal, no backfill, and no change to the
+ *  duplicate-bookId verdict -- a peek can see one twin while a mover has the
+ *  other mid-rename, so only a locked resolve may add to or clear it). The only sanctioned pre-lock
+ *  resolve, for the two-span pattern; nothing it returns may feed a write. */
 export async function peekBook(
   bookId: string,
   hintDir?: string,
@@ -381,13 +429,24 @@ export async function withBookOps<T>(
 /** A startup sweep's per-book step: lock the book found at `dir` and run `fn`
  *  against the folder it lives in NOW (a rename that queued ahead of the sweep
  *  moves it). A book whose state.json carries no `bookId` cannot be resolved by
- *  any route, so the API cannot move it: `fn` runs on `dir` unlocked. A book that
+ *  any route, so the API cannot move it: `fn` runs on `dir` unlocked. A state that
+ *  cannot be READ (EBUSY / EPERM / EIO) is not "no bookId": the folder is skipped
+ *  (`BOOK_GONE`, logged; the next startup retries) rather than run unlocked. A book that
  *  vanished while the sweep queued is skipped (`BOOK_GONE`). */
 export async function withBookOpAtDir<T>(
   dir: string,
   fn: (bookDir: string) => Promise<T>,
 ): Promise<T | typeof BOOK_GONE> {
-  const raw = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
+  let raw: BookStateJson | null;
+  try {
+    raw = await readStateJsonWithRecovery(stateJsonPath(dir));
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) {
+      console.warn('[book-op-lock] state.json read failed; skipping this folder', err);
+      return BOOK_GONE;
+    }
+    raw = null;
+  }
   if (!raw?.bookId) return fn(dir);
   return withBookOp(raw.bookId, ({ bookDir }) => fn(bookDir), { hintDir: dir });
 }
@@ -533,11 +592,13 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
 
 /* ---- minting ids ----------------------------------------------------------------- */
 
-/** Every bookId some `state.json` under the books root carries. */
+/** Every bookId some `state.json` under the books root carries. A state that
+ *  cannot be READ fails closed (`BookStateUnreadableError`): its id is unknown,
+ *  so no id can be proved free. */
 async function takenBookIds(): Promise<Set<string>> {
   const taken = new Set<string>();
   for (const dir of walkBookDirs()) {
-    const raw = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
+    const raw = await readStateOrThrow(dir);
     if (raw?.bookId) taken.add(raw.bookId);
   }
   return taken;

@@ -322,6 +322,23 @@ recite:
     rename waits (quick) or gets 409 `book_busy` (long) with the old path never
     recreated; also confirm the token is released on every exit path (sync throw,
     early return, rejection) and not before the last child settles.
+31. **A shared index or cache seeded from a caller-supplied hint, so one
+    caller's guess becomes every caller's answer** — PR #3714 pass 1 (#3711,
+    `book-op-lock.ts` `accept()`): a resolve accepted the caller's `hintDir`
+    and then wrote it into the process-wide `bookId -> bookDir` index. A
+    startup sweep locks each walked folder by its own path as the hint, so for
+    a bookId two folders carry it indexed the SECOND twin; every later
+    resolve-by-id then wrote the twin the unlocked first-match GET does not
+    show. The hint was correct for that one caller and wrong as a shared
+    answer. Pass 2 found the same shape reachable through a swallowed read
+    error: a walk that could not read one folder counted as authoritative
+    discovery. Checkable: for every write to a shared map, cache or index,
+    list where the written value came from — authoritative discovery (a full
+    walk that saw every candidate, the key's own verified entry) versus
+    caller-supplied input (a hint, a request param, a walker's current
+    folder, a partial walk) — and confirm only the former writes it; then
+    test by resolving once through the non-authoritative input and asserting
+    the next resolve WITHOUT it still answers what the unlocked reader does.
 
 ### Keeping the catalogue current
 
