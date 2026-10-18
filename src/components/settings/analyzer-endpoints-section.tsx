@@ -250,9 +250,13 @@ export function AnalyzerEndpointsSection() {
     setErrors(result.errors);
     if (!result.input) return;
     setSaveError(null);
+    let created: AnalyzerEndpoint | undefined;
     try {
       if (editing) await dispatch(updateAnalyzerEndpoint({ endpointId: editing.id, input: result.input })).unwrap();
-      else await dispatch(createAnalyzerEndpoint(result.input)).unwrap();
+      else {
+        const settings = await dispatch(createAnalyzerEndpoint(result.input)).unwrap();
+        created = settings.analyzerEndpoints?.find((e) => e.id === withId.id);
+      }
       if (withId.key.trim() !== '') {
         await dispatch(saveAnalyzerEndpointKey({ endpointId: result.input.id, key: withId.key.trim() })).unwrap();
       } else if (result.hostChanged && withId.noKey) {
@@ -261,6 +265,12 @@ export function AnalyzerEndpointsSection() {
       setEditing(undefined);
       void dispatch(fetchAnalyzerCatalog({ refresh: true }));
     } catch (err) {
+      /* #3710 M5 — the endpoint exists now: a retry must update it, not slug a second one (lab-2). */
+      if (created) {
+        const madeId = created.id;
+        setEditing(created);
+        setDraft((d) => ({ ...d, id: madeId }));
+      }
       const { fieldErrors, rest } = splitEndpointIssues(err);
       setErrors(fieldErrors);
       setSaveError(rest);

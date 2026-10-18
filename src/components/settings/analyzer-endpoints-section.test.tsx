@@ -126,6 +126,25 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     expect(vi.mocked(api.createAnalyzerEndpoint).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.putAnalyzerEndpointKey).mock.invocationCallOrder[0]);
   });
 
+  it('#3710 M5 — when the key save fails after the endpoint was created, a retry updates it instead of creating lab-2', async () => {
+    vi.mocked(api.createAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    vi.mocked(api.putAnalyzerEndpointKey).mockRejectedValueOnce(new Error('disk full')).mockResolvedValue(settingsWith([LAB]));
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    renderSection();
+    fireEvent.click(screen.getByTestId('add-endpoint'));
+    fireEvent.change(screen.getByTestId('endpoint-name'), { target: { value: 'Lab' } });
+    fireEvent.change(screen.getByTestId('endpoint-base-url'), { target: { value: 'http://127.0.0.1:8080/v1' } });
+    fireEvent.change(screen.getByTestId('endpoint-context-tokens'), { target: { value: '32768' } });
+    fireEvent.change(screen.getByTestId('endpoint-key'), { target: { value: 'sk-local' } });
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    expect(await screen.findByTestId('endpoint-save-error')).toHaveTextContent('disk full');
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.putAnalyzerEndpointKey).toHaveBeenCalledTimes(2));
+    expect(api.createAnalyzerEndpoint).toHaveBeenCalledTimes(1);
+    expect(api.updateAnalyzerEndpoint).toHaveBeenCalledWith('lab', expect.objectContaining({ id: 'lab' }));
+    expect(vi.mocked(api.putAnalyzerEndpointKey).mock.calls[1]).toEqual(['lab', 'sk-local']);
+  });
+
   it('editing the host with a saved key prompts for the key and blocks Save until it is re-entered', async () => {
     vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([{ ...LAB, baseUrl: 'http://10.0.0.5:8080/v1' }]));
     vi.mocked(api.putAnalyzerEndpointKey).mockResolvedValue(settingsWith([LAB]));
