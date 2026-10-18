@@ -1368,7 +1368,8 @@ async function applyReparse(
      folder-renaming PUT, a DELETE) has finished; the state step at the end
      checks again under the book + state-json locks. The destructive arms cannot
      run inside those locks (they take `cast`, which is ordered before `book`),
-     so this is a gate, not an exclusion. Absent => null (the callers answer 404).
+     so this is a gate, not an exclusion. Absent => null (the callers answer 409 if the book still exists
+     elsewhere, 404 only if it is gone -- see answerAbsentOrMoved).
      The read is the recovering one (#3625): a stranded main with a `.bak.1`
      beside it is still the book. */
   const present = await withStateJsonLock(
@@ -1620,16 +1621,29 @@ async function applyReparse(
   return outcome ? outcome.value : null;
 }
 
-/* #3400 pass 10 -- locate the book AND hold its reparse marker, with the two
-   agreeing. The marker is keyed by folder, so a folder-moving rename that
-   completed between the first lookup and the mark would leave the marker on a
-   dead path. Re-resolving after marking closes that: a rename that checked
-   isReparseBusy before our mark either moved the folder before our re-resolve
-   (we see the new folder, drop the stale mark and mark that one) or reaches its
-   post-mkdir re-check after our mark (and is refused). Returns null for an
-   absent book and 'unstable' if the folder keeps moving; in both the marker is
-   NOT held. Otherwise the marker is held on the returned located.bookDir, and
-   no destructive step has run. */
+/* #3400 pass 10/11 -- locate the book AND hold its reparse marker, with the two
+   agreeing. The marker is keyed by folder, and a folder-moving rename can
+   interleave with this in four ways:
+     1. it completed before our first lookup: we simply see the new folder;
+     2. it completed between the first lookup and our mark: the marker would sit
+        on a dead path, so we re-resolve AFTER marking and, on a different
+        folder, drop the stale mark and mark the new one (bounded retries);
+     3. it passed its post-mkdir isReparseBusy re-check before our mark landed
+        and moves the folder after our re-resolve: nothing here can see it. The
+        presence gate at the top of applyReparse is what catches it, before any
+        destructive step has run; that gate is LOAD-BEARING for this protocol,
+        and the handlers answer its null truthfully (answerAbsentOrMoved: 409
+        retry when the book still exists elsewhere, 404 only when it is gone);
+     4. it passed BOTH isReparseBusy checks before our mark and its directory
+        rename has not landed yet: the presence gate waits on the old folder's
+        state-json key that the rename holds, sees the file gone and answers
+        404 before any arm runs. The book is intact (it just moved), and the
+        outcome is the same on main; this PR does not change it.
+   A rename that checked isReparseBusy before our mark and reaches its
+   post-mkdir re-check after it is refused. Returns null for an absent book and
+   'unstable' if the folder keeps moving; in both the marker is NOT held.
+   Otherwise the marker is held on the returned located.bookDir, and no
+   destructive step has run. */
 async function locateAndMarkReparseBusy(
   bookId: string,
 ): Promise<NonNullable<Awaited<ReturnType<typeof findBookByBookId>>> | null | 'unstable'> {
@@ -1643,11 +1657,23 @@ async function locateAndMarkReparseBusy(
     clearReparseBusy(dir);
     located = fresh;
   }
-  return 'unstable';
+  /* The last re-resolve found the book gone: absent, not unstable. */
+  return located ? 'unstable' : null;
 }
 
 const REPARSE_UNSTABLE_409 =
   'This book was being moved while the manuscript was re-parsed. Try again in a moment.';
+const REPARSE_MOVED_409 =
+  'This book was moved while the manuscript was re-parsed. Try again in a moment.';
+
+/* applyReparse answered null: either the presence gate found no state.json at
+   the folder the request resolved (nothing destructive has run) or the final
+   locked step saw the book elsewhere / gone. Say which, truthfully. */
+async function answerAbsentOrMoved(res: Response, bookId: string) {
+  const now = await findBookByBookId(bookId);
+  if (now) return res.status(409).json({ error: REPARSE_MOVED_409 });
+  return res.status(404).json({ error: 'Book not found.' });
+}
 
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
    manuscript so chapter detection picks up parser-rule updates without
@@ -1733,7 +1759,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       changeLogType: 'reparse',
       changeLogTitle: 'Re-parsed manuscript',
     });
-    if (!payload) return res.status(404).json({ error: 'Book not found.' });
+    if (!payload) return await answerAbsentOrMoved(res, req.params.bookId);
     res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
@@ -1833,7 +1859,7 @@ bookStateRouter.post(
         await unlink(tmpPath).catch(() => {});
         await unlink(backupPath).catch(() => {});
       }
-      if (!payload) return res.status(404).json({ error: 'Book not found.' });
+      if (!payload) return await answerAbsentOrMoved(res, req.params.bookId);
       if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
         await unlink(join(bookDir, oldFile)).catch(() => {});
       }

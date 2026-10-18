@@ -27,7 +27,47 @@ const hooks = vi.hoisted(() => ({
   hold: undefined as undefined | (() => Promise<void>),
   /* runs once, right after the NEXT findBookByBookId resolves, before it returns */
   afterNextFind: undefined as undefined | (() => void),
+  /* runs after EVERY findBookByBookId, with its 1-based call number */
+  onFind: undefined as undefined | ((n: number) => void),
+  findCalls: 0,
+  /* runs once, right after parseManuscript returns (before applyReparse) */
+  afterParse: undefined as undefined | (() => void),
+  /* runs once, right after the rename route's mkdir resolves */
+  afterMkdir: undefined as undefined | (() => void),
 }));
+
+vi.mock('../parsers/index.js', async () => {
+  const real = await vi.importActual<typeof import('../parsers/index.js')>('../parsers/index.js');
+  return {
+    ...real,
+    parseManuscript: async (...a: Parameters<typeof real.parseManuscript>) => {
+      const out = await real.parseManuscript(...a);
+      const h = hooks.afterParse;
+      if (h) {
+        hooks.afterParse = undefined;
+        h();
+      }
+      return out;
+    },
+  };
+});
+
+vi.mock('node:fs/promises', async () => {
+  const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...real,
+    default: real,
+    mkdir: async (...a: Parameters<typeof real.mkdir>) => {
+      const out = await real.mkdir(...a);
+      const h = hooks.afterMkdir;
+      if (h) {
+        hooks.afterMkdir = undefined;
+        h();
+      }
+      return out;
+    },
+  };
+});
 
 /* Resolved per call: the factory result is cached across vi.resetModules(), but
    the real module reads WORKSPACE_DIR at import, which changes every test. */
@@ -40,6 +80,8 @@ vi.mock('../workspace/scan.js', async () => {
         '../workspace/scan.js',
       );
       const found = await real.findBookByBookId(id);
+      hooks.findCalls++;
+      hooks.onFind?.(hooks.findCalls);
       const h = hooks.afterNextFind;
       if (h) {
         hooks.afterNextFind = undefined;
@@ -87,6 +129,7 @@ function files(dir: string): string[] {
 }
 
 beforeEach(async () => {
+  hooks.findCalls = 0;
   ws = mkdtempSync(join(tmpdir(), 'audiobook-replace-rename-'));
   process.env.WORKSPACE_DIR = ws;
   vi.resetModules();
@@ -128,6 +171,9 @@ beforeEach(async () => {
 afterEach(() => {
   hooks.hold = undefined;
   hooks.afterNextFind = undefined;
+  hooks.onFind = undefined;
+  hooks.afterParse = undefined;
+  hooks.afterMkdir = undefined;
   rmSync(ws, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
 });
@@ -153,6 +199,10 @@ function moveFolderOnDiskDuringArms(): void {
 }
 
 const UPLOAD = Buffer.from('## Fresh A\n\nAlpha.\n\n## Fresh B\n\nBeta.\n');
+const MOVED =
+  'This book was moved while the manuscript was re-parsed. Try again in a moment.';
+const UNSTABLE =
+  'This book was being moved while the manuscript was re-parsed. Try again in a moment.';
 const REFUSAL =
   'The manuscript is being re-parsed for this book. Wait for it to finish before renaming it.';
 
@@ -242,14 +292,16 @@ describe.each([
 ])(
   'replace-manuscript backstop: folder moved on disk during the arms (%s)',
   (_label, upload, original) => {
-    it('answers 404, installs nothing and leaves state.json and the manuscript file as they were', async () => {
+    it('answers 409, installs nothing and leaves state.json and the manuscript file as they were', async () => {
       moveFolderOnDiskDuringArms();
       const res = await request(app)
         .post(`/api/books/${bookId}/replace-manuscript`)
         .attach('file', UPLOAD, upload);
 
-      expect(res.status).toBe(404);
-      expect(res.body.error).toBe('Book not found.');
+      /* the book still exists (at the new folder), so the answer is a retry, not
+         a false "not found" */
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe(MOVED);
 
       const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
       expect(state.manuscriptFile).toBe(original);
@@ -268,10 +320,11 @@ describe.each([
 );
 
 describe('reparse backstop: folder moved on disk during the arms', () => {
-  it('answers 404 and leaves state.json untouched (the cast is already gone by then)', async () => {
+  it('answers 409 and leaves state.json untouched (the cast is already gone by then)', async () => {
     moveFolderOnDiskDuringArms();
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(MOVED);
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter One']);
     expect(state.castConfirmed).toBe(true);
@@ -303,5 +356,93 @@ describe('rename completing between the lookup and the marker (#3400 pass 10)', 
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Fresh A', 'Fresh B']);
     expect(readFileSync(join(newDir, 'manuscript.md'), 'utf8')).toContain('Fresh A');
+  });
+});
+
+/* Third interleave (#3400 pass 11): the folder moves after our re-resolve and
+   before applyReparse's presence gate. Nothing destructive has run; the answer
+   must be a retry while the book exists, and 404 only when it is gone. */
+describe('book moved or deleted before the presence gate (#3400 pass 11)', () => {
+  it.each(['reparse', 'replace-manuscript'] as const)(
+    '%s: a move after the re-resolve answers 409, not a false 404, and the book is intact',
+    async (route) => {
+      hooks.afterParse = () => renameSync(oldDir, newDir);
+      const req = request(app).post(`/api/books/${bookId}/${route}`);
+      const res =
+        route === 'reparse' ? await req.send({}) : await req.attach('file', UPLOAD, 'revised.md');
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe(MOVED);
+      const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
+      expect(state.chapters.map((c: { title: string }) => c.title)).toEqual(['Chapter One']);
+      expect(state.castConfirmed).toBe(true);
+      expect(existsSync(join(newDir, '.audiobook', 'cast.json'))).toBe(true);
+      expect(existsSync(oldDir)).toBe(false);
+    },
+  );
+
+  it.each(['reparse', 'replace-manuscript'] as const)(
+    '%s: a book deleted before the gate answers 404',
+    async (route) => {
+      hooks.afterParse = () => rmSync(oldDir, { recursive: true, force: true });
+      const req = request(app).post(`/api/books/${bookId}/${route}`);
+      const res =
+        route === 'reparse' ? await req.send({}) : await req.attach('file', UPLOAD, 'revised.md');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Book not found.');
+    },
+  );
+});
+
+describe('retry loop of the marker (#3400 pass 11)', () => {
+  it('drops the stale mark on the vacated folder', async () => {
+    const { isReparseBusy } = await import('../tts/design-lock.js');
+    hooks.afterNextFind = () => renameSync(oldDir, newDir);
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    expect(res.status).toBe(200);
+    expect(isReparseBusy(oldDir)).toBe(false);
+    expect(isReparseBusy(newDir)).toBe(false);
+  });
+
+  it('answers 409 when the folder keeps moving across every attempt, holding no marker', async () => {
+    const { isReparseBusy } = await import('../tts/design-lock.js');
+    const at = (t: string) => join(ws, 'books', AUTHOR, SERIES, t);
+    const dirs = [oldDir, at('Hop B'), at('Hop C'), at('Hop D')];
+    hooks.onFind = (n) => {
+      if (n <= 3) renameSync(dirs[n - 1], dirs[n]);
+    };
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(UNSTABLE);
+    for (const d of dirs) expect(isReparseBusy(d)).toBe(false);
+    // nothing destructive ran: the book is intact at its last stop
+    expect(existsSync(join(dirs[3], '.audiobook', 'cast.json'))).toBe(true);
+  });
+
+  it('answers 404, not 409, when the book is deleted during the last attempt', async () => {
+    const hopB = join(ws, 'books', AUTHOR, SERIES, 'Hop B');
+    const hopC = join(ws, 'books', AUTHOR, SERIES, 'Hop C');
+    hooks.onFind = (n) => {
+      if (n === 1) renameSync(oldDir, hopB);
+      else if (n === 2) renameSync(hopB, hopC);
+      else if (n === 3) rmSync(hopC, { recursive: true, force: true });
+    };
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Book not found.');
+  });
+});
+
+describe('rename post-mkdir re-check (#3400 pass 11)', () => {
+  it('refuses a rename whose reparse marker landed between its first check and its mkdir', async () => {
+    const { markReparseBusy, clearReparseBusy } = await import('../tts/design-lock.js');
+    hooks.afterMkdir = () => markReparseBusy(oldDir);
+    const r = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'state', patch: { title: NEW_TITLE } });
+    clearReparseBusy(oldDir);
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe(REFUSAL);
+    expect(existsSync(newDir)).toBe(false);
+    expect(existsSync(oldDir)).toBe(true);
   });
 });

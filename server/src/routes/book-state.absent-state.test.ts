@@ -198,15 +198,15 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
     expect(moved.prosodyAnnotated).toBeUndefined();
   });
 
-  it('reparse queued behind a folder move -> 404, analysis cache intact, nothing written at the old path', async () => {
+  it('reparse queued behind a folder move -> 409, analysis cache intact, nothing written at the old path', async () => {
     await saveAnalysisCache('m_absent', { chapters: { 1: [] } });
     const res = await queueBehind(() => request(app).post(`/api/books/${bookId}/reparse`), moveBook);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
     expect(Object.keys((await loadAnalysisCache('m_absent')).chapters)).toEqual(['1']);
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript (SAME extension) queued behind a folder move -> 404, the moved book keeps its manuscript bytes', async () => {
+  it('replace-manuscript (SAME extension) queued behind a folder move -> 409, the moved book keeps its manuscript bytes', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -214,12 +214,12 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n\nChapter 2\n\nMore.\n'), 'new.txt'),
       moveBook,
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
     expect(readFileSync(join(movedDir(), 'manuscript.txt'), 'utf8')).toBe('Chapter 1\n\nSome text here.\n');
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript (DIFFERENT extension) queued behind a folder move -> 404, no orphan manuscript.md in the moved folder', async () => {
+  it('replace-manuscript (DIFFERENT extension) queued behind a folder move -> 409, no orphan manuscript.md in the moved folder', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -227,12 +227,12 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n'), 'new.md'),
       moveBook,
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
     expect(readdirSync(movedDir()).sort()).toEqual(['.audiobook', 'manuscript.txt']);
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript queued behind a folder move -> 404, the moved book keeps its manuscript file', async () => {
+  it('replace-manuscript queued behind a folder move -> 409, the moved book keeps its manuscript file', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -240,7 +240,7 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n'), 'new.md'),
       moveBook,
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
     const moved = JSON.parse(readFileSync(join(movedDir(), '.audiobook', 'state.json'), 'utf8')) as {
       manuscriptFile: string;
     };
