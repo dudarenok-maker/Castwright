@@ -769,11 +769,12 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
     30_000,
   );
 
-  it(
-    '#3400 pass 10 caller pin: the persist re-verifies its write target BEFORE the state-json leaf lock, so a slow-path heal does not deadlock',
-    async () => {
+  it.each(['main', 'subset'] as const)(
+    '#3400 pass 10 caller pin (%s run): the persist re-verifies its write target BEFORE the state-json leaf lock, so a slow-path heal does not deadlock',
+    async (runKind) => {
       const seed = await seedRunnableBook();
-      const { runMainAnalyzerJob } = await import('./analysis.js');
+      const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+      const { saveAnalysisCache } = await import('../store/analysis-cache.js');
       const { getManuscript, putManuscript, removeManuscript } = await import('../store/manuscripts.js');
       const { stateJsonPath } = await import('../workspace/paths.js');
       const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
@@ -802,12 +803,43 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       let leafLockTimedOut = true;
       let jobPromise: Promise<void> | undefined;
       try {
-        jobPromise = runMainAnalyzerJob(
-          seed.job,
-          getManuscript(seed.manuscriptId)! as never,
-          seed.phase0Selection,
-          { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
-        );
+        if (runKind === 'main') {
+          jobPromise = runMainAnalyzerJob(
+            seed.job,
+            getManuscript(seed.manuscriptId)! as never,
+            seed.phase0Selection,
+            { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
+          );
+        } else {
+          /* The subset-final state write is only reached when stage 1 already
+             exists, so seed it. */
+          await saveAnalysisCache(seed.manuscriptId, {
+            chapters: {},
+            stage1: {
+              characters: [
+                { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+                {
+                  id: 'nova',
+                  name: 'Nova',
+                  role: 'character',
+                  color: '#abc',
+                  evidence: [{ quote: 'The plan is set.' }],
+                },
+              ],
+              chapters: [{ id: 1, title: 'Chapter One' }],
+            },
+          } as never);
+          Object.assign(seed.job, { kind: 'subset', subsetChapterIds: [1] });
+          const rec = getManuscript(seed.manuscriptId)!;
+          jobPromise = runSubsetAnalyzerJob(
+            seed.job,
+            rec as never,
+            seed.phase0Selection,
+            (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection as never,
+            rec.chapterHints,
+            false,
+          );
+        }
         jobPromise.catch(() => {});
         await new Promise((r) => setTimeout(r, 300));
         seed.releasePhase0();
@@ -827,7 +859,7 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       expect(stateWriteSeam.fired).toBeGreaterThan(0);
       const state = JSON.parse(readFileSync(stateJsonPath(seed.oldDir), 'utf8'));
       /* the terminal state record landed ... */
-      expect(state.analysisProvenance).toBeDefined();
+      expect(state.analysisProvenance?.scope).toBe(runKind === 'main' ? 'book' : 'subset');
       /* ... and the slow path ran: it re-hydrated the record, replacing the
          bogus bookId the seam planted with the folder's real one. */
       expect(reboundBookId).toBe(state.bookId);
