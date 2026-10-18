@@ -72,6 +72,20 @@ beforeEach(async () => {
   );
 });
 
+/** Event-based (PR #3714): resolve once `queued()` reports the DELETE genuinely
+ *  waiting on the held lock, never a fixed sleep. Releases the holder on timeout
+ *  so a failure does not leave the lock held for the next test. */
+async function waitUntilQueued(queued: () => number, release: () => void, what: string): Promise<void> {
+  const deadline = Date.now() + 8000;
+  while (queued() < 1) {
+    if (Date.now() > deadline) {
+      release();
+      throw new Error(`timed out waiting for the DELETE to queue on ${what}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 describe('DELETE /api/books/:bookId on an unreadable book', () => {
   it('precondition: the torn book is listed as unreadable', async () => {
     const b = (await listed()).find((x) => x.bookId === tornId);
@@ -110,14 +124,24 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
   it('removes a not_analysed book only once the book path claim is free', async () => {
     const { makeBookId } = await import('../workspace/paths.js');
     const { withBookPathClaim } = await import('../workspace/book-op-lock.js');
+    const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
     const fresh = 'Claimed Fresh Book';
     const freshDir = join(workspaceRoot, 'books', AUTHOR, SERIES, fresh);
     mkdirSync(freshDir, { recursive: true });
     writeFileSync(join(freshDir, 'manuscript.txt'), 'x');
     let release!: () => void;
-    const held = withBookPathClaim(() => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withBookPathClaim(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, fresh)}`).then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    await waitUntilQueued(() => __keyWaitersForTest('book-path-claim'), release, 'the book path claim');
     expect(existsSync(freshDir)).toBe(true);
     release();
     await held;
@@ -219,13 +243,23 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     const located = await findBookByBookId(healthyId);
     expect(located?.bookDir).toBe(healthyDir);
     const statePath = join(healthyDir, '.audiobook', 'state.json');
-    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
     /* Hold the book's lock, start the DELETE (it resolves the folder, then
        queues on the lock), and swap another book's state in before releasing. */
     let release!: () => void;
-    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete(`/api/books/${healthyId}`).then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    await waitUntilQueued(() => __stateJsonWaitersForTest(statePath), release, 'the state-json lock');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -251,7 +285,7 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
      state's bookId differs from the folder-derived id, so the stateless fallback
      cannot remove it instead: only the in-lock branch can. */
   it('removes the folder when its state (main and every backup) is torn while the DELETE waits on the lock', async () => {
-    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
     const title = 'Torn While Waiting';
     const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
     const statePath = join(dir, '.audiobook', 'state.json');
@@ -270,9 +304,19 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
       }),
     );
     let release!: () => void;
-    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete('/api/books/torn-while-waiting-id').then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    await waitUntilQueued(() => __stateJsonWaitersForTest(statePath), release, 'the state-json lock');
     writeFileSync(statePath, '{ torn');
     writeFileSync(`${statePath}.bak.1`, '{ torn');
     release();

@@ -37,6 +37,7 @@ import {
   withKeyLock,
   withStateJsonLock,
   requestFailureMessage,
+  requestFailureMessageFs,
   isLockAcquisitionTimeout,
 } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -79,7 +80,6 @@ import {
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
 import {
-  readStateJsonWithRecovery,
   updateStateJsonLocked,
   writeStateJsonAtomic,
 } from '../workspace/state-migrate.js';
@@ -885,7 +885,9 @@ bookStateRouter.get('/:bookId/analysis/state', async (req: Request, res: Respons
     return res.status(404).json({ error: 'No analysis state.' });
   } catch (e) {
     console.error('[book-state] analysis/state GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to read analysis state.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to read analysis state.'),
+    });
   }
 });
 
@@ -897,7 +899,9 @@ bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Respons
     res.json(file);
   } catch (e) {
     console.error('[book-state] dropped-quotes GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to read dropped-quotes.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to read dropped-quotes.'),
+    });
   }
 });
 
@@ -1310,7 +1314,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
        `withCastLock`, whose key is the absolute path of this book's cast.json.
        Curate that one class; every other body is unchanged. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Failed to write book state.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to write book state.'),
     });
   }
 });
@@ -1449,7 +1453,7 @@ async function applyReparse(
     /* Plan 286 (invariant 8) — this arm's fs error embeds the absolute
        workspace path, and both handlers answer (e as Error).message. Log it raw;
        surface a fixed sentence. A lock timeout and a newer-schema refusal pass
-       through unchanged: the handlers' requestFailureMessage curates the first,
+       through unchanged: the handlers' requestFailureMessageFs curates the first,
        and the second's text is fixed and path-free. */
     resetRevisions(bookDir).catch((e: unknown) => {
       console.error('[book-state] revisions reset failed', e);
@@ -1755,7 +1759,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     /* #2260 FINAL ROUND (B2) — the reparse takes `withCastLock` for the
        cast.json read+delete arm. Same curation. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Failed to re-parse manuscript.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to re-parse manuscript.'),
     });
   }
 });
@@ -1866,7 +1870,7 @@ bookStateRouter.post(
          `withCastLock` cast.json read+delete arm through the shared
          applyReparse() core as reparse above. Same curation. */
       res.status(500).json({
-        error: requestFailureMessage(
+        error: requestFailureMessageFs(
           e,
           (e as Error).message || 'Failed to replace manuscript.',
         ),
@@ -1994,7 +1998,9 @@ bookStateRouter.post(
       res.status(outcome.status).json(outcome.body);
     } catch (e) {
       console.error('[book-state] exclude toggle failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Failed to toggle exclude.'),
+      });
     }
   },
 );
@@ -2066,7 +2072,9 @@ bookStateRouter.post(
       res.status(outcome.status).json(outcome.body);
     } catch (e) {
       console.error('[book-state] held toggle failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Failed to toggle held.'),
+      });
     }
   },
 );
@@ -2175,7 +2183,7 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
     if (refusal) return res.status(refusal.status).json(refusal.body);
     console.error('[book-state] DELETE failed', e);
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Failed to delete book.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to delete book.'),
     });
   }
 });
@@ -2276,7 +2284,7 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
        chapter. Falls back to the stored chapterId when the record predates
        uuids or the chapter has since been deleted. */
     if (progress?.chapterUuid) {
-      const current = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
+      const current = await readBookStateOrThrow(located.bookDir);
       const match = current?.chapters.find((c) => c.uuid === progress.chapterUuid);
       if (match && match.id !== progress.chapterId) {
         return res.json({ ...progress, chapterId: match.id });
@@ -2285,7 +2293,9 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
     res.json(progress);
   } catch (e) {
     console.error('[book-state] GET listen-progress failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to read listen-progress.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to read listen-progress.'),
+    });
   }
 });
 
@@ -2375,7 +2385,7 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
        current chapterId) so GET can re-derive the chapterId after a
        restructure. Absent when the chapterId doesn't map to a chapter (or
        a legacy book without uuids) — GET then keeps the stored chapterId. */
-    const stateForUuid = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
+    const stateForUuid = await readBookStateOrThrow(located.bookDir);
     const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
     /* fs-15 shelf controls — merge the prior record's shelf flags rather than
        clobbering them: `finished` is sticky (a user "Mark as finished" survives
@@ -2399,7 +2409,9 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
     if (gone === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
   } catch (e) {
     console.error('[book-state] PUT listen-progress failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write listen-progress.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to write listen-progress.'),
+    });
   }
 });
 
@@ -2446,7 +2458,9 @@ bookStateRouter.post('/:bookId/shelf-status', async (req: Request, res: Response
     if (gone === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
   } catch (e) {
     console.error('[book-state] POST shelf-status failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write shelf-status.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to write shelf-status.'),
+    });
   }
 });
 
@@ -2475,7 +2489,7 @@ bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response)
     /* #2260 FINAL ROUND (B2) — the only `listen-stats:` key space in the app,
        and the one non-cast key that reaches a client-facing 500. Same curation. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Failed to write listen-stats.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to write listen-stats.'),
     });
   }
 });

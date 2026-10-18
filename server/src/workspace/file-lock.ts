@@ -226,6 +226,35 @@ export function requestFailureMessage(err: unknown, fallback: string): string {
   return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_REQUEST_ERROR : fallback;
 }
 
+/* #3711 PR #3714 -- the body for a node fs error (EBUSY / ENOSPC / EPERM on a
+   read or write). Its own message embeds the absolute path it failed on, the
+   same LAN leak as a lock key. */
+export const FS_FAILURE_REQUEST_ERROR =
+  "The book's files could not be read or written right now. Try again.";
+
+/** A node fs error: a string `code` plus the `syscall` or `path` node sets on
+ *  every one. A deliberate error that merely carries a code is not one. */
+function isFsError(err: unknown): boolean {
+  const e = err as { code?: unknown; syscall?: unknown; path?: unknown } | null;
+  return (
+    !!e && typeof e.code === 'string' && (typeof e.syscall === 'string' || typeof e.path === 'string')
+  );
+}
+
+/** `requestFailureMessage` plus the node fs error class, which answers
+ *  `FS_FAILURE_REQUEST_ERROR` (the raw error goes to the log). Used by the
+ *  whole-request handlers in `book-state.ts` and `chapters-restructure.ts`,
+ *  whose fallbacks are `(e as Error).message`; every other error's message,
+ *  deliberate user-facing ones included, still passes through verbatim. */
+export function requestFailureMessageFs(err: unknown, fallback: string): string {
+  if (isLockAcquisitionTimeout(err)) return LOCK_CONTENTION_REQUEST_ERROR;
+  if (isFsError(err)) {
+    console.error('[file-lock] fs error curated out of a response body', err);
+    return FS_FAILURE_REQUEST_ERROR;
+  }
+  return fallback;
+}
+
 function decrementWaiters(key: string): void {
   const n = (waiters.get(key) ?? 1) - 1;
   if (n <= 0) waiters.delete(key);

@@ -22,7 +22,11 @@ import type { Request, Response } from '../http.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { castJsonPath } from '../workspace/paths.js';
-import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
+import {
+  itemFailureReason,
+  requestFailureMessage,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
 import { readJson } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
@@ -99,7 +103,7 @@ voiceStyleRouter.post(
         return res
           .status(500)
           .json({
-            error: requestFailureMessage(
+            error: requestFailureMessageFs(
               e,
               /* #2260 FINAL ROUND (B2) — `writeVoiceStylePersona` takes a cast
                  lock. The BATCH sibling reports contention per item through

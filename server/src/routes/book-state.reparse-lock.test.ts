@@ -193,12 +193,21 @@ describe('reparse — state.json write is serialised with the chapter restructur
     await gate.reached; // restructure holds the book lock; state.json already merged
     expect(readState().chapters).toHaveLength(2);
 
+    const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
     const reparse = request(app)
       .post(`/api/books/${bookId}/reparse`)
       .then((r) => r);
-    /* The reparse's cast / audio / cache work does not take the book lock, so
-       give it time to finish everything up to its own state step. */
-    await new Promise((r) => setTimeout(r, 400));
+    /* Event-based (PR #3714): the reparse parses with no lock held, then commits
+       under `book-op`, which the restructure holds -- wait until it is genuinely
+       queued there, never a fixed sleep. */
+    const deadline = Date.now() + 8000;
+    while (__keyWaitersForTest(`book-op:${bookId}`) < 1) {
+      if (Date.now() > deadline) {
+        gate.release();
+        throw new Error('timed out waiting for the reparse to queue on book-op');
+      }
+      await new Promise((r) => setTimeout(r, 5));
+    }
     /* THE LOCK: the reparse must not have written state.json while the
        restructure still holds the lock (the old unlocked write landed here). */
     const midFlight = readState().chapters.length;

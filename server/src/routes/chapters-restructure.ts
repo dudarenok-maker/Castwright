@@ -69,7 +69,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
+import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -391,7 +391,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] merge failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Merge failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Merge failed.'),
+      });
     }
   },
 );
@@ -422,7 +424,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] split failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Split failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Split failed.'),
+      });
     }
   },
 );
@@ -480,7 +484,7 @@ chaptersRestructureRouter.post(
     } catch (e) {
       console.error('[chapters-restructure] refresh-titles failed', e);
       res.status(500).json({
-        error: (e as Error).message || 'Refresh chapter titles failed.',
+        error: requestFailureMessageFs(e, (e as Error).message || 'Refresh chapter titles failed.'),
       });
     }
   },
@@ -514,7 +518,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] exclude failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Exclude failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Exclude failed.'),
+      });
     }
   },
 );
@@ -572,7 +578,7 @@ chaptersRestructureRouter.post(
         titleOverridden: updated.titleOverridden === true,
       });
     } catch (e) {
-      const msg = (e as Error).message || 'Rename failed.';
+      const msg = requestFailureMessageFs(e, (e as Error).message || 'Rename failed.');
       // Surface validation errors from applyRename as 400, anything
       // else (filesystem write failures, etc.) as 500.
       if (/not found/.test(msg)) {
@@ -607,7 +613,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] reorder failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Reorder failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Reorder failed.'),
+      });
     }
   },
 );

@@ -713,8 +713,14 @@ Design rationale:
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
-  and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all thirty-nine call sites (`book-state` ×6, `cast-design` ×4
+  and leaves every other body verbatim, or its sibling `requestFailureMessageFs`,
+  which also answers a fixed path-free sentence for a node fs error (a `code`
+  plus `syscall`/`path`: write EBUSY / ENOSPC / EPERM embed the absolute path
+  too) and is what the whole-request handlers in `book-state` and
+  `chapters-restructure` (and `voice-style`'s single generate) whose fallback
+  is the error's own message use (#3711) —
+  `git grep requestFailureMessage` matches both and enumerates all fifty-two
+  call sites (`book-state` ×13, `chapters-restructure` ×6, `cast-design` ×4
   (both arms of its defensive outer plus the job's two terminal `error` events),
   `voice-library` ×3, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
