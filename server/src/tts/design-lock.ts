@@ -16,8 +16,8 @@
    analysis route works in manuscriptId, the design routes in bookId, but both
    resolve a bookDir).
 
-   LOCK ORDER (#3711): design -> library-voice -> book-op -> book-path-claim ->
-   cast. `withDesignLock` is held only inside design jobs, which hold no book-op;
+   LOCK ORDER (#3711, reconciled with #3594): design -> library-voice -> book-op
+   -> book-path-claim -> cast -> book -> state-json. `withDesignLock` is held only inside design jobs, which hold no book-op;
    the series sweeps it wraps take a book-op per OTHER book INSIDE it, because
    those books are not registered. Nothing that holds a book-op takes the design
    lock, and a design job's book-folder protection against a rename is its

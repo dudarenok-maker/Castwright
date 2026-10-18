@@ -18,6 +18,7 @@ import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { updateStateJsonLocked } from '../workspace/state-migrate.js';
+import { withLocatedBook } from '../workspace/book-state-update.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
@@ -49,28 +50,37 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
     const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
 
     if (bookId) {
-      const located = await findBookByBookId(bookId);
+      let located = await findBookByBookId(bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
       /* srv-35 — guarantee a stable uuid on every chapter (and persist the
-         migration) so the manifest keys are durable. Idempotent. */
-      if (ensureChapterUuids(state)) {
-        /* #3700 — persisted under the per-book state-json lock against a fresh
-           read; the uuids that reached disk are adopted below. */
-        await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
-          ensureChapterUuids(fresh) ? fresh : null,
-        )
-          .then((persisted) => {
-            for (const ch of state.chapters) {
-              const onDisk = persisted?.chapters.find((c) => c.id === ch.id);
-              if (onDisk?.uuid) ch.uuid = onDisk.uuid;
-            }
-          })
-          .catch(() => {
-            /* best-effort migration write; the in-memory state already has
-               the uuids for this response. */
-          });
+         migration) so the manifest keys are durable. Idempotent. #3400: the
+         mint writes the whole state.json, so it re-locates and runs under the
+         book lock (a restructure landing meanwhile keeps its chapter list).
+         #3700: the write itself is a fresh read-modify-write inside the
+         state-json leaf lock, and the uuids that reached disk are adopted. */
+      if (located.state.chapters.some((c) => !c.uuid)) {
+        const minted = await withLocatedBook(bookId, async (fresh) => {
+          if (ensureChapterUuids(fresh.state)) {
+            await updateStateJsonLocked(stateJsonPath(fresh.bookDir), (onDisk) =>
+              ensureChapterUuids(onDisk) ? onDisk : null,
+            )
+              .then((persisted) => {
+                for (const ch of fresh.state.chapters) {
+                  const d = persisted?.chapters.find((c) => c.id === ch.id);
+                  if (d?.uuid) ch.uuid = d.uuid;
+                }
+              })
+              .catch(() => {
+                /* best-effort migration write; the in-memory state already has
+                   the uuids for this response. */
+              });
+          }
+          return fresh;
+        });
+        if (!minted) return res.status(404).json({ error: 'Book not found.' });
+        located = minted.value;
       }
+      const { bookDir, state } = located;
       const audioRoot = audioDir(bookDir);
       const audioByChapterId = new Map<number, ChapterAudioFact>();
       for (const c of state.chapters) {

@@ -18,15 +18,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { api, DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { DetectEmotionsError, DetectInstructError } from '../lib/api';
 import { notificationsActions } from '../store/notifications-slice';
 import {
   runProsodyPasses,
   buildProsodyProgressPayload,
+  markProsodyUnfinished,
   type SubstageDetail,
 } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
-import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
+import { selectAnalysisBusyForBook, selectBookRestructuring } from '../store/analysis-substage-selectors';
 import { IconSparkle, IconArrowDn } from '../lib/icons';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { SubstageProgressPill } from './substage-progress-pill';
@@ -54,7 +55,11 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const [menuOpen, setMenuOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  /* #3400 — a book mid-restructure is not startable either: the restructure
+     re-keys the sentences a run would snapshot. */
+  const busy = useAppSelector((s) =>
+    bookId ? selectAnalysisBusyForBook(s, bookId) || selectBookRestructuring(s, bookId) : false,
+  );
   /* #3435 — the slices hold the stage's book. While its read is slow or
      failing they still hold the previous book, whose sentences the Manuscript
      view shows under this one: a run bound then would write that book's
@@ -97,6 +102,26 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
        gate to the book at click time and apply only while the slices hold it
        AND the stage names it (same gate as the layout's auto-trigger). */
     const book = { bookId, manuscriptId: store.getState().manuscript.manuscriptId as string };
+    /* #3400 — a chapter restructure re-keys the sentences this run snapshotted,
+       so a later annotation would land on the wrong line. The run ends when a
+       restructure of its book BEGINS (the counter, not restructuringBookId:
+       one can start and finish between two annotations). */
+    const epoch = () => store.getState().ui.restructureEpochs[bookId] ?? 0;
+    const startEpoch = epoch();
+    const restructured = () => epoch() !== startEpoch;
+    const unsubscribe = store.subscribe(() => {
+      if (restructured() && !controller.signal.aborted) controller.abort();
+    });
+    // Held while the book's restructure is in flight (a state.json write).
+    const markUnfinished = () => markProsodyUnfinished(store, bookId);
+    const toastRestructured = () =>
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message:
+            'Emotion detection stopped because the chapters were restructured — the rest will be filled in the next time you open the book.',
+        }),
+      );
     try {
       const { totalAnnotations, totalChapters, skipped } = await runProsodyPasses(bookId, {
         dispatch,
@@ -104,7 +129,9 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         chapterId: scope.chapterId,
         canApply: () => {
           const s = store.getState();
-          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+          return (
+            !restructured() && selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true
+          );
         },
         onProgress: (fraction, d) => {
           setProgress(fraction);
@@ -115,15 +142,17 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
-      if (skipped > 0) {
+      if (restructured()) {
+        markUnfinished();
+        toastRestructured();
+        setStatus(null);
+      } else if (skipped > 0) {
         /* #3435 (PR #3505 review passes 6-7) — mark the book unfinished
            (false, not cleared: the layout re-runs only an explicit false) so
            it is re-run (fill-only) the next time it is opened, and say so
            in a toast: leaving the book unmounts this button, so a status line
            here would never be seen. */
-        void api
-          .putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } })
-          .catch(() => {});
+        markUnfinished();
         dispatch(
           notificationsActions.pushToast({
             kind: 'warn',
@@ -142,6 +171,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       setPhase('idle');
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
+        if (restructured()) {
+          markUnfinished();
+          toastRestructured();
+        }
         setStatus(null);
         setPhase('idle');
       } else if (e instanceof DetectEmotionsError && e.code === 'no_attribution') {
@@ -155,6 +188,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         setPhase('idle');
       }
     } finally {
+      unsubscribe();
       dispatch(prosodyActions.clear({ bookId }));
       abortRef.current = null;
     }

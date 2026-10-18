@@ -788,17 +788,17 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     vi.resetModules();
   });
 
-  it('undefined: leaves revisions.json alone and the result carries no reviewRecorded', async () => {
+  it('undefined: leaves revisions.json alone and the result carries no reviewOutcome', async () => {
     writePriorTake();
     const result = await finalizeChapterAudioWrite(baseInput());
     expect(existsSync(revisionsPath())).toBe(false);
-    expect('reviewRecorded' in result).toBe(false);
+    expect('reviewOutcome' in result).toBe(false);
   });
 
   it('object + preserved: upserts one server entry for the chapter', async () => {
     writePriorTake();
     const result = await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
-    expect(result.reviewRecorded).toBe(true);
+    expect(result.reviewOutcome).toBe('recorded');
     const pending = readPending();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
@@ -815,10 +815,24 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     expect(pending[0].id).toMatch(/^revision:1:\d+$/);
   });
 
+  it('object + preserved: stamps the entry with the chapter uuid and the render stamp state.json carries (#3400)', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    st.chapters[0].uuid = 'uuid-ch-1';
+    writeFileSync(statePath, JSON.stringify(st));
+    writePriorTake();
+    await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
+    const after = JSON.parse(readFileSync(statePath, 'utf8'));
+    const [entry] = readPending();
+    expect(entry.chapterUuid).toBe('uuid-ch-1');
+    expect(entry.renderedAt).toBeTruthy();
+    expect(entry.renderedAt).toBe(after.chapters[0].audioRenderedAt);
+  });
+
   it('object + first render (nothing preserved): drops any stale entry, records nothing', async () => {
     seedEntry(1, 'revision:1:500');
     const result = await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
-    expect(result.reviewRecorded).toBe(true);
+    expect(result.reviewOutcome).toBe('none');
     expect(readPending()).toEqual([]);
   });
 
@@ -826,7 +840,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     writePriorTake();
     seedEntry(1, 'revision:1:500');
     const result = await finalizeChapterAudioWrite({ ...baseInput(), review: null });
-    expect(result.reviewRecorded).toBe(true);
+    expect(result.reviewOutcome).toBe('none');
     expect(readPending()).toEqual([]);
   });
 
@@ -852,7 +866,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     expect(seen).toEqual({ duration: '00:01', audioExists: true });
   });
 
-  it('a store failure → reviewRecorded:false; the take still lands; no store text in the result', async () => {
+  it('a store failure → reviewOutcome:failed; the take still lands; no store text in the result', async () => {
     writePriorTake();
     vi.resetModules();
     vi.doMock('../workspace/revisions-store.js', async (importOriginal) => {
@@ -867,7 +881,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     });
     const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
     const result = await finalizeMocked({ ...baseInput(), review: REVIEW });
-    expect(result.reviewRecorded).toBe(false);
+    expect(result.reviewOutcome).toBe('failed');
     expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
     expect(JSON.stringify(result)).not.toContain('SECRET-WORKSPACE');
   });

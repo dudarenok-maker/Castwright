@@ -8,7 +8,9 @@ import { TAGLINE_SHORT } from '../lib/brand';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { fetchAnalyzerModels } from '../store/account-slice';
 import { uiActions } from '../store/ui-slice';
 import { libraryActions } from '../store/library-slice';
@@ -31,6 +33,8 @@ const BINARY_EXT_RE = /\.(pdf|epub|mobi|azw3)$/i;
 
 export function UploadView() {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const navigate = useNavigate();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   /* Dynamic curated ∪ live-Ollama-tag union for the analysis-model picker, so a
@@ -123,6 +127,10 @@ export function UploadView() {
      sufficient for the v1 acceptance criteria — surface what changed,
      commit on confirm. */
   function handleDiffApply() {
+    // #3400 pass 7 — applyReupload is refused while the book restructures; bail
+    // BEFORE clearing the title overrides or navigating away (the Cmd/Ctrl+Enter
+    // shortcut reaches this handler even with the button disabled).
+    if (refuseIfEditsLocked(store.getState, dispatch)) return;
     /* Plan 84 — drop the titleOverridden flag on any chapter that the
        new manuscript's parse will no longer match. The override flag
        is keyed by numeric id; if the re-uploaded manuscript shifts
@@ -433,6 +441,7 @@ export function UploadView() {
         diff={diffEntries}
         overrideConflicts={overrideConflicts}
         onApply={handleDiffApply}
+        applyDisabledReason={editsLocked ? RESTRUCTURING_REASON : undefined}
         onDiscard={handleDiffDiscard}
       />
     </div>

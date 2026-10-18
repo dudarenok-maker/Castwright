@@ -62,14 +62,15 @@ import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
 import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
+import { restructureGuardMiddleware } from './restructure-guard-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
-import { revisionsScopeMiddleware } from './revisions-scope-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { castDesignMiddleware } from './cast-design-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
+import { revisionPlayerMiddleware } from './revision-player-middleware';
 import { qaRepairRunnerMiddleware } from './qa-repair-runner-middleware';
 import { exportPollMiddleware } from './exports-middleware';
 import { exportPillMiddleware } from './export-pill-middleware';
@@ -224,8 +225,9 @@ export const store = configureStore({
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
     }).concat(
-      revisionsScopeMiddleware,
+      restructureGuardMiddleware,
       persistenceMiddleware,
+      revisionPlayerMiddleware,
       generationStreamMiddleware(getStreamRunner),
       analysisStreamMiddleware,
       castDesignMiddleware,

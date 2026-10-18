@@ -14,8 +14,11 @@
 
    RULES (CLAUDE.md "cast.json writes" bullet carries the full order):
      - Lock order: design -> library-voice -> book-op -> book-path-claim ->
-       cast -> cast-id-history. `state-json`, `revision-op -> revisions`,
-       `listen-stats` and `script-review-ledger` nest UNDER book-op.
+       cast -> book -> state-json, with cast -> cast-id-history. `revision-op ->
+       revisions`, `listen-stats` and `script-review-ledger` nest UNDER book-op.
+       `book` is #3594's per-book state.json / manuscript-edits lock
+       (book-lock.ts): always taken INSIDE book-op, and no `book` holder ever
+       takes book-op.
      - NEVER nest `withBookOp`; two or more books always go through
        `withBookOps`. Re-entry fails at the 10s acquisition budget with the key in
        the log (a diagnostic, not a licence).
@@ -43,6 +46,7 @@ import { BOOKS_ROOT, STANDALONES_SERIES, ensureWorkspace, makeBookId, parseBookI
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { renameWithRetry } from './atomic-rename.js';
 import { getManuscript, putManuscript } from '../store/manuscripts.js';
+import { withBookLock } from './book-lock.js';
 import { backfillAudioModelKeysFromSegments, type BookStateJson } from './scan.js';
 
 /** Returned by `withBookOp*` / `runBookJob` when the book no longer exists. */
@@ -475,7 +479,15 @@ function assertNotBusy(bookId: string): void {
 /** Rename a book's folder to `newDir`, writing `buildNext(fresh)` as its new
  *  state.json. Refuses (BookBusyError) while a long job is registered, and
  *  (BookPathTakenError) if `newDir` exists. EPERM/EBUSY/EACCES from the rename
- *  becomes BookFolderInUseError. On success the handle tracks the new folder. */
+ *  becomes BookFolderInUseError. On success the handle tracks the new folder.
+ *
+ *  Takes the per-book `book` lock (book-lock.ts, #3594) itself, INSIDE the path
+ *  claim: book-op -> book-path-claim -> book -> state-json. A writer that holds
+ *  only `book` (the workspace scan's self-heal, `updateStateAtDir`) therefore
+ *  cannot run between this move's read and its write, and one queued behind it
+ *  re-resolves to the new folder. The caller must NOT already hold `book` for
+ *  this book in a different async context (re-entry in the same context is a
+ *  no-op, per book-lock.ts). */
 export async function moveBookFolder(
   book: BookHandle,
   newDir: string,
@@ -490,6 +502,7 @@ export async function moveBookFolder(
   }
   const oldDir = book.bookDir;
   return withBookPathClaim(() =>
+    withBookLock(book.bookId, () =>
     withStateJsonLock(stateJsonPath(oldDir), async () => {
       const fresh = await readStateJsonWithRecovery(stateJsonPath(oldDir));
       if (!fresh) throw new Error('moveBookFolder: state.json is missing');
@@ -527,6 +540,7 @@ export async function moveBookFolder(
       await rmdir(dirname(oldSeriesDir)).catch(() => undefined);
       return next;
     }),
+    ),
   );
 }
 
@@ -576,6 +590,10 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
       await rmFolder(dir);
       return 'removed';
     }
+    /* `heal = false` on purpose: this runs while holding `state-json`, and a
+       healing resolve reaches `backfillAudioModelKeysFromSegments` (accept()),
+       whose write takes the `book` lock -- `book` under `state-json` would
+       invert the order (book -> state-json). A non-healing resolve takes no lock. */
     const moved = await resolveBook(book.bookId, undefined, false, true);
     if (!moved || moved.bookDir === dir) return 'gone';
     book.bookDir = moved.bookDir;

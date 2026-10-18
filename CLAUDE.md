@@ -581,18 +581,41 @@ Design rationale:
   level only, a locked function must not call another locked function on the
   same book; (2) the read goes inside the lock, and so does every decision
   derived from it — wrapping only the write buys nothing at all; (3) two or
-  more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
-  order is **`design` → `library-voice` → `book-op` → `book-path-claim` →
-  `cast` → `cast-id-history`** — never acquire an earlier
-  class while holding a later one, or two requests deadlock. The per-book
-  `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
-  outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. The per-book `state-json` lock
-  (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is likewise a **leaf**
-  around every `.audiobook/state.json` read-modify-write — the read goes inside
-  it, and `workspace/state-json-lock.guard.test.ts` fails the build on an
-  unlocked `writeStateJsonAtomic`. Accept/reject (and the legacy
-  `…/audio/previous` routes) additionally serialise per chapter on a
+  more books → `withCastLocks`, never nested `withCastLock`s; (4) the global
+  lock order is **`design` → `library-voice` → `book-op` → `book-path-claim` →
+  `cast` → `book` → `state-json`**, with `cast` → `cast-id-history` — never
+  acquire an earlier class while holding a later one, or two requests
+  deadlock. The per-book `revisions` lock (`workspace/revisions-store.ts`,
+  plan 285) is a **leaf** outside that chain: nothing but revisions.json is
+  written under it and no other lock is taken while it is held (never nested
+  with `state-json`). The per-book `book` lock (`workspace/book-lock.ts`,
+  #3400) is NOT the same lock as `book-op` (below): `book-op` is the
+  operation-and-move lock, `book` the narrower state.json /
+  manuscript-edits.json consistency lock — keyed by bookId, re-entrant within
+  one async context, no acquisition timeout, and **always taken inside
+  `book-op`** (or by a path that holds no `book-op`, such as the scan's
+  self-heal); **no `book` holder ever takes `book-op`, and no path takes
+  `book` before `cast`**. `book` may be taken while holding `cast` (the cast
+  merge's `manuscript-edits.json` rewrite), but no holder of it may take
+  `cast`, `design` or `library-voice`; it is the lock a chapter restructure
+  holds across its read -> multi-file write (inside `book-op` and the
+  `restructure-gate` claim: `book-op` → gate → `book`), and every
+  `state.json` read-modify-write that derives from a read goes through it
+  (`workspace/book-state-update.ts`, enforced by
+  `workspace/state-lock.guard.test.ts`). `moveBookFolder` takes it itself,
+  inside the path claim. The per-book `state-json` lock (`withStateJsonLock`,
+  `workspace/file-lock.ts`, #3700) is the innermost **leaf**: taken INSIDE
+  `book` (or alone, by the paths that hold no `book`: `DELETE`, the
+  bundle-import overwrite (`scan-import-folder.ts`), import / samples
+  creation, reparse's presence gate, the render finalize and the generation
+  failure persist), only around the fresh re-read + write
+  (`updateStateJsonLocked`, `state-migrate.ts`); nothing else is taken while
+  it is held — the one nesting is the folder move, which also keys the
+  destination path's `state-json`. The read goes inside
+  it, an absent `state.json` answers 404 and writes nothing, and
+  `workspace/state-json-lock.guard.test.ts` fails the build on an unlocked
+  `writeStateJsonAtomic`. Accept/reject and `restore-unrecorded`
+  additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
   while holding `revisions`. **The per-book operation lock `book-op:<bookId>`
@@ -633,25 +656,35 @@ Design rationale:
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort — plus four
-  `state.json` sites under `withStateJsonLock` (#3625): finalize's duration/model/render stamp
+  `state.json` sites under the `state-json` leaf lock (#3625): finalize's duration/model/render stamp
   (`server/src/audio/finalize-chapter-write.ts`), Start fresh's `castConfirmed`
   un-confirm (`analysis.ts`), and the two analysis persist `state.json` writes
   (parked in `persistLockTimeout` and rethrown after the remaining writes, like
-  the `cast.json` ones). Swallowing at an
+  the `cast.json` ones). The analysis sites go through `updateStateAtDir`, taken
+  after the cast work — the `book` lock does not bound its wait, but the
+  `state-json` leaf lock inside it does, so that wrap is live and keeps the
+  write from ever being the silent kind. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. ELEVEN handlers swallow it
+  `cast.json` and `state.json` never written at all. TWELVE handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
   re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292); and `applyReview`
+  diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key; and six `state.json` sites
-  under `withStateJsonLock` (#3625): generation's failure stamp
+  `reviewOutcome: 'failed'`, never the lock key; and the restructure pending
+  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — an entry
+  it fails to drop answers `revision_not_found` on the next accept/reject
+  once its chapter has been renumbered or re-rendered, because a
+  server-recorded entry carries the chapter's `uuid` and `audioRenderedAt`
+  and `revisions-store.ts` refuses it when the chapter at its id no longer
+  matches (`entryMatchesChapter`, #3400). A legacy client-written entry
+  has no stamps and is not covered; and six `state.json` sites under
+  `withStateJsonLock` (#3625): generation's failure stamp
   (`routes/generation.ts`), which only annotates a reload after `chapter_failed`
   already went out over SSE; `refreshChapterTitles` (`routes/book-state.ts`),
   whose re-derived titles are recomputed on the next read; the sync-manifest
@@ -686,8 +719,9 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of the two legacy `…/audio/previous` routes in
-  `chapter-audio.ts` (`DELETE` and `…/restore`); and
+  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  legacy `…/audio/previous` routes there answer 410 unconditionally since
+  plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). A separate,

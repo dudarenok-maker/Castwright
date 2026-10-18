@@ -189,8 +189,8 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
   [
     'routes/book-state.ts',
     {
-      writes: 9,
-      why: 'writes cast.json, edits, revisions.json, change-log.json, carryover, log, listen-progress.json and listen-stats.json — all OTHER per-book .json, never state.json (its state writes route through writeStateJsonAtomic). One writeJsonAtomic( on :1070 is prose in a comment and is opaque, hence 9 not 10.',
+      writes: 8,
+      why: 'writes cast.json, edits, change-log.json, carryover, log, listen-progress.json and listen-stats.json — all OTHER per-book .json, never state.json (its state writes route through writeStateJsonAtomic). One writeJsonAtomic( on :1188 is prose in a comment and is opaque, hence 8 not 9.',
     },
   ],
   [
@@ -233,6 +233,13 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
     {
       writes: 1,
       why: 'writes the chapter segments file (segPath) — not state.json.',
+    },
+  ],
+  [
+    'workspace/revisions-store.ts',
+    {
+      writes: 1,
+      why: 'writeJsonAtomic targets revisions.json (revisionsJsonPath) — never state.json; its one stateJsonPath( use (readLiveChapters, #3400) is a read-only readJson, taking no lock and writing nothing.',
     },
   ],
 ]);
@@ -280,31 +287,42 @@ function countRawStateWrites(
    its `voice-not-designed` failure persist; analysis.ts went from 2 to 3
    when #3435's Start fresh began un-confirming the book, and to 4 when the
    subset route began reading castConfirmed at load for its result gate —
-   a read, not a write; #3700 wrapped each state.json writer in
-   withStateJsonLock, which re-spells `stateJsonPath(bookDir)` as the lock key
-   — book-state.ts +3 (the rename PUT also keys the new path), chapters-restructure.ts +2, import.ts +1, samples.ts +1,
-   auto-backup.ts +1 — not new write sites; the pass-3 absent-state refusals then added
-   book-state.ts +2 (DELETE's lock key + presence check) and auto-backup.ts +1
-   (restore's presence check) — reads, not writes; #3711 then moved the folder
-   rename/delete into workspace/book-op-lock.ts's movers, taking book-state.ts
-   from 14 to 10 and giving book-op-lock.ts its 10; #3711 task 7 then added
-   book-op-lock.ts +1 (withBookOpAtDir's bookId read) and re-staged the bundle
-   importer, scan-import-folder.ts 1 to 5 (two staging-dir sites, three
-   overwrite reads/lock keys); the merge with #3625 then added book-state.ts +1
-   (DELETE's stateless-folder lock key, 10 to 11) and scan-import-folder.ts +1
-   (the fresh placement keys the target's state.json, 5 to 6) — reads and lock
-   keys, not new write sites; PR #3714 review pass 2 then folded the resolver's
-   and the id-minter's state reads into one read helper in book-op-lock.ts,
-   11 to 10 -- reads, not writes). Asserted BOTH
+   a read, not a write; revisions-store.ts joined with 1 read-only site when
+   #3400's readLiveChapters began re-checking an A/B entry against live state;
+   cover/store.ts + cover/upload.ts dropped out and workspace/book-state-update.ts
+   joined with 3 when #3400 moved the cover patches onto its locked
+   `updateStateAtDir`; analysis.ts dropped from 4 to 1 when #3400 pass 8 moved
+   its Start-fresh un-confirm and both terminal persists onto `updateStateAtDir`
+   too, leaving only the castConfirmed read at load; #3700 wrapped each
+   remaining state.json writer in withStateJsonLock, which re-spells
+   `stateJsonPath(bookDir)` as the lock key -- book-state.ts, chapters-restructure.ts,
+   import.ts, samples.ts and auto-backup.ts gained sites, and the pass-3 absent-state
+   refusals (DELETE's lock key + presence check, restore's presence check) added
+   more -- reads and lock keys, not new write sites; book-state-update.ts then
+   dropped 3 -> 1 and scan.ts 4 -> 3 when the layered `updateStateAtDir` /
+   `persistHealPatches` began reading and writing through `updateStateJsonLocked`
+   rather than spelling the path themselves; book-state.ts then gained 2 for
+   applyReparse's presence gate -- a lock key and an existence read, not a write;
+   #3625 then added scan-import-folder.ts +1 (the in-lock claim keys the target's
+   state.json) and book-state.ts +1 (DELETE's stateless-folder lock key);
+   #3711 (PR #3714) then moved the folder rename/delete into
+   workspace/book-op-lock.ts's movers, giving book-op-lock.ts its 10 (the
+   resolver's and the id-minter's state reads, folded into one read helper by
+   review pass 2; withBookOpAtDir's bookId read; the movers' lock keys and
+   presence reads), and re-staged the bundle importer, scan-import-folder.ts
+   2 to 6 (two staging-dir sites, three overwrite reads/lock keys, the fresh
+   placement's target key); the reconciliation of #3711 with #3594 then took
+   book-state.ts from 17 to 13 -- the PUT's folder rename (its two lock keys,
+   its read and its new-path write) moved into moveBookFolder and the DELETE's
+   removal into removeBookFolder, leaving DELETE's stateless-folder lock key --
+   reads, lock keys and one relocated write, not new write sites). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
-  'cover/store.ts': 2,
-  'cover/upload.ts': 2,
   'import/scan-import-folder.ts': 6,
-  'routes/analysis.ts': 4,
-  'routes/book-state.ts': 11,
+  'routes/analysis.ts': 1,
+  'routes/book-state.ts': 13,
   'routes/chapters-restructure.ts': 3,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,
@@ -314,10 +332,12 @@ const G3_STATE_SITES: Record<string, number> = {
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
   'workspace/auto-backup.ts': 5,
+  'workspace/book-state-update.ts': 1,
   'workspace/book-dir-guard.ts': 1,
   'workspace/book-op-lock.ts': 10,
   'workspace/library-cast-scan.ts': 1,
-  'workspace/scan.ts': 4,
+  'workspace/revisions-store.ts': 1,
+  'workspace/scan.ts': 3,
   'workspace/series-cast-scan.ts': 2,
   'workspace/series-full-cast-scan.ts': 1,
   'workspace/series-reuse-link.ts': 1,

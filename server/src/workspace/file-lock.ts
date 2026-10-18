@@ -54,7 +54,11 @@ const waiters = new Map<string, number>();
    `library-voice:<uuid>` while clearLibraryVoiceReferences takes, per confirmed
    book, `book-op` then a cast lock (library-voice -> book-op -> cast, one book
    at a time), so it is 2N+1 acquisitions for N books. A book-op never nests
-   inside another book-op: two or more books go through withBookOps. */
+   inside another book-op: two or more books go through withBookOps. The
+   per-book `book` lock (book-lock.ts) is NOT a withKeyLock and adds no budget:
+   it has no acquisition timeout, so only the `state-json` leaf inside it bounds
+   a wait there. Full order: design -> library-voice -> book-op ->
+   book-path-claim -> cast -> book -> state-json. */
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
 
 /** Stable discriminator carried by `LockAcquisitionTimeoutError`. */
@@ -340,8 +344,9 @@ export function __stateJsonWaitersForTest(statePath: string): number {
 }
 
 /** #3700 — serialise a read-modify-write of one book's `.audiobook/state.json`
- *  across concurrent chapter renders. A LEAF lock (outside the design ->
- *  library-voice -> cast order): hold it only across the single
+ *  across concurrent chapter renders. The innermost LEAF lock (design ->
+ *  library-voice -> book-op -> book-path-claim -> cast -> book -> state-json):
+ *  hold it only across the single
  *  read-through-write, never while taking another lock. Without it two sibling
  *  chapters finalizing together both read the same snapshot and the second
  *  write clobbered the first chapter's stamp (and on Windows the read could land

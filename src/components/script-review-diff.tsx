@@ -6,8 +6,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from '@reduxjs/toolkit';
+import { useStore } from 'react-redux';
 import { Checkbox } from './primitives';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import {
   scriptReviewActions,
   selectActiveReview,
@@ -252,6 +254,13 @@ async function resolveAppliedOps(
 
 export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
+  /* #3400 pass 7 — every manuscript action Apply dispatches is refused while
+     the book restructures. Disable the control AND check the live flag before
+     any side write (resolve ops, boundary_move), so a refused apply resolves
+     nothing. `store` is read in handlers: a flag raised after render is seen. */
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
+  const refuseIfLocked = () => refuseIfEditsLocked(store.getState, dispatch);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bucket = useAppSelector((s) => selectActiveReview(s as any, bookId));
   const sentences = useAppSelector((s) => s.manuscript.sentences);
@@ -384,6 +393,12 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      persistence Task 14) — no whole-bucket clear at the end. Called once,
      after the LAST confirm resolves. */
   async function runProposed(finalized: FinalizedProposed[], startBookId: string) {
+    if (refuseIfLocked()) {
+      // Nothing applied, nothing resolved: leave the review reachable.
+      setConfirm(null);
+      dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
+      return;
+    }
     const rosterByName = new Map(cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id }]));
     try {
       const { createdCharacters, aborted } = await applyProposedReattributions(finalized, {
@@ -450,6 +465,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     group: ProposedNameGroup,
     decision: { characterId?: string; proposed?: { name: string; gender?: string; ageRange?: string } },
   ) {
+    if (refuseIfLocked()) return;
     if (decision.characterId) {
       for (const op of group.ops) {
         dispatch(
@@ -494,6 +510,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   }
 
   function handleApply() {
+    if (refuseIfLocked()) return;
     const startBookId = bookId;
     // Gather only the ops the user selected
     const selectedOps = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]);
@@ -891,11 +908,13 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
             <button
               data-testid="apply-button"
               onClick={handleApply}
-              disabled={selectedCount === 0}
+              disabled={selectedCount === 0 || editsLocked}
+              title={editsLocked ? RESTRUCTURING_REASON : undefined}
               className="shrink-0 inline-flex items-center gap-2 px-5 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Apply {selectedCount} selected
             </button>
+            {editsLocked && <span className="text-xs text-ink/60">{RESTRUCTURING_REASON}</span>}
             <button
               data-testid="dismiss-button"
               onClick={handleDismiss}

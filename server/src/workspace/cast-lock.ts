@@ -16,8 +16,10 @@
  *      it. Wrapping only the write buys nothing at all.
  *   3. Two or more books -> withCastLocks, never nested withCastLocks.
  *   4. Global lock order: design -> library-voice -> book-op -> book-path-claim
- *      -> cast -> cast-id-history (#3711 inserted book-op and book-path-claim;
- *      see workspace/book-op-lock.ts). Never acquire an earlier class while
+ *      -> cast -> book -> state-json, with cast -> cast-id-history (#3711
+ *      inserted book-op and book-path-claim, see workspace/book-op-lock.ts;
+ *      #3594's per-book `book` lock, workspace/book-lock.ts, sits after cast
+ *      and is always taken inside book-op). Never acquire an earlier class while
  *      holding a later one. The DELETE library-voice path holds
  *      `library-voice:<uuid>` across clearLibraryVoiceReferences, which takes
  *      `book-op` then a cast lock per book — so POST /assign must take
@@ -34,7 +36,7 @@
  *      revisions-store.ts, plan 285) is a LEAF outside this order: its holder
  *      writes only revisions.json and acquires no other lock, so it can never
  *      be one half of a cycle. Never take any lock while holding it.
- *      Accept/reject (and the legacy `…/audio/previous` routes) additionally
+ *      Accept/reject and `restore-unrecorded` additionally
  *      serialise per chapter on a `revision-op:<bookDir>:<chapterId>` key held
  *      across the whole audio step; its order is `revision-op` -> `revisions`
  *      — never take `revision-op` while holding `revisions`.

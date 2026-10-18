@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { BulkReassignUndoBanner } from './bulk-reassign-undo-banner';
@@ -66,5 +66,21 @@ describe('BulkReassignUndoBanner', () => {
     expect(revertEvent?.title).toBe('Reverted bulk line reassignment');
     expect(revertEvent?.title).not.toMatch(/-1/);
     expect(revertEvent?.title).not.toMatch(/Chapter/);
+  });
+
+  it("#3400: Undo is disabled while its book's chapters are being restructured, and enabled again after", () => {
+    const store = makeStore(true, true);
+    render(<Provider store={store}><BulkReassignUndoBanner /></Provider>);
+    act(() => {
+      store.dispatch(uiSlice.actions.setRestructuringBook('book-1'));
+    });
+    const undo = screen.getByRole('button', { name: /undo/i });
+    expect(undo).toBeDisabled();
+    fireEvent.click(undo);
+    expect(store.getState().manuscript.sentences[0].characterId).toBe('narrator');
+    act(() => {
+      store.dispatch(uiSlice.actions.clearRestructuringBook('book-1'));
+    });
+    expect(screen.getByRole('button', { name: /undo/i })).toBeEnabled();
   });
 });

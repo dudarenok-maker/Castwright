@@ -537,6 +537,71 @@ describe('sanctioned movers', () => {
     expect(existsSync(join(bookDir, '.audiobook', 'state.json'))).toBe(true);
   });
 
+  /* #3711 reconciled with #3594 — moveBookFolder takes the per-book `book` lock
+     itself, inside the path claim (book-op -> book-path-claim -> book ->
+     state-json), so a writer that holds only `book` (the scan heal,
+     updateStateAtDir) and never takes book-op is excluded from the move. */
+  it('moveBookFolder waits for a `book`-only holder; the holder\'s write to the folder moves with the book', async () => {
+    const { withBookLock } = await import('./book-lock.js');
+    const { bookId, bookDir } = seedBook('A', 'S', 'BookLockHeld');
+    const newDir = join(paths.BOOKS_ROOT, 'A', 'S', 'BookLockHeld2');
+    const gate = deferred();
+    let holding = false;
+    /* Simulates the scan's self-heal: holds `book` (no book-op), then writes
+       into the folder it resolved before the move could run. */
+    const holder = withBookLock(bookId, async () => {
+      holding = true;
+      await gate.promise;
+      writeFileSync(join(bookDir, '.audiobook', 'heal-marker'), 'x');
+    });
+    await until(() => holding);
+    let moved = false;
+    const mover = lock.withBookOp(bookId, async (b) => {
+      await lock.moveBookFolder(b, newDir, (fresh) => ({ ...fresh, title: 'BookLockHeld2' }));
+      moved = true;
+    });
+    /* Give the move every chance to run: without the book lock it would rename
+       now and the holder's write below would recreate the old folder. */
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(moved).toBe(false);
+    expect(existsSync(join(bookDir, '.audiobook', 'state.json'))).toBe(true);
+    expect(existsSync(newDir)).toBe(false);
+    gate.resolve();
+    await Promise.all([holder, mover]);
+    expect(existsSync(bookDir)).toBe(false);
+    expect(readFileSync(join(newDir, '.audiobook', 'heal-marker'), 'utf8')).toBe('x');
+  });
+
+  it('a `book`-only writer (updateStateAtDir) queued behind a move writes nothing at the old folder', async () => {
+    const { updateStateAtDir } = await import('./book-state-update.js');
+    const { bookId, bookDir } = seedBook('A', 'S', 'QueuedHeal');
+    const newDir = join(paths.BOOKS_ROOT, 'A', 'S', 'QueuedHeal2');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const release = deferred();
+    let reached = false;
+    /* Park the move inside its locked re-read: it then holds the claim, `book`
+       and the old path's state-json key. Armed inside the callback so the
+       book-op resolve's own read of state.json does not take the gate. */
+    const mover = lock.withBookOp(bookId, (b) => {
+      faults.readGate = { path: statePath, reached: () => (reached = true), release: release.promise };
+      return lock.moveBookFolder(b, newDir, (fresh) => ({ ...fresh, title: 'QueuedHeal2' }));
+    });
+    await until(() => reached);
+    let mutated = false;
+    const writer = updateStateAtDir(bookDir, (state) => {
+      mutated = true;
+      return { ...state, notes: 'from the queued writer' };
+    });
+    release.resolve();
+    const [, wrote] = await Promise.all([mover, writer]);
+    expect(wrote).toBe(false);
+    expect(mutated).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+    const written = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(written.title).toBe('QueuedHeal2');
+    expect(written.notes).toBeUndefined();
+  });
+
   it('removeBookFolder deletes the folder and the index entry; the book is then gone', async () => {
     const { bookId, bookDir } = seedBook('A', 'S', 'Remove');
     await lock.withBookOp(bookId, async (b) => {

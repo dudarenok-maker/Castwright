@@ -13,6 +13,7 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { AnalysingView } from './analysing';
 import { WIKI_BASE } from '../lib/wiki-links';
+import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
 import type {
   AnalyseResponse,
@@ -1606,9 +1607,12 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(store.getState().analysis.activeStream).toEqual(prior);
   });
 
-  it(
-    'a 409 main_analysis_running keeps the row, shows the server message on it and restores the prior snapshot',
-    async () => {
+  it.each([
+    ['main_analysis_running', 'The analysis on this book is still stopping. Try again in a moment.'],
+    ['chapters_restructuring', 'The chapters of this book are being changed. Try again in a moment.'],
+  ])(
+    'a 409 %s keeps the row, shows the server message on it and restores the prior snapshot',
+    async (code, message) => {
       /* Both forms (the 409 body and the late-check SSE frame) reach the view as
          the same AnalysisError (api.ts maps them alike — pinned in
          api-analysis-stream-errors.test.ts), so one rejection shape covers both:
@@ -1645,10 +1649,8 @@ describe('AnalysingView — failed-chapter retry', () => {
       await act(async () => {
         fireEvent.click(retryBtn);
       });
-      const message =
-        'The analysis on this book is still stopping. Try again in a moment.';
       await act(async () => {
-        rejectSubset?.(new AnalysisError(message, 'main_analysis_running'));
+        rejectSubset?.(new AnalysisError(message, code));
       });
       expect(await screen.findByText(message)).toBeInTheDocument();
       expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
@@ -1688,6 +1690,64 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(store.getState().analysis.activeStream).toBeNull();
     expect(screen.getByRole('button', { name: /retry chapter/i })).not.toBeDisabled();
     expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
+  });
+
+  it('#3400 pass 8: a main POST refused with chapters_restructuring is a quiet try-again, not a failed analysis', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    const message = 'The chapters of this book are being changed. Try again in a moment.';
+    analyseManuscriptRejection = new AnalysisError(message, 'chapters_restructuring');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    expect(await screen.findByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(screen.getByRole('button', { name: /(start|resume) analysis/i })).not.toBeDisabled();
+  });
+
+  it('#3400 pass 8: Start analysis is disabled with the restructuring reason while the book restructures', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    expect(startBtn).toBeDisabled();
+    expect(startBtn).toHaveAttribute('title', RESTRUCTURING_REASON);
+    expect(await screen.findByRole('button', { name: /retry chapter/i })).toBeDisabled();
+    expect(screen.getAllByText(RESTRUCTURING_REASON).length).toBeGreaterThan(0);
+    // A control (another book restructuring) leaves it enabled.
+    act(() => {
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
+      store.dispatch(uiActions.setRestructuringBook('other'));
+    });
+    expect(screen.getByRole('button', { name: /start analysis/i })).not.toBeDisabled();
   });
 
   /* #3435 final review M7 — the refusal line is about the refused start; a

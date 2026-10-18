@@ -456,21 +456,19 @@ describe('#3711 task 5 -- revision-ops and chapter-audio previous routes', () =>
     expect(readJsonFile<{ dismissed: string[] }>(paths.revisionsJsonPath(r.newDir)).dismissed).toContain('drift:b:1');
   });
 
-  it('chapter-audio: DELETE previous (accept)', async () => {
-    const book = seedBook('Single AudioAccept');
-    seedRevisions(book);
-    const r = await renameBehind(book, keyGate(revisionsStore.revisionOpLockKey(book.bookDir, 1)), () => request(app).delete(api(book, 'chapters/1/audio/previous')), 'Single AudioAccept Renamed');
-    expectLandedInNewFolder(r, book, 204);
-    expect(readFileSync(join(paths.audioDir(r.newDir), '01-x.mp3'), 'utf8')).toBe('LIVE');
-    expect(existsSync(join(paths.audioDir(r.newDir), '01-x.previous.mp3'))).toBe(false);
-  });
-
-  it('chapter-audio: POST previous/restore (reject)', async () => {
-    const book = seedBook('Single AudioReject');
-    seedRevisions(book);
-    const r = await renameBehind(book, keyGate(revisionsStore.revisionOpLockKey(book.bookDir, 1)), () => request(app).post(api(book, 'chapters/1/audio/previous/restore')), 'Single AudioReject Renamed');
+  /* The legacy DELETE previous (accept) / POST previous/restore (reject) routes
+     answer 410 since plan 286 and touch no audio; restore-unrecorded is the one
+     chapter-audio route that still moves `.previous` audio. */
+  it('chapter-audio: POST previous/restore-unrecorded', async () => {
+    const book = seedBook('Single AudioRestoreUnrecorded');
+    const root = paths.audioDir(book.bookDir);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, '01-x.mp3'), 'LIVE');
+    writeFileSync(join(root, '01-x.previous.mp3'), 'PREV');
+    const r = await renameBehind(book, keyGate(revisionsStore.revisionOpLockKey(book.bookDir, 1)), () => request(app).post(api(book, 'chapters/1/audio/previous/restore-unrecorded')), 'Single AudioRestoreUnrecorded Renamed');
     expectLandedInNewFolder(r, book, 204);
     expect(readFileSync(join(paths.audioDir(r.newDir), '01-x.mp3'), 'utf8')).toBe('PREV');
+    expect(existsSync(join(paths.audioDir(r.newDir), '01-x.previous.mp3'))).toBe(false);
   });
 });
 
@@ -604,7 +602,7 @@ describe('#3711 task 5 -- a deleted book answers 404 in each route family\'s own
     const rev = await request(app).post(`/api/books/${ghost}/revisions/r1/accept`).send({});
     expect(rev.status).toBe(404);
     expect(rev.body.error).toBe('book_not_found');
-    expect((await request(app).delete(`/api/books/${ghost}/chapters/1/audio/previous`)).status).toBe(404);
+    expect((await request(app).post(`/api/books/${ghost}/chapters/1/audio/previous/restore-unrecorded`)).status).toBe(404);
     expect((await request(app).delete(`/api/books/${ghost}/cover`)).status).toBe(404);
     expect((await request(app).patch(`/api/books/${ghost}/cover/framing`).send({ offsetX: 0, offsetY: 0, zoom: 1 })).status).toBe(404);
     expect((await request(app).post(`/api/books/${ghost}/script-review/discard`).send({ chapterIds: [1] })).status).toBe(404);

@@ -17,6 +17,8 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { chaptersSlice } from '../store/chapters-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
+import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import type { ActiveStreamSnapshot } from '../store/chapters-slice';
 import type { LibraryBook } from '../lib/types';
 
@@ -79,6 +81,7 @@ function renderModal(
     books?: LibraryBook[];
     dualModelEnabled?: boolean;
     activeGeneration?: ActiveGenerationPreload;
+    restructuring?: string;
   } = {},
 ) {
   const store = configureStore({
@@ -88,6 +91,7 @@ function renderModal(
       library: librarySlice.reducer,
       account: accountSlice.reducer,
       chapters: chaptersSlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: {
       queue: { entries, paused: opts.paused ?? false, recycling: false, loaded: true },
@@ -122,6 +126,7 @@ function renderModal(
     status: 200,
     json: () => Promise.resolve({ entries, paused: opts.paused ?? false }),
   });
+  if (opts.restructuring) store.dispatch(uiActions.setRestructuringBook(opts.restructuring));
   const onClose = vi.fn();
   return {
     store,
@@ -135,6 +140,16 @@ function renderModal(
 }
 
 describe('QueueModal', () => {
+  it('#3400 pass 7: Cancel is disabled (with a reason) for a book that is restructuring, not for another', () => {
+    renderModal([entry({ id: 'e1', bookId: 'book-A' }), entry({ id: 'e2', bookId: 'book-B', order: 1 })], {
+      restructuring: 'book-A',
+    });
+    const a = screen.getByTestId('queue-entry-e1-cancel');
+    expect(a).toBeDisabled();
+    expect(a).toHaveAttribute('title', RESTRUCTURING_REASON);
+    expect(screen.getByTestId('queue-entry-e2-cancel')).toBeEnabled();
+  });
+
   it('renders the empty state when no entries are queued', () => {
     renderModal([]);
     expect(screen.getByText('Empty')).toBeInTheDocument();

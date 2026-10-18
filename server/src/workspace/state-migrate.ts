@@ -151,7 +151,7 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJsonWri
  *  or `null` when state.json is absent. */
 export async function updateStateJsonLocked(
   path: string,
-  mutate: (fresh: BookStateJson) => BookStateJson | null,
+  mutate: (fresh: BookStateJson) => BookStateJson | null | Promise<BookStateJson | null>,
   /** Runs inside the lock, only once state.json is known present and `mutate`
    *  has produced a change, immediately before the write. For a caller whose
    *  other disk writes must not happen unless the book is still there. */
@@ -164,7 +164,7 @@ export async function updateStateJsonLocked(
        a deleted book back. Skip the write and report absence as `null`. */
     if (!onDisk) return null;
     const fresh = onDisk;
-    const next = mutate(fresh);
+    const next = await mutate(fresh);
     if (!next) return fresh;
     if (beforeWrite) await beforeWrite();
     await writeStateJsonAtomic(path, { ...next, language: next.language ?? null });

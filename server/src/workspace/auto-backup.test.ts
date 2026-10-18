@@ -217,4 +217,39 @@ describe('restoreBackup', () => {
     expect(after.language).toBe('fr');
     expect(after.schema).toBe(1);
   });
+
+  /* #3400 pass 8 -- the restore runs under the book lock: a restore queued
+     behind a chapter restructure must wait for it, not write the snapshot into
+     the middle of it. */
+  it('waits for the book lock before writing the snapshot', async () => {
+    const { bookId, bookDir } = bookDirFor('restore-locked');
+    await seedBook(bookId, bookDir, { v: 'original' });
+    const file = await mod.backupBook(
+      { bookId, bookDir },
+      { keep: 5, now: new Date(2026, 0, 3, 9, 0, 0) },
+    );
+    await writeFile(
+      paths.stateJsonPath(bookDir),
+      JSON.stringify(makeState(bookId, { v: 'edited' })),
+      'utf8',
+    );
+    const { withBookLock } = await import('./book-lock.js');
+    let release!: () => void;
+    let entered!: () => void;
+    const holderIn = new Promise<void>((r) => (entered = r));
+    const holder = withBookLock(bookId, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await holderIn;
+    const restore = mod.restoreBackup(bookId, file!);
+    await new Promise((r) => setTimeout(r, 150));
+    const during = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect(during.v).toBe('edited');
+    release();
+    await holder;
+    await restore;
+    const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect(after.v).toBe('original');
+  });
 });

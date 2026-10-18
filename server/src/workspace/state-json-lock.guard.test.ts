@@ -404,8 +404,8 @@ describe('state.json write lock — static guard (#3700)', () => {
       'routes/generation.ts',
       'routes/book-state.ts',
       'workspace/state-migrate.ts',
-      'cover/store.ts',
-      'routes/analysis.ts',
+      'routes/chapters-restructure.ts',
+      'workspace/auto-backup.ts',
     ]) {
       expect(sawLocked(rel), `${rel}: expected at least one locked state.json write`).toBe(true);
     }

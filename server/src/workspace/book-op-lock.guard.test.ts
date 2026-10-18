@@ -600,6 +600,7 @@ const ALLOW_G2 = allow([
   ['routes/analysis.ts', 1, 'job-lease'], // POST /:id/analysis/pause: writes analysis-state.json (persistTerminalSnapshot) only for a live, un-aborted job, which holds its analysis lease until that write lands (it is folded into job.terminalWrites)
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
+  ['routes/chapter-audio.ts', 2, 'no-book-write'], // DELETE previous + POST previous/restore: plan 286 retired both to 410 `moved`, touching no file
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
   ['routes/script-review.ts', 2, 'no-book-write'], // cancel (in-memory abort) + attach (re-attach only)

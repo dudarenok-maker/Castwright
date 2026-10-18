@@ -16,9 +16,7 @@
    - patchStateFraming(bookDir, framing): persists pan + zoom onto the
      existing coverImage record. No-op when no cover is pinned. */
 
-import { withStateJsonLock } from '../workspace/file-lock.js';
-import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { stateJsonPath } from '../workspace/paths.js';
+import { updateStateAtDir } from '../workspace/book-state-update.js';
 import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
@@ -106,26 +104,26 @@ export async function encodeUploadedCover(
 export async function patchStateLocalCover(
   bookDir: string,
   originalFilename: string | null,
-  /** Runs inside the lock once state.json is confirmed present — the cover
+  /** Runs inside the lock once state.json is confirmed present - the cover
       file write, so nothing lands in a book folder that moved or was deleted. */
   beforeWrite?: () => Promise<void>,
 ): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  /* #3700 — read-modify-write under the per-book state-json lock. `false` =
-     state.json absent (deleted/moved while queued): nothing was written. */
-  return withStateJsonLock(path, async () => {
-    const state = await readStateJsonWithRecovery(path);
-    if (!state) return false;
-    if (beforeWrite) await beforeWrite();
-    state.coverImage = {
-      source: 'local',
-      originalFilename,
-      uploadedAt: new Date().toISOString(),
-    };
-    state.updatedAt = new Date().toISOString();
-    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-    return true;
-  });
+  /* #3400 + #3700 -- read-modify-write under the per-book lock and the
+     state-json leaf lock (`updateStateAtDir`). `false` = state.json absent
+     (deleted/moved while queued): nothing was written. */
+  return updateStateAtDir(
+    bookDir,
+    (state) => {
+      state.coverImage = {
+        source: 'local',
+        originalFilename,
+        uploadedAt: new Date().toISOString(),
+      };
+      state.updatedAt = new Date().toISOString();
+      return state;
+    },
+    { beforeWrite },
+  );
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -137,15 +135,11 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 }
 
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  return withStateJsonLock(path, async () => {
-    const state = await readStateJsonWithRecovery(path);
-    if (!state) return false;
-    if (!state.coverImage) return false;
+  return updateStateAtDir(bookDir, (state) => {
+    if (!state.coverImage) return null;
     state.coverImage.framing = clampFraming(framing);
     state.updatedAt = new Date().toISOString();
-    await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-    return true;
+    return state;
   });
 }
 

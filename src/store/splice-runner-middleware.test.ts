@@ -1,18 +1,21 @@
 /* fs-26 — the background splice runner: one splice SSE per chapter, sequential,
-   enqueuing a pending A/B revision each, flipping it playable + refreshing the
-   chapter audio on completion, and tracking batch progress. api.streamSplice is
+   refreshing the chapter audio and refetching the active book's server-owned
+   revisions on completion, and tracking batch progress + inFlightChapters.
+   Plan 286 (#3400) — the client never writes pending; the server records it
+   and the runner refetches instead. api.streamSplice/pollRevisions are
    mocked so no backend is needed. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import type { SpliceArgs, SpliceTick } from '../lib/api';
 
-const { streamSpliceSpy, putBookStateSpy } = vi.hoisted(() => ({
+const { streamSpliceSpy, putBookStateSpy, pollRevisionsSpy } = vi.hoisted(() => ({
   streamSpliceSpy: vi.fn(),
   putBookStateSpy: vi.fn().mockResolvedValue(undefined),
+  pollRevisionsSpy: vi.fn(),
 }));
 vi.mock('../lib/api', () => ({
-  api: { streamSplice: streamSpliceSpy, putBookState: putBookStateSpy },
+  api: { streamSplice: streamSpliceSpy, putBookState: putBookStateSpy, pollRevisions: pollRevisionsSpy },
 }));
 
 import { spliceSlice, spliceActions } from './splice-slice';
@@ -20,7 +23,6 @@ import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { notificationsSlice } from './notifications-slice';
 import { uiSlice, uiActions } from './ui-slice';
-import { revisionsScopeMiddleware } from './revisions-scope-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
 import type { Chapter } from '../lib/types';
@@ -43,8 +45,8 @@ function makeStore(currentBookId = 'bk1') {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
       /* `revisions.bookId` starts already scoped to `currentBookId`, matching
          the real app: by the time a splice batch can start, the active book
-         has already been opened (and its hydrate, real or null, has landed)
-         so revisions-scope-middleware has already synced the two. */
+         has already been opened and its hydrate (real or null) has landed,
+         scoping the two together. */
       revisions: { ...revisionsSlice.getInitialState(), bookId: currentBookId },
       ui: {
         ...uiSlice.getInitialState(),
@@ -58,7 +60,7 @@ function makeStore(currentBookId = 'bk1') {
       },
     },
     middleware: (getDefault) =>
-      getDefault().concat(revisionsScopeMiddleware, persistenceMiddleware, spliceRunnerMiddleware()),
+      getDefault().concat(persistenceMiddleware, spliceRunnerMiddleware()),
   });
 }
 
@@ -67,10 +69,55 @@ async function flush() {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
 
+/* Action-type recorder — a store built via `makeStoreWithRecorder` below
+   appends every dispatched action's type here, cleared in `beforeEach`. The
+   `pending` assertion alone can't prove "never writes pending": the refetch's
+   `applyPoll` adopts the mocked empty server state and would wipe a stray
+   client enqueue before any assertion runs, so the plan 286 tests check the
+   action stream itself. */
+const dispatched: string[] = [];
+
+function makeStoreWithRecorder(currentBookId = 'bk1') {
+  return configureStore({
+    reducer: {
+      splice: spliceSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      ui: uiSlice.reducer,
+    },
+    preloadedState: {
+      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
+      revisions: { ...revisionsSlice.getInitialState(), bookId: currentBookId },
+      ui: {
+        ...uiSlice.getInitialState(),
+        stage: {
+          kind: 'ready' as const,
+          bookId: currentBookId,
+          view: 'cast' as const,
+          currentChapterId: 3,
+          openProfileId: null,
+        },
+      },
+    },
+    middleware: (getDefault) =>
+      getDefault().concat(
+        persistenceMiddleware,
+        spliceRunnerMiddleware(),
+        () => (next: (a: unknown) => unknown) => (a: unknown) => {
+          dispatched.push((a as { type: string }).type);
+          return next(a);
+        },
+      ),
+  });
+}
+
 describe('spliceRunnerMiddleware', () => {
   beforeEach(() => {
     streamSpliceSpy.mockReset();
     putBookStateSpy.mockClear();
+    pollRevisionsSpy.mockReset().mockResolvedValue({ drift: [] });
+    dispatched.length = 0;
     streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
       args.onTick({
         type: 'splice_complete',
@@ -84,35 +131,59 @@ describe('spliceRunnerMiddleware', () => {
     });
   });
 
-  it('runs one splice per chapter, enqueues + flips pending revisions, refreshes audio, counts results', async () => {
-    const store = makeStore();
-    store.dispatch(
-      spliceActions.startBatch({
-        id: 'b1',
-        bookId: 'bk1',
-        characterId: 'castor',
-        characterName: 'Castor Allred',
-        mode: 'remix',
-        gainDb: 6,
-        chapterIds: [1, 2],
-      }),
-    );
+  it('plan 286 — runs one splice per chapter, never writes pending, refetches the active book, refreshes audio, counts results', async () => {
+    const store = makeStoreWithRecorder();
+    store.dispatch(spliceActions.startBatch({ id: 'b1', bookId: 'bk1', characterId: 'castor', characterName: 'Castor Allred', mode: 'remix', gainDb: 6, chapterIds: [1, 2] }));
     await flush();
-
     expect(streamSpliceSpy).toHaveBeenCalledTimes(2);
-    expect(streamSpliceSpy.mock.calls.every(([a]) => a.mode === 'remix' && a.gainDb === 6)).toBe(true);
+    expect(pollRevisionsSpy).toHaveBeenCalledWith({ bookId: 'bk1' });
+    expect(dispatched.filter((t) => t.startsWith('revisions/') && t !== 'revisions/applyPoll')).toEqual([]);
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(putBookStateSpy.mock.calls.some((c) => (c[1] as { slice: string }).slice === 'revisions')).toBe(false);
+    expect(store.getState().chapters.chapters.find((c) => c.id === 1)!.duration).toBe('03:42');
+    expect(store.getState().splice.batches.b1).toMatchObject({ total: 2, succeeded: 2, failed: 0, status: 'done' });
+  });
 
-    const pending = store.getState().revisions.pending;
-    expect(pending).toHaveLength(2);
-    expect(pending.every((r) => r.playable)).toBe(true);
+  it('plan 286 — a splice that finishes while the user is on another book does not refetch', async () => {
+    const store = makeStoreWithRecorder();
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      store.dispatch(uiActions.openBook({ id: 'other', status: 'complete' } as never));
+      args.onTick({ type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId, mode: args.mode, durationSec: 222, segmentCount: 1, hasPreviousAudio: true } as SpliceTick);
+    });
+    store.dispatch(spliceActions.startBatch({ id: 'b2', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix', gainDb: 6, chapterIds: [1] }));
+    await flush();
+    expect(pollRevisionsSpy).not.toHaveBeenCalled();
+  });
 
-    // chapter audio refreshed (duration from the tick + a renderedAt stamp)
-    const chapters = store.getState().chapters.chapters;
-    expect(chapters.find((c) => c.id === 1)!.duration).toBe('03:42'); // 222s
-    expect(chapters.find((c) => c.id === 1)!.audioRenderedAt).toBeTruthy();
+  it('plan 286 — inFlightChapters tracks the running chapter per book and clears on completion or failure', async () => {
+    /* Failure is driven through a chapter_failed tick, as 'counts a failed chapter
+       without aborting the rest' (~:119-121) does — NOT a throwing streamSplice:
+       the middleware launches the batch with `void runBatch(...)`, so a throw
+       would surface as an unhandled rejection rather than a counted failure. */
+    let release!: () => void;
+    streamSpliceSpy
+      .mockImplementationOnce((args: SpliceArgs) => new Promise<void>((r) => (release = () => {
+        args.onTick({ type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId, mode: args.mode, durationSec: 120, segmentCount: 1, hasPreviousAudio: true } as SpliceTick);
+        r();
+      })))
+      .mockImplementationOnce(async (args: SpliceArgs) => { args.onTick({ type: 'chapter_failed', chapterId: args.chapterId, errorReason: 'boom' }); });
+    const store = makeStoreWithRecorder();
+    store.dispatch(spliceActions.startBatch({ id: 'b3', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix', gainDb: 6, chapterIds: [1, 2] }));
+    await flush();
+    expect(store.getState().splice.inFlightChapters).toEqual([{ bookId: 'bk1', chapterId: 1 }]);
+    release(); await flush();
+    expect(store.getState().splice.batches.b3).toMatchObject({ succeeded: 1, failed: 1, status: 'done' });
+    expect(store.getState().splice.inFlightChapters).toEqual([]); // chapter 2 failed and still settled
+  });
 
-    const batch = store.getState().splice.batches.b1;
-    expect(batch).toMatchObject({ total: 2, succeeded: 2, failed: 0, status: 'done' });
+  it("plan 286 — reviewOutcome:'failed' toasts once", async () => {
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      args.onTick({ type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId, mode: args.mode, durationSec: 222, segmentCount: 1, hasPreviousAudio: true, reviewOutcome: 'failed' } as SpliceTick);
+    });
+    const store = makeStoreWithRecorder();
+    store.dispatch(spliceActions.startBatch({ id: 'b4', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix', gainDb: 6, chapterIds: [1, 2] }));
+    await flush();
+    expect(store.getState().notifications.toasts.filter((t) => t.message === "The new take is live, but its A/B review couldn't be saved")).toHaveLength(1);
   });
 
   it('counts a failed chapter without aborting the rest', async () => {
@@ -244,98 +315,12 @@ describe('spliceRunnerMiddleware', () => {
     expect(chapter1.duration).toBe('2:00'); /* Original duration, unchanged. */
   });
 
-  it('never writes a splice revision into a book the user switched to mid-batch (#3376)', async () => {
-    /* Repro from PR #3395 review finding 2: start a Fix-audio batch on book
-       bk1, then open bk2 before the batch finishes. Unlike the audio-stamp
-       guard above (which only covers markChapterAudioUpdated), enqueuePending
-       and markRevisionPlayable had NO book guard, so bk1's splice revision
-       for chapter 2 would be enqueued straight into bk2's `pending` list —
-       and, since `pending` is client-owned and persisted per active book,
-       bk2 would keep it forever while bk1 never got it. This pins both
-       call sites: (1) enqueuePending must not fire once the active book has
-       moved on, and (2) markRevisionPlayable must not flip an entry that was
-       enqueued before the switch either, since the slice's `pending` list no
-       longer represents bk1 once the user has navigated away. */
-    const resolvers: Array<() => void> = [];
-    streamSpliceSpy.mockImplementation(
-      (args: SpliceArgs) =>
-        new Promise<void>((resolve) => {
-          resolvers.push(() => {
-            args.onTick({
-              type: 'splice_complete',
-              chapterId: args.chapterId,
-              characterId: args.characterId,
-              mode: args.mode,
-              durationSec: 111,
-              segmentCount: 1,
-              hasPreviousAudio: true,
-            } as SpliceTick);
-            resolve();
-          });
-        }),
-    );
-
-    const store = makeStore('bk1');
-    store.dispatch(
-      spliceActions.startBatch({
-        id: 'b6',
-        bookId: 'bk1',
-        characterId: 'castor',
-        characterName: 'Castor',
-        mode: 'remix',
-        gainDb: 1,
-        chapterIds: [1, 2],
-      }),
-    );
-    await flush();
-
-    /* Chapter 1's enqueue happened while bk1 was still active — it's the
-       user's own book, so it should be present. */
-    expect(store.getState().revisions.pending).toEqual([
-      expect.objectContaining({ id: 'splice-bk1-1-castor', playable: false }),
-    ]);
-
-    /* Navigate to bk2 before chapter 1's splice resolves — the PRODUCTION
-       navigation action, not the synthetic `chapters/setCurrentBookId`
-       production never dispatches on navigation (chapters.currentBookId only
-       moves once bk2's own hydrate lands). revisions-scope-middleware reacts
-       to this and re-scopes `revisions.bookId` to bk2 immediately, which is
-       what the guards below must actually key off (#3395 pass 2, N2). */
-    store.dispatch(uiActions.openBook({ id: 'bk2', status: 'complete' }));
-
-    /* Resolve chapter 1 (fires splice_complete while bk2 is active) and let
-       the loop advance to chapter 2 (its enqueuePending also fires while
-       bk2 is active). */
-    expect(resolvers).toHaveLength(1);
-    resolvers[0]();
-    await flush();
-    expect(resolvers).toHaveLength(2);
-    resolvers[1]();
-    await flush();
-
-    /* revisions-scope-middleware resets `pending` to empty the instant
-       `uiActions.openBook('bk2')` lands (before either deferred completion
-       fires) — bk1's own already-enqueued entry goes with it, same as any
-       other per-book field, because `pending` no longer represents bk1 once
-       the user has navigated away. Neither guarded dispatch below can
-       re-populate it from bk1's book. */
-    const pending = store.getState().revisions.pending;
-    expect(pending).toEqual([]);
-
-    /* Belt-and-braces: no PUT for bk2 ever carries either of bk1's splice
-       ids — the persistence-middleware guard refuses to persist a revisions
-       patch whose `revisions.bookId` disagrees with the write's target book,
-       and the enqueue/markPlayable guards above never even dispatch for
-       bk2 in the first place. */
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    const bk2RevisionsPuts = putBookStateSpy.mock.calls.filter(
-      ([bookId, body]) => bookId === 'bk2' && (body as { slice?: string }).slice === 'revisions',
-    );
-    const leaked = bk2RevisionsPuts.some(([, body]) =>
-      ((body as { patch: { pending: Array<{ id: string }> } }).patch.pending ?? []).some((r) =>
-        r.id.startsWith('splice-bk1'),
-      ),
-    );
-    expect(leaked).toBe(false);
-  });
+  /* The pre-286 '#3376' regression test ('never writes a splice revision into
+     a book the user switched to mid-batch') asserted `revisions.pending`
+     changes driven by the runner's own now-removed pending-cache dispatches.
+     Plan 286 Task 20 removes both — the runner never writes
+     pending, it refetches — so that test no longer has anything to pin and is
+     deleted; the 'plan 286' tests above (particularly 'never writes pending'
+     and 'does not refetch' for a book the user has left) cover the same
+     cross-book-safety property the server-owned way. */
 });

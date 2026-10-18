@@ -13,9 +13,16 @@
    the title alone. */
 
 import { useEffect, useRef, useState } from 'react';
+import { useStore } from 'react-redux';
 import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
+import type { RootState } from '../store';
+import {
+  RESTRUCTURING_REASON,
+  refuseIfEditsLocked,
+  selectBookEditsLocked,
+} from '../store/restructure-lock';
 import { chaptersActions } from '../store/chapters-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
@@ -38,6 +45,11 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
   const [draft, setDraft] = useState(chapter?.title ?? '');
   const [busy, setBusy] = useState(false);
   const dispatch = useAppDispatch();
+  /* #3400 pass 7 — renameChapter is keyed by chapter id, which a restructure
+     renumbers, so a rename that lands mid-restructure renames the wrong
+     chapter. Save disables with the reason; the handler re-checks the live flag. */
+  const store = useStore<RootState>();
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   /* Imperative focus on mount — lint forbids the JSX `autoFocus`
      prop. Mirrors how other modals get the input focused without
      tripping the a11y rule. */
@@ -55,6 +67,7 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
 
   async function handleSave() {
     if (!canSave || !chapter) return;
+    if (refuseIfEditsLocked(store.getState, dispatch, bookId)) return;
     setBusy(true);
     try {
       await api.renameChapter(bookId, chapter.id, trimmed);
@@ -126,8 +139,10 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
-            <p className="text-[11px] text-ink/50">
-              Overrides the auto-derived title for this chapter.
+            <p className="text-[11px] text-ink/50" data-testid="edit-chapter-title-hint">
+              {restructuring
+                ? RESTRUCTURING_REASON
+                : 'Overrides the auto-derived title for this chapter.'}
             </p>
             <div className="flex items-center gap-3">
               <button
@@ -139,7 +154,7 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
               <PrimaryButton
                 variant="dark"
                 onClick={() => void handleSave()}
-                disabled={!canSave}
+                disabled={!canSave || restructuring}
               >
                 {busy ? 'Saving…' : 'Save'}
               </PrimaryButton>

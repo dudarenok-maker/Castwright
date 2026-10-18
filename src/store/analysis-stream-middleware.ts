@@ -341,7 +341,9 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            from the server, with no halt and no toast. */
         if (
           e instanceof AnalysisError &&
-          (e.code === 'main_analysis_running' || e.code === 'subset_analysis_running')
+          (e.code === 'main_analysis_running' ||
+            e.code === 'subset_analysis_running' ||
+            e.code === 'chapters_restructuring')
         ) {
           closeHandle();
           void restoreFromServer(snap);

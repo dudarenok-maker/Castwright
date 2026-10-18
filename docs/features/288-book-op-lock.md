@@ -284,7 +284,9 @@ say so) and are not registered *(my call)*.
 
 ### Lock order
 
-**design → library-voice → book-op → book-path-claim → cast → cast-id-history.**
+**design → library-voice → book-op → book-path-claim → cast → book → state-json**, with
+**cast → cast-id-history**. (`book` arrived with #3594; see "Reconciliation with #3594's `book` lock"
+below.)
 
 These nest under book-op:
 - `revision-op → revisions`;
@@ -700,7 +702,7 @@ It uses the same opaque-range tokenizer as `state-json-lock.guard.test.ts`. The 
       book-op → cast, per book).
     - The `tts/design-lock.ts` header.
     - Reviewer-brief entry 29: an addendum, "fixed for moves by `book-op` + `book-jobs`, PR #…".
-    - Reviewer-brief **new entry 30**: "a book-folder writer outside `withBookOp` and outside a `runBookJob`
+    - Reviewer-brief **new entry 39** (originally 30; renumbered after #3594 added 30–38): "a book-folder writer outside `withBookOp` and outside a `runBookJob`
       `fn` (an un-awaited child, a registration released at a deadline, a resolve before the lock)".
       Checkable: hold book-op or a job, queue a rename, and assert that it waits or gets 409.
     - The PUT state 409 description.
@@ -725,6 +727,53 @@ It uses the same opaque-range tokenizer as `state-json-lock.guard.test.ts`. The 
   `npm run check:cycles` passes.
 - The guard allowlist holds only `no-book-write`, `cross-book-walker` and `job-lease` entries.
 - **No on-box acceptance is owed.** Every behaviour is provable by fault injection.
+
+## Reconciliation with #3594's `book` lock
+
+#3594 (#3400, merged to `main` as 4c109a86 while this PR was open) added a second per-book lock,
+`withBookLock` (`workspace/book-lock.ts`), and a reparse-busy marker. Merging `main` into this branch
+kept both locks and removed the marker.
+
+**One combined order:** `design → library-voice → book-op → book-path-claim → cast → book → state-json`,
+with `cast → cast-id-history`, and `revision-op → revisions`, `listen-stats` and
+`script-review-ledger` under book-op.
+
+The two locks do different jobs:
+- **book-op** is the operation-and-move lock (this plan).
+- **`book`** is the narrower state.json / manuscript-edits.json consistency lock. It is keyed by
+  bookId, re-entrant within one async context, has no acquisition timeout, and is always taken
+  **inside** book-op (or by a path that holds no book-op, such as the workspace scan's self-heal).
+
+Two invariants hold everywhere: no `book` holder takes book-op, and no path takes `book` before `cast`.
+
+Where each path sits:
+- **PUT `/state`:** `withBookOp` stays outermost. The `cast` slice keeps `withCastLock` (book-op →
+  cast, never under `book`). The `manuscript` slice and a non-moving `state` write take
+  `withBookLock` → `state-json`. A move calls `moveBookFolder` without `book` held;
+  `moveBookFolder` takes `withBookLock` itself, inside the path claim (book-op → book-path-claim →
+  book → state-json), so a `book`-only writer (the scan heal, `updateStateAtDir`) cannot interleave
+  with a move.
+- **Chapter restructure:** the two-span prep, then `withBookOp` → #3594's `beginRestructure` gate →
+  `withBookLock` → `applyRestructureClaimed` (using the handle's `bookDir`).
+- **Reparse / replace-manuscript:** the two-span flow under `withBookOp`; inside `applyReparse`,
+  #3594's `withLocatedBook` locked step (book-op → book → state-json) and its backstop stay.
+- **Exclude / held toggles:** `withBookOp` → `withBookLock` → `updateStateJsonLocked`.
+- **`restore-unrecorded`:** `withBookOp` → #3594's `hasPendingForChapter` (409 `has_revision`) →
+  `revision-op` → restore. The legacy `DELETE …/audio/previous` keeps #3594's 410 `moved`.
+
+**Owner decision (2026-10-19): a rename during a reparse or replace-manuscript waits, then
+succeeds.** book-op already covers the whole destructive commit, so #3594's refusal machinery is
+redundant and was removed: `markReparseBusy` / `clearReparseBusy` / `isReparseBusy`
+(`tts/design-lock.ts`), `locateAndMarkReparseBusy`, `answerAbsentOrMoved`, the
+`REPARSE_UNSTABLE_409` / `REPARSE_MOVED_409` sentences, the `busyDir` clear, and the PUT's
+reparse/analysis 409s (`moveBookFolder`'s `assertNotBusy` covers analysis with `book_busy`).
+These stay, as defence against a move made outside the server: the backstop in `applyReparse`'s
+locked step (`fresh.bookDir !== bookDir → null`, now answered 404), analysis's
+`assertWriteTargetStable`, and `restructure-gate.ts`.
+
+Pinned by `book-state.replace-manuscript-rename.test.ts` (a queued rename waits, then lands at the
+new folder, and the old path is never recreated), `book-op-lock.test.ts` (a `book`-only holder
+excludes `moveBookFolder`), and `chapters-restructure.test.ts` (book-op → gate → book).
 
 ## Out of scope
 
