@@ -30,10 +30,10 @@ import {
   bookDirByDisplay,
   dotAudiobook,
   ensureWorkspace,
-  makeBookId,
   stateJsonPath,
   slug,
 } from '../workspace/paths.js';
+import { mintBookId, withBookPathClaim } from '../workspace/book-op-lock.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
@@ -370,13 +370,8 @@ importRouter.post('/books', async (req: Request, res: Response) => {
 
     ensureWorkspace();
     const bookDir = bookDirByDisplay(author, series, title);
-    if (existsSync(bookDir)) {
-      const suggestedTitle = `${title} (2)`;
-      return res.status(409).json({ error: 'slug_collision', suggestedTitle });
-    }
 
     const manuscriptId = 'mns_' + nanoid(10);
-    const bookId = makeBookId(author, series, title);
     /* MOBI and AZW3 share the same ManuscriptFormat ('mobi') but the file
        extension matters at re-parse time: .azw3 routes to initKf8File,
        .mobi routes to initMobiFile. Preserve the original extension when
@@ -386,17 +381,6 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       entry.format === 'mobi' && originalExt === 'azw3' ? 'azw3' : EXT_BY_FORMAT[entry.format];
     const manuscriptFile = `manuscript.${manuscriptExt}`;
     const manuscriptPath = join(bookDir, manuscriptFile);
-
-    await mkdir(bookDir, { recursive: true });
-    await mkdir(dotAudiobook(bookDir), { recursive: true });
-    await mkdir(join(bookDir, 'audio'), { recursive: true });
-    /* Persist the ORIGINAL uploaded bytes verbatim — re-parse later
-       needs the unmodified input. Earlier versions wrote sourceText
-       (the *extracted* text), which broke EPUB re-parse outright (plain
-       text isn't a valid ZIP) and silently corrupted markdown re-parse
-       too (parseText strips headings + injects audio tags, so re-parsing
-       the already-stripped-and-tagged text produces wrong chapters). */
-    await writeFile(manuscriptPath, entry.originalBuffer);
 
     const now = new Date().toISOString();
     const excludedSet = new Set<string>(
@@ -421,34 +405,60 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         titleSynthesized: c.titleSynthesized || undefined,
       };
     });
-    const state: BookStateJsonWrite = {
-      bookId,
-      manuscriptId,
-      title,
-      author,
-      series,
-      seriesPosition,
-      isStandalone,
-      manuscriptFile,
-      castConfirmed: false,
-      chapters: chaptersWithSlug.map((c) => ({
-        id: c.id,
-        title: c.title,
-        slug: c.slug,
-        excluded: c.excluded,
-        titleSynthesized: c.titleSynthesized,
-      })),
-      coverGradient: deterministicGradient(bookId),
-      createdAt: now,
-      updatedAt: now,
-      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      language,
-    };
-    /* #3700 — every state.json write goes through the per-book lock, a fresh
-       create included, so it can never interleave with a sibling writer. */
-    await withStateJsonLock(stateJsonPath(bookDir), () =>
-      writeStateJsonAtomic(stateJsonPath(bookDir), state),
-    );
+    /* #3711 — the path claim covers "is this Author/Series/Title path free ->
+       mint a bookId nothing else carries -> create the folder -> first
+       state.json write", so a rename into the same path or a twin import cannot
+       interleave. The id is `makeBookId(...)` unless a book RENAMED away from
+       this path still holds it; then the title slug gets a `-2` suffix, so two
+       books never share an id. */
+    const created = await withBookPathClaim(async () => {
+      if (existsSync(bookDir)) return null;
+      const bookId = await mintBookId(author, series, title);
+      await mkdir(bookDir, { recursive: true });
+      await mkdir(dotAudiobook(bookDir), { recursive: true });
+      await mkdir(join(bookDir, 'audio'), { recursive: true });
+      /* Persist the ORIGINAL uploaded bytes verbatim — re-parse later
+         needs the unmodified input. Earlier versions wrote sourceText
+         (the *extracted* text), which broke EPUB re-parse outright (plain
+         text isn't a valid ZIP) and silently corrupted markdown re-parse
+         too (parseText strips headings + injects audio tags, so re-parsing
+         the already-stripped-and-tagged text produces wrong chapters). */
+      await writeFile(manuscriptPath, entry.originalBuffer);
+      const state: BookStateJsonWrite = {
+        bookId,
+        manuscriptId,
+        title,
+        author,
+        series,
+        seriesPosition,
+        isStandalone,
+        manuscriptFile,
+        castConfirmed: false,
+        chapters: chaptersWithSlug.map((c) => ({
+          id: c.id,
+          title: c.title,
+          slug: c.slug,
+          excluded: c.excluded,
+          titleSynthesized: c.titleSynthesized,
+        })),
+        coverGradient: deterministicGradient(bookId),
+        createdAt: now,
+        updatedAt: now,
+        chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+        language,
+      };
+      /* #3700 — every state.json write goes through the per-book lock, a fresh
+         create included, so it can never interleave with a sibling writer. */
+      await withStateJsonLock(stateJsonPath(bookDir), () =>
+        writeStateJsonAtomic(stateJsonPath(bookDir), state),
+      );
+      return bookId;
+    });
+    if (created === null) {
+      const suggestedTitle = `${title} (2)`;
+      return res.status(409).json({ error: 'slug_collision', suggestedTitle });
+    }
+    const bookId = created;
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be

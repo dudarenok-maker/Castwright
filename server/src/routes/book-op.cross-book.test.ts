@@ -29,6 +29,7 @@ let app: Express;
 let paths: typeof import('../workspace/paths.js');
 let fileLock: typeof import('../workspace/file-lock.js');
 let castLock: typeof import('../workspace/cast-lock.js');
+let bookOp: typeof import('../workspace/book-op-lock.js');
 let voiceLibrary: typeof import('../workspace/voice-library.js');
 let manuscripts: typeof import('../store/manuscripts.js');
 const manuscriptIds: string[] = [];
@@ -48,6 +49,7 @@ beforeAll(async () => {
   paths = await import('../workspace/paths.js');
   fileLock = await import('../workspace/file-lock.js');
   castLock = await import('../workspace/cast-lock.js');
+  bookOp = await import('../workspace/book-op-lock.js');
   voiceLibrary = await import('../workspace/voice-library.js');
   manuscripts = await import('../store/manuscripts.js');
   app = express();
@@ -435,5 +437,30 @@ describe('#3711 task 6 -- voice-library DELETE and assign: library-voice -> book
     expect(r.renameRes.status).toBe(204);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('promote: a book renamed while the promote queues on book-op is read from the NEW folder (201, not a spurious 404)', async () => {
+    const book = seedBook('Lib Promote');
+    const newDir = paths.bookDirByDisplay(AUTHOR, book.series, 'Lib Promote Renamed');
+    let promoteP!: Promise<request.Response>;
+    await bookOp.withBookOp(book.bookId, async (held) => {
+      promoteP = fire(
+        request(app).post('/api/voice-library/promote').send({ bookId: book.bookId, characterId: 'alice', name: 'Promoted' }),
+      );
+      await waitUntil(() => waiters(`book-op:${book.bookId}`) === 1, 'the promote to queue on book-op');
+      await bookOp.moveBookFolder(held, newDir, (fresh) => ({ ...fresh, title: 'Lib Promote Renamed' }));
+    });
+    const res = await promoteP;
+    expect(res.status).toBe(201);
+    expect(res.body.promotedFrom).toEqual({ bookId: book.bookId, characterId: 'alice' });
+    expect(existsSync(book.bookDir)).toBe(false); // the promote read; it recreated nothing
+    expect(castOf(newDir).map((c) => c.id)).toEqual(['narrator', 'alice', 'bob']); // origin cast untouched
+  });
+
+  it('promote of a book that does not exist is a 404', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'no__such__book', characterId: 'alice', name: 'X' });
+    expect(res.status).toBe(404);
   });
 });

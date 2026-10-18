@@ -7,7 +7,7 @@
 
    Conflict handling (when the target dir already exists):
 
-     - 'rename'   (default) — append `-imported-1`, `-imported-2`, … to
+     - 'rename'   (default) — append ` (imported)`, ` (imported 2)`, … to
                               the book title until the slug-based target
                               dir is free. Also adjusts state.json's
                               `title` + `bookId` to match the rewritten
@@ -16,21 +16,30 @@
                               by the same path. Files that exist on disk
                               but not in the bundle are LEFT IN PLACE
                               (e.g. user's listen-progress.json which was
-                              intentionally excluded from the bundle).
+                              intentionally excluded from the bundle). The
+                              existing book KEEPS its bookId, and the
+                              overwrite is refused (BookBusyError) while a
+                              long job is registered for it.
      - 'fail'                — throws BundleConflictError without touching
                               disk.
 
-   Atomicity: every file in the bundle is written to a `.tmp-<pid>-<ts>`
-   sibling first; once every write succeeds, we rename each tmp file over
-   the live path. On ANY failure during the write phase, the tmp files
-   are removed and no live file is touched. (This is per-file atomic, not
-   bundle-atomic — a crash AFTER the first rename but before the last
-   leaves a half-imported book. Operators recover by deleting the partial
-   target dir and re-importing.) */
+   #3711 — bookIds are unique: a bundle's own id is kept only when nothing in
+   the workspace carries it; otherwise a fresh one is minted (`mintBookId`).
+
+   Staging + atomicity: every entry is first written under
+   `<workspace>/.staging/<nonce>/` (outside `books/`, same volume), with no lock
+   held. A fresh/`rename` import then takes the path claim only for the
+   collision check, the bookId, and ONE directory rename into place — atomic. An
+   'overwrite' takes book-op(existing id) -> the claim, re-checks the target
+   still carries that id (else BundleConflictError), then renames the staged
+   files over the live ones (per-file atomic, not bundle-atomic — a crash after
+   the first rename but before the last leaves a half-imported book; operators
+   recover by deleting the partial target dir and re-importing). A crash leaves
+   an orphan `.staging/<nonce>` which the startup sweep removes after an hour. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { fromBuffer as yauzlFromBuffer, type ZipFile, type Entry } from 'yauzl';
 import {
   STANDALONES_SERIES,
@@ -38,11 +47,22 @@ import {
   bookDirByDisplay,
   dotAudiobook,
   ensureWorkspace,
-  makeBookId,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
+import {
+  BOOK_GONE,
+  BookBusyError,
+  bookJobKinds,
+  isBookIdTaken,
+  mintBookId,
+  withBookOp,
+  withBookPathClaim,
+} from '../workspace/book-op-lock.js';
+import { makeStagingDir } from '../workspace/portable-staging.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   PORTABLE_SCHEMA_VERSION,
@@ -117,7 +137,7 @@ async function readAllEntries(zipBuffer: Buffer): Promise<Map<string, Buffer>> {
 
 /** Append " (imported)" / " (imported 2)" / … to the title until the
     resulting bookDir doesn't exist. Returns the resolved bookDir path,
-    the adjusted title, and the new bookId.
+    and the adjusted title.
 
     The first-collision suffix is " (imported)" rather than " (imported 1)"
     because a single re-import (the common case) should produce a clean
@@ -131,13 +151,13 @@ function resolveRenamedTarget(
   author: string,
   series: string,
   baseTitle: string,
-): { bookDir: string; title: string; bookId: string } {
+): { bookDir: string; title: string } {
   for (let i = 0; i < 100; i += 1) {
     const suffix = i === 0 ? ' (imported)' : ` (imported ${i + 1})`;
     const title = `${baseTitle}${suffix}`;
     const bookDir = bookDirByDisplay(author, series, title);
     if (!existsSync(bookDir)) {
-      return { bookDir, title, bookId: makeBookId(author, series, title) };
+      return { bookDir, title };
     }
   }
   throw new Error('bundle_conflict: too many colliding imports; aborting after 100 attempts');
@@ -212,158 +232,178 @@ export async function importPortableBundle(
   const author = state.author;
   const series = state.series || STANDALONES_SERIES;
   const baseTitle = state.title;
-  let bookDir = bookDirByDisplay(author, series, baseTitle);
-  let resolvedTitle = baseTitle;
-  let resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
-  let renamedTo: string | undefined;
-  /* #3700: an 'overwrite' into an existing book replaces its live state.json,
-     which a concurrent render/rename read-modify-write also owns. */
-  let overwritingExisting = false;
 
-  if (existsSync(bookDir)) {
-    if (strategy === 'fail') {
-      throw new BundleConflictError(bookDir);
-    }
-    if (strategy === 'rename') {
-      const renamed = resolveRenamedTarget(author, series, baseTitle);
-      bookDir = renamed.bookDir;
-      resolvedTitle = renamed.title;
-      resolvedBookId = renamed.bookId;
-      renamedTo = bookDir;
-      state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
-    } else {
-      /* 'overwrite' falls through — bookDir stays as the existing path. */
-      overwritingExisting = true;
-    }
-  }
-
-  /* Stage every entry into a tmp file alongside its eventual home, then
-     promote all of them via rename. Per-file atomicity (see file-header
-     comment for the caveat about bundle-atomicity). */
-  await mkdir(bookDir, { recursive: true });
-  await mkdir(dotAudiobook(bookDir), { recursive: true });
-  await mkdir(audioDir(bookDir), { recursive: true });
-
-  /* Re-serialise state.json from the (possibly renamed) in-memory shape
-     instead of writing stateRaw verbatim — otherwise the bookId / title
-     in the rename branch wouldn't actually land on disk. A bundle
-     state.json with no `language` lands as an explicit `language: null`
-     (key present); a bundle that carries a language round-trips unchanged. */
-  const finalStateBuf = Buffer.from(
-    JSON.stringify({ ...state, language: state.language ?? null }, null, 2),
-    'utf8',
-  );
-
-  type Staged = { dest: string; tmp: string; buf: Buffer | null; sourceEntry?: string };
-  const staged: Staged[] = [];
-  const tmpSuffix = `.tmp-${process.pid}-${Date.now()}`;
-
-  function planEntry(dest: string, buf: Buffer, sourceEntry: string): void {
-    staged.push({ dest, tmp: `${dest}${tmpSuffix}`, buf, sourceEntry });
-  }
-
-  const liveStatePath = stateJsonPath(bookDir);
-  planEntry(liveStatePath, finalStateBuf, 'state.json');
-  const manuscriptBuf = entries.get(state.manuscriptFile);
-  if (!manuscriptBuf) {
-    throw new InvalidBundleError(
-      'missing_manuscript',
-      `Bundle references manuscript ${state.manuscriptFile} but the file is absent.`,
-    );
-  }
-  planEntry(join(bookDir, state.manuscriptFile), manuscriptBuf, state.manuscriptFile);
-
-  /* Optional top-level entries: cover.{jpg,png,…} and change-log.json. */
-  const coverEntries: [string, Buffer][] = [];
-  for (const [name, buf] of entries.entries()) {
-    if (name === 'MANIFEST.json' || name === 'state.json') continue;
-    if (name === state.manuscriptFile) continue;
-    if (name.startsWith('audio/')) continue;
-    /* Cover and change-log land in .audiobook/, everything else top-level
-       is unexpected — log + skip rather than fail, so a forward-compat
-       writer adding fields doesn't break older importers. */
-    if (name === 'change-log.json') {
-      planEntry(join(dotAudiobook(bookDir), 'change-log.json'), buf, name);
-      continue;
-    }
-    if (name.startsWith('cover.')) {
-      coverEntries.push([name, buf]);
-      continue;
-    }
-    /* Forward-compat: skip silently. */
-  }
-
-  /* #3535: re-encode the cover to a clean JPEG like every other cover path,
-     and store it as cover.jpg whatever the entry's extension. Every cover.*
-     entry shares that one destination (and so one tmp file), so stage at most
-     one: an exact cover.jpg first, else the first that decodes. An undecodable
-     entry is skipped (the book still imports), like an unknown entry. */
-  coverEntries.sort(([a], [b]) => Number(b === 'cover.jpg') - Number(a === 'cover.jpg'));
-  let coverStaged = false;
-  for (const [name, buf] of coverEntries) {
-    if (coverStaged) {
-      console.warn(`[import] skipping extra cover entry ${name}: one cover per bundle`);
-      continue;
-    }
-    try {
-      const jpeg = await reencodeToJpeg(buf, { tolerant: true });
-      planEntry(join(dotAudiobook(bookDir), 'cover.jpg'), jpeg, name);
-      coverStaged = true;
-    } catch (e) {
-      console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
-    }
-  }
-
-  /* Audio entries — audio/<slug>.<ext>. Restored into <bookDir>/audio/. */
-  const audioRoot = audioDir(bookDir);
-  for (const [name, buf] of entries.entries()) {
-    if (!name.startsWith('audio/')) continue;
-    const relPath = name.slice('audio/'.length);
-    if (!relPath) continue;
-    planEntry(join(audioRoot, relPath), buf, name);
-  }
-
-  /* Phase 1: write every tmp file. On ANY failure, unlink the ones already
-     written and abort before touching live files. */
-  const tmpsWritten: string[] = [];
+  /* #3711 -- stage EVERY entry into `<workspace>/.staging/<nonce>/` first. That
+     is outside `books/` and on the same volume, with no lock and no write under
+     `books/`: a slow bundle never holds the path claim, and a half-written book
+     is never visible to a scan or a resolve. The tree mirrors the final book
+     folder, so a fresh/`rename` import is placed by ONE directory rename. */
+  const stage = await makeStagingDir();
   try {
-    for (const s of staged) {
-      if (s.buf === null) continue;
-      await mkdir(dirname(s.tmp), { recursive: true });
-      await writeFile(s.tmp, s.buf);
-      tmpsWritten.push(s.tmp);
-    }
-  } catch (e) {
-    for (const t of tmpsWritten) await unlink(t).catch(() => {});
-    throw e;
-  }
+    /* Staged files, relative to the book folder (state.json first, as before: the
+       overwrite path renames them over live files in this order). */
+    const stagedRel: string[] = [];
+    const stageFile = async (rel: string, buf: Buffer): Promise<void> => {
+      const dest = join(stage, rel);
+      await mkdir(dirname(dest), { recursive: true });
+      await writeFile(dest, buf);
+      stagedRel.push(rel);
+    };
+    const stateRel = relative(stage, stateJsonPath(stage));
+    /* The final state.json is written once the bookId and title are decided under
+       the claim; reserve its slot (and the directory skeleton) now. */
+    stagedRel.push(stateRel);
+    await mkdir(dotAudiobook(stage), { recursive: true });
+    await mkdir(audioDir(stage), { recursive: true });
 
-  /* Phase 2: rename each tmp file over its final destination. Failure
-     mid-rename is the half-imported case called out in the header. */
-  const commit = async (): Promise<void> => {
-    for (const s of staged) {
-      await rename(s.tmp, s.dest);
+    const manuscriptBuf = entries.get(state.manuscriptFile);
+    if (!manuscriptBuf) {
+      throw new InvalidBundleError(
+        'missing_manuscript',
+        `Bundle references manuscript ${state.manuscriptFile} but the file is absent.`,
+      );
     }
-  };
-  try {
-    /* #3700: leaf lock, nothing else is taken inside it. A fresh folder has no
-       other writer yet, so only the overwrite path needs it. */
-    if (overwritingExisting) await withStateJsonLock(liveStatePath, commit);
-    else await commit();
-  } catch (e) {
-    /* Best-effort cleanup of remaining tmp files (the ones we hadn't
-       renamed yet); already-renamed live files are left in place because
-       we don't have their pre-import bytes any more. */
-    for (const t of tmpsWritten) await unlink(t).catch(() => {});
-    throw e;
-  }
+    await stageFile(state.manuscriptFile, manuscriptBuf);
 
-  return {
-    bookId: resolvedBookId,
-    targetPath: bookDir,
-    importedFiles: staged.length,
-    ...(strategy === 'rename' && renamedTo
-      ? { conflict: { strategy: 'rename' as const, renamedTo } }
-      : {}),
-  };
+    /* Optional top-level entries: cover.{jpg,png,…} and change-log.json. */
+    const coverEntries: [string, Buffer][] = [];
+    for (const [name, buf] of entries.entries()) {
+      if (name === 'MANIFEST.json' || name === 'state.json') continue;
+      if (name === state.manuscriptFile) continue;
+      if (name.startsWith('audio/')) continue;
+      /* Cover and change-log land in .audiobook/, everything else top-level
+         is unexpected — log + skip rather than fail, so a forward-compat
+         writer adding fields doesn't break older importers. */
+      if (name === 'change-log.json') {
+        await stageFile(relative(stage, join(dotAudiobook(stage), 'change-log.json')), buf);
+        continue;
+      }
+      if (name.startsWith('cover.')) {
+        coverEntries.push([name, buf]);
+        continue;
+      }
+      /* Forward-compat: skip silently. */
+    }
+
+    /* #3535: re-encode the cover to a clean JPEG like every other cover path,
+       and store it as cover.jpg whatever the entry's extension. Every cover.*
+       entry shares that one destination, so stage at most one: an exact
+       cover.jpg first, else the first that decodes. An undecodable entry is
+       skipped (the book still imports), like an unknown entry. */
+    coverEntries.sort(([a], [b]) => Number(b === 'cover.jpg') - Number(a === 'cover.jpg'));
+    let coverStaged = false;
+    for (const [name, buf] of coverEntries) {
+      if (coverStaged) {
+        console.warn(`[import] skipping extra cover entry ${name}: one cover per bundle`);
+        continue;
+      }
+      try {
+        const jpeg = await reencodeToJpeg(buf, { tolerant: true });
+        await stageFile(relative(stage, join(dotAudiobook(stage), 'cover.jpg')), jpeg);
+        coverStaged = true;
+      } catch (e) {
+        console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
+      }
+    }
+
+    /* Audio entries — audio/<slug>.<ext>. Restored into <bookDir>/audio/. */
+    const audioRoot = audioDir(stage);
+    for (const [name, buf] of entries.entries()) {
+      if (!name.startsWith('audio/')) continue;
+      const relPath = name.slice('audio/'.length);
+      if (!relPath) continue;
+      await stageFile(relative(stage, join(audioRoot, relPath)), buf);
+    }
+
+    /* Re-serialise state.json from the in-memory shape instead of writing
+       stateRaw verbatim, so the decided bookId / title actually land on disk. A
+       bundle state.json with no `language` lands as an explicit `language: null`
+       (key present); a bundle that carries a language round-trips unchanged. */
+    const writeStagedState = (bookId: string, title: string): Promise<void> =>
+      writeFile(
+        stateJsonPath(stage),
+        JSON.stringify({ ...state, title, bookId, language: state.language ?? null }, null, 2),
+        'utf8',
+      );
+
+    /* The id a NEW book gets: the bundle's own when nothing in the workspace
+       carries it, else a minted one (never two books with one id). Called under
+       the claim. */
+    const idForNewBook = async (title: string, keepBundleId: boolean): Promise<string> =>
+      keepBundleId && state.bookId && !(await isBookIdTaken(state.bookId))
+        ? state.bookId
+        : mintBookId(author, series, title);
+
+    /* Fresh / `rename` import. Under the claim ONLY: collision check -> bookId ->
+       mkdir the parents -> one directory rename of the staged tree into place. */
+    const placeFresh = (): Promise<ImportPortableBundleResult> =>
+      withBookPathClaim(async () => {
+        let bookDir = bookDirByDisplay(author, series, baseTitle);
+        let title = baseTitle;
+        let renamedTo: string | undefined;
+        if (existsSync(bookDir)) {
+          /* 'fail' -- or an 'overwrite' whose target is not a book we can lock. */
+          if (strategy !== 'rename') throw new BundleConflictError(bookDir);
+          const renamed = resolveRenamedTarget(author, series, baseTitle);
+          bookDir = renamed.bookDir;
+          title = renamed.title;
+          renamedTo = bookDir;
+        }
+        const bookId = await idForNewBook(title, renamedTo === undefined);
+        await writeStagedState(bookId, title);
+        await mkdir(dirname(bookDir), { recursive: true });
+        await renameWithRetry(stage, bookDir);
+        return {
+          bookId,
+          targetPath: bookDir,
+          importedFiles: stagedRel.length,
+          ...(renamedTo ? { conflict: { strategy: 'rename' as const, renamedTo } } : {}),
+        };
+      });
+
+    /* 'overwrite' into an existing folder, under the claim: re-check the target
+       still carries `expectedId` (null = it carried none), else it is a conflict;
+       then rename the staged files over the live ones, state.json first, holding
+       state-json(target) as before. Files only on disk are LEFT IN PLACE. */
+    const commitOverwrite = (
+      targetDir: string,
+      expectedId: string | null,
+    ): Promise<ImportPortableBundleResult> =>
+      withBookPathClaim(async () => {
+        const live = await readStateJsonWithRecovery(stateJsonPath(targetDir)).catch(() => null);
+        if (!existsSync(targetDir) || (live?.bookId ?? null) !== expectedId) {
+          throw new BundleConflictError(targetDir);
+        }
+        const bookId = expectedId ?? (await idForNewBook(baseTitle, true));
+        await writeStagedState(bookId, baseTitle);
+        await withStateJsonLock(stateJsonPath(targetDir), async () => {
+          for (const rel of stagedRel) {
+            const dest = join(targetDir, rel);
+            await mkdir(dirname(dest), { recursive: true });
+            await rename(join(stage, rel), dest);
+          }
+        });
+        return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
+      });
+
+    const targetDir = bookDirByDisplay(author, series, baseTitle);
+    if (strategy === 'overwrite' && existsSync(targetDir)) {
+      /* Read the existing id UNLOCKED, take that book's book-op, then the claim
+         (lock order: book-op -> book-path-claim). The overwrite KEEPS the existing
+         bookId and is refused while a long job is registered for it. */
+      const existing = await readStateJsonWithRecovery(stateJsonPath(targetDir)).catch(() => null);
+      const existingId = existing?.bookId;
+      if (!existingId) return await commitOverwrite(targetDir, null);
+      const overwritten = await withBookOp(existingId, async () => {
+        const kinds = bookJobKinds(existingId);
+        if (kinds.length > 0) throw new BookBusyError(kinds);
+        return commitOverwrite(targetDir, existingId);
+      });
+      if (overwritten !== BOOK_GONE) return overwritten;
+      /* The book left the library while we queued: import it as a fresh one. */
+    }
+    return await placeFresh();
+  } finally {
+    await rm(stage, { recursive: true, force: true }).catch(() => undefined);
+  }
 }

@@ -32,6 +32,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
+import { withBookOpAtDir } from './book-op-lock.js';
 import { findChapterAudio } from './chapter-audio-file.js';
 import { BOOKS_ROOT, audioDir, bookDirByDisplay } from './paths.js';
 
@@ -153,10 +154,15 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
     for (const series of safeReaddir(authorDir)) {
       const seriesDir = join(authorDir, series);
       for (const title of safeReaddir(seriesDir)) {
-        const bookDir = bookDirByDisplay(author, series, title);
-        const result = await fsckOrphanAudio(audioDir(bookDir));
-        recovered.push(...result.recovered);
-        errors.push(...result.errors);
+        const walkedDir = bookDirByDisplay(author, series, title);
+        /* #3711 — per-book step under book-op, on the folder the book lives in
+           NOW: a rename queued ahead of the sweep must not leave the promote/drop
+           renames landing in a vacated path. */
+        await withBookOpAtDir(walkedDir, async (bookDir) => {
+          const result = await fsckOrphanAudio(audioDir(bookDir));
+          recovered.push(...result.recovered);
+          errors.push(...result.errors);
+        });
       }
     }
   }

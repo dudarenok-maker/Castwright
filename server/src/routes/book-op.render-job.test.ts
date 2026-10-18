@@ -203,6 +203,24 @@ describe('POST /generation is a registered render job (#3711)', () => {
     expect((await renameRequest()).status).toBe(204);
   });
 
+  it('a render callback that THROWS outside the per-chapter handler still deregisters the job and ends the stream with idle', async () => {
+    /* A `null` sentence makes processOneChapter throw (`s.excludeFromSynthesis` of
+       null) BEFORE its own try/finally, so the throw escapes the chapter loop and
+       skips the normal-path deregisterJob / endAllSubscribers. */
+    const cacheModule = await import('../store/analysis-cache.js');
+    const real = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    vi.spyOn(cacheModule, 'loadAnalysisCache').mockResolvedValue({ ...real, chapters: { 1: [null] } } as never);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { isGenerationActive } = await import('./generation.js');
+    const res = await generate();
+    const ticks = parseTicks(res.text);
+    expect(ticks.find((t) => t.type === 'chapter_failed')?.errorReason).toBe('Could not start the render.');
+    expect(ticks.map((t) => t.type)).toContain('idle'); // the subscribers were ended
+    expect(isGenerationActive(bookId)).toBe(false); // the in-flight map entry was removed
+    expect(bookJobKinds(bookId)).toEqual([]);
+    expect((await renameRequest()).status).toBe(204);
+  });
+
   it('releases the registration on an early return (no target chapters)', async () => {
     const res = await generate({ chapterIds: [99], force: true });
     expect(parseTicks(res.text).map((t) => t.type)).toContain('idle');

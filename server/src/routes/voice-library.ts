@@ -63,7 +63,7 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
-import { findBookByBookId, bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
+import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
@@ -1021,13 +1021,19 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
         .json({ error: '`bookId`, `characterId`, and `name` are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) {
+    /* #3711 — the book is resolved AND its cast.json read under book-op, so a
+       folder rename that queued ahead of this request cannot leave us reading the
+       vacated path (a spurious "No character"). Promote never WRITES the book (the
+       origin cast.json is untouched); everything after this read is library-level
+       state, so book-op is released before the copy and the entry write. */
+    const castRead = await withBookOp(bookId, ({ bookDir }) =>
+      readJson<CastJson>(castJsonPath(bookDir)),
+    );
+    if (castRead === BOOK_GONE) {
       return res.status(404).json({ error: `No book "${bookId}".` });
     }
 
-    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
-    const characters = cast?.characters ?? [];
+    const characters = castRead?.characters ?? [];
     const character = characters.find((c) => c.id === characterId);
     if (!character) {
       return res

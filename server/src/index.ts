@@ -44,6 +44,7 @@ import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
 import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
+import { sweepStaleStaging } from './workspace/portable-staging.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
 import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js';
 import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
@@ -166,6 +167,16 @@ export async function bootStartSidecarSupervisor(
 
 async function main(): Promise<void> {
   ensureWorkspace();
+
+  /* #3711 — drop portable-bundle staging left behind by a crashed import. AWAITED,
+     and before either listenWithAutoRebind() call below, so it finishes before the
+     server can accept an import (an entry under an hour old is kept anyway, since
+     it may belong to a live one). One readdir when there is nothing to do; never
+     throws. */
+  const sweptStaging = await sweepStaleStaging();
+  if (sweptStaging.length > 0) {
+    console.log(`[staging] removed ${sweptStaging.length} stale portable-import staging dir(s).`);
+  }
 
   /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
      onnxruntime-gpu (or another swap package) provides `onnxruntime`, so a

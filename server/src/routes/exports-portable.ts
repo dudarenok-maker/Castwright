@@ -28,7 +28,7 @@ import {
   importPortableBundle,
   type ConflictStrategy,
 } from '../import/scan-import-folder.js';
-import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, BookBusyError } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
@@ -132,6 +132,13 @@ portableImportRouter.post(
         return res
           .status(409)
           .json({ error: 'bundle_conflict', existingPath: e.existingPath, message: e.message });
+      }
+      if (e instanceof BookBusyError) {
+        /* #3711 -- an overwrite of a book a long job is registered for. */
+        return res.status(409).json({
+          error: `This book is busy (${[...new Set(e.kinds)].join(', ')}). Wait for it to finish, then import again.`,
+          code: 'book_busy',
+        });
       }
       if (e instanceof InvalidBundleError) {
         return res

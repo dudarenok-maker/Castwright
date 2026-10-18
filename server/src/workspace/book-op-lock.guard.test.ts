@@ -373,8 +373,28 @@ const ENUMERATED_WRITERS: ReadonlySet<string> = new Set([
   'routes/voice-library.ts DELETE /:voiceUuid/assign',
   'routes/voice-library.ts DELETE /:voiceUuid',
   'routes/library-cast-override.ts POST /library-cast/override',
-  'routes/exports-portable.ts POST /portable',
+  'routes/voice-library.ts POST /promote', // reads a book's cast.json (never writes it)
 ]);
+
+/* G6: the book CREATORS. They are not `/:bookId` handlers, so G2 cannot see them,
+   and the portable import's book-op (the overwrite path) lives in the library
+   function, not the route handler -- so the route is covered here instead of by
+   an `ENUMERATED_WRITERS` entry. Each creator must carry every token listed:
+   the path claim for the collision check + placement, and the id-minting /
+   already-loaded check that keeps bookIds unique. */
+const CREATOR_TOKENS: ReadonlyMap<string, RegExp[]> = new Map([
+  ['routes/import.ts', [/\bwithBookPathClaim\(/g, /\bmintBookId\(/g]],
+  ['routes/samples.ts', [/\bwithBookPathClaim\(/g, /\bpeekBook\(/g]],
+  ['import/scan-import-folder.ts', [/\bwithBookPathClaim\(/g, /\bwithBookOp\(/g, /\bmintBookId\(/g]],
+]);
+
+/** Creator files missing one of their required tokens (prose and strings do not count). */
+function missingCreatorTokens(rel: string, content: string, required: RegExp[]): string[] {
+  const opaque = computeOpaqueRanges(content);
+  return required
+    .filter((re) => tokenIndexes(content, opaque, re).length === 0)
+    .map((re) => `${rel}: no ${re.source.replace(/\\b|\\\(/g, '')}( call`);
+}
 
 interface Handler extends Span {
   method: string;
@@ -577,7 +597,6 @@ const ALLOW_G2 = allow([
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
   ['routes/cast-tier.ts', 1, 'cross-book-walker'], // walker: book-op per book inside forEachMatchingCastCharacter
-  ['routes/exports-portable.ts', 1, 'pending:T7 (POST /portable import)'],
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
   ['routes/script-review.ts', 2, 'no-book-write'], // cancel (in-memory abort) + attach (re-attach only)
@@ -762,6 +781,22 @@ describe('book-op lock — static guard (#3711)', () => {
   it('G5: runBookJob is the ONLY registration function (book-jobs.ts exports; __addBookJobToken has no other caller)', () => {
     expect(scanned.jobsExports.sort()).toEqual(['runBookJob']);
     expect(scanned.addTokenUsers).toEqual([]);
+  });
+
+  it('G6: each book creator (manuscript import, sample load, portable import) takes the path claim and keeps bookIds unique', () => {
+    const problems: string[] = [];
+    for (const [rel, required] of CREATOR_TOKENS) {
+      problems.push(...missingCreatorTokens(rel, readFileSync(join(SRC_ROOT, rel), 'utf8'), required));
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('G6 negative control: a creator without the claim / mint token is reported; prose and strings do not count', () => {
+    const req = [/\bwithBookPathClaim\(/g, /\bmintBookId\(/g];
+    expect(missingCreatorTokens('x.ts', 'const id = makeBookId(a, s, t);', req)).toHaveLength(2);
+    expect(missingCreatorTokens('x.ts', 'await withBookPathClaim(async () => { const id = await mintBookId(a, s, t); });', req)).toEqual([]);
+    expect(missingCreatorTokens('x.ts', '// withBookPathClaim( mintBookId( used to be here\nconst s = "mintBookId(";', req)).toHaveLength(2);
+    expect(missingCreatorTokens('x.ts', 'await withBookPathClaim(async () => {});', req)).toHaveLength(1);
   });
 
   it('no pending:T<n> allowlist entry remains (flipped on by Task 10)', () => {

@@ -349,6 +349,20 @@ export async function withBookOps<T>(
   return curated(() => step(0, []));
 }
 
+/** A startup sweep's per-book step: lock the book found at `dir` and run `fn`
+ *  against the folder it lives in NOW (a rename that queued ahead of the sweep
+ *  moves it). A book whose state.json carries no `bookId` cannot be resolved by
+ *  any route, so the API cannot move it: `fn` runs on `dir` unlocked. A book that
+ *  vanished while the sweep queued is skipped (`BOOK_GONE`). */
+export async function withBookOpAtDir<T>(
+  dir: string,
+  fn: (bookDir: string) => Promise<T>,
+): Promise<T | typeof BOOK_GONE> {
+  const raw = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
+  if (!raw?.bookId) return fn(dir);
+  return withBookOp(raw.bookId, ({ bookDir }) => fn(bookDir), { hintDir: dir });
+}
+
 /** One workspace-wide key held across "is this Author/Series/Title path free ->
  *  mkdir parents -> create or rename into it". Held by the movers and the book
  *  creators; closes the empty-parent `rmdir` race and the creator-vs-rename path
@@ -471,16 +485,29 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
 
 /* ---- minting ids ----------------------------------------------------------------- */
 
-/** A bookId no `state.json` in the workspace carries. Called under the path
- *  claim by NON-sample creators only. `makeBookId(...)` if free; otherwise
- *  `-2`, `-3`, ... is appended to the TITLE slug so `parseBookId` keeps its
- *  three parts. */
-export async function mintBookId(author: string, series: string, title: string): Promise<string> {
+/** Every bookId some `state.json` under the books root carries. */
+async function takenBookIds(): Promise<Set<string>> {
   const taken = new Set<string>();
   for (const dir of walkBookDirs()) {
     const raw = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
     if (raw?.bookId) taken.add(raw.bookId);
   }
+  return taken;
+}
+
+/** True if any `state.json` in the workspace carries `bookId`. Called under the
+ *  path claim by creators that want to KEEP an incoming id (a portable bundle's)
+ *  when it is free. */
+export async function isBookIdTaken(bookId: string): Promise<boolean> {
+  return (await takenBookIds()).has(bookId);
+}
+
+/** A bookId no `state.json` in the workspace carries. Called under the path
+ *  claim by NON-sample creators only. `makeBookId(...)` if free; otherwise
+ *  `-2`, `-3`, ... is appended to the TITLE slug so `parseBookId` keeps its
+ *  three parts. */
+export async function mintBookId(author: string, series: string, title: string): Promise<string> {
+  const taken = await takenBookIds();
   const base = makeBookId(author, series || STANDALONES_SERIES, title);
   if (!taken.has(base)) return base;
   const parts = parseBookId(base);

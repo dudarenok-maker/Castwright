@@ -2432,6 +2432,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      entry and starts a fresh run. */
   endAllSubscribers(job, { type: 'idle' });
 
+  } catch (e) {
+    /* A throw out of the chapter loop (outside processOneChapter's own handling)
+       skips the normal-path deregisterJob / endAllSubscribers above. Without this the
+       job stays in `inFlightByChapter` / `inFlightByBook` forever -- every later POST
+       for the chapter would see a phantom in-flight job, `isGenerationActive` would
+       stay true, and EVERY attached subscriber (not just the starter) would never get
+       a terminal frame. Give them the curated failure frame (never the raw message) and
+       `idle`, then rethrow so the caller still logs it. */
+    deregisterJob(key, job);
+    broadcast(job, {
+      type: 'chapter_failed',
+      errorReason: isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the render.',
+    });
+    endAllSubscribers(job, { type: 'idle' });
+    throw e;
   } finally {
     /* #3711 — wait for the un-awaited children that write the book. They resolve once
        scoring's own `runBookJob` registration has (triggerScoring), so by the time this

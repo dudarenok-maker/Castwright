@@ -253,7 +253,7 @@ const G2_RAW_ALLOWED = new Map<string, { writes: number; marker: RegExp; why: st
     {
       writes: 1,
       marker: /\blanguage:\s*state\.language\s*\?\?\s*null/g,
-      why: 'atomic portable-bundle importer: stages state.json via planEntry(stateJsonPath(bookDir), finalStateBuf, ...) then writeFile+rename across the whole bundle; required to restate language (language: state.language ?? null) so a language-less bundle lands as explicit null, not an untyped write.',
+      why: 'atomic portable-bundle importer: stages state.json via writeFile(stateJsonPath(stage), ...) into .staging/<nonce>, then renames the staged tree/files into the book folder; required to restate language (language: state.language ?? null) so a language-less bundle lands as explicit null, not an untyped write.',
     },
   ],
 ]);
@@ -287,14 +287,17 @@ function countRawStateWrites(
    book-state.ts +2 (DELETE's lock key + presence check) and auto-backup.ts +1
    (restore's presence check) — reads, not writes; #3711 then moved the folder
    rename/delete into workspace/book-op-lock.ts's movers, taking book-state.ts
-   from 14 to 10 and giving book-op-lock.ts its 10). Asserted BOTH
+   from 14 to 10 and giving book-op-lock.ts its 10; #3711 task 7 then added
+   book-op-lock.ts +1 (withBookOpAtDir's bookId read) and re-staged the bundle
+   importer, scan-import-folder.ts 1 to 5 (two staging-dir sites, three
+   overwrite reads/lock keys) — reads and lock keys, not new write sites). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'cover/store.ts': 2,
   'cover/upload.ts': 2,
-  'import/scan-import-folder.ts': 1,
+  'import/scan-import-folder.ts': 5,
   'routes/analysis.ts': 4,
   'routes/book-state.ts': 10,
   'routes/chapters-restructure.ts': 3,
@@ -307,7 +310,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/active-analyses.ts': 1,
   'workspace/auto-backup.ts': 5,
   'workspace/book-dir-guard.ts': 1,
-  'workspace/book-op-lock.ts': 10,
+  'workspace/book-op-lock.ts': 11,
   'workspace/library-cast-scan.ts': 1,
   'workspace/scan.ts': 4,
   'workspace/series-cast-scan.ts': 2,

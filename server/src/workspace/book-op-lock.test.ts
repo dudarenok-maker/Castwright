@@ -733,6 +733,54 @@ describe('mintBookId', () => {
   });
 });
 
+describe('isBookIdTaken', () => {
+  it('is true only for an id some state.json under books/ carries', async () => {
+    const { bookId } = seedBook('Taken', 'Ser', 'Here');
+    expect(await lock.isBookIdTaken(bookId)).toBe(true);
+    expect(await lock.isBookIdTaken(`${bookId}-nope`)).toBe(false);
+  });
+});
+
+describe('withBookOpAtDir (startup-sweep step)', () => {
+  it('runs fn on the folder the book lives in NOW when a mover relocated it while the step queued', async () => {
+    const { bookId, bookDir } = seedBook('Sweep', 'Ser', 'Mover');
+    const newDir = join(paths.BOOKS_ROOT, 'Sweep', 'Ser', 'Mover Renamed');
+    const seen: string[] = [];
+    let stepP!: Promise<unknown>;
+    await lock.withBookOp(bookId, async (book) => {
+      stepP = lock.withBookOpAtDir(bookDir, async (dir) => {
+        seen.push(dir);
+      });
+      await until(() => fileLock.__keyWaitersForTest(`book-op:${bookId}`) === 1);
+      await lock.moveBookFolder(book, newDir, (fresh) => ({ ...fresh, title: 'Mover Renamed' }));
+    });
+    await stepP;
+    expect(seen).toEqual([newDir]);
+  });
+
+  it('runs fn unlocked on the walked dir for a book whose state.json carries no bookId', async () => {
+    const { bookDir } = seedBook('Sweep', 'Ser', 'No Id', { bookId: null });
+    const seen: string[] = [];
+    await lock.withBookOpAtDir(bookDir, async (dir) => {
+      seen.push(dir);
+    });
+    expect(seen).toEqual([bookDir]);
+  });
+
+  it('skips (BOOK_GONE) a book that vanished while the step queued', async () => {
+    const { bookId, bookDir } = seedBook('Sweep', 'Ser', 'Vanishes');
+    const fn = vi.fn(async () => 'ran');
+    let stepP!: Promise<unknown>;
+    await lock.withBookOp(bookId, async (book) => {
+      stepP = lock.withBookOpAtDir(bookDir, fn);
+      await until(() => fileLock.__keyWaitersForTest(`book-op:${bookId}`) === 1);
+      await lock.removeBookFolder(book);
+    });
+    expect(await stepP).toBe(lock.BOOK_GONE);
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
 describe('test hooks', () => {
   it('__keyWaitersForTest generalises __stateJsonWaitersForTest', async () => {
     expect(fileLock.__keyWaitersForTest('nobody-holds-this')).toBe(0);
