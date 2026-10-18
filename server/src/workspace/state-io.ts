@@ -5,12 +5,18 @@
    file, so the previous bytes survive until that rename completes. A rotating
    write (`{ rotate }`) first moves the old file to `.bak.1` and renames the tmp
    onto the vacated name: a kill between the two renames leaves main absent
-   (the previous state is in `.bak.1`). The rotating write drops a
-   `<file>.writing-<pid>-<n>` marker BEFORE the first rename and removes it after
-   the rename-in, so an absent main WITH a marker is a stranded write and an
-   absent main WITHOUT one is a deliberate delete (`hasWriteInFlightMarker`);
-   `readJsonWithRecovery` with `recoverMissing` reads the backup either way.
-   A kill mid-write never leaves a partial main file.
+   (the previous state is in `.bak.1`), and for a moment during EVERY rotating
+   write main is absent too. A plain read (`readJson`, `existsSync`) in that
+   window sees no file, so every reader of a rotated file must recover:
+   `readJsonWithRecovery` with `recoverMissing` serves the backup. For
+   state.json that is `readStateJsonWithRecovery` (state-migrate.ts), and
+   `state-json-read.guard.test.ts` fails the build on a plain state.json read.
+   The rotating write also drops a `<file>.writing-<pid>-<n>` marker BEFORE the
+   first rename and removes it after the rename-in, for a caller where absence
+   can also mean a deliberate delete (user-settings.json): a marker that
+   explains the absence (`writeMarkersExplainAbsence`) makes it a stranded
+   write, anything else a delete. A kill mid-write never leaves a partial main
+   file.
 
    Windows + OneDrive caveat: when the destination is in a OneDrive-synced
    folder, OneDrive briefly holds a read handle on the file as part of its
@@ -73,30 +79,67 @@ const STALE_MARKER_MS = 30_000;
 /** Markers this process created for writes that are still running. */
 const liveMarkers = new Set<string>();
 
+/** Markers this process KEPT because its own write failed after rotation and
+ *  the restore failed too (main left absent). Dead, but this process knows they
+ *  are a strand, not a delete (#3625 pass 6). */
+const keptMarkers = new Set<string>();
+
+/** One marker's state: `live` (it may belong to a write still running), `dead`
+ *  (with its mtime), or `gone` (vanished while we looked). Live is this process's
+ *  own running write, or another's marker younger than STALE_MARKER_MS. */
+function markerState(path: string, name: string): { full: string; state: 'live' | 'dead' | 'gone'; mtimeMs: number } {
+  const full = join(dirname(path), name);
+  const own = name.startsWith(`${writeMarkerPrefix(path)}${process.pid}-`);
+  if (own && liveMarkers.has(full)) return { full, state: 'live', mtimeMs: Number.NaN };
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(full).mtimeMs;
+  } catch {
+    return { full, state: 'gone', mtimeMs: Number.NaN };
+  }
+  if (own) return { full, state: 'dead', mtimeMs };
+  return { full, state: Date.now() - mtimeMs > STALE_MARKER_MS ? 'dead' : 'live', mtimeMs };
+}
+
 /** Remove every marker for `path` that cannot belong to a live write - this
  *  process's own whose write has returned, or anyone's older than
  *  STALE_MARKER_MS - and report whether any (possibly live) marker remains.
  *  A marker outliving its write turns every later deliberate delete into a
- *  recovery (#3625 delta review 3, I2), so writes and stranded reads sweep.
- *  `remove: false` only reports. Throws like `hasWriteInFlightMarker` when the
- *  directory cannot be listed. */
+ *  recovery (#3625 delta review 3, I2), so writes, stranded reads and reads
+ *  that find main present sweep. `remove: false` only reports. Throws like
+ *  `hasWriteInFlightMarker` when the directory cannot be listed. */
 export function sweepDeadWriteMarkers(path: string, remove = true): boolean {
-  const ownPrefix = `${writeMarkerPrefix(path)}${process.pid}-`;
   let remaining = 0;
   for (const name of listWriteMarkers(path)) {
-    const full = join(dirname(path), name);
-    let dead = name.startsWith(ownPrefix) && !liveMarkers.has(full);
-    if (!dead) {
-      try {
-        dead = Date.now() - statSync(full).mtimeMs > STALE_MARKER_MS;
-      } catch {
-        continue; // already gone
-      }
+    const { full, state } = markerState(path, name);
+    if (state === 'gone') continue;
+    if (state === 'live') remaining += 1;
+    else if (remove) {
+      removeMarker(full);
+      keptMarkers.delete(full);
     }
-    if (!dead) remaining += 1;
-    else if (remove) removeMarker(full);
   }
   return remaining > 0;
+}
+
+/** Whether the markers beside an ABSENT `path` explain that absence to this
+ *  process - a strand it can attribute, as opposed to a deliberate delete
+ *  (#3625 pass 6). A marker explains it when it is LIVE (a write may be between
+ *  its renames right now), when this process kept it after its own failed
+ *  write, or when it is dead but NEWER than `mainSeenAtMs`, this process's last
+ *  sighting of a present main. A dead marker older than that sighting was
+ *  already there while main was whole, so it cannot be why main is gone now;
+ *  with no sighting at all (`null`: a cold boot) no dead marker can be
+ *  attributed, and the absence reads as a delete. Throws like
+ *  `hasWriteInFlightMarker` when the directory cannot be listed. */
+export function writeMarkersExplainAbsence(path: string, mainSeenAtMs: number | null): boolean {
+  for (const name of listWriteMarkers(path)) {
+    const { full, state, mtimeMs } = markerState(path, name);
+    if (state === 'gone') continue;
+    if (state === 'live' || keptMarkers.has(full)) return true;
+    if (mainSeenAtMs !== null && mtimeMs > mainSeenAtMs) return true;
+  }
+  return false;
 }
 
 export interface WriteJsonOpts {
@@ -151,7 +194,7 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *  but JSON.parse rejects it" — UNLESS the caller opts in with
  *  `recoverMissing` (state.json always - nothing deletes it on purpose, so an
  *  absent main with a parseable `.bak.N` is a stranded book; user-settings.json
- *  only once `hasWriteInFlightMarker` says a write died, since deleting that file
+ *  only once `writeMarkersExplainAbsence` says a write died, since deleting that file
  *  is how a user resets it), in which case the newest parseable backup is
  *  returned with a warning, and `null` only when there is none. When the main file is corrupt AND every
  *  backup is corrupt / missing, the original parse error is re-thrown
@@ -305,6 +348,7 @@ export async function writeJsonAtomic(
        Main still absent: leave it - it is the evidence of a stranded write. */
     if (marker) liveMarkers.delete(marker);
     if (marker && existsSync(path)) removeMarker(marker);
+    else if (marker) keptMarkers.add(marker);
     throw e;
   }
 }

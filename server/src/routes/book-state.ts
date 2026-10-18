@@ -1810,13 +1810,25 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
        refuses. Leaf lock: nothing else is taken inside. If state.json is
        already gone by the time we hold the lock, the folder moved (a rename
        PUT held the key) - resolve the book again rather than answering 204
-       for a delete that removed nothing. */
+       for a delete that removed nothing.
+       #3625 pass 6 - "gone" is the recovering read's verdict, not main's
+       existence: a STRANDED book (main absent, a good `.bak.1`, the state
+       `findBookByBookId` matched on) is still here and is removed, as
+       `restoreBackup` treats it. The read also names the book now in the
+       folder, so a different book moved into it is never removed. A state
+       that no longer parses at all is still the folder resolved a moment ago
+       and is removed. */
     let located = await findBookByBookId(req.params.bookId);
     let removed = false;
     for (let attempt = 0; located && !removed && attempt < 3; attempt += 1) {
       const dir = located.bookDir;
       removed = await withStateJsonLock(stateJsonPath(dir), async () => {
-        if (!existsSync(stateJsonPath(dir))) return false;
+        const fresh = await readStateJsonWithRecovery(stateJsonPath(dir)).catch((err: unknown) => {
+          if (err instanceof SyntaxError) return undefined;
+          throw err;
+        });
+        if (fresh === null) return false;
+        if (fresh && fresh.bookId !== req.params.bookId) return false;
         await rm(dir, { recursive: true, force: true });
         return true;
       });

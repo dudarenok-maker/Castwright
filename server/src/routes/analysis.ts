@@ -7984,7 +7984,7 @@ export async function runSubsetAnalyzerJob(
        the result gate, since decision F never demotes it. A state.json that
        belongs to another manuscript (a stale path) counts as not confirmed. */
     const loadDir = liveBookDir(job);
-    const loadState = loadDir ? await readJson<BookStateJson>(stateJsonPath(loadDir)).catch(() => null) : null;
+    const loadState = loadDir ? await readStateJsonWithRecovery(stateJsonPath(loadDir)).catch(() => null) : null;
     const bookReachedConfirm = reachedConfirm(loadState?.manuscriptId === manuscriptId ? loadState : null, cache);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};

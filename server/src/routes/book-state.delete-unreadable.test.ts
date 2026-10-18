@@ -157,6 +157,72 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(odd)).toBe(true);
   });
 
+  /* #3625 pass 6 (🟠3, probe P-DEL): a STRANDED book - main state.json absent,
+     a good `.bak.1` (a rotating write died between its renames). The library
+     lists it through the recovering read, so DELETE finds it, but the lock body
+     required main to exist: it answered 204, removed nothing, and every retry
+     did the same. */
+  it('removes a stranded book (main state.json absent, a good .bak.1) and its row', async () => {
+    const title = 'Stranded Book';
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, 'manuscript.txt'), 'x');
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json.bak.1'),
+      JSON.stringify({
+        bookId: 'stranded-book-id',
+        manuscriptId: 'm_stranded',
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    expect((await listed()).some((b) => b.bookId === 'stranded-book-id')).toBe(true);
+
+    const res = await request(app).delete('/api/books/stranded-book-id');
+    expect(res.status).toBe(204);
+    expect(existsSync(dir)).toBe(false);
+    expect((await listed()).some((b) => b.bookId === 'stranded-book-id')).toBe(false);
+    expect(existsSync(healthyDir)).toBe(true);
+  });
+
+  /* The in-lock re-read compares the bookId: a different book now living in the
+     resolved folder (it was renamed away and another moved in) is not removed. */
+  it('does not remove the folder when the state read inside the lock names another book', async () => {
+    const { findBookByBookId } = await import('../workspace/scan.js');
+    const located = await findBookByBookId(healthyId);
+    expect(located?.bookDir).toBe(healthyDir);
+    const statePath = join(healthyDir, '.audiobook', 'state.json');
+    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    /* Hold the book's lock, start the DELETE (it resolves the folder, then
+       queues on the lock), and swap another book's state in before releasing. */
+    let release!: () => void;
+    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    const del = request(app).delete(`/api/books/${healthyId}`).then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        bookId: 'another-book-id',
+        manuscriptId: 'm_another',
+        title: HEALTHY,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    release();
+    await held;
+    const res = await del;
+    expect(res.status).toBe(204);
+    expect(existsSync(healthyDir)).toBe(true);
+  });
+
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {
     const res = await request(app).delete('/api/books/no-such-book');
     expect(res.status).toBe(204);

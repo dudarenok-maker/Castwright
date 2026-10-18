@@ -1028,7 +1028,7 @@ export async function listAllChangeLogs(): Promise<BookChangeLogEvents[]> {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const state = await readJson<BookStateJson>(stateJsonPath(dir)).catch(() => null);
+        const state = await readStateJsonWithRecovery(stateJsonPath(dir)).catch(() => null);
         if (!state) continue;
         const log = await readJson<{ events?: unknown[] }>(changeLogJsonPath(dir)).catch(
           () => null,

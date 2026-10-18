@@ -26,7 +26,7 @@
 import { join } from 'node:path';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { BOOKS_ROOT, analysisStateJsonPath, ensureWorkspace, stateJsonPath } from './paths.js';
-import { readJson } from './state-io.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import type { BookStateJson } from './scan.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
@@ -75,7 +75,7 @@ export async function scanActiveAnalyses(): Promise<ActiveAnalysisSummary[]> {
            — needed for bookId + bookTitle. A missing/malformed state.json
            means the workspace is in an inconsistent state for this book;
            skip it silently rather than 500 the whole scan. */
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir)).catch(() => null);
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir)).catch(() => null);
         if (!state) continue;
         /* A confirmed book's analysis is finished; a leftover paused/halted
            snapshot (e.g. an aborted or displaced run the server never cleared)

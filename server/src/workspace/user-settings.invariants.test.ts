@@ -16,12 +16,14 @@
    `readdirSync` can be made to fail. All pass straight through by default. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, mkdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 const hooks = vi.hoisted(() => ({
   rename: null as null | ((src: string, dest: string) => Promise<void>),
   readFile: null as null | ((path: string) => Promise<void>),
+  /** Runs after the real read has returned its bytes, before the caller sees them. */
+  readFileAfter: null as null | ((path: string) => Promise<void>),
   readdirFails: false,
 }));
 
@@ -35,7 +37,9 @@ vi.mock('node:fs/promises', async () => {
     },
     readFile: (async (...args: Parameters<typeof actual.readFile>) => {
       if (hooks.readFile) await hooks.readFile(String(args[0]));
-      return actual.readFile(...args);
+      const out = await actual.readFile(...args);
+      if (hooks.readFileAfter) await hooks.readFileAfter(String(args[0]));
+      return out;
     }) as typeof actual.readFile,
   };
 });
@@ -68,14 +72,17 @@ function clean(): void {
 beforeEach(() => {
   hooks.rename = null;
   hooks.readFile = null;
+  hooks.readFileAfter = null;
   hooks.readdirFails = false;
   clean();
   mod._resetUserSettingsCache();
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   hooks.rename = null;
   hooks.readFile = null;
+  hooks.readFileAfter = null;
   hooks.readdirFails = false;
   clean();
   mod._resetUserSettingsCache();
@@ -151,6 +158,26 @@ describe('I1 — a read never commits values older than the newest completed wri
       expect(mod.getResolvedAllowCloudFallback(), `run ${run}`).toBe(false);
     }
   });
+
+  /* Pass 6 🟡1: the stamp a read commits is the one taken BEFORE it read, never
+     a stat at commit time. Another process's rename-in that lands after this
+     read parsed main, but before it committed, would otherwise be recorded
+     under the OLD content, and nothing would ever re-read it. */
+  it('a rename-in by another process between the parse and the commit is picked up by the next read', async () => {
+    writeFileSync(P, settings({ displayName: 'Old' }));
+    let swapped = false;
+    hooks.readFileAfter = async (p) => {
+      if (p !== P || swapped) return;
+      swapped = true;
+      const tmp = `${P}.tmp-sibling`;
+      writeFileSync(tmp, settings({ displayName: 'Sibling, written after our parse' }));
+      renameSync(tmp, P);
+    };
+    expect((await mod.readUserSettings()).displayName).toBe('Old');
+    hooks.readFileAfter = null;
+    expect(swapped).toBe(true);
+    expect((await mod.readUserSettings()).displayName).toBe('Sibling, written after our parse');
+  });
 });
 
 const erofs = () => Object.assign(new Error('EROFS: simulated'), { code: 'EROFS' });
@@ -216,6 +243,63 @@ describe('I2 — a deliberate delete resets to defaults and never resurrects', (
     await expect(mod.writeUserSettings({ displayName: 'After' })).resolves.toBeTruthy();
   });
 
+  /* Pass 6 🟠2, probe P-I2a: a dead marker that no save has swept since it
+     appeared. Its mtime predates this process's last sighting of a present
+     main, so it cannot explain main's absence. */
+  it('P-I2a: an hour-old marker with no save after it does not turn a delete into a recovery (warm)', async () => {
+    await mod.writeUserSettings({ displayName: 'v1' });
+    await mod.writeUserSettings({ displayName: 'v2' });
+    foreignMarker(HOUR);
+    rmSync(P);
+    expect((await mod.readUserSettings()).displayName).toBe(mod.DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(P)).toBe(false);
+  });
+
+  /* P-I2b: a young foreign marker survives the post-write sweeps (it could be a
+     live sibling), then ages. It was on disk before the last save, so it
+     predates the last sighting of main. */
+  it('P-I2b: a fresh foreign marker kept by two saves, then aged, does not resurrect on delete', async () => {
+    await mod.writeUserSettings({ displayName: 'v1' });
+    foreignMarker(0);
+    await mod.writeUserSettings({ displayName: 'v2' });
+    await mod.writeUserSettings({ displayName: 'v3' });
+    expect(markers()).toHaveLength(1); // young and foreign: the sweeps keep it
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + HOUR); // the marker ages
+    rmSync(P);
+    expect((await mod.readUserSettings()).displayName).toBe(mod.DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(P)).toBe(false);
+  });
+
+  /* P-I2c, the cold case. At boot this process has never seen main, so a crash
+     mid-save (I3) and a stale marker followed by a deliberate delete (I2) look
+     the same on disk. Owner decision (#3625 pass 6): delete wins. */
+  it('P-I2c: at boot, a dead marker beside a missing main is a delete: defaults', async () => {
+    await mod.writeUserSettings({ displayName: 'v1' });
+    await mod.writeUserSettings({ displayName: 'v2' });
+    foreignMarker(HOUR);
+    rmSync(P);
+    mod._resetUserSettingsCache(); // a restart
+    expect((await mod.readUserSettings()).displayName).toBe(mod.DEFAULT_USER_SETTINGS.displayName);
+    expect(existsSync(P)).toBe(false);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+  });
+
+  /* Pass 6 🟠2 (c): reads sweep too, not only writes, so a dead marker beside a
+     present main does not wait for the next save. */
+  it('a read that finds main present sweeps dead markers, at boot too, and keeps a live one', async () => {
+    writeFileSync(P, settings({ displayName: 'Mine' }));
+    foreignMarker(HOUR);
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    expect(markers()).toEqual([]);
+
+    mod._resetUserSettingsCache();
+    const live = foreignMarker(0);
+    expect((await mod.readUserSettings()).displayName).toBe('Mine');
+    expect(markers()).toEqual([basename(live)]);
+  });
+
   it('S3: a thorough reset under a stale marker is a reset (cold): defaults, not flagged corrupt', async () => {
     foreignMarker(HOUR);
     const s = await mod.readUserSettings();
@@ -226,8 +310,16 @@ describe('I2 — a deliberate delete resets to defaults and never resurrects', (
 });
 
 describe('I3 — a crash mid-write is recovered from backup at most once, then main is rewritten', () => {
-  it('a dead marker + absent main recovers .bak.1, writes it back to main and drops the marker; a later delete resets', async () => {
-    writeFileSync(bak(1), settings({ displayName: 'Crashed', allowCloudFallback: false }));
+  /* Pass 6: I3 applies to a strand this process can ATTRIBUTE - a live marker,
+     or a dead one newer than its last sighting of a present main. Here main was
+     seen two hours ago and a sibling died mid-save an hour ago. */
+  it('a dead marker newer than the last sighting of main recovers .bak.1, writes it back and drops the marker; a later delete resets', async () => {
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(realNow - 2 * HOUR);
+    writeFileSync(P, settings({ displayName: 'Crashed', allowCloudFallback: false }));
+    await mod.readUserSettings(); // this process sees main, two hours ago
+    clock.mockRestore();
+    renameSync(P, bak(1)); // the sibling's rename-away, an hour ago
     foreignMarker(HOUR);
     expect((await mod.readUserSettings()).displayName).toBe('Crashed');
     expect(existsSync(P)).toBe(true);
@@ -236,6 +328,42 @@ describe('I3 — a crash mid-write is recovered from backup at most once, then m
 
     rmSync(P);
     expect((await mod.readUserSettings()).displayName).toBe(mod.DEFAULT_USER_SETTINGS.displayName);
+  });
+
+  /* Pass 6: a marker this process kept after its OWN failed write is a strand it
+     can always attribute, whatever its mtime says (a filesystem clock coarser
+     than Date.now() can date it before the last sighting of main). */
+  it('the marker kept by our own failed write is recovered even when its mtime predates the last sighting', async () => {
+    await mod.writeUserSettings({ displayName: 'v1' });
+    await mod.writeUserSettings({ displayName: 'v2' });
+    hooks.rename = async (src, dest) => {
+      if (src.includes('.tmp-') || dest === P) throw erofs();
+    };
+    await expect(mod.writeUserSettings({ displayName: 'v3' })).rejects.toThrow(/EROFS/);
+    hooks.rename = null;
+    expect(markers()).toHaveLength(1);
+    const t = (Date.now() - HOUR) / 1000;
+    utimesSync(`${dirname(P)}/${markers()[0]}`, t, t);
+    expect((await mod.readUserSettings()).displayName).toBe('v2');
+    expect(onDisk()).toMatchObject({ displayName: 'v2' });
+  });
+
+  /* Pass 6 🟡2: the warning on a failed write-back says the next read recovers
+     again; the read must actually retry, not serve the cache forever. */
+  it('a failed write-back is retried by the next read', async () => {
+    await mod.writeUserSettings({ displayName: 'v1' });
+    await mod.writeUserSettings({ displayName: 'v2' });
+    hooks.rename = async (src, dest) => {
+      if (src.includes('.tmp-') || dest === P) throw erofs();
+    };
+    await expect(mod.writeUserSettings({ displayName: 'v3' })).rejects.toThrow(/EROFS/);
+    expect(existsSync(P)).toBe(false);
+    expect((await mod.readUserSettings()).displayName).toBe('v2'); // its write-back fails too
+    expect(existsSync(P)).toBe(false);
+    hooks.rename = null;
+    expect((await mod.readUserSettings()).displayName).toBe('v2');
+    expect(existsSync(P)).toBe(true);
+    expect(onDisk()).toMatchObject({ displayName: 'v2' });
   });
 
   it('a LIVE marker (a sibling mid-write) is served from the backup but main is not written under it', async () => {

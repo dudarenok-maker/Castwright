@@ -21,7 +21,7 @@ import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
-import { writeStateJsonAtomic } from './state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { withStateJsonLock } from './file-lock.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
@@ -97,8 +97,20 @@ export async function backupBook(
   book: { bookId: string; bookDir: string },
   opts: BackupBookOpts,
 ): Promise<string | null> {
-  const src = stateJsonPath(book.bookDir);
-  if (!existsSync(src)) return null;
+  /* #3625 pass 6 - the recovering read, not `existsSync` + a raw read: a
+     rotating write renames main away before its rename-in, so a plain read
+     inside that window found no state.json and skipped the book. In the window
+     (or for a stranded book) this reads `.bak.1`, the state before the write.
+     A corrupt main recovers from its newest parseable backup too; only when
+     nothing parses (a SyntaxError) is there no snapshot worth keeping. */
+  let value: unknown;
+  try {
+    value = await readStateJsonWithRecovery(stateJsonPath(book.bookDir));
+  } catch (err) {
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+  if (!value) return null;
 
   if (opts.minIntervalMs && opts.minIntervalMs > 0) {
     const existing = await listBackups(book.bookId);
@@ -106,17 +118,6 @@ export async function backupBook(
       const newest = new Date(existing[0].createdAt).getTime();
       if (opts.now.getTime() - newest < opts.minIntervalMs) return null;
     }
-  }
-
-  const raw = await readFile(src, 'utf8');
-  let value: unknown;
-  /* Validate it parses before keeping it as a "good" snapshot — a corrupt
-     state.json isn't worth preserving (the in-place .bak chain already
-     guards the live file). */
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
   }
 
   const dir = bookBackupsDir(book.bookId);
@@ -155,11 +156,11 @@ async function enumerateBooks(): Promise<Array<{ bookId: string; bookDir: string
       const seriesDir = join(authorDir, series);
       for (const title of await dirsIn(seriesDir)) {
         const bookDir = join(seriesDir, title);
-        const sp = stateJsonPath(bookDir);
-        if (!existsSync(sp)) continue;
         try {
-          const parsed = JSON.parse(await readFile(sp, 'utf8')) as { bookId?: unknown };
-          if (typeof parsed.bookId === 'string' && parsed.bookId) {
+          /* The recovering read (#3625 pass 6): a book mid-write has no main
+             state.json for a moment, and must not drop out of the sweep. */
+          const parsed = (await readStateJsonWithRecovery(stateJsonPath(bookDir))) as { bookId?: unknown } | null;
+          if (parsed && typeof parsed.bookId === 'string' && parsed.bookId) {
             out.push({ bookId: parsed.bookId, bookDir });
           }
         } catch {

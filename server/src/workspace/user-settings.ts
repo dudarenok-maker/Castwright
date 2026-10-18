@@ -14,7 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { appendFile, copyFile, mkdir } from 'node:fs/promises';
-import { hasWriteInFlightMarker, readJsonWithRecovery, sweepDeadWriteMarkers, writeJsonAtomic } from './state-io.js';
+import { readJsonWithRecovery, sweepDeadWriteMarkers, writeJsonAtomic, writeMarkersExplainAbsence } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -1052,10 +1052,22 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
          the write's cache instead of committing what it read.)
      I2  A deliberate delete (no live write in flight) resets to defaults and
          never resurrects. (A write-in-flight marker that outlived its write
-         is swept, so it cannot keep turning a delete into a recovery.)
-     I3  A crash mid-write is recovered from backup at most once, then main is
-         rewritten. (A stranded recovery whose markers are all dead writes the
-         recovered settings back to main and drops the markers.)
+         is swept - by writes, and by every read that finds main present - and
+         one not yet swept counts only if it can explain the absence, below.)
+     I3  A crash mid-write that THIS PROCESS CAN ATTRIBUTE is recovered from
+         backup at most once, then main is rewritten. Attributable means a live
+         marker (a write may be between its renames now: serve the backup,
+         write nothing), a marker this process kept after its own failed write,
+         or a dead marker NEWER than this process's last sighting of a present
+         main (`mainSeenAt`). A stranded recovery whose markers are all dead
+         writes the recovered settings back to main and drops the markers.
+         A dead marker OLDER than that sighting was already there while main
+         was whole, so it cannot explain the absence: that is a delete (I2).
+         THE COLD CASE (#3625 pass 6, owner decision): at boot there is no
+         sighting, and a dead marker beside a missing main is ambiguous between
+         a crash mid-save (I3) and a stale marker followed by a delete (I2).
+         DELETE WINS: it is a reset to defaults, and the backups are dropped
+         like any reset's.
      I4  Any uncertainty (a readdir error, unknown marker state) refuses writes
          rather than serving defaults. (It is handled like a non-parse read
          error: the last-known settings stay, `readUnverified` is set.) */
@@ -1114,6 +1126,12 @@ export async function readUserSettings(): Promise<UserSettings> {
     read can tell whether a write completed while it was on disk (I1). */
 let writeGeneration = 0;
 
+/** When this process last saw the settings file present (a read that parsed
+    main, or a write that landed it); `null` until it has. A write-in-flight
+    marker older than this was already on disk while main was whole, so it
+    cannot explain a later absence (I2/I3). */
+let mainSeenAt: number | null = null;
+
 type ReadOutcome = {
   settings: UserSettings;
   explicitKeys: Set<string>;
@@ -1150,11 +1168,13 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
-  /* An absent main is a RESET (the user deleted the file) unless a rotating write
-     left its in-flight marker, which makes it a STRANDED file: a sibling server
-     between its two renames, or a write that died there. The decision is taken
-     AFTER a null read, marker first and main second: a rename-in that lands in
-     between is then seen as a present main, never as a reset. */
+  /* An absent main is a RESET (the user deleted the file) unless a rotating
+     write's in-flight marker EXPLAINS the absence (I3: live, kept by our own
+     failed write, or newer than our last sighting of main), which makes it a
+     STRANDED file: a sibling server between its two renames, or a write that
+     died there. The decision is taken AFTER a null read, marker first and main
+     second: a rename-in that lands in between is then seen as a present main,
+     never as a reset. */
   const readFromDisk = (recoverMissing: boolean) =>
     readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP, recoverMissing });
   let raw: unknown;
@@ -1166,7 +1186,7 @@ async function performUserSettingsRead(): Promise<UserSettings> {
   try {
     raw = await readFromDisk(false);
     if (!raw) {
-      const marker = hasWriteInFlightMarker(USER_SETTINGS_PATH);
+      const marker = writeMarkersExplainAbsence(USER_SETTINGS_PATH, mainSeenAt);
       if (existsSync(USER_SETTINGS_PATH)) {
         readStamp = statFileStamp();
         raw = await readFromDisk(false); // a rename-in landed after our read
@@ -1193,7 +1213,11 @@ async function performUserSettingsRead(): Promise<UserSettings> {
           try {
             await writeJsonAtomic(USER_SETTINGS_PATH, raw, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
             readStamp = statFileStamp();
+            mainSeenAt = Date.now();
           } catch (writeErr) {
+            /* A stamp no file carries: without it the `null` stamp of an absent
+               main matches the disk, and no warm read would ever retry. */
+            readStamp = STAMP_FORCE_REREAD;
             console.warn(
               `[user-settings] recovered ${USER_SETTINGS_PATH} from its backup but could not write it back ` +
                 `(${(writeErr as Error).message}); the next read recovers again.`,
@@ -1285,6 +1309,18 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       corrupt: false,
       stamp: null,
     });
+  }
+  if (!stranded) {
+    /* Main was read, so it was present: record the sighting (I3) and sweep the
+       markers that cannot belong to a live write, so a dead one does not wait
+       for the next save to go (I2). Best-effort: a directory that cannot be
+       listed now is retried by the next write or read. */
+    mainSeenAt = Date.now();
+    try {
+      sweepDeadWriteMarkers(USER_SETTINGS_PATH);
+    } catch {
+      /* See above. */
+    }
   }
   // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
   const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
@@ -1394,6 +1430,7 @@ const STAMP_FORCE_REREAD: FileStamp = { mtimeMs: -1, size: -1 };
     all. */
 function stampCacheAfterWrite(written: object): void {
   writeGeneration += 1;
+  mainSeenAt = Date.now(); // the write landed main (I3)
   const now = statFileStamp();
   const expectedSize = Buffer.byteLength(JSON.stringify(written, null, 2), 'utf8');
   cachedFileStamp = now !== null && now.size === expectedSize ? now : STAMP_FORCE_REREAD;
@@ -2064,6 +2101,7 @@ export function _resetUserSettingsCache(): void {
   lastKnownEngineInstallState.coqui = 'not-installed';
   settingsFileCorrupt = false;
   readUnverified = false;
+  mainSeenAt = null; // a restart has never seen the file
   /* #3084 P25 — forget archived and unarchived drops and any in-flight archive retry,
      so a later test that reuses an entry archives it again. */
   archivedDrops.clear();
