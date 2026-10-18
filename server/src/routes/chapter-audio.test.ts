@@ -611,7 +611,9 @@ describe('chapter-audio router', () => {
         const { withKeyLock } = await import('../workspace/file-lock.js');
         try {
           await vi.waitFor(() => {
-            const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+            /* #3711 — the DELETE now queues on the book's book-op lock (held by the
+               parked restore), ahead of the per-chapter revision-op key. */
+            const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('book-op:'));
             expect(opCalls.length).toBeGreaterThanOrEqual(2);
           });
         } finally {

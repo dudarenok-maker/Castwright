@@ -575,28 +575,17 @@ const ALLOW_G1 = allow([]);
 const ALLOW_G2 = allow([
   ['routes/analysis.ts', 1, 'no-book-write'], // POST /:id/analysis/pause: in-memory abort only
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
-  ['routes/cast-add-from-roster.ts', 1, 'pending:T5'],
-  ['routes/cast-aliases.ts', 3, 'pending:T5'],
-  ['routes/cast-create.ts', 1, 'pending:T5'],
   ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
-  ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
   ['routes/cast-link-prior.ts', 1, 'pending:T6'],
-  ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
-  ['routes/cast-merge.ts', 1, 'pending:T5'],
   ['routes/cast-not-linked-to.ts', 2, 'pending:T6'],
-  ['routes/cast-reject-orphan.ts', 2, 'pending:T5'],
   ['routes/cast-series-patch.ts', 1, 'pending:T6'],
   ['routes/cast-tier.ts', 1, 'pending:T6'],
-  ['routes/chapter-audio.ts', 2, 'pending:T5'],
-  ['routes/cover.ts', 4, 'pending:T5'],
   ['routes/exports-portable.ts', 1, 'pending:T7 (POST /portable import)'],
   ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
   ['routes/library-cast-override.ts', 1, 'pending:T6'],
-  ['routes/qwen-voice.ts', 3, 'pending:T5 (promote/discard/emotion-variant)'],
-  ['routes/revision-ops.ts', 3, 'pending:T5'],
-  ['routes/script-review.ts', 5, 'pending:T5 (discard/resolve/selection) + no-book-write (cancel/attach)'],
-  ['routes/share.ts', 1, 'pending:T5'],
+  ['routes/script-review.ts', 2, 'no-book-write'], // cancel (in-memory abort) + attach (re-attach only)
+  ['routes/share.ts', 1, 'no-book-write'], // POST /:bookId/share: writes only the workspace-level share-links.json
   ['routes/single-design.ts', 1, 'no-book-write'], // POST design-single/subscribe: re-attach only
   ['routes/voice-library.ts', 3, 'pending:T6'],
   ['routes/voice-match.ts', 1, 'no-book-write'],
@@ -604,29 +593,14 @@ const ALLOW_G2 = allow([
   ['routes/voices.ts', 1, 'pending:T6'],
 ]);
 /* G3a: file -> a book resolved before the lock in a guarded handler. The
-   no-book-write handlers still resolve with findBookByBookId today; Task 5/10
-   decides whether they move to peekBook or a read under withBookOp. */
+   no-book-write handlers (annotate-emotion, instruct-annotation, share) resolve
+   through the lock-free \`peekBook\`, which G3a permits. */
 const ALLOW_G3A = allow([
-  ['routes/annotate-emotion.ts', 1, 'pending:T5'],
-  ['routes/cast-add-from-roster.ts', 2, 'pending:T5'],
-  ['routes/cast-aliases.ts', 3, 'pending:T5'],
-  ['routes/cast-create.ts', 1, 'pending:T5'],
-  ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
   ['routes/cast-link-prior.ts', 2, 'pending:T6'],
-  ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
-  ['routes/cast-merge.ts', 1, 'pending:T5'],
   ['routes/cast-not-linked-to.ts', 4, 'pending:T6'],
-  ['routes/cast-reject-orphan.ts', 2, 'pending:T5'],
   ['routes/cast-series-patch.ts', 2, 'pending:T6'],
   ['routes/cast-tier.ts', 1, 'pending:T6'],
-  ['routes/chapter-audio.ts', 2, 'pending:T5'],
-  ['routes/cover.ts', 4, 'pending:T5'],
-  ['routes/instruct-annotation.ts', 1, 'pending:T5'],
   ['routes/library-cast-override.ts', 2, 'pending:T6'],
-  ['routes/qwen-voice.ts', 3, 'pending:T5'],
-  ['routes/revision-ops.ts', 3, 'pending:T5'],
-  ['routes/script-review.ts', 3, 'pending:T5'],
-  ['routes/share.ts', 1, 'pending:T5'],
   ['routes/voice-library.ts', 2, 'pending:T6'],
   ['routes/voice-override-linked.ts', 2, 'pending:T6'],
 ]);

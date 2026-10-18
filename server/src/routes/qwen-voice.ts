@@ -29,7 +29,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
-import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
@@ -861,8 +861,10 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
     };
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — QUICK (every sidecar call here is bounded by EVICT_FETCH_TIMEOUT_MS),
+       so book-op is held for the whole span: the cast.json write below hits the
+       folder resolved here, even with a rename queued behind. */
+    const outcome = await withBookOp(bookId, async (located) => {
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) {
@@ -997,6 +999,9 @@ qwenVoiceRouter.post(
     return res
       .status(200)
       .json({ voiceId: realVoiceId, url: voiceSamplePublicUrl(realFileName), voiceUuid: character.voiceUuid });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -1016,8 +1021,8 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
     };
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — quick (local rm only); book-op held for the whole span. */
+    const outcome = await withBookOp(bookId, async (located) => {
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) {
@@ -1051,6 +1056,9 @@ qwenVoiceRouter.post(
       await rm(previewMp3, { force: true }).catch(() => {});
     }
     return res.status(200).json({ ok: true });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -1073,9 +1081,9 @@ qwenVoiceRouter.delete(
       });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-
+    /* #3711 — quick (the teardown's evict is bounded by EVICT_FETCH_TIMEOUT_MS);
+       book-op is held for the whole span, outside the cast lock below. */
+    const outcome = await withBookOp(bookId, async (located) => {
     /* C1 fix — mirrors promote-voice above (qwen-voice.ts, the
        "Narrow by design" comment on its own withCastLock call): the read is
        inside the lock, and the 404 + the variant-map mutation are both
@@ -1113,5 +1121,8 @@ qwenVoiceRouter.delete(
     await tearDownEmotionVariant(designedId);
 
     return res.status(200).json({ ok: true, removed: emotion });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );

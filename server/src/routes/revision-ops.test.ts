@@ -424,13 +424,15 @@ function parkUnlink(match: (p: string) => boolean) {
   unlinkGate.match = match;
   return { hit, release };
 }
-/* Resolves once a SECOND op has called withKeyLock for a `revision-op:` key —
+/* Resolves once a SECOND op has called withKeyLock for a `book-op:` key —
    i.e. it has queued behind the parked first one (withKeyLock registers its
-   place synchronously on call). Deterministic: no sleep. */
+   place synchronously on call). Since #3711 the whole op holds the book's
+   book-op lock, so a second op on the same book queues THERE (before reaching
+   the per-chapter key). Deterministic: no sleep. */
 async function secondOpQueued() {
   const { withKeyLock } = await import('../workspace/file-lock.js');
   await vi.waitFor(() => {
-    const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+    const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('book-op:'));
     expect(opCalls.length).toBeGreaterThanOrEqual(2);
   });
 }
@@ -519,7 +521,7 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     expect(keys.filter((k) => k.startsWith('revision-op:') && k.endsWith(':1'))).toHaveLength(1);
   });
 
-  it('ops on DIFFERENT chapters do not wait on each other', async () => {
+  it('ops on DIFFERENT chapters of one book now serialise on book-op (#3711) and both land', async () => {
     writeFileSync(live(), 'LIVE');
     writeFileSync(prev(), 'PREV');
     writeFileSync(live('02-two'), 'LIVE2');
@@ -528,10 +530,14 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const gate = parkUnlink((p) => p.endsWith('01-one.mp3'));
     const parked = reject('r1').then((r) => r);
     await gate.hit;
-    const other = await reject('r2');
-    expect(other.status).toBe(200);
+    const other = reject('r2').then((r) => r);
+    try {
+      await secondOpQueued();
+    } finally {
+      gate.release();
+    }
+    expect((await other).status).toBe(200);
     expect(readFileSync(live('02-two'), 'utf8')).toBe('PREV2');
-    gate.release();
     expect((await parked).status).toBe(200);
   });
 
@@ -539,12 +545,16 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
     const { withKeyLock } = await import('../workspace/file-lock.js');
     vi.mocked(withKeyLock).mockClear();
+    /* The first call is the route's book-op (let it through); the second is the
+       per-chapter key, which times out. */
+    const real = await vi.importActual<typeof import('../workspace/file-lock.js')>('../workspace/file-lock.js');
+    vi.mocked(withKeyLock).mockImplementationOnce(real.withKeyLock);
     vi.mocked(withKeyLock).mockRejectedValueOnce(
       new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000),
     );
     seed([entry(1, 'r1')]);
     const res = await accept('r1');
-    expect(vi.mocked(withKeyLock).mock.calls[0][0]).toMatch(/^revision-op:.*:1$/);
+    expect(vi.mocked(withKeyLock).mock.calls[1][0]).toMatch(/^revision-op:.*:1$/);
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
     expect(res.text).not.toContain('SECRET-WORKSPACE');

@@ -44,8 +44,8 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
-import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import {
   chunkSentencesByBudget,
   ownsOp,
@@ -547,13 +547,16 @@ scriptReviewRouter.post(
   '/:bookId/script-review/discard',
   async (req: Request, res: Response): Promise<void> => {
     const { bookId } = req.params;
-    const located = await findBookByBookId(bookId);
-    if (!located) {
+    /* #3711 — book-op outermost: the ledger write lands in the book's current
+       folder even with a rename queued behind. */
+    const chapterIds: number[] = Array.isArray(req.body?.chapterIds) ? req.body.chapterIds : [];
+    const outcome = await withBookOp(bookId, (located) =>
+      discardChapters(located.bookDir, bookId, chapterIds),
+    );
+    if (outcome === BOOK_GONE) {
       res.status(404).json({ error: 'Book not found.' });
       return;
     }
-    const chapterIds: number[] = Array.isArray(req.body?.chapterIds) ? req.body.chapterIds : [];
-    await discardChapters(located.bookDir, bookId, chapterIds);
     res.json({ ok: true });
   },
 );
@@ -562,18 +565,16 @@ scriptReviewRouter.post(
   '/:bookId/script-review/resolve',
   async (req: Request, res: Response): Promise<void> => {
     const { bookId } = req.params;
-    const located = await findBookByBookId(bookId);
-    if (!located) {
-      res.status(404).json({ error: 'Book not found.' });
-      return;
-    }
-    const { chapterId, version, appliedOpKeys } = req.body ?? {};
-    if (typeof chapterId !== 'number' || typeof version !== 'number' || !Array.isArray(appliedOpKeys)) {
-      res.status(400).json({ error: 'chapterId, version, and appliedOpKeys are required.' });
-      return;
-    }
-    const result = await resolveOps(located.bookDir, bookId, { chapterId, version, appliedOpKeys });
-    res.json(result);
+    /* #3711 — book-op outermost; see discard above. */
+    const outcome = await withBookOp(bookId, async (located) => {
+      const { chapterId, version, appliedOpKeys } = req.body ?? {};
+      if (typeof chapterId !== 'number' || typeof version !== 'number' || !Array.isArray(appliedOpKeys)) {
+        res.status(400).json({ error: 'chapterId, version, and appliedOpKeys are required.' });
+        return;
+      }
+      res.json(await resolveOps(located.bookDir, bookId, { chapterId, version, appliedOpKeys }));
+    });
+    if (outcome === BOOK_GONE) res.status(404).json({ error: 'Book not found.' });
   },
 );
 
@@ -581,24 +582,22 @@ scriptReviewRouter.patch(
   '/:bookId/script-review/selection',
   async (req: Request, res: Response): Promise<void> => {
     const { bookId } = req.params;
-    const located = await findBookByBookId(bookId);
-    if (!located) {
-      res.status(404).json({ error: 'Book not found.' });
-      return;
-    }
-    const { chapterId, version, selected } = req.body ?? {};
-    if (
-      typeof chapterId !== 'number' ||
-      typeof version !== 'number' ||
-      typeof selected !== 'object' ||
-      selected === null ||
-      Array.isArray(selected)
-    ) {
-      res.status(400).json({ error: 'chapterId, version, and selected are required.' });
-      return;
-    }
-    const result = await patchSelection(located.bookDir, bookId, { chapterId, version, selected });
-    res.json(result);
+    /* #3711 — book-op outermost; see discard above. */
+    const outcome = await withBookOp(bookId, async (located) => {
+      const { chapterId, version, selected } = req.body ?? {};
+      if (
+        typeof chapterId !== 'number' ||
+        typeof version !== 'number' ||
+        typeof selected !== 'object' ||
+        selected === null ||
+        Array.isArray(selected)
+      ) {
+        res.status(400).json({ error: 'chapterId, version, and selected are required.' });
+        return;
+      }
+      res.json(await patchSelection(located.bookDir, bookId, { chapterId, version, selected }));
+    });
+    if (outcome === BOOK_GONE) res.status(404).json({ error: 'Book not found.' });
   },
 );
 

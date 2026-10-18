@@ -35,6 +35,7 @@ import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
@@ -374,18 +375,21 @@ chapterAudioRouter.delete(
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId))
       return res.status(404).json({ message: 'Chapter audio not found.' });
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const chapter = located.state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const root = audioDir(located.bookDir);
-    /* #3400: serialised against revision accept/reject on the same chapter
-       (the same audio functions, the same race). */
-    let outcome: 'deleted' | 'none';
+    /* #3711 — book-op outermost (book-op -> revision-op): the audio step runs in
+       the folder resolved under the lock, even with a rename queued behind. */
+    let outcome: 'deleted' | 'none' | 'not-found';
     try {
-      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-        acceptPreviousAudio(root, chapter.slug),
-      );
+      const done = await withBookOp(req.params.bookId, async (located) => {
+        const chapter = located.state.chapters.find((c) => c.id === chapterId);
+        if (!chapter) return 'not-found' as const;
+        const root = audioDir(located.bookDir);
+        /* #3400: serialised against revision accept/reject on the same chapter
+           (the same audio functions, the same race). */
+        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+          acceptPreviousAudio(root, chapter.slug),
+        );
+      });
+      outcome = done === BOOK_GONE ? 'not-found' : done;
     } catch (e) {
       /* The lock key embeds the absolute book path — never echo it. The raw
          error goes to the log. */
@@ -395,6 +399,7 @@ chapterAudioRouter.delete(
       }
       throw e;
     }
+    if (outcome === 'not-found') return res.status(404).json({ message: 'Chapter audio not found.' });
     if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
@@ -415,16 +420,18 @@ chapterAudioRouter.post(
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId))
       return res.status(404).json({ message: 'Chapter audio not found.' });
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const chapter = located.state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const root = audioDir(located.bookDir);
-    let outcome: 'restored' | 'none';
+    /* #3711 — book-op outermost; see the accept (DELETE) route above. */
+    let outcome: 'restored' | 'none' | 'not-found';
     try {
-      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-        restorePreviousAudio(root, chapter.slug),
-      );
+      const done = await withBookOp(req.params.bookId, async (located) => {
+        const chapter = located.state.chapters.find((c) => c.id === chapterId);
+        if (!chapter) return 'not-found' as const;
+        const root = audioDir(located.bookDir);
+        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+          restorePreviousAudio(root, chapter.slug),
+        );
+      });
+      outcome = done === BOOK_GONE ? 'not-found' : done;
     } catch (e) {
       console.error('[chapter-audio] reject (restore previous) failed', e);
       /* A lock timeout's message embeds the book path; the fixed body below
@@ -432,6 +439,7 @@ chapterAudioRouter.post(
       if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
       return res.status(500).json({ message: 'Failed to restore previous audio.' });
     }
+    if (outcome === 'not-found') return res.status(404).json({ message: 'Chapter audio not found.' });
     if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },

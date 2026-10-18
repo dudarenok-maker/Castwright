@@ -34,7 +34,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { randomBytes } from 'node:crypto';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -84,32 +84,33 @@ castAddFromRosterRouter.post(
       });
     }
 
-    const sourceLocated = await findBookByBookId(sourceBookId);
-    if (!sourceLocated)
-      return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
-    const targetLocated = await findBookByBookId(targetBookId);
-    if (!targetLocated)
-      return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
+    /* #3711 — book-op on the SOURCE (the only book written); the target is a
+       read-only consultation through `peekBook`, which takes no lock and writes
+       nothing. */
+    const outcome = await withBookOp(sourceBookId, async (sourceLocated) => {
+      const targetLocated = await peekBook(targetBookId);
+      if (!targetLocated)
+        return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
 
-    if (
-      sourceLocated.state.author !== targetLocated.state.author ||
-      sourceLocated.state.series !== targetLocated.state.series ||
-      sourceLocated.state.isStandalone === true ||
-      targetLocated.state.isStandalone === true
-    ) {
-      return res.status(404).json({
-        error: 'Target book is not a series-mate of the source book.',
-      });
-    }
+      if (
+        sourceLocated.state.author !== targetLocated.state.author ||
+        sourceLocated.state.series !== targetLocated.state.series ||
+        sourceLocated.state.isStandalone === true ||
+        targetLocated.state.isStandalone === true
+      ) {
+        return res.status(404).json({
+          error: 'Target book is not a series-mate of the source book.',
+        });
+      }
 
-    /* #1981 — lock the SOURCE book only (it's the only one written); the
-       target read below is a read-only consultation, not a second RMW, so
-       `withCastLocks` (which would ALSO take a lock on the target book) would
-       be widening the lock for no reason. The target read is a documented
-       check-then-act residual (the target character could change between
-       this read and use) — out of scope for this task, same as the other
-       cross-book sites in this sweep. */
-    return withCastLock(sourceLocated.bookDir, async () => {
+      /* #1981 — lock the SOURCE book only (it's the only one written); the
+         target read below is a read-only consultation, not a second RMW, so
+         `withCastLocks` (which would ALSO take a lock on the target book) would
+         be widening the lock for no reason. The target read is a documented
+         check-then-act residual (the target character could change between
+         this read and use) — out of scope for this task, same as the other
+         cross-book sites in this sweep. */
+      return withCastLock(sourceLocated.bookDir, async () => {
       const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
       const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
       if (!sourceCast?.characters) {
@@ -163,6 +164,10 @@ castAddFromRosterRouter.post(
       );
 
       return res.json({ character: newCharacter });
+      });
     });
+    if (outcome === BOOK_GONE)
+      return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
+    return outcome;
   },
 );

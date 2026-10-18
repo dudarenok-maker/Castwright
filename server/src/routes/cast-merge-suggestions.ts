@@ -15,6 +15,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { performCastMerge, didCastMergeApply } from './cast-merge.js';
@@ -58,10 +59,11 @@ castMergeSuggestionsRouter.post(
       return res.status(400).json({ error: 'sourceId and targetId are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-
-    await dismissSuggestion(located.bookDir, sourceId, targetId);
+    /* #3711 — book-op outermost so the write lands in the book's current folder. */
+    const outcome = await withBookOp(bookId, (located) =>
+      dismissSuggestion(located.bookDir, sourceId, targetId),
+    );
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     return res.json({});
   },
 );
@@ -85,10 +87,13 @@ castMergeSuggestionsRouter.post(
       return res.status(400).json({ error: 'sourceId and targetId must differ.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
-
+    /* #3711 — book-op outermost, held across the merge AND the follow-up
+       dismiss (both write the book folder). The existing curated-failure seam
+       below runs INSIDE the callback unchanged; a book-op acquisition timeout
+       (which never reached it) is curated by the outer catch. */
+    let outcome;
+    try {
+      outcome = await withBookOp(bookId, async ({ bookDir, state }) => {
     try {
       await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
     } catch (err) {
@@ -168,5 +173,13 @@ castMergeSuggestionsRouter.post(
     /* Drop the suggestion only after a successful merge. */
     await dismissSuggestion(bookDir, sourceId, targetId);
     return res.json({});
+      });
+    } catch (err) {
+      if (!isLockAcquisitionTimeout(err)) throw err;
+      console.error('[cast-merge-suggestions] accept failed', err);
+      return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    }
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );

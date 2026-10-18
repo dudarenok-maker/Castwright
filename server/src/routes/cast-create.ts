@@ -20,7 +20,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -53,12 +53,12 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return res.status(400).json({ error: 'name is required.' });
 
-  const located = await findBookByBookId(bookId);
-  if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-
+  /* #3711 — book-op outermost: a folder rename queued behind this create lands
+     after it, so the cast.json write below hits the folder it resolved. */
+  const outcome = await withBookOp(bookId, (located) =>
   /* #1981 — the read is inside the lock; the minted id and the whole
      `nextCharacters` build are decisions derived from it. */
-  return withCastLock(located.bookDir, async () => {
+  withCastLock(located.bookDir, async () => {
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     if (!cast?.characters) {
       return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
@@ -297,5 +297,7 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
 
     console.log(`[cast-create] ${bookId} + "${newId}"`);
     return res.json({ character: newCharacter });
-  });
+  }));
+  if (outcome === BOOK_GONE) return res.status(404).json({ error: `Book "${bookId}" not found.` });
+  return outcome;
 });

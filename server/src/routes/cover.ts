@@ -24,6 +24,7 @@ import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { coverImagePath } from '../workspace/paths.js';
 import { CoverSourceError } from '../cover/sources/types.js';
 import { findCandidateById, aggregateCovers } from '../cover/search.js';
@@ -70,9 +71,12 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '`candidateId` is required.' });
     }
 
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
+    /* #3711 two-span: the candidate search + download are slow and write nothing,
+       so they run off a lock-free `peekBook` (nothing it returns feeds a write);
+       only the commit below holds book-op, on the freshly resolved folder. */
+    const peeked = await peekBook(req.params.bookId);
+    if (!peeked) return res.status(404).json({ error: 'Book not found.' });
+    const { state } = peeked;
 
     const candidate = await findCandidateById(state.title, state.author, candidateId);
     if (!candidate) {
@@ -85,8 +89,11 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
        lock only once state.json is confirmed present: a book moved or deleted
        while this request queued answers 404 with nothing written. */
     const jpeg = await fetchCoverJpeg(candidate.coverUrl);
-    const dest = coverImagePath(bookDir);
-    if (!(await patchStateCover(bookDir, candidate, () => writeCoverFile(dest, jpeg)))) {
+    const committed = await withBookOp(req.params.bookId, async ({ bookDir }) => {
+      const dest = coverImagePath(bookDir);
+      return patchStateCover(bookDir, candidate, () => writeCoverFile(dest, jpeg));
+    });
+    if (committed === BOOK_GONE || !committed) {
       return res.status(404).json({ error: 'Book not found.' });
     }
 
@@ -133,18 +140,18 @@ coverRouter.get('/:bookId/cover', async (req: Request, res: Response) => {
 
 coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir } = located;
-    const path = coverImagePath(bookDir);
-    /* #3700 review pass 3 — the file removal runs inside the state-json lock,
-       and only if state.json is still there (404 otherwise, nothing touched). */
-    const ok = await clearStateCover(bookDir, () =>
-      rm(path, { force: true }).catch(() => {
-        /* best-effort */
-      }),
-    );
-    if (!ok) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — book-op outermost: the removal hits the folder resolved under it. */
+    const ok = await withBookOp(req.params.bookId, async ({ bookDir }) => {
+      const path = coverImagePath(bookDir);
+      /* #3700 review pass 3 — the file removal runs inside the state-json lock,
+         and only if state.json is still there (404 otherwise, nothing touched). */
+      return clearStateCover(bookDir, () =>
+        rm(path, { force: true }).catch(() => {
+          /* best-effort */
+        }),
+      );
+    });
+    if (ok === BOOK_GONE || !ok) return res.status(404).json({ error: 'Book not found.' });
     res.status(204).end();
   } catch (e) {
     console.error('[cover] DELETE failed', e);
@@ -183,9 +190,11 @@ coverRouter.post(
   },
   async (req: Request, res: Response) => {
     try {
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3711 two-span: validate + re-encode run off a lock-free `peekBook`; only
+         the commit below holds book-op. */
+      const peeked = await peekBook(req.params.bookId);
+      if (!peeked) return res.status(404).json({ error: 'Book not found.' });
+      const { state } = peeked;
 
       const file = req.file;
       let sniffedMime: UploadMimeType;
@@ -212,8 +221,11 @@ coverRouter.post(
       const originalFilename = file!.originalname || null;
       /* #3700 review pass 3 — write the file inside the state-json lock only
          once state.json is confirmed present (404 + nothing written otherwise). */
-      const dest = coverImagePath(bookDir);
-      if (!(await patchStateLocalCover(bookDir, originalFilename, () => writeCoverFile(dest, jpeg)))) {
+      const committed = await withBookOp(req.params.bookId, async ({ bookDir }) => {
+        const dest = coverImagePath(bookDir);
+        return patchStateLocalCover(bookDir, originalFilename, () => writeCoverFile(dest, jpeg));
+      });
+      if (committed === BOOK_GONE || !committed) {
         return res.status(404).json({ error: 'Book not found.' });
       }
 
@@ -230,10 +242,6 @@ coverRouter.post(
 
 coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) => {
   try {
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir } = located;
-
     const body = req.body as { offsetX?: unknown; offsetY?: unknown; zoom?: unknown };
     const offsetX = Number(body?.offsetX);
     const offsetY = Number(body?.offsetY);
@@ -244,7 +252,11 @@ coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) 
         .json({ error: '`offsetX`, `offsetY`, `zoom` are required and must be numbers.' });
     }
 
-    const ok = await patchStateFraming(bookDir, { offsetX, offsetY, zoom });
+    /* #3711 — book-op outermost. */
+    const ok = await withBookOp(req.params.bookId, ({ bookDir }) =>
+      patchStateFraming(bookDir, { offsetX, offsetY, zoom }),
+    );
+    if (ok === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     if (!ok)
       return res.status(404).json({ error: 'No cover pinned for this book — set a cover first.' });
 
