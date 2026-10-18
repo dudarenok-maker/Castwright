@@ -1153,7 +1153,7 @@ function ReparseResultBody({
           className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
           {modelGroups.map((g) => (
-            <optgroup key={g.id} label={g.label}>
+            <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
               {g.models.map((m) => (
                 <option key={m.id} value={m.id} title={m.hint}>
                   {m.label}

@@ -1807,7 +1807,7 @@ export function AnalysingView({
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-red-400/40"
                   >
                     {analyzerModelGroups.map((g) => (
-                      <optgroup key={g.id} label={g.label}>
+                      <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
                         {g.models.map((m) => (
                           <option key={m.id} value={m.id} title={m.hint}>
                             {m.label}

@@ -217,6 +217,30 @@ describe('ModelSettingsForm — analysis model and engine move together (#3710 F
   });
 });
 
+describe('ModelSettingsForm — analyzer picker group keys (#3710 M4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+  });
+
+  it('an endpoint named "Ollama" does not collide with the built-in Ollama group', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderForm({
+        analyzerEndpoints: [{ id: 'ollama', name: 'Ollama', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', concurrency: 1, requestCeilingMs: 1_800_000, structuredOutput: 'schema', reasoningStyle: 'not_controllable', reasoning: 'model-default', maxOutputTokens: 0, contextTokens: 32768 }],
+        analyzerCatalog: {
+          groups: [{ kind: 'endpoint', id: 'ollama', label: 'Ollama', status: 'ok', models: [{ id: 'openai:ollama::qwen3', label: 'qwen3', engine: 'openai', model: 'qwen3', structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 } }] }],
+        },
+      } as never);
+      await screen.findByTestId('account-default-analysis-model');
+      const duplicateKeyWarnings = errors.mock.calls.filter((c) => String(c[0]).includes('same key'));
+      expect(duplicateKeyWarnings).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
 describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

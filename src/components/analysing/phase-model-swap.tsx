@@ -113,7 +113,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
       >
         <option value="">(use saved default)</option>
         {modelGroups.map((g) => (
-          <optgroup key={g.id} label={g.label}>
+          <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
             {g.models.map((m) => (
               <option key={m.id} value={m.id} title={m.hint}>
                 {m.label}

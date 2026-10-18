@@ -294,7 +294,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             {analyzerModelGroups.map((g) => (
-              <optgroup key={g.id} label={g.label}>
+              <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
                     {m.label}
