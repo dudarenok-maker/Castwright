@@ -425,8 +425,12 @@ recite:
     re-located the book by id and recorded `manuscriptFile` against the new
     folder. A folder-renaming write that landed during the destructive arms left
     the record in one folder and the file in another (409 after a restart, or a
-    silently lost same-extension upload). Fixed in 47c23fc2 (the locked step
-    refuses with the absent-book 404 when the located folder differs). Checkable:
+    silently lost same-extension upload). 47c23fc2's in-step refusal
+    (absent-book 404 when the located folder differs) was not enough: the
+    destructive arms had already run, so the moved book lost its cast, audio and
+    cache and the user got a false "Book not found". Fixed in pass 10 by refusing
+    the rename up front (409 while a ref-counted reparse marker is set); the
+    in-step check stays as a backstop. Checkable:
     for every locked step that locates the target again, list each earlier side
     effect and path that was derived from the pre-lock location and ask whether
     the two can name different places; test by forcing the move between the two
