@@ -28,7 +28,9 @@ import {
   importPortableBundle,
   type ConflictStrategy,
 } from '../import/scan-import-folder.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 
@@ -38,9 +40,13 @@ export const portableExportRouter = Router();
 
 /** GET /api/books/:bookId/export/portable — stream the bundle. */
 portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: Response) => {
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ error: 'book_not_found' });
-
+  /* #3711 — request-scoped `export` job (it zips the whole book, then stages a copy
+     under <bookDir>/exports): a folder move/delete is refused (409 book_busy) while it
+     runs. The book is resolved by the registration (under book-op), so `located` is
+     its CURRENT folder. */
+  let registered;
+  try {
+    registered = await runBookJob(req.params.bookId, 'export', async (located) => {
   try {
     const result = await buildPortableBundleByBookId(located.state.bookId);
     const downloadName = `${slugify(located.state.title)}.portable.zip`;
@@ -69,6 +75,13 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
       message: 'Exporting the bundle failed. See the server log for details.',
     });
   }
+    });
+  } catch (e) {
+    console.error('[portable-export] registration failed', e);
+    return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the export.') });
+  }
+  if (registered === BOOK_GONE) return res.status(404).json({ error: 'book_not_found' });
+  await registered.done;
 });
 
 async function stagePortableLocally(

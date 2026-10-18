@@ -30,6 +30,26 @@ vi.mock('../workspace/scan.js', async (importOriginal) => {
   };
 });
 
+/* #3711 -- POST resume-scoring resolves its early 404/409 through `peekBook` (advisory,
+   no lock) instead of findBookByBookId, so the same sentinel bookIds drive its catch
+   block through the peek. Real lookups pass through. */
+vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
+  return {
+    ...actual,
+    peekBook: async (bookId: string, hintDir?: string) => {
+      if (bookId === 'THROW_TRIGGER') {
+        throw new Error('disk read failed');
+      }
+      if (bookId === 'LOCK_TRIGGER') {
+        const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+        throw new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+      }
+      return actual.peekBook(bookId, hintDir);
+    },
+  };
+});
+
 /* srv-36 hardening (Task 7) — stub ONLY scoreBook so the resume-scoring
    route's "triggers scoring" test can observe the route → triggerScoring
    wiring without needing a real 12-anchor centroid fixture (scoreBook

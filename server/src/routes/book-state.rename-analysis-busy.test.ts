@@ -4,10 +4,7 @@
    Since #3711 the registration is the per-book busy registry (`runBookJob`,
    `workspace/book-jobs.ts`), taken under the `book-op` lock that the rename also
    holds -- so registration and move exclude each other, and the old
-   "registers between the first check and the rename" window is closed. Until
-   analysis.ts registers through `runBookJob` itself (task 4) the in-memory
-   `markAnalysisBusy` predicate is kept as an interim second source; one case
-   below pins it.
+   "registers between the first check and the rename" window is closed.
 
    Its own file rather than a new case in book-state.test.ts, for two reasons:
    book-state.test.ts is pinned into the single-fork slow tier
@@ -35,7 +32,6 @@ let app: Express;
 let bookId: string;
 let bookDir: string;
 let newDir: string;
-let markAnalysisBusy: (d: string) => void;
 let clearAnalysisBusy: (d: string) => void;
 let runBookJob: typeof import('../workspace/book-jobs.js').runBookJob;
 let BOOK_GONE: typeof import('../workspace/book-op-lock.js').BOOK_GONE;
@@ -56,7 +52,6 @@ beforeAll(async () => {
   /* Same module instances book-state.ts holds: ESM caches by specifier and
      nothing here calls vi.resetModules(). */
   const designLock = await import('../tts/design-lock.js');
-  markAnalysisBusy = designLock.markAnalysisBusy;
   clearAnalysisBusy = designLock.clearAnalysisBusy;
   runBookJob = (await import('../workspace/book-jobs.js')).runBookJob;
   const opLock = await import('../workspace/book-op-lock.js');
@@ -274,17 +269,6 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
     expect(res.body.code).toBe('book_busy');
     expect(res.body.error).toMatch(/rendering audio/i);
     expect(existsSync(bookDir)).toBe(true);
-    expect(existsSync(newDir)).toBe(false);
-  });
-
-  it('interim: the in-memory analysis-busy predicate still refuses until analysis registers (task 4)', async () => {
-    seedBook();
-    markAnalysisBusy(bookDir);
-
-    const res = await renameRequest();
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/analysis is running/i);
     expect(existsSync(newDir)).toBe(false);
   });
 });

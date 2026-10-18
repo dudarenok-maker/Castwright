@@ -90,7 +90,6 @@ import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.
    characterId bucketing through it too. (No direct cast-id-history or
    character-id utility import: those are reached through this module.) */
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { isAnalysisBusy } from '../tts/design-lock.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -1184,18 +1183,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const folderSeries = projected.isStandalone ? STANDALONES_SERIES : projected.series;
         const newDir = bookDirByDisplay(projected.author, folderSeries, projected.title);
         if (newDir !== bookDir) {
-          /* #2165 — until analysis registers through `runBookJob` (#3711 task 4)
-             this predicate over the ref-counted in-memory map is still what
-             refuses a rename mid-analysis; `moveBookFolder` refuses the
-             registered kinds itself, first, before the path-collision 409.
+          /* #2165 / #3711 — an analysis is a registered `analysis` job
+             (`runBookJob`, taken under the same book-op this rename holds), so
+             `moveBookFolder` refuses it itself -- first, before the path-collision
+             409 -- and there is no window between an analysis's last check and
+             this rename.
 
              Deliberately inside this branch — a PUT that moves no folder
              (castConfirmed, prosody flags, notes, tags: the autosaves the
              persistence middleware fires constantly, including during an
              analysis) must keep returning 204. */
-          if (isAnalysisBusy(bookDir)) {
-            return { status: 409, body: { error: busySentence(['analysis'], 'rename'), code: 'book_busy' } };
-          }
           await moveBookFolder(book, newDir, buildNext);
         } else {
           /* #3700 — the merge is a whole-file read-modify-write of state.json, so

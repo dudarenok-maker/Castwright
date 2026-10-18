@@ -524,18 +524,18 @@ function scanSingleCastLocks(content: string): string[] {
     tell a registered long job from a missing one in a file it doesn't list (a
     blind spot, listed in the header). `pending` = the plan task that adds them. */
 const LONG_JOB_FILES: ReadonlyMap<string, { min: number; pending: string | null }> = new Map([
-  ['routes/generation.ts', { min: 2, pending: 'T4' }], // generation POST + triggerScoring
-  ['routes/chapter-splice.ts', { min: 1, pending: 'T4' }],
-  ['routes/chapter-qa-repair.ts', { min: 1, pending: 'T4' }],
-  ['routes/qa-report.ts', { min: 1, pending: 'T4' }], // resume-scoring
-  ['routes/analysis.ts', { min: 2, pending: 'T4' }], // main + subset
-  ['routes/cast-design.ts', { min: 1, pending: 'T4' }],
-  ['routes/single-design.ts', { min: 1, pending: 'T4' }],
-  ['routes/qwen-voice.ts', { min: 1, pending: 'T4' }], // design-voice
-  ['routes/voice-style.ts', { min: 2, pending: 'T4' }], // generate + generate-all
-  ['routes/script-review.ts', { min: 1, pending: 'T4' }],
-  ['routes/export.ts', { min: 1, pending: 'T4' }],
-  ['routes/exports-portable.ts', { min: 1, pending: 'T4' }], // GET export/portable
+  ['routes/generation.ts', { min: 2, pending: null }], // generation POST + triggerScoring
+  ['routes/chapter-splice.ts', { min: 1, pending: null }],
+  ['routes/chapter-qa-repair.ts', { min: 1, pending: null }],
+  ['routes/qa-report.ts', { min: 1, pending: null }], // resume-scoring
+  ['routes/analysis.ts', { min: 2, pending: null }], // main + subset
+  ['routes/cast-design.ts', { min: 1, pending: null }],
+  ['routes/single-design.ts', { min: 1, pending: null }],
+  ['routes/qwen-voice.ts', { min: 1, pending: null }], // design-voice
+  ['routes/voice-style.ts', { min: 2, pending: null }], // generate + generate-all
+  ['routes/script-review.ts', { min: 1, pending: null }],
+  ['routes/export.ts', { min: 1, pending: null }],
+  ['routes/exports-portable.ts', { min: 1, pending: null }], // GET export/portable
 ]);
 
 function countRunBookJob(content: string): number {
@@ -573,12 +573,12 @@ const ALLOW_G1 = allow([]);
 /* G2: file -> guarded handlers with no book-op / runBookJob. Final reasons are
    `no-book-write` / `cross-book-walker`. */
 const ALLOW_G2 = allow([
-  ['routes/analysis.ts', 3, 'pending:T4'],
+  ['routes/analysis.ts', 1, 'no-book-write'], // POST /:id/analysis/pause: in-memory abort only
   ['routes/annotate-emotion.ts', 1, 'no-book-write'],
   ['routes/cast-add-from-roster.ts', 1, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],
-  ['routes/cast-design.ts', 2, 'pending:T4'],
+  ['routes/cast-design.ts', 1, 'no-book-write'], // POST design/pause: in-memory abort only
   ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
   ['routes/cast-link-prior.ts', 1, 'pending:T6'],
   ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
@@ -588,24 +588,19 @@ const ALLOW_G2 = allow([
   ['routes/cast-series-patch.ts', 1, 'pending:T6'],
   ['routes/cast-tier.ts', 1, 'pending:T6'],
   ['routes/chapter-audio.ts', 2, 'pending:T5'],
-  ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
-  ['routes/chapter-splice.ts', 1, 'pending:T4'],
   ['routes/cover.ts', 4, 'pending:T5'],
-  ['routes/export.ts', 2, 'pending:T4'],
-  ['routes/exports-portable.ts', 2, 'pending:T4 (GET export/portable) + T7 (POST /portable import)'],
-  ['routes/generation.ts', 2, 'pending:T4'],
+  ['routes/exports-portable.ts', 1, 'pending:T7 (POST /portable import)'],
+  ['routes/generation.ts', 1, 'no-book-write'], // POST generation/pause: in-memory abort only
   ['routes/instruct-annotation.ts', 1, 'no-book-write'],
   ['routes/library-cast-override.ts', 1, 'pending:T6'],
-  ['routes/qa-report.ts', 1, 'pending:T4'],
-  ['routes/qwen-voice.ts', 4, 'pending:T4 (design-voice) + T5 (promote/discard/emotion-variant)'],
+  ['routes/qwen-voice.ts', 3, 'pending:T5 (promote/discard/emotion-variant)'],
   ['routes/revision-ops.ts', 3, 'pending:T5'],
-  ['routes/script-review.ts', 6, 'pending:T4 (run) + T5 (discard/resolve/selection/cancel/attach)'],
+  ['routes/script-review.ts', 5, 'pending:T5 (discard/resolve/selection) + no-book-write (cancel/attach)'],
   ['routes/share.ts', 1, 'pending:T5'],
-  ['routes/single-design.ts', 2, 'pending:T4'],
+  ['routes/single-design.ts', 1, 'no-book-write'], // POST design-single/subscribe: re-attach only
   ['routes/voice-library.ts', 3, 'pending:T6'],
   ['routes/voice-match.ts', 1, 'no-book-write'],
   ['routes/voice-override-linked.ts', 1, 'pending:T6'],
-  ['routes/voice-style.ts', 2, 'pending:T4'],
   ['routes/voices.ts', 1, 'pending:T6'],
 ]);
 /* G3a: file -> a book resolved before the lock in a guarded handler. The
@@ -616,7 +611,6 @@ const ALLOW_G3A = allow([
   ['routes/cast-add-from-roster.ts', 2, 'pending:T5'],
   ['routes/cast-aliases.ts', 3, 'pending:T5'],
   ['routes/cast-create.ts', 1, 'pending:T5'],
-  ['routes/cast-design.ts', 1, 'pending:T4'],
   ['routes/cast-link-orphan.ts', 1, 'pending:T5'],
   ['routes/cast-link-prior.ts', 2, 'pending:T6'],
   ['routes/cast-merge-suggestions.ts', 2, 'pending:T5'],
@@ -626,23 +620,15 @@ const ALLOW_G3A = allow([
   ['routes/cast-series-patch.ts', 2, 'pending:T6'],
   ['routes/cast-tier.ts', 1, 'pending:T6'],
   ['routes/chapter-audio.ts', 2, 'pending:T5'],
-  ['routes/chapter-qa-repair.ts', 1, 'pending:T4'],
-  ['routes/chapter-splice.ts', 1, 'pending:T4'],
   ['routes/cover.ts', 4, 'pending:T5'],
-  ['routes/export.ts', 1, 'pending:T4'],
-  ['routes/exports-portable.ts', 1, 'pending:T4'],
-  ['routes/generation.ts', 1, 'pending:T4'],
   ['routes/instruct-annotation.ts', 1, 'pending:T5'],
   ['routes/library-cast-override.ts', 2, 'pending:T6'],
-  ['routes/qa-report.ts', 1, 'pending:T4'],
-  ['routes/qwen-voice.ts', 4, 'pending:T4 + T5'],
+  ['routes/qwen-voice.ts', 3, 'pending:T5'],
   ['routes/revision-ops.ts', 3, 'pending:T5'],
-  ['routes/script-review.ts', 4, 'pending:T4 + T5'],
+  ['routes/script-review.ts', 3, 'pending:T5'],
   ['routes/share.ts', 1, 'pending:T5'],
-  ['routes/single-design.ts', 1, 'pending:T4'],
   ['routes/voice-library.ts', 2, 'pending:T6'],
   ['routes/voice-override-linked.ts', 2, 'pending:T6'],
-  ['routes/voice-style.ts', 2, 'pending:T4'],
 ]);
 /* G3b: file -> findBookByBookId( inside a loop body. */
 const ALLOW_G3B = allow([

@@ -19,7 +19,8 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
 import { readJson } from '../workspace/state-io.js';
@@ -49,61 +50,72 @@ voiceStyleRouter.post(
   async (req: Request, res: Response<{ voiceStyle: string } | { error: string }>) => {
     const { bookId, characterId } = req.params;
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir } = located;
-
-    /* #1981 review fix round 2 — this NO LONGER holds the book's cast lock
-       across the LLM call. `generateVoiceStylePersona` is a Gemini/Ollama
-       round-trip, and on the Gemini path it sits behind
-       `geminiRateLimiter.acquire`'s unbounded sleep — the same defect class
-       `/generate-all` was just fixed for (see that handler's own comment
-       below). Same recipe here: this read is OUTSIDE any lock and only
-       decides whether the character exists and what to feed the generator —
-       it is not the source of truth for the write. The persist goes through
-       `writeVoiceStylePersona` (cast-design.ts), which re-reads the cast
-       FRESH inside its own short-lived per-character lock immediately before
-       writing. A character deleted between this read and the persist is not
-       resurrected — `writeVoiceStylePersona` returns `false`, which this
-       handler turns into the same 404 an unknown character gets up front. */
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before generating voice styles.',
-      });
-    }
-
-    const idx = cast.characters.findIndex((c) => c.id === characterId);
-    if (idx === -1) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
-
+    /* #3711 — LONG job (an LLM loop with no few-second bound): registered so a folder
+       move/delete is refused (409 book_busy) while it runs; it holds no book-op. The
+       resolve comes from the lease, so a delete that landed first is a 404. */
+    let reg;
     try {
-      const prep = await preparePersonaBatch(bookDir);
-      const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
-      const written = await writeVoiceStylePersona(bookDir, characterId, voiceStyle);
-      if (!written) {
+      reg = await runBookJob(bookId, 'design', async (lease) => {
+        const { bookDir } = lease;
+
+      /* #1981 review fix round 2 — this NO LONGER holds the book's cast lock
+         across the LLM call. `generateVoiceStylePersona` is a Gemini/Ollama
+         round-trip, and on the Gemini path it sits behind
+         `geminiRateLimiter.acquire`'s unbounded sleep — the same defect class
+         `/generate-all` was just fixed for (see that handler's own comment
+         below). Same recipe here: this read is OUTSIDE any lock and only
+         decides whether the character exists and what to feed the generator —
+         it is not the source of truth for the write. The persist goes through
+         `writeVoiceStylePersona` (cast-design.ts), which re-reads the cast
+         FRESH inside its own short-lived per-character lock immediately before
+         writing. A character deleted between this read and the persist is not
+         resurrected — `writeVoiceStylePersona` returns `false`, which this
+         handler turns into the same 404 an unknown character gets up front. */
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before generating voice styles.',
+        });
+      }
+
+      const idx = cast.characters.findIndex((c) => c.id === characterId);
+      if (idx === -1) {
         return res.status(404).json({ error: `Character "${characterId}" not found.` });
       }
-      console.log(
-        `[voice-style] book=${bookId} character=${characterId} → "${voiceStyle.slice(0, 60)}"`,
-      );
-      return res.json({ voiceStyle });
+
+      try {
+        const prep = await preparePersonaBatch(bookDir);
+        const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
+        const written = await writeVoiceStylePersona(bookDir, characterId, voiceStyle);
+        if (!written) {
+          return res.status(404).json({ error: `Character "${characterId}" not found.` });
+        }
+        console.log(
+          `[voice-style] book=${bookId} character=${characterId} → "${voiceStyle.slice(0, 60)}"`,
+        );
+        return res.json({ voiceStyle });
+      } catch (e) {
+        console.error('[voice-style] generate failed', e);
+        return res
+          .status(500)
+          .json({
+            error: requestFailureMessage(
+              e,
+              /* #2260 FINAL ROUND (B2) — `writeVoiceStylePersona` takes a cast
+                 lock. The BATCH sibling reports contention per item through
+                 `itemFailureReason`; this single-character route fails the whole
+                 request, so it takes the whole-request counterpart. */
+              (e as Error).message || 'Voice-style generation failed.',
+            ),
+          });
+      }
+      });
     } catch (e) {
-      console.error('[voice-style] generate failed', e);
-      return res
-        .status(500)
-        .json({
-          error: requestFailureMessage(
-            e,
-            /* #2260 FINAL ROUND (B2) — `writeVoiceStylePersona` takes a cast
-               lock. The BATCH sibling reports contention per item through
-               `itemFailureReason`; this single-character route fails the whole
-               request, so it takes the whole-request counterpart. */
-            (e as Error).message || 'Voice-style generation failed.',
-          ),
-        });
+      console.error('[voice-style] generate registration failed', e);
+      return res.status(500).json({ error: requestFailureMessage(e, 'Voice-style generation failed.') });
     }
+    if (reg === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    await reg.done;
   },
 );
 
@@ -118,9 +130,12 @@ voiceStyleRouter.post(
     const { bookId } = req.params;
     const includeNarrator = (req.body ?? {})?.includeNarrator === true;
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir } = located;
+    /* #3711 — LONG job (an LLM loop per character): registered so a folder move/delete
+       is refused (409 book_busy) while it runs; it holds no book-op. */
+    let reg;
+    try {
+      reg = await runBookJob(bookId, 'design', async (lease) => {
+    const { bookDir } = lease;
 
     /* #1981 review fix round — this NO LONGER holds the book's cast lock
        across the batch. The original mechanical conversion wrapped
@@ -195,5 +210,12 @@ voiceStyleRouter.post(
         `${Object.keys(failures).length} failed`,
     );
     return res.json({ voiceStyles, failures });
+      });
+    } catch (e) {
+      console.error('[voice-style] generate-all registration failed', e);
+      return res.status(500).json({ error: requestFailureMessage(e, 'Voice-style generation failed.') });
+    }
+    if (reg === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    await reg.done;
   },
 );

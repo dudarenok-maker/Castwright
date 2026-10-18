@@ -20,7 +20,10 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
+import { bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
+import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -108,8 +111,10 @@ chapterQaRepairRouter.post(
     /* Task 6 pre-flight — resolve the book and its language BEFORE the SSE
        stream opens, so an unset language answers a real HTTP `409
        { error: 'language_unset' }` instead of a streamed 200. The book lookup
-       is hoisted above the header setup (the not-found branch below reuses it). */
-    const located = await findBookByBookId(bookId);
+       is hoisted above the header setup (the not-found branch below reuses it).
+       #3711 — this resolve is `peekBook`: advisory only (no lock, nothing it
+       returns feeds a write); the registered job below re-resolves from its lease. */
+    const located = await peekBook(bookId);
     if (located && bookStateLanguageOrNull(located.state) === null) {
       return res.status(409).json({ error: 'language_unset' });
     }
@@ -128,7 +133,15 @@ chapterQaRepairRouter.post(
     if (!Number.isInteger(chapterId)) return fail('chapterId must be an integer.');
 
     if (!located) return fail(`No book found for id "${bookId}".`);
-    const { bookDir, state } = located;
+
+    /* #3711 — the repair is a registered `render` job (it re-records and rewrites the
+       chapter audio): a folder move/delete is refused while it runs. The book and its
+       CURRENT folder come from the lease, resolved under book-op. Headers are already
+       flushed, so a registration failure is the route's own `chapter_failed` frame. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'render', async (lease) => {
+    const { bookDir, state } = lease;
 
     const chapter = state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return fail(`No chapter ${chapterId} in book "${bookId}".`);
@@ -906,5 +919,12 @@ chapterQaRepairRouter.post(
     } finally {
       releaseSlot?.();
     }
+      });
+    } catch (e) {
+      console.error('[qa-repair] job registration failed', e);
+      return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the audio-QA repair.');
+    }
+    if (registered === BOOK_GONE) return fail('Book not found.');
+    await registered.done;
   },
 );

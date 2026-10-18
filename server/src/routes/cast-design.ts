@@ -32,7 +32,9 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -779,8 +781,15 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     (characterIds !== null && characterIds.length > 0) ||
     (scope !== 'bases' && variantTasks.length > 0);
 
-  const located = await findBookByBookId(bookId);
-  if (!located) return res.status(404).json({ error: 'Book not found.' });
+  /* #3711 — the whole design run is a registered `design` job: a folder move/delete is
+     refused (409 book_busy) while it runs; it holds no book-op. Detached: `fn` runs the
+     pre-start checks against the lease (the book as resolved under book-op), opens the
+     SSE stream, then awaits the run; the handler awaits only the registration. A
+     gone book / timed-out registration never reached `fn`, so no header is flushed
+     yet and the failure is a plain JSON status. */
+  let registered;
+  try {
+    registered = await runBookJob(bookId, 'design', async (located) => {
   const { bookDir } = located;
 
   const existing = inFlightByBook.get(bookId);
@@ -905,7 +914,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* Sticky: keep running for a reload re-attach. */
   });
 
-  void runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
+  await runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
     /* Defensive — the loop catches per-character; a throw here is unexpected.
        #2260 FINAL ROUND (B2) — curated all the same. The REACHABLE contention
        path in this route is per-character and already reports
@@ -934,6 +943,13 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
       });
     }
   });
+    });
+  } catch (e) {
+    console.error('[cast-design] job registration failed', e);
+    return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the cast design.') });
+  }
+  if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+  registered.done.catch((e) => console.error('[cast-design] design job failed', e));
 });
 
 castDesignRouter.get('/:bookId/cast/design/status', (req: Request, res: Response) => {

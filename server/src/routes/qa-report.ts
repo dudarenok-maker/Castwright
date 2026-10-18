@@ -13,6 +13,8 @@ import { buildAudioQaReport } from '../audio/qa-report.js';
 import { computeRevisionsForBook } from './revisions.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import { triggerScoring, isGenerationActive } from './generation.js';
+import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 
 export const qaReportRouter = Router();
 
@@ -56,8 +58,12 @@ qaReportRouter.get('/:bookId/qa-report', async (req: Request, res: Response) => 
 qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Response) => {
   try {
     const { bookId } = req.params;
-    const located = await findBookByBookId(bookId);
-    if (!located) {
+    /* #3711 — `peekBook` is advisory (no lock; it feeds only these early 404/409s). The
+       chapter list and folder come from the lease below, resolved under book-op.
+       `triggerScoring` registers the long `scoring` job itself and resolves once that
+       registration has; this wrapper's token is released only after it, so no move
+       can slip between the two. */
+    if (!(await peekBook(bookId))) {
       res.status(404).json({ error: 'Book not found' });
       return;
     }
@@ -65,8 +71,19 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
       res.status(409).json({ error: 'Book is currently generating — resume scoring once the run finishes.' });
       return;
     }
-    const { bookDir, state } = located;
-    void triggerScoring({ bookId, bookDir, chapters: state.chapters, justFinalizedSlugs: [] });
+    const registered = await runBookJob(bookId, 'scoring', async (lease) => {
+      await triggerScoring({
+        bookId,
+        bookDir: lease.bookDir,
+        chapters: lease.state.chapters,
+        justFinalizedSlugs: [],
+      });
+    });
+    if (registered === BOOK_GONE) {
+      res.status(404).json({ error: 'Book not found' });
+      return;
+    }
+    await registered.done; /* resolves once scoring's own registration has */
     res.status(202).json({ started: true });
   } catch (e) {
     console.error('[qa-report] POST resume-scoring failed', e);

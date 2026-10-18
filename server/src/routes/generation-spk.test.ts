@@ -16,10 +16,42 @@
  *   6. Finding 2: the post-audition VRAM reconcile fires against the run's
  *      FULL-cast keep-flags (`ctx.keep`) — NOT scoreBook's return — and is
  *      skipped when the run uses no Qwen tier.
+ *   7. #3711 — the score pass is a registered `scoring` job and scores the
+ *      LEASE's folder (resolved under book-op), not `ctx.bookDir`; a book that is
+ *      gone is never scored.
+ *
+ * `runBookJob` is replaced by a stand-in that hands `fn` a lease for the books
+ * in `leaseDirs` (and BOOK_GONE for any other), since the fake `/b1`-style ids
+ * here have no folder on disk. The real registry is covered in
+ * workspace/book-jobs.test.ts and routes/book-op.long-jobs.test.ts.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const leaseDirs = vi.hoisted(
+  () =>
+    new Map<string, string>([
+      ['b1', '/b1'],
+      ['b1b', '/b1b'],
+      ['b2', '/b2'],
+      ['hang-1029', '/h'],
+      ['b3', '/b3'],
+      ['b4', '/b4'],
+      ['b5', '/b5'],
+      ['b-key', '/b-key'],
+      ['b-resume', '/b-resume'],
+    ]),
+);
+vi.mock('../workspace/book-jobs.js', async () => {
+  const { BOOK_GONE } = await import('../workspace/book-op-lock.js');
+  return {
+    runBookJob: vi.fn(async (bookId: string, _kind: string, fn: (lease: unknown) => Promise<unknown>) => {
+      const bookDir = leaseDirs.get(bookId);
+      if (!bookDir) return BOOK_GONE;
+      return { done: fn({ bookId, bookDir, state: {} }) };
+    }),
+  };
+});
 vi.mock('../audio/render-integrity/aggregate.js', () => ({
   scoreBook: vi.fn(async () => ({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 })),
 }));
@@ -45,7 +77,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { writeAttempted } from '../audio/render-integrity/verdicts-io.js';
 import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
-import { afterChapterFinalized, triggerScoring } from './generation.js';
+import { afterChapterFinalized, triggerScoring, __awaitScoringSettled } from './generation.js';
 import * as cfg from '../config/resolver.js';
 
 const NO_QWEN = { keep06: false, keep17: false };
@@ -158,6 +190,27 @@ describe('afterChapterFinalized', () => {
     // Let the score-pass tail run; the reconcile must NOT fire for a no-Qwen run.
     await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
     expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+  });
+});
+
+describe('triggerScoring — registered scoring job (#3711)', () => {
+  beforeEach(() => {
+    vi.mocked(scoreBook).mockClear();
+  });
+
+  it("scores the lease's folder, not ctx.bookDir (the book may have moved since the ctx was built)", async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    leaseDirs.set('b-moved', '/moved-here');
+    await triggerScoring({ bookId: 'b-moved', bookDir: '/stale', chapters: [CH1], justFinalizedSlugs: [] });
+    await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(scoreBook).mock.calls[0][0]).toBe('/moved-here');
+  });
+
+  it('never scores a book that is gone (registration answered BOOK_GONE)', async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    await triggerScoring({ bookId: 'b-deleted', bookDir: '/x', chapters: [CH1], justFinalizedSlugs: [] });
+    await __awaitScoringSettled('b-deleted');
+    expect(scoreBook).not.toHaveBeenCalled();
   });
 });
 

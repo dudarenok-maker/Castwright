@@ -15,6 +15,7 @@
 
 import { selectTtsProvider, type TtsModelKey, type SynthesizeOutput } from '../../tts/index.js';
 import { embedSegment } from '../../tts/embed-client.js';
+import { SYNTH_CALL_TIMEOUT_MS } from '../../tts/synthesise-chapter.js';
 import { buildSampleText, stripQuoteMarks } from '../../tts/voice-sample-cache.js';
 import { buildCentroid } from './centroid.js';
 import { MIN_DURATION_SEC } from './constants.js';
@@ -34,6 +35,13 @@ export const AUDITION_POOL_MARGIN = 2;
 /** Per-render evidence-quote cap. Matches voice-sample-cache.ts's MAX_CHARS
  *  but is an intentionally separate constant — that module is untouched. */
 const AUDITION_QUOTE_MAX_CHARS = 320;
+
+/** #3711 — the per-call bound on a scoring sidecar call; `undefined` when the
+ *  operator disabled the ceiling (`SIDECAR_CALL_TIMEOUT_MS=0`, which `AbortSignal.timeout`
+ *  would otherwise turn into an immediate abort). */
+function scoringCallSignal(): AbortSignal | undefined {
+  return SYNTH_CALL_TIMEOUT_MS > 0 ? AbortSignal.timeout(SYNTH_CALL_TIMEOUT_MS) : undefined;
+}
 
 // ── Parameter types ───────────────────────────────────────────────────────────
 
@@ -181,7 +189,15 @@ export async function auditionCentroid(
       modelKey: TtsModelKey;
       language?: string;
       cloned?: boolean;
-    }) => selectTtsProvider(input.modelKey).synthesize(input));
+    }) =>
+      /* #3711 — the scoring pass is a registered `scoring` job (a folder move is refused
+         while it runs), so this sidecar call must be bounded: the same per-call ceiling
+         a render uses. A timeout rejects, which the pool loops below already treat as
+         "sidecar unavailable" (return null -- the existing non-terminal transient). */
+      selectTtsProvider(input.modelKey).synthesize({
+        ...input,
+        signal: scoringCallSignal(),
+      }));
 
   /* #1951 — every audition render carries the SAME language/cloned pair, so
      build it once. Spread (rather than passing `undefined`) so an absent book
@@ -191,7 +207,11 @@ export async function auditionCentroid(
     ...(language != null ? { language } : {}),
     ...(cloned != null ? { cloned } : {}),
   };
-  const embed = opts?.embedFn ?? embedSegment;
+  const embed =
+    opts?.embedFn ??
+    ((pcm: Buffer, sampleRate: number) =>
+      /* #3711 — bounded like the synth call above; render's own embed calls are unchanged. */
+      embedSegment(pcm, sampleRate, { signal: scoringCallSignal() }));
 
   /** One render+floor-retry+embed attempt. Returns the embedding on
    *  success, or `null` if the render never clears the floor. A throw from

@@ -29,6 +29,8 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
   castJsonPath,
@@ -585,8 +587,14 @@ qwenVoiceRouter.post(
       emotion = body.emotion as Exclude<Emotion, 'neutral'>;
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — the design is a registered `design` job (a sidecar design call with no
+       few-second bound): a folder move/delete is refused (409 book_busy) while it
+       runs; it holds no book-op. Request-scoped: `fn` is everything from the resolve
+       to the last write, and the route awaits `done`. The book is resolved by the
+       registration (under book-op), so `located` is its CURRENT folder. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'design', async (located) => {
     const { bookDir } = located;
     /* Mutual exclusion: a bulk "Design full cast" run owns the book's designs
        (serializing via the per-book lock). Refuse a competing single design so
@@ -784,6 +792,20 @@ qwenVoiceRouter.post(
       return res.status(status).json({
         error: requestFailureMessage(e, (e as Error).message || 'Voice design failed.'),
       });
+    }
+      });
+    } catch (e) {
+      console.error('[qwen-voice] design-voice registration failed', e);
+      return res.status(500).json({ error: requestFailureMessage(e, 'Voice design failed.') });
+    }
+    if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    try {
+      await registered.done;
+    } catch (e) {
+      console.error('[qwen-voice] design-voice failed', e);
+      if (!res.headersSent) {
+        res.status(500).json({ error: requestFailureMessage(e, 'Voice design failed.') });
+      }
     }
   },
 );

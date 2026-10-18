@@ -20,7 +20,9 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
@@ -243,8 +245,15 @@ singleDesignRouter.post(
       preview?: unknown;
     };
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — the whole design is a registered `design` job: a folder move/delete is
+       refused (409 book_busy) while it runs; it holds no book-op. Detached: `fn` runs the
+       pre-start checks against the lease (the book as resolved under book-op), opens the
+       SSE stream, then awaits the run; the handler awaits only the registration. A gone
+       book / timed-out registration never reached `fn`, so no header is flushed yet and
+       the failure is a plain JSON status. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'design', async (located) => {
     const { bookDir } = located;
 
     /* Symmetric mutual exclusion: refuse if a bulk OR another single design owns
@@ -366,7 +375,14 @@ singleDesignRouter.post(
       /* Sticky: keep running for a reload re-attach. */
     });
 
-    void runSingleDesign(job, persona, sampleVoiceId, modelKey, language, seriesInfo ?? undefined);
+    await runSingleDesign(job, persona, sampleVoiceId, modelKey, language, seriesInfo ?? undefined);
+      });
+    } catch (e) {
+      console.error('[single-design] job registration failed', e);
+      return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the voice design.') });
+    }
+    if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    registered.done.catch((e) => console.error('[single-design] design job failed', e));
   },
 );
 

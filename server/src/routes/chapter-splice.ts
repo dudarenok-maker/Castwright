@@ -17,7 +17,10 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateAudioFormat, type BookStateJson } from '../workspace/scan.js';
+import { bookStateAudioFormat, type BookStateJson } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
+import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { castJsonPath, audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -111,8 +114,10 @@ chapterSpliceRouter.post(
        stream opens, so an unset language answers a real HTTP `409
        { error: 'language_unset' }` instead of a streamed 200. `fail()` below
        is SSE-framed; a 409 needs a clean JSON response, so the book lookup is
-       hoisted above the header setup and reused by the not-found branch. */
-    const located = await findBookByBookId(bookId);
+       hoisted above the header setup and reused by the not-found branch. #3711 —
+       this resolve is `peekBook`: advisory only (no lock, nothing it returns feeds
+       a write); the registered job below re-resolves the book from its lease. */
+    const located = await peekBook(bookId);
     if (located && bookStateLanguageOrNull(located.state) === null) {
       return res.status(409).json({ error: 'language_unset' });
     }
@@ -152,7 +157,15 @@ chapterSpliceRouter.post(
     }
 
     if (!located) return fail(`No book found for id "${bookId}".`);
-    const { bookDir, state } = located;
+
+    /* #3711 — the splice is a registered `render` job (it re-renders audio and writes
+       the chapter): a folder move/delete is refused while it runs. The book and its
+       CURRENT folder come from the lease, resolved under book-op. Headers are already
+       flushed, so a registration failure is the route's own `chapter_failed` frame. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'render', async (lease) => {
+    const { bookDir, state } = lease;
 
     const chapter = state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return fail(`No chapter ${chapterId} in book "${bookId}".`);
@@ -574,5 +587,12 @@ chapterSpliceRouter.post(
     } finally {
       releaseSlot();
     }
+      });
+    } catch (e) {
+      console.error('[splice] job registration failed', e);
+      return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the splice.');
+    }
+    if (registered === BOOK_GONE) return fail('Book not found.');
+    await registered.done;
   },
 );

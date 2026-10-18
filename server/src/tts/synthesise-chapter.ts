@@ -164,7 +164,7 @@ const QWEN_BATCH_TOKEN_BUDGET_17B = configValue<number>('tts.batch.tokenBudget17
    the Hollow Tide stall). Bounding each call turns that infinite hang into a single
    chapter failure the queue rides past. Generous default (10 min) — far above
    any legitimate single batch (~250 s for 32 sentences). `0` disables. */
-const SYNTH_CALL_TIMEOUT_MS = (() => {
+export const SYNTH_CALL_TIMEOUT_MS = (() => {
   const raw = Number(process.env.SIDECAR_CALL_TIMEOUT_MS);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 600_000;
 })();

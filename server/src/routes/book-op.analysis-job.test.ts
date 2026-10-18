@@ -1,0 +1,353 @@
+/* #3711 task 4 -- an analysis run is a registered `analysis` job (main and subset):
+     - while it runs, a folder rename and a DELETE are refused with 409 `book_busy`;
+     - its registration is released on every exit path (completion, a selection error
+       before the job starts) and a start for a deleted book registers nothing -- the
+       client gets an SSE `book_not_found` frame;
+     - `job.bookDir` comes from the lease, i.e. the book's CURRENT folder (a registration
+       queued behind a rename starts on the new folder);
+     - the lease is released only when the run's tracked units have ACTUALLY settled: a
+       main run past its drain deadline still holds the book until `liveWork` drains.
+
+   The route cases go through supertest with stub analyzers (the analysis.refuse-while-main
+   harness); the drain case drives the exported lifecycle (`endJob` / `takeWork` /
+   `releaseWork`) under the real `runBookJob` and the real rename route. */
+
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
+import type { CharacterOutput, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
+import type { AnalysisJob } from './analysis.js';
+
+type G = Record<string, unknown>;
+const g = globalThis as G;
+
+vi.mock('./ollama-health.js', () => ({
+  detectOllamaDevice: vi.fn(async () => 'cuda'),
+  unloadResidentOllama: vi.fn(async () => {}),
+}));
+vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
+  setLastKnownAnalyzerDevice: vi.fn(),
+}));
+vi.mock('../analyzer/select-analyzer.js', async () => {
+  const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
+    '../analyzer/select-analyzer.js',
+  );
+  return {
+    ...actual,
+    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1' }) => {
+      if ((globalThis as G).__baj_select_throws) throw new Error('no analyzer is configured for this test');
+      const sel = (globalThis as G)[opts.phase === 'phase1' ? '__baj_phase1_selection' : '__baj_phase0_selection'];
+      return sel ?? actual.selectAnalyzerForPhase(opts as Parameters<typeof actual.selectAnalyzerForPhase>[0]);
+    },
+    isPerPhaseModelSelectionActive: () => false,
+  };
+});
+
+const AUTHOR = 'Analysis Job Author';
+const SERIES = 'The Series';
+const BODIES: Record<number, string> = { 1: '"The plan is set." Silence followed.' };
+
+let workspaceRoot: string;
+let app: Express;
+let makeBookId: typeof import('../workspace/paths.js').makeBookId;
+let bookJobKinds: typeof import('../workspace/book-op-lock.js').bookJobKinds;
+let runBookJob: typeof import('../workspace/book-jobs.js').runBookJob;
+let BOOK_GONE: typeof import('../workspace/book-op-lock.js').BOOK_GONE;
+let analysisModule: typeof import('./analysis.js');
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-analysis-job-test-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+  process.env.STAGE2_COVERAGE_RETRIES = '0';
+  analysisModule = await import('./analysis.js');
+  const { bookStateRouter } = await import('./book-state.js');
+  makeBookId = (await import('../workspace/paths.js')).makeBookId;
+  const opLock = await import('../workspace/book-op-lock.js');
+  bookJobKinds = opLock.bookJobKinds;
+  BOOK_GONE = opLock.BOOK_GONE;
+  runBookJob = (await import('../workspace/book-jobs.js')).runBookJob;
+  app = express();
+  app.use(express.json());
+  app.use('/api/manuscripts', analysisModule.analysisRouter);
+  app.use('/api/books', bookStateRouter);
+}, 120_000);
+
+afterAll(() => {
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+  delete process.env.STAGE2_COVERAGE_RETRIES;
+});
+
+afterEach(() => {
+  for (const k of Object.keys(g)) if (k.startsWith('__baj_')) delete g[k];
+  vi.useRealTimers();
+});
+
+function novaCharacter(): CharacterOutput {
+  return { id: 'nova', name: 'Nova', role: 'character', color: '#abc', evidence: [{ quote: 'The plan is set.' }] };
+}
+function stubAnalyzer(over: Partial<Analyzer>): Analyzer {
+  return {
+    runStage1: () => Promise.reject(new Error('not used')),
+    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+      return { characters: [novaCharacter()] };
+    },
+    async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+      return {
+        sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: 'nova', confidence: 0.9, text: BODIES[chapterId] }],
+      };
+    },
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.resolve(null),
+    ...over,
+  };
+}
+const selectionFor = (analyzer: Analyzer): AnalyzerSelection => ({
+  analyzer,
+  engine: 'gemini',
+  model: 'gemini-3.6-flash',
+  fallbackModel: null,
+});
+
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((r) => (open = r));
+  return { promise, open };
+}
+
+interface Seeded {
+  manuscriptId: string;
+  bookId: string;
+  bookDir: string;
+  newTitle: string;
+  newDir: string;
+}
+
+/** A real book on disk plus its in-memory manuscript record (carrying bookId/bookDir). */
+async function seedBook(label: string, opts: { onDisk?: boolean } = {}): Promise<Seeded> {
+  const manuscriptId = `test-baj-${label}-${Date.now()}-${Math.random()}`;
+  const title = `Analysis Job ${label}`;
+  const newTitle = `${title} Renamed`;
+  const bookId = makeBookId(AUTHOR, SERIES, title);
+  const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+  rmSync(bookDir, { recursive: true, force: true });
+  if (opts.onDisk !== false) {
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId,
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: 1,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.md'), `# Chapter One\n\n${BODIES[1]}\n`);
+  }
+  const { putManuscript } = await import('../store/manuscripts.js');
+  putManuscript({
+    manuscriptId,
+    format: 'plaintext',
+    title,
+    wordCount: 12,
+    byteSize: 100,
+    uploadedAt: new Date().toISOString(),
+    sourceText: BODIES[1],
+    chapterHints: [{ id: 1, title: 'Chapter One', body: BODIES[1] }],
+    bookId,
+    bookDir,
+  });
+  return { manuscriptId, bookId, bookDir, newTitle, newDir: join(workspaceRoot, 'books', AUTHOR, SERIES, newTitle) };
+}
+
+const renameOf = (s: Seeded) =>
+  request(app)
+    .put(`/api/books/${s.bookId}/state`)
+    .set('Content-Type', 'application/json')
+    .send({ slice: 'state', patch: { title: s.newTitle } });
+
+function sseFrames(text: string): Array<Record<string, unknown>> {
+  return text
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice(6)));
+}
+
+describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
+  it('refuses rename and DELETE with 409 while the run is in flight, then allows them', async () => {
+    const s = await seedBook('running');
+    const entered = gate();
+    const release = gate();
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          entered.open();
+          await release.promise;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const run = request(app)
+      .post(`/api/manuscripts/${s.manuscriptId}/analysis`)
+      .send({})
+      .then((r) => r);
+    await entered.promise;
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+
+    const rename = await renameOf(s);
+    expect(rename.status).toBe(409);
+    expect(rename.body.code).toBe('book_busy');
+    expect(rename.body.error).toMatch(/analysis is running/i);
+    const del = await request(app).delete(`/api/books/${s.bookId}`);
+    expect(del.status).toBe(409);
+    expect(del.body.code).toBe('book_busy');
+    expect(existsSync(s.bookDir)).toBe(true);
+    expect(existsSync(s.newDir)).toBe(false);
+
+    release.open();
+    const res = await run;
+    expect(sseFrames(res.text).some((f) => f.kind === 'result')).toBe(true);
+    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    expect((await renameOf(s)).status).toBe(204);
+    expect(existsSync(s.newDir)).toBe(true);
+  });
+
+  it('releases the registration when the analyzer selection fails before the job starts', async () => {
+    const s = await seedBook('select-throws');
+    g.__baj_select_throws = true;
+    const res = await request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis`).send({});
+    expect(sseFrames(res.text).some((f) => f.kind === 'error')).toBe(true);
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+    expect(analysisModule.isAnalysisJobRunning(s.manuscriptId)).toBe(false);
+    expect((await renameOf(s)).status).toBe(204);
+  });
+
+  it('a start after the book was deleted answers an SSE book_not_found frame and registers nothing', async () => {
+    const s = await seedBook('deleted', { onDisk: false });
+    const res = await request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis`).send({});
+    expect(sseFrames(res.text).find((f) => f.kind === 'error')).toMatchObject({
+      code: 'book_not_found',
+      message: 'Book not found.',
+    });
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+    expect(analysisModule.isAnalysisJobRunning(s.manuscriptId)).toBe(false);
+  });
+
+  it('a subset start after the book was deleted answers the same frame and registers nothing', async () => {
+    const s = await seedBook('subset-deleted', { onDisk: false });
+    const res = await request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis/chapters`).send({ chapterIds: [1] });
+    expect(sseFrames(res.text).find((f) => f.kind === 'error')).toMatchObject({ code: 'book_not_found' });
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+  });
+
+  it("a registration queued behind a rename starts on the NEW folder (the job's bookDir comes from the lease)", async () => {
+    const s = await seedBook('lease-dir');
+    const paths = await import('../workspace/paths.js');
+    const fileLock = await import('../workspace/file-lock.js');
+    /* Park the rename inside book-op via the book's state-json lock, then queue an
+       analysis registration on book-op behind it. */
+    const open = gate();
+    const held = gate();
+    void fileLock.withStateJsonLock(paths.stateJsonPath(s.bookDir), async () => {
+      held.open();
+      await open.promise;
+    });
+    await held.promise;
+    const renameP = Promise.resolve(renameOf(s) as unknown as PromiseLike<request.Response>);
+    while (fileLock.__keyWaitersForTest(`state-json:${paths.stateJsonPath(s.bookDir)}`) < 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    let leaseDir = '';
+    const registeredP = runBookJob(s.bookId, 'analysis', async (lease) => {
+      leaseDir = lease.bookDir;
+    });
+    while (fileLock.__keyWaitersForTest(`book-op:${s.bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
+    open.open();
+    const [renameRes, registered] = await Promise.all([renameP, registeredP]);
+    expect(renameRes.status).toBe(204);
+    if (registered === BOOK_GONE) throw new Error('book vanished');
+    await registered.done;
+    expect(leaseDir).toBe(s.newDir);
+  });
+});
+
+describe('the analysis lease is released only when the tracked units settle (#3711)', () => {
+  it('a main run past its drain deadline still holds the book until liveWork drains', async () => {
+    const s = await seedBook('drain');
+    const { endJob, takeWork, releaseWork, MAIN_DRAIN_DEADLINE_MS, __testRegisterJobForTest } = analysisModule;
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: s.manuscriptId,
+      kind: 'main',
+      bookDir: s.bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    job.settled = new Promise<void>((resolve) => {
+      job.resolveSettled = resolve;
+    });
+    __testRegisterJobForTest(job);
+
+    /* The route's registration: its fn awaits the job's `settled`, as startMain does. */
+    const registered = await runBookJob(s.bookId, 'analysis', async () => {
+      await job.settled;
+    });
+    if (registered === BOOK_GONE) throw new Error('book vanished');
+    let leaseReleased = false;
+    void registered.done.then(() => {
+      leaseReleased = true;
+    });
+
+    takeWork(job); // a tracked unit that has not yet observed the abort
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    endJob(job); // armed: the drain-deadline timer
+    expect(job.ended).toBe(true);
+    vi.advanceTimersByTime(MAIN_DRAIN_DEADLINE_MS + 1);
+    vi.useRealTimers();
+    expect(job.left).toBe(true); // the deadline fired: busy flag and pin released ...
+
+    /* ... but the book is still held, because a unit is still running. */
+    await Promise.resolve();
+    expect(leaseReleased).toBe(false);
+    expect(bookJobKinds(s.bookId)).toEqual(['analysis']);
+    const refused = await renameOf(s);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('book_busy');
+    expect(existsSync(s.newDir)).toBe(false);
+
+    releaseWork(job); // the last unit settles
+    await registered.done;
+    expect(leaseReleased).toBe(true);
+    expect(bookJobKinds(s.bookId)).toEqual([]);
+    expect((await renameOf(s)).status).toBe(204);
+    expect(existsSync(s.newDir)).toBe(true);
+  });
+});

@@ -24,7 +24,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateLanguageOrNull, BookLanguageUnsetError } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguageOrNull, BookLanguageUnsetError, type BookStateJson } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
@@ -44,6 +44,8 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import {
   chunkSentencesByBudget,
   ownsOp,
@@ -317,11 +319,17 @@ scriptReviewRouter.post(
     const requestedModel: string | undefined =
       typeof req.body?.model === 'string' ? req.body.model : undefined;
 
-    const located = await findBookByBookId(bookId);
-    if (!located) {
-      res.status(404).json({ error: 'Book not found.' });
-      return;
-    }
+    /* #3711 — the review run is a registered `script-review` job (it makes LLM calls with
+       no few-second bound and checkpoints into the book): a folder move/delete is refused
+       (409 book_busy) while it runs; it holds no book-op. Detached: `fn` runs the
+       pre-start checks and the join/conflict rule against the lease (the book as
+       resolved under book-op), opens the SSE stream, then awaits the run; EVERY early
+       return below (404/409/join/no_attribution/no_such_chapter) and a throw before the
+       run is released by `runBookJob` itself, so none can leak a token. The handler
+       awaits only the registration. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'script-review', async (located) => {
     const manuscriptId = located.state.manuscriptId;
     if (!manuscriptId) {
       res.status(409).json({ error: 'Book has not been analysed yet.' });
@@ -438,7 +446,7 @@ scriptReviewRouter.post(
         clearInterval(sub.keepAlive);
       });
 
-      void runScriptReviewJob(registeredJob, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
+      await runScriptReviewJob(registeredJob, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
         .catch((err) => {
           // Finding 5 (PR review round 3): a synchronous throw inside
           // runScriptReviewJob (e.g. selectAnalyzerForPhase throwing on a
@@ -477,6 +485,22 @@ scriptReviewRouter.post(
       if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
       throw err;
     }
+      });
+    } catch (e) {
+      console.error('[script-review] job registration failed', e);
+      res.status(500).json({ error: requestFailureMessage(e, 'Could not start the script review.') });
+      return;
+    }
+    if (registered === BOOK_GONE) {
+      res.status(404).json({ error: 'Book not found.' });
+      return;
+    }
+    registered.done.catch((e) => {
+      console.error('[script-review] review job failed', e);
+      if (!res.headersSent) {
+        res.status(500).json({ error: requestFailureMessage(e, 'Script review failed to start.') });
+      }
+    });
   },
 );
 
@@ -686,7 +710,7 @@ function makeSubscriber(res: Response): ScriptReviewSubscriber {
 async function runScriptReviewJob(
   job: ScriptReviewJob,
   ctx: {
-    located: Awaited<ReturnType<typeof findBookByBookId>> & object;
+    located: { bookDir: string; state: BookStateJson };
     manuscriptId: string;
     allChapterIds: number[];
     excludedChapterIds: Set<number>;
