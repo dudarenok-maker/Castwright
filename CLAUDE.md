@@ -582,7 +582,8 @@ Design rationale:
   same book; (2) the read goes inside the lock, and so does every decision
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
-  order is **`design` → `library-voice` → `cast`** — never acquire an earlier
+  order is **`design` → `library-voice` → `book-op` → `book-path-claim` →
+  `cast` → `cast-id-history`** — never acquire an earlier
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
@@ -594,7 +595,28 @@ Design rationale:
   `…/audio/previous` routes) additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
-  while holding `revisions`. Since #2260 that
+  while holding `revisions`. **The per-book operation lock `book-op:<bookId>`
+  (`withBookOp`/`withBookOps`, `workspace/book-op-lock.ts`, plan 288, #3711)
+  is what stops a folder rename/delete splitting a book across two folders.**
+  `revisions`, `state-json`, `revision-op`, `listen-stats` and
+  `script-review-ledger` all nest under it (the first two as leaves). Every
+  `/:bookId` write is **quick** or **long**: a quick operation (everything that
+  writes the book folder, including bounded sidecar calls) holds book-op for its
+  whole span; a long one (an unbounded model/sidecar/LLM call, an unbounded wait,
+  a whole-book encode/archive) holds none and registers only through
+  `runBookJob` (`workspace/book-jobs.ts`) — the sole registration function, so
+  every exit path releases — and a rename/delete of that book is then refused
+  with a 409 `book_busy`. A quick operation that must do slow, write-free prep
+  first may `peekBook` (lock-free, never feeds a write), then re-resolve and
+  re-validate inside `withBookOp` (the two-span pattern); otherwise nothing
+  resolves a book before its lock. **Never nest `withBookOp`** — two or more
+  books go through `withBookOps`, a walker takes one book's book-op per step —
+  and never call `runBookJob`, `withDesignLock` or `withLibraryVoiceLock`
+  while holding one. Book folders are only moved/removed through
+  `moveBookFolder`/`removeBookFolder`, which demand a live book-op handle.
+  `workspace/book-op-lock.guard.test.ts` fails the build on a mover outside
+  those, an unguarded `/:bookId` write handler, a resolve before the lock, or
+  a long-job file missing its `runBookJob`. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
@@ -660,8 +682,9 @@ Design rationale:
   so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round) — except downstream of `withStateJsonLock` alone, which already
-  curates its own message. See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` or `withBookOp`
+  alone, each of which already curates its own message (`withBookOp` keeps the
+  timeout `code` too). See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

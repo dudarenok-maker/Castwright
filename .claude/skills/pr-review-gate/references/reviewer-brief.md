@@ -306,6 +306,22 @@ recite:
     the lock is released, against a path it resolved before it (a change-log
     write, a cast delete, a slug rewrite), land in a folder a queued
     folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
+    Fixed for moves by `book-op` + `book-jobs` (#3711): a move/delete holds
+    `book-op:<bookId>` exclusively and is refused while a long job is registered.
+30. **A book-folder writer outside `withBookOp` and outside a `runBookJob`
+    `fn`** — #3711 / plan 288. The writer is a quick operation that takes no
+    `book-op`, or a long job that never registered, or one whose write escapes
+    its registration: an un-awaited child that writes the book after the parent's
+    token is released (generation's `afterChapterFinalized`, scoring), a
+    registration released at a deadline while its units still run (analysis's
+    `MAIN_DRAIN_DEADLINE_MS`), or a book resolved before the lock (`findBookBy*`
+    ahead of `withBookOp`, a `peekBook` result fed into a write). A folder move
+    then lands mid-operation and the next write recreates the old folder.
+    Checkable: for every route or job that writes under a book folder, hold its
+    `book-op` or its job (gate the work), queue a rename/delete, and assert the
+    rename waits (quick) or gets 409 `book_busy` (long) with the old path never
+    recreated; also confirm the token is released on every exit path (sync throw,
+    early return, rejection) and not before the last child settles.
 
 ### Keeping the catalogue current
 

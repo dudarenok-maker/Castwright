@@ -47,6 +47,14 @@ Signature: `withBookOp(bookId, fn: (book: BookHandle) => Promise<T>, opts?: { hi
 - Returns `BOOK_GONE` if any of the books is gone. Rejects an empty list.
 - **Never nest `withBookOp`; two or more books always go through `withBookOps`.**
 
+#### `withBookOpAtDir(dir, fn)`
+
+- The startup sweeps' per-book step (`migrateLegacyChangeLogs`, `fsckAllBooks`). It reads the `state.json`
+  at `dir`: with a `bookId` it runs `withBookOp(bookId, ({bookDir}) => fn(bookDir), {hintDir: dir})`, so a
+  rename that queued ahead of the sweep hands `fn` the moved folder; a book without a `bookId` runs
+  `fn(dir)` unlocked, because no route can move it. `BOOK_GONE` means the book vanished while the sweep
+  queued, and the step is skipped.
+
 #### `peekBook(bookId, hintDir?)`
 
 - A read-only resolve that takes **no lock**. It runs the same resolver and returns `{bookDir, state}` or
@@ -122,6 +130,8 @@ only the locked resolves heal, and they apply the same lazy `audioModelKey` back
 
 - Called under the claim, by **non-sample** creators only **(coordinator call)**.
 - Returns `makeBookId(...)`. If no `state.json` in the workspace carries that id, it is used as-is.
+- `isBookIdTaken(bookId)` is the same scan exposed on its own. The bundle importer calls it under the claim
+  to KEEP an incoming bundle id when it is free, and mints only on a collision.
 - Otherwise it appends `-2`, `-3`, … to the **title** slug until the id is free. This keeps `parseBookId`'s
   three parts.
 
@@ -175,7 +185,17 @@ the user knows what is holding the book.
 - **Children of a job that write the book** stay inside `done`:
   - Generation collects every un-awaited `afterChapterFinalized(...)` promise (`generation.ts:1974`) into
     `job.children`.
-  - It `await Promise.allSettled(job.children)` before `fn` returns.
+  - A `finally` around the job body awaits `drainChildren(job)` before `fn` returns. It is not a plain
+    `Promise.allSettled(job.children)`: that snapshots the array, and a child pushed while the earlier ones
+    are awaited would be missed. `drainChildren` loops until no new child appears. The `finally` means a
+    body that throws after pushing a child still waits for it.
+  - A throw out of the chapter loop (outside `processOneChapter`'s own handling) used to skip the normal-path
+    `deregisterJob` / `endAllSubscribers`. A `catch` now deregisters the job, broadcasts the curated
+    `chapter_failed` frame (the lock-contention sentence for a lock timeout, else "Could not start the
+    render.") and `idle` to every subscriber, then rethrows.
+  - The no-progress watchdog can abandon a chapter whose synth ignores abort. Once `watchdogFired`, that
+    chapter returns before its finalize and again right after it, so a late-resolving synth cannot write the
+    book (it could recreate a moved folder) or start scoring.
   - `triggerScoring` resolves only after scoring's own `runBookJob` registration has resolved. So when
     generation's token is released, scoring's token is already held, and no move can slip in between.
   - Any other un-awaited child that writes the book follows the same rule.
@@ -372,7 +392,13 @@ pre-existing, not a move, and out of scope.
   1. Stage into `.staging/`.
   2. Under the claim only: collision check → `mintBookId` → `mkdir` the parents → **one directory rename** of
      the staged tree into place *(coordinator call: stage before the claim)*.
-- **Staging cleanup** *(coordinator call)*: a startup sweep removes `<workspace>/.staging/` entries older
+- **Containment**: the importer does not rely on yauzl alone refusing `..` entry names. A bundle-supplied
+  `state.manuscriptFile` or `audio/` entry name that resolves outside the staging or book folder is an
+  `InvalidBundleError` (`scan-import-folder.containment.test.ts`). The author, series and title it supplies go
+  through `bookDirByDisplay`, which already sanitises each segment and asserts containment under
+  `BOOKS_ROOT` (`workspace/paths.ts`; no change was needed there).
+- **Staging cleanup** *(coordinator call)*: `sweepStaleStaging` (`workspace/portable-staging.ts`, `STAGING_MAX_AGE_MS`
+  = 1 h) removes `<workspace>/.staging/` entries older
   than 1 h. It is **awaited before the server accepts imports**: it runs before `listen` in `index.ts`,
   costs one `readdir`, and an entry under an hour old is kept, because it may belong to a live import.
 - **Folders without `state.json`** never resolve, as today (404).
@@ -387,6 +413,10 @@ pre-existing, not a move, and out of scope.
 - `cast-series-patch` and `voice-override-linked` use per-sibling steps.
 - Voice-library assign: library-voice → `withBookOp` → cast (`voice-library.ts:1605-1958`).
 - `DELETE /:voiceUuid/assign` (`:2039`): `withBookOp` → cast.
+- `POST /promote` (`voice-library.ts:1021`): the book is resolved and its `cast.json` read inside one
+  `withBookOp`, which is then released before the copy and the library-entry write. Promote never writes the
+  book (the origin `cast.json` is untouched), so the lock only guarantees it does not read a vacated path
+  and answer a spurious "No character".
 - `DELETE /:voiceUuid` (`:2255`): library-voice → the per-book step.
 
 No caller of a multi-book walker holds book-op, so there is no re-entry.
@@ -394,7 +424,7 @@ No caller of a multi-book walker holds book-op, so there is no re-entry.
 **e. Writers outside the mutating `/:bookId` routes.**
 - `GET /:bookId/export/portable` (`exports-portable.ts:79-85`) is a request-scoped `export` job.
 - `migrateLegacyChangeLogs` (`index.ts:197`) and `fsckAllBooks` (`index.ts:216`) stay fire-and-forget. Each
-  book's step runs under `withBookOp(state.bookId, …, {hintDir})`. A book without a `bookId` is processed
+  book's step runs through `withBookOpAtDir(dir, fn)` (= `withBookOp(state.bookId, …, {hintDir})`). A book without a `bookId` is processed
   unlocked, because it cannot be moved through the API *(my call)*.
 - `backgroundFetchCover` (`import.ts:460`): the fetch runs outside, and the write runs inside one `withBookOp`.
 - The GET-time backfill in `findBookBy` (`scan.ts:1163`) is already safe: it writes through

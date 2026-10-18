@@ -919,25 +919,25 @@ export async function forEachMatchingCastCharacter(
            caller holds the book's book-op (a book with an id) or nothing (one without). */
         const writeBook = (dir: string): Promise<number> =>
           withCastLock(dir, async () => {
-          const cast = await readJson<CastJson>(castJsonPath(dir));
-          if (!cast?.characters?.length) return 0;
-          let bookUpdated = 0;
-          let dirty = false;
-          for (let i = 0; i < cast.characters.length; i++) {
-            const original = cast.characters[i];
-            const id = original.voiceId ?? original.id;
-            if (id !== voiceId) continue;
-            const next = mutate(original);
-            cast.characters[i] = next;
-            dirty = true;
-            /* See the onlyBookDir branch above — a declined (same-reference)
-               mutate must not count as an update. */
-            if (next !== original) bookUpdated += 1;
-          }
-          if (dirty) {
-            await writeJsonAtomic(castJsonPath(dir), cast);
-          }
-          return bookUpdated;
+            const cast = await readJson<CastJson>(castJsonPath(dir));
+            if (!cast?.characters?.length) return 0;
+            let bookUpdated = 0;
+            let dirty = false;
+            for (let i = 0; i < cast.characters.length; i++) {
+              const original = cast.characters[i];
+              const id = original.voiceId ?? original.id;
+              if (id !== voiceId) continue;
+              const next = mutate(original);
+              cast.characters[i] = next;
+              dirty = true;
+              /* See the onlyBookDir branch above — a declined (same-reference)
+                 mutate must not count as an update. */
+              if (next !== original) bookUpdated += 1;
+            }
+            if (dirty) {
+              await writeJsonAtomic(castJsonPath(dir), cast);
+            }
+            return bookUpdated;
           });
         if (!state.bookId) {
           /* A book whose state.json lacks a bookId can never be matched by the

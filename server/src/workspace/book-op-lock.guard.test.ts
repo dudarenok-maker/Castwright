@@ -36,12 +36,10 @@
                     by `book-jobs.ts`).
 
    ALLOWLISTS are keyed on FILE AND COUNT, both directions (a file that scans
-   clean must not be listed; a count that drifts either way fails). During the
-   #3711 PR every unconverted site is listed with reason `pending:T<n>` (the plan
-   task that converts it); each task shrinks its entries and Task 10 flips
-   `ALLOW_PENDING` to false so none may remain. The final allowlist holds only
-   `no-book-write` / `cross-book-walker` (G2) and the permanent `onlyBookDir`
-   exemption (G4).
+   clean must not be listed; a count that drifts either way fails). The
+   allowlist holds only `no-book-write` / `cross-book-walker` (G2) and the
+   permanent `onlyBookDir` exemption (G4); `ALLOW_PENDING` is false, so a
+   `pending:T<n>` entry (the reason used while #3711 was converting sites) fails.
 
    G2 also forbids a nested `withBookOp(` / `withBookOps(` inside a `withBookOp*`
    callback (re-entry on the same id times out at 10s; two books go through ONE
@@ -576,8 +574,8 @@ function exportedFunctions(content: string): string[] {
 
 /* ===== allowlists ============================================================= */
 
-/* Task 10 flips this to false: from then on no `pending:T<n>` entry may remain. */
-const ALLOW_PENDING = true;
+/* Off: no `pending:T<n>` entry may remain. The negative controls pass `true` explicitly to prove the other path. */
+const ALLOW_PENDING = false;
 
 interface AllowEntry {
   count: number;
@@ -798,7 +796,7 @@ describe('book-op lock — static guard (#3711)', () => {
     expect(missingCreatorTokens('x.ts', 'await withBookPathClaim(async () => {});', req)).toHaveLength(1);
   });
 
-  it('no pending:T<n> allowlist entry remains (flipped on by Task 10)', () => {
+  it('no pending:T<n> allowlist entry remains', () => {
     const all = [ALLOW_G1, ALLOW_G2, ALLOW_G3A, ALLOW_G3B, ALLOW_G4A, ALLOW_G4B];
     expect(pendingEntries(all, ALLOW_PENDING)).toEqual([]);
   });
@@ -957,12 +955,12 @@ describe('book-op lock — static guard (#3711)', () => {
   it('the allowlist diff reports drift in BOTH directions and unknown/invalid entries', () => {
     const found = new Map([['a.ts', ['x', 'y']]]);
     expect(diffAllowlist('T', found, new Map())).toHaveLength(1); // not on the allowlist
-    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]))).toHaveLength(1); // count drift up
-    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 3, reason: 'pending:T2' }]]))).toHaveLength(1); // count drift down
-    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'pending:T2' }], ['b.ts', { count: 1, reason: 'pending:T3' }]]))).toHaveLength(1); // stale entry
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'no-book-write' }]]))).toHaveLength(1); // count drift up
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 3, reason: 'no-book-write' }]]))).toHaveLength(1); // count drift down
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'no-book-write' }], ['b.ts', { count: 1, reason: 'no-book-write' }]]))).toHaveLength(1); // stale entry
     expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'because' }]]))).toHaveLength(1); // invalid reason
-    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'pending:T2' }]]))).toEqual([]);
-    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'pending:T2' }]]), new Map([['a.ts', 1]]))).toEqual([]);
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 2, reason: 'no-book-write' }]]))).toEqual([]);
+    expect(diffAllowlist('T', found, new Map([['a.ts', { count: 1, reason: 'no-book-write' }]]), new Map([['a.ts', 1]]))).toEqual([]);
     expect(diffAllowlist('T', found, new Map(), new Map([['a.ts', 2]]))).toEqual([]);
   });
 

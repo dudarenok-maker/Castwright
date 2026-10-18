@@ -94,10 +94,10 @@ castMergeSuggestionsRouter.post(
     let outcome;
     try {
       outcome = await withBookOp(bookId, async ({ bookDir, state }) => {
-    try {
-      await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
-    } catch (err) {
-      /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
+        try {
+          await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+        } catch (err) {
+          /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
          `performCastMerge` is DEFERRED, not aborting: it is parked at the
          retirement site and rethrown only once cast.json, manuscript-edits
          .json, the analysis cache and the `cast-merges` journal have all been
@@ -136,21 +136,21 @@ castMergeSuggestionsRouter.post(
          Its own failure is swallowed deliberately — the timeout is the more
          informative error and must be what the user sees, and a failed
          dismiss is no worse than not attempting one. */
-      if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
-        try {
-          await dismissSuggestion(bookDir, sourceId, targetId);
-        } catch (dismissErr) {
-          console.warn(
-            '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
-            dismissErr,
-          );
-        }
-      }
-      const e = err as { status?: number; error?: string };
-      if (e.status && e.error) {
-        return res.status(e.status).json({ error: e.error });
-      }
-      /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
+          if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
+            try {
+              await dismissSuggestion(bookDir, sourceId, targetId);
+            } catch (dismissErr) {
+              console.warn(
+                '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
+                dismissErr,
+              );
+            }
+          }
+          const e = err as { status?: number; error?: string };
+          if (e.status && e.error) {
+            return res.status(e.status).json({ error: e.error });
+          }
+          /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
          sibling `POST /cast/merge` handler, including the retraction. The
          claim recorded here through round 4 ("a throw without `{status,
          error}` used to reach Express 5's default handler and come back as
@@ -163,16 +163,16 @@ castMergeSuggestionsRouter.post(
          user's workspace. Curated body for the lock-timeout class, generic
          body for everything else; the full error still goes to the log. See
          `cast-merge.ts`'s handler for the long version. */
-      console.error('[cast-merge-suggestions] accept failed', err);
-      if (isLockAcquisitionTimeout(err)) {
-        return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
-      }
-      return res.status(500).json({ error: 'Internal server error.' });
-    }
+          console.error('[cast-merge-suggestions] accept failed', err);
+          if (isLockAcquisitionTimeout(err)) {
+            return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+          }
+          return res.status(500).json({ error: 'Internal server error.' });
+        }
 
-    /* Drop the suggestion only after a successful merge. */
-    await dismissSuggestion(bookDir, sourceId, targetId);
-    return res.json({});
+        /* Drop the suggestion only after a successful merge. */
+        await dismissSuggestion(bookDir, sourceId, targetId);
+        return res.json({});
       });
     } catch (err) {
       if (!isLockAcquisitionTimeout(err)) throw err;

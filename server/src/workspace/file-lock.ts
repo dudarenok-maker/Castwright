@@ -49,9 +49,12 @@ const waiters = new Map<string, number>();
    withCastLocks quirk): every nested acquisition adds one full budget, so the
    effective worst case is depth x this. withCastLocks chains one withKeyLock
    per book, so a two-book route is 2 deep; voice-library.ts's POST /assign
-   takes `library-voice:<uuid>` then a cast lock, so it is 2 deep; and its
-   DELETE path holds `library-voice:<uuid>` while clearLibraryVoiceReferences
-   takes a cast lock per confirmed book, so it is N+1 deep for N books. */
+   takes `library-voice:<uuid>` then the target book's `book-op:<bookId>` then a
+   cast lock (#3711), so it is 3 deep; and its DELETE path holds
+   `library-voice:<uuid>` while clearLibraryVoiceReferences takes, per confirmed
+   book, `book-op` then a cast lock (library-voice -> book-op -> cast, one book
+   at a time), so it is 2N+1 acquisitions for N books. A book-op never nests
+   inside another book-op: two or more books go through withBookOps. */
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
 
 /** Stable discriminator carried by `LockAcquisitionTimeoutError`. */

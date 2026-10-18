@@ -113,29 +113,29 @@ export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<vo
      the book's book-op (a book with an id) or nothing (one without). */
   const clearBook = (bookDir: string): Promise<void> =>
     withCastLock(bookDir, async () => {
-    const cast = await readJson<CastJson>(castJsonPath(bookDir));
-    if (!cast) return;
+      const cast = await readJson<CastJson>(castJsonPath(bookDir));
+      if (!cast) return;
 
-    let dirty = false;
-    const characters = (cast.characters ?? []).map((c) => {
-      const overrides = c.overrideTtsVoices;
-      if (!overrides) return c;
-      const next = { ...overrides };
-      let changed = false;
-      for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
-        if (overrides[engine]?.libraryUuid === voiceUuid) {
-          delete next[engine];
-          changed = true;
+      let dirty = false;
+      const characters = (cast.characters ?? []).map((c) => {
+        const overrides = c.overrideTtsVoices;
+        if (!overrides) return c;
+        const next = { ...overrides };
+        let changed = false;
+        for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
+          if (overrides[engine]?.libraryUuid === voiceUuid) {
+            delete next[engine];
+            changed = true;
+          }
         }
-      }
-      if (!changed) return c;
-      dirty = true;
-      return { ...c, overrideTtsVoices: next };
-    });
+        if (!changed) return c;
+        dirty = true;
+        return { ...c, overrideTtsVoices: next };
+      });
 
-    if (dirty) {
-      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
-    }
+      if (dirty) {
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
+      }
     });
 
   /* #3711 -- the caller (DELETE /:voiceUuid) holds the library-voice lock, so
