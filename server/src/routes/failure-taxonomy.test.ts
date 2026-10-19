@@ -903,6 +903,18 @@ describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () =
     expect(r.remediation).toMatch(/analyzer engine/i);
     expect(r.remediation).toMatch(/OpenAI-compatible/);
   });
+
+  it('a not-an-endpoint refusal says the saved model is not an endpoint while the engine is OpenAI-compatible, and does not tell the user to set the engine they already set', () => {
+    const r = classifyAnalysisFailure(new AnalyzerEndpointMissingError('qwen3.5:4b', 'settings', 'not-an-endpoint'), 'Analyzer');
+    expect(r.code).toBe('analyzer-endpoint-missing');
+    expect(r.userMessage).toContain('"qwen3.5:4b"');
+    expect(r.userMessage).toContain('not an endpoint model');
+    expect(r.userMessage).not.toMatch(/not configured|deleted|Pick another model/);
+    expect(r.remediation).toMatch(/endpoint model/);
+    expect(r.remediation).toMatch(/change the analyzer engine/i);
+    expect(r.remediation).not.toMatch(/set the analyzer engine to OpenAI-compatible/i);
+  });
+
   it.each([
     ['schema', 'may not enforce'],
     ['json', 'constrains the structure'],

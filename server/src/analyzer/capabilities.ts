@@ -208,7 +208,7 @@ export function assertAnalyzerTargetUsable(
   if (target.engine === 'openai') {
     const parsed = parseEndpointModelId(target.modelId);
     const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
-    if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source);
+    if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source, parsed ? 'not-saved' : 'not-an-endpoint');
     resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),

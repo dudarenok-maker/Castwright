@@ -36,6 +36,12 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(preflightTargets(['phase0'], 'qwen3.5:4b', s)).toEqual([{ modelId: 'qwen3.5:4b', source: 'run-pick', engine: 'local' }]);
   });
 
+  it('an Ollama tag checked while the engine is OpenAI-compatible → reason not-an-endpoint (the model is not an endpoint id)', () => {
+    const err = thrown(() => runAnalyzerPreflight([{ modelId: 'qwen3.5:4b', source: 'settings', engine: 'openai' }], settings()));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ source: 'settings', reason: 'not-an-endpoint' });
+  });
+
   it('a deleted endpoint from the per-run pick → AnalyzerEndpointMissingError source run-pick', () => {
     const s = settings({ analyzerEndpoints: [] });
     const err = thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::qwen3-30b', s), s));

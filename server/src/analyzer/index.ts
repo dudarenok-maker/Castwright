@@ -115,7 +115,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     /* Refused only when the endpoint is not saved. `modelSource` (3a) keeps an env-named id saying env.
        Without it, an explicit model is a run pick (3a's contract); only the saved default is settings (P23). */
     if (!parsed || !endpoint) {
-      throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'));
+      throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'), parsed ? 'not-saved' : 'not-an-endpoint');
     }
     const primary = new OpenAIAnalyzer({ endpoint, apiKey: resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl), model: parsed.model });
     return withFallback({ analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null }, opts.fallbackSwitch);

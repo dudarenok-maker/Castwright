@@ -577,6 +577,11 @@ const ENDPOINT_ENGINE_MISMATCH_REMEDIATION =
   'Set the analyzer engine to OpenAI-compatible (Model Manager, Analyzer engine) so the saved default analysis model is used, ' +
   'or pick this endpoint model for the run directly.';
 
+/* The remediation for a `not-an-endpoint` analyzer-endpoint-missing: the engine is already OpenAI-compatible, so the fix is the model (or going back to the engine the model belongs to). */
+const ENDPOINT_NOT_AN_ENDPOINT_REMEDIATION =
+  'Pick an endpoint model as the default analysis model (Model Manager, Analysis model), ' +
+  'or change the analyzer engine to the one this model belongs to.';
+
 function withCopy(code: FailureCode, userMessage: string, detail?: string, remediation?: string): AnalysisFailure {
   return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
@@ -1075,6 +1080,9 @@ export function classifyAnalysisFailure(
   if (err instanceof AnalyzerEndpointMissingError) {
     if (err.reason === 'engine-mismatch') {
       return withCopy('analyzer-endpoint-missing', err.message, undefined, ENDPOINT_ENGINE_MISMATCH_REMEDIATION);
+    }
+    if (err.reason === 'not-an-endpoint') {
+      return withCopy('analyzer-endpoint-missing', err.message, undefined, ENDPOINT_NOT_AN_ENDPOINT_REMEDIATION);
     }
     return withCopy(
       'analyzer-endpoint-missing',

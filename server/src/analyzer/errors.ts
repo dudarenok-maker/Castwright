@@ -239,20 +239,23 @@ const ENDPOINT_SOURCE_LABEL: Record<'settings' | 'env' | 'run-pick' | 'persona',
     before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b).
 
     `reason` says WHY, so the copy is true in each case it fires in: `not-saved` (the endpoint is not in
-    saved settings, e.g. deleted) or `engine-mismatch` (selectAnalyzer's deliberate P23 refusal: the
+    saved settings, e.g. deleted), `engine-mismatch` (selectAnalyzer's deliberate P23 refusal: the
     endpoint IS saved as the default analysis model but the analyzer engine is Ollama, and the run named
-    no model of its own). */
+    no model of its own) or `not-an-endpoint` (the reverse: the analyzer engine is OpenAI-compatible but
+    the model is an Ollama tag or a Gemini id, not an endpoint id; `endpointId` then carries that model). */
 export class AnalyzerEndpointMissingError extends Error {
   readonly code = 'ANALYZER_ENDPOINT_MISSING';
   constructor(
     readonly endpointId: string,
     readonly source: 'settings' | 'env' | 'run-pick' | 'persona',
-    readonly reason: 'not-saved' | 'engine-mismatch' = 'not-saved',
+    readonly reason: 'not-saved' | 'engine-mismatch' | 'not-an-endpoint' = 'not-saved',
   ) {
     super(
       reason === 'engine-mismatch'
         ? `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is saved as the default analysis model, but the analyzer engine is not set to OpenAI-compatible, so a run with no model of its own cannot use it.`
-        : `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`,
+        : reason === 'not-an-endpoint'
+          ? `The analyzer engine is OpenAI-compatible, but the model "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not an endpoint model, so there is no endpoint to run it on.`
+          : `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`,
     );
     this.name = 'AnalyzerEndpointMissingError';
   }

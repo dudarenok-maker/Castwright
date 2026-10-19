@@ -61,6 +61,18 @@ describe('selectAnalyzer — endpoint-shaped model ids (#3084 PR 3a, P23)', () =
     expect(err).toMatchObject({ reason: 'not-saved' });
     expect((err as Error).message).toContain('is not configured');
   });
+
+  it('the engine on OpenAI-compatible with an Ollama tag as the default model is refused as not-an-endpoint, never as a deleted endpoint or a wrong engine', () => {
+    _setUserSettingsCacheForTest({ geminiApiKey: null, analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const err = thrown(() => selectAnalyzer({}));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ source: 'settings', reason: 'not-an-endpoint' });
+    const message = (err as Error).message;
+    expect(message).toContain('"qwen3.5:4b"');
+    expect(message).toContain('not an endpoint model');
+    expect(message).not.toMatch(/not configured|deleted/);
+  });
+
   it('still routes an Ollama tag that merely starts with "openai:" to Ollama', () => {
     const sel = selectAnalyzer({ model: 'openai:latest' });
     expect(sel.engine).toBe('local');
