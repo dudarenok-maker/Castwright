@@ -866,6 +866,54 @@ describe('POST /:id/analysis honours a per-run phase1Model (#3141 step 4)', () =
   }, 60_000);
 });
 
+/* ── Suite: the subset route shares one fallback switch across its two selections
+   (#3084 wave 3d) ─────────────────────────────────────────────────────────── */
+
+describe('POST /:id/analysis/chapters shares one fallback switch per run (#3084 wave 3d)', () => {
+  it('hands phase 0 and phase 1 the same RunFallbackSwitch, and a second request a different one', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+    setPhase0Selection(buildSelection(buildSpyPhase0Analyzer(), 'phase0-subset-route-model'));
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-subset-route-model'));
+    const calls = startCapturingSelectorCalls();
+    const switchOf = (c: unknown) => (c as { fallbackSwitch?: unknown }).fallbackSwitch;
+
+    const ids = [1, 2].map((n) => `test-subset-route-switch-${n}-${Date.now()}-${Math.random()}`);
+    for (const id of ids) registerStubManuscript(id, 1);
+
+    try {
+      for (const id of ids) {
+        const res = await supertest(app).post(`/api/manuscripts/${id}/analysis/chapters`).send({ chapterIds: [1] }).buffer(true);
+        expect(res.status).toBe(200);
+      }
+
+      const phase0Calls = calls.filter((c) => c.phase === 'phase0');
+      const phase1Calls = calls.filter((c) => c.phase === 'phase1');
+      expect(phase0Calls).toHaveLength(2);
+      expect(phase1Calls).toHaveLength(2);
+      for (let i = 0; i < 2; i++) {
+        expect(switchOf(phase0Calls[i])).toBeInstanceOf(RunFallbackSwitch);
+        expect(switchOf(phase1Calls[i])).toBe(switchOf(phase0Calls[i]));
+      }
+      expect(switchOf(phase0Calls[1])).not.toBe(switchOf(phase0Calls[0]));
+    } finally {
+      for (const id of ids) {
+        removeManuscript(id);
+        await clearAnalysisCache(id);
+      }
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+});
+
 /* ── Suite: a reasoning overflow ends the run (#3084 P20) ─────────────── */
 
 describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
