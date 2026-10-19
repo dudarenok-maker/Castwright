@@ -13,6 +13,7 @@ import {
   LOCK_CONTENTION_REQUEST_ERROR,
   requestFailureMessageFs,
   FS_FAILURE_REQUEST_ERROR,
+  FS_PERMANENT_FAILURE_REQUEST_ERROR,
 } from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
@@ -437,9 +438,9 @@ describe('requestFailureMessageFs (#3711)', () => {
 
   it('curates a node fs error, whatever its code', () => {
     const path = 'C:\\Users\\me\\books\\A\\S\\T\\.audiobook\\state.json';
-    for (const code of ['EBUSY', 'ENOSPC', 'EPERM', 'EACCES', 'EIO']) {
+    for (const code of ['EBUSY', 'ENOSPC', 'EPERM', 'EACCES', 'EIO', 'EROFS', 'EAGAIN', 'EMFILE']) {
       const body = requestFailureMessageFs(fsError(code, 'open', path), 'Merge failed.');
-      expect(body).toBe(FS_FAILURE_REQUEST_ERROR);
+      expect([FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]).toContain(body);
       expect(body).not.toContain('C:');
       expect(body).not.toContain(code);
     }
@@ -449,7 +450,22 @@ describe('requestFailureMessageFs (#3711)', () => {
     ).toBe(FS_FAILURE_REQUEST_ERROR);
     expect(
       requestFailureMessageFs(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC', syscall: 'write' }), 'x'),
-    ).toBe(FS_FAILURE_REQUEST_ERROR);
+    ).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+  });
+
+  /* PR #3714 review pass 5 -- a retry cannot fix a full disk or a permission
+     error, so their body never says "Try again"; a transient one still does. */
+  it('says "Try again" only for a transient fs error', () => {
+    const path = 'C:\\w\\state.json';
+    for (const code of ['ENOSPC', 'EACCES', 'EROFS']) {
+      const body = requestFailureMessageFs(fsError(code, 'write', path), 'x');
+      expect(body).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+      expect(body).not.toMatch(/try again/i);
+    }
+    for (const code of ['EBUSY', 'EPERM', 'EIO', 'EAGAIN', 'EMFILE']) {
+      expect(requestFailureMessageFs(fsError(code, 'open', path), 'x')).toBe(FS_FAILURE_REQUEST_ERROR);
+    }
+    expect(FS_FAILURE_REQUEST_ERROR).toMatch(/Try again/);
   });
 
   it('still curates a lock-acquisition expiry exactly as requestFailureMessage does', () => {
@@ -470,6 +486,8 @@ describe('requestFailureMessageFs (#3711)', () => {
   });
 
   it('the curated body names no path, syscall or code', () => {
-    expect(FS_FAILURE_REQUEST_ERROR).not.toMatch(/[A-Z]:\\|\/|E[A-Z]{3,}|\bopen\b|\bwrite\b/);
+    for (const body of [FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]) {
+      expect(body).not.toMatch(/[A-Z]:\\|\/|E[A-Z]{3,}|\bopen\b|\bwrite\b/);
+    }
   });
 });

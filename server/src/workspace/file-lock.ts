@@ -232,6 +232,12 @@ export function requestFailureMessage(err: unknown, fallback: string): string {
 export const FS_FAILURE_REQUEST_ERROR =
   "The book's files could not be read or written right now. Try again.";
 
+/* PR #3714 review pass 5 -- the body for an fs error a retry cannot fix (a full
+   disk, a permission or read-only refusal): it never promises "Try again". */
+export const FS_PERMANENT_FAILURE_REQUEST_ERROR =
+  "The book's files could not be read or written. Check free disk space and folder permissions.";
+const PERMANENT_FS_CODES = new Set(['ENOSPC', 'EACCES', 'EROFS']);
+
 /** A node fs error: a string `code` plus the `syscall` or `path` node sets on
  *  every one. A deliberate error that merely carries a code is not one. */
 function isFsError(err: unknown): boolean {
@@ -242,15 +248,18 @@ function isFsError(err: unknown): boolean {
 }
 
 /** `requestFailureMessage` plus the node fs error class, which answers
- *  `FS_FAILURE_REQUEST_ERROR` (the raw error goes to the log). Used by the
- *  whole-request handlers in `book-state.ts` and `chapters-restructure.ts`,
- *  whose fallbacks are `(e as Error).message`; every other error's message,
+ *  `FS_FAILURE_REQUEST_ERROR` (`FS_PERMANENT_FAILURE_REQUEST_ERROR` for a full
+ *  disk or a permission refusal; the raw error goes to the log). Used by the
+ *  whole-request handlers whose fallbacks are `(e as Error).message` (CLAUDE.md
+ *  lists them); every other error's message,
  *  deliberate user-facing ones included, still passes through verbatim. */
 export function requestFailureMessageFs(err: unknown, fallback: string): string {
   if (isLockAcquisitionTimeout(err)) return LOCK_CONTENTION_REQUEST_ERROR;
   if (isFsError(err)) {
     console.error('[file-lock] fs error curated out of a response body', err);
-    return FS_FAILURE_REQUEST_ERROR;
+    return PERMANENT_FS_CODES.has((err as { code: string }).code)
+      ? FS_PERMANENT_FAILURE_REQUEST_ERROR
+      : FS_FAILURE_REQUEST_ERROR;
   }
   return fallback;
 }

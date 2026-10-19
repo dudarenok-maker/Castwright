@@ -40,7 +40,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
   resolveVoiceAssignment,
@@ -543,7 +543,9 @@ voicesRouter.get('/', async (req: Request, res: Response) => {
     res.json({ voices });
   } catch (e) {
     console.error('[voices] aggregate failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library scan failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library scan failed.'),
+    });
   }
 });
 
@@ -560,7 +562,9 @@ voicesRouter.get('/base', async (_req: Request, res: Response) => {
     res.json({ voices });
   } catch (e) {
     console.error('[voices] base catalog failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Base-voice catalog failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Base-voice catalog failed.'),
+    });
   }
 });
 
@@ -584,7 +588,9 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
     res.status(204).end();
   } catch (e) {
     console.error('[voices] pin failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Pin update failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Pin update failed.'),
+    });
   }
 });
 
@@ -809,7 +815,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
        `forEachMatchingCastCharacter` takes one `withCastLock` per matching book,
        so this handler can receive the class. Same curation. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Override update failed.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Override update failed.'),
     });
   }
 });

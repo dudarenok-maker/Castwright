@@ -3999,6 +3999,10 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     await vl.writeEntry(makeEntry({ voiceUuid: 'nostage-1', provenance: 'designed' }));
     const res = await request(app).post('/api/voice-library/nostage-1/redesign/promote').send({});
     expect(res.status).toBe(409);
+    /* PR #3714 review pass 5 -- the stat error's absolute preview path stays out
+       of the body. */
+    expect(res.body.error).toBe('No staged preview voice to promote.');
+    expect(JSON.stringify(res.body)).not.toMatch(/ENOENT|\.pt\b/);
   });
 
   it('promote 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {

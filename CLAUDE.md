@@ -716,16 +716,19 @@ Design rationale:
   and leaves every other body verbatim, or its sibling `requestFailureMessageFs`,
   which also answers a fixed path-free sentence for a node fs error (a `code`
   plus `syscall`/`path`: write EBUSY / ENOSPC / EPERM embed the absolute path
-  too) and is what the whole-request handlers in `book-state` and
-  `chapters-restructure` (and `voice-style`'s single generate) whose fallback
-  is the error's own message use (#3711) —
-  `git grep requestFailureMessage` matches both and enumerates all fifty-two
-  call sites (`book-state` ×13, `chapters-restructure` ×6, `cast-design` ×4
+  too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
+  and is what the whole-request handlers in `book-state`,
+  `chapters-restructure`, `cover`, `voice-library`, `voices`, `import` and
+  `samples` (and `voice-style`'s single generate) whose fallback is the
+  error's own message use (#3711) —
+  `git grep requestFailureMessage` matches both and enumerates all
+  seventy-eight call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  `chapters-restructure` ×6, `cast-design` ×4
   (both arms of its defensive outer plus the job's two terminal `error` events),
-  `voice-library` ×3, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
+  `voices` ×4, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `exports-portable`, `voices`),
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since

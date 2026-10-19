@@ -71,7 +71,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
+import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -126,7 +126,6 @@ async function parseForLegacyTitleFlags(
     parse), plus the fingerprint they were taken against. */
 interface RestructurePrep {
   fingerprint: ManuscriptFingerprint | null;
-  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>;
   legacyParse: { titles: string[]; flags: boolean[] } | null;
   /** The peeked book, for a route's own advisory parse (refresh-titles). */
   peeked: { bookDir: string; state: BookStateJson };
@@ -146,7 +145,9 @@ async function prepareRestructure(
     };
   }
 
-  // Hydrate manuscript record so we have current ChapterHint[]
+  /* Hydrate the manuscript record (the slow parse) before the lock, so the
+     commit's lookup is usually warm. The commit never uses THIS record: it
+     re-reads the one the locked state names (review pass 5). */
   const record = await getOrHydrateManuscript(peeked.state.manuscriptId);
   if (!record) {
     return {
@@ -163,7 +164,7 @@ async function prepareRestructure(
      The fingerprint is taken BEFORE the parse, so a change during it is seen. */
   const fingerprint = await manuscriptFingerprint(peeked.bookDir, peeked.state.manuscriptFile);
   const legacyParse = await parseForLegacyTitleFlags(peeked.state, peeked.bookDir);
-  return { fingerprint, record, legacyParse, peeked };
+  return { fingerprint, legacyParse, peeked };
 }
 
 /** Shared "load → transform → write" body. Runs INSIDE the route's `withBookOp`
@@ -234,11 +235,18 @@ async function applyRestructureClaimed(
 }> {
   const { bookDir } = book;
   let { state } = book;
-  /* PR #3714 review pass 4 -- the LIVE record, re-read under the lock: a
-     reparse / replace-manuscript this op queued behind replaced the store entry
-     (`putManuscript`), so the one `prepareRestructure` hydrated may be detached.
-     The prep copy serves only a cold store. */
-  const record = getManuscript(manuscriptId) ?? prep.record;
+  /* PR #3714 review passes 4-5 -- the record is the current one for the
+     manuscript the LOCKED state names (`manuscriptId` is `book.state`'s, resolved
+     under book-op), never the one `prepareRestructure` hydrated: an op this one
+     queued behind may have replaced the store entry (reparse / replace-manuscript
+     `putManuscript`) or the whole book (a bundle overwrite, possibly under a NEW
+     manuscriptId; the prepared record belongs to the old one). The new
+     chapter list is built from these hints, so a stale record rewrites
+     `state.chapters` from another manuscript. The store answers when warm; a
+     cold one (the overwrite drops the entries it replaced) hydrates here, under
+     the lock. */
+  const record = await getOrHydrateManuscript(manuscriptId);
+  if (!record) return { status: 404, body: { error: 'Manuscript not found on disk.' } };
   const advisoryValid = sameFingerprint(
     prep.fingerprint,
     await manuscriptFingerprint(bookDir, state.manuscriptFile),

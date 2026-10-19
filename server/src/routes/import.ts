@@ -35,7 +35,7 @@ import {
 } from '../workspace/paths.js';
 import { mintBookId, withBookPathClaim } from '../workspace/book-op-lock.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
+import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -182,7 +182,9 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       return res.status(415).json({ error: e.message });
     }
     console.error('[import] parse failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Import failed.' });
+    return res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Import failed.'),
+    });
   }
 });
 
@@ -513,6 +515,8 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[import] confirm failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Confirm failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Confirm failed.'),
+    });
   }
 });

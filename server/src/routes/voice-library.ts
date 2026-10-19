@@ -67,7 +67,7 @@ import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
 /* #1951 — the clone's own manifest language, from the reference clip. */
@@ -259,7 +259,7 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
     console.error('[voice-library] design failed', e);
     return res
       .status(httpStatusForSidecarError(e))
-      .json({ error: (e as Error).message || 'Voice design failed.' });
+      .json({ error: requestFailureMessageFs(e, (e as Error).message || 'Voice design failed.') });
   }
 });
 
@@ -340,7 +340,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
     console.error('[voice-library] redesign failed', e);
     return res
       .status(httpStatusForSidecarError(e))
-      .json({ error: (e as Error).message || 'Voice redesign failed.' });
+      .json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Voice redesign failed.'),
+      });
   }
 });
 
@@ -375,9 +377,10 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     try {
       await stat(qwenVoicePtPath(previewKey));
     } catch (e) {
-      return res
-        .status(409)
-        .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
+      /* PR #3714 review pass 5 -- the stat error names the absolute preview
+         path; it goes to the log, never the body. */
+      console.warn('[voice-library] promote: no staged preview', e);
+      return res.status(409).json({ error: 'No staged preview voice to promote.' });
     }
     await rm(qwenVoicePtPath(storageKey), { force: true });
     await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
@@ -432,7 +435,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     return res.status(200).json(updated);
   } catch (e) {
     console.error('[voice-library] redesign/promote failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Promote failed.' });
+    return res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Promote failed.'),
+    });
   }
 });
 
@@ -465,7 +470,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
     return res.status(200).json({ discarded: true });
   } catch (e) {
     console.error('[voice-library] redesign/discard failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Discard failed.' });
+    return res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Discard failed.'),
+    });
   }
 });
 
@@ -532,7 +539,9 @@ voiceLibraryRouter.get('/', async (_req: Request, res: Response) => {
     res.json({ voices });
   } catch (e) {
     console.error('[voice-library] list failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library list failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library list failed.'),
+    });
   }
 });
 
@@ -729,7 +738,9 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
     res.json(withComputedStaleness(written));
   } catch (e) {
     console.error('[voice-library] patch failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library update failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library update failed.'),
+    });
   }
 });
 
@@ -819,7 +830,9 @@ voiceLibraryRouter.post('/:voiceUuid/engines/:engine/retry', async (req: Request
     res.json(withComputedStaleness(written));
   } catch (e) {
     console.error('[voice-library] retry failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice engine retry failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice engine retry failed.'),
+    });
   }
 });
 
@@ -966,7 +979,7 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     console.error('[voice-library] sample failed', e);
     return res
       .status(httpStatusForSidecarError(e))
-      .json({ error: (e as Error).message || 'Voice sample failed.' });
+      .json({ error: requestFailureMessageFs(e, (e as Error).message || 'Voice sample failed.') });
   }
 });
 
@@ -1083,7 +1096,9 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
     return res.status(201).json(await readEntry(libraryUuid));
   } catch (e) {
     console.error('[voice-library] promote failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Voice promotion failed.' });
+    return res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice promotion failed.'),
+    });
   }
 });
 
@@ -1104,7 +1119,9 @@ voiceLibraryRouter.post(
         if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({ error: 'Sample too large (max 25 MB).' });
         }
-        return res.status(400).json({ error: (err as Error).message || 'Upload error.' });
+        return res.status(400).json({
+          error: requestFailureMessageFs(err, (err as Error).message || 'Upload error.'),
+        });
       }
       next();
     });
@@ -1119,7 +1136,9 @@ voiceLibraryRouter.post(
       return res.status(202).json(result);
     } catch (e) {
       const status = (e as { status?: number }).status ?? 502;
-      return res.status(status).json({ error: (e as Error).message || 'Clone-sample ingest failed.' });
+      return res.status(status).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Clone-sample ingest failed.'),
+      });
     }
   },
 );
@@ -1414,7 +1433,9 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         .json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice clone failed.' });
+    return res.status(502).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice clone failed.'),
+    });
   }
 });
 
@@ -1999,7 +2020,7 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        serialise. `requestFailureMessage` curates that one class and leaves every
        other body exactly as it was; the raw error still goes to the log above. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Voice library assign failed.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library assign failed.'),
     });
   }
 });
@@ -2104,7 +2125,7 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
     /* #2260 FINAL ROUND (B2) — the third of this file's three lock-taking
        handlers: the unassign's own `withCastLock` above. Same curation. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Voice library unassign failed.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library unassign failed.'),
     });
   }
 });
@@ -2189,7 +2210,9 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
         : final,
     );
   } catch (e) {
-    return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
+    return res.status(502).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Revoke failed.'),
+    });
   }
 });
 
@@ -2307,7 +2330,7 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
        is the site MOST likely to produce the class, and it leaked the cast-lock
        key — an absolute workspace path — the same way `/assign` did. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Voice library delete failed.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library delete failed.'),
     });
   }
 });

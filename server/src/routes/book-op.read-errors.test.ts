@@ -546,6 +546,21 @@ describe('(j) a bundle overwrite never runs on an unreadable target state (revie
     expect(readState(dir).bookId).toBe('busy-id');
     expect(readFileSync(join(dir, 'manuscript.md'), 'utf8')).toBe('Opening prose here.\n');
   });
+
+  it('refuses when only the outer, unlocked id read cannot read the state (review pass 5)', async () => {
+    const dir = seedBook('Probe Author', 'S', 'Busy Target', 'busy-id');
+    /* The unlocked id read throws once; every later read succeeds. Swallowing it
+       as "carries no id" skipped book-op and reached the claim's re-check, which
+       read `busy-id` and answered a 409 BundleConflictError -- a read fault
+       mislabelled as a conflict. */
+    scripted.set(paths.stateJsonPath(dir), ['busy', 'ok']);
+    await expect(portable.importPortableBundle(await bundle(), { onConflict: 'overwrite' })).rejects.toBeInstanceOf(
+      bookOp.BookStateUnreadableError,
+    );
+    scripted.clear();
+    expect(readState(dir).bookId).toBe('busy-id');
+    expect(readFileSync(join(dir, 'manuscript.md'), 'utf8')).toBe('Opening prose here.\n');
+  });
 });
 
 describe('(k) an in-lock state re-read that fails never puts a path in the body (review pass 4)', () => {

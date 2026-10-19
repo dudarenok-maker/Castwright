@@ -51,6 +51,7 @@ import {
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
+import { removeManuscript } from '../store/manuscripts.js';
 import {
   BOOK_GONE,
   BookBusyError,
@@ -398,6 +399,12 @@ export async function importPortableBundle(
             await rename(join(stage, rel), dest);
           }
         });
+        /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
+           warm ManuscriptRecord for either id is now another book's text: drop
+           both, and the next reader (a restructure, an analysis start)
+           re-hydrates from disk. */
+        if (live?.manuscriptId) removeManuscript(live.manuscriptId);
+        if (state.manuscriptId) removeManuscript(state.manuscriptId);
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });
 

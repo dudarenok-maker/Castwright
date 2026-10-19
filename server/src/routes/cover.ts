@@ -25,6 +25,7 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { coverImagePath } from '../workspace/paths.js';
 import { CoverSourceError } from '../cover/sources/types.js';
 import { findCandidateById, aggregateCovers } from '../cover/search.js';
@@ -60,7 +61,9 @@ coverRouter.get('/:bookId/cover/candidates', async (req: Request, res: Response)
     res.json({ candidates });
   } catch (e) {
     console.error('[cover] candidates failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover lookup failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Cover lookup failed.'),
+    });
   }
 });
 
@@ -104,7 +107,9 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
       return res.status(502).json({ error: e.message, kind: e.kind });
     }
     console.error('[cover] POST failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover save failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Cover save failed.'),
+    });
   }
 });
 
@@ -133,7 +138,9 @@ coverRouter.get('/:bookId/cover', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[cover] GET failed', e);
     if (!res.headersSent) {
-      res.status(500).json({ error: (e as Error).message || 'Cover read failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Cover read failed.'),
+      });
     }
   }
 });
@@ -155,7 +162,9 @@ coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
     res.status(204).end();
   } catch (e) {
     console.error('[cover] DELETE failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover delete failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Cover delete failed.'),
+    });
   }
 });
 
@@ -183,7 +192,9 @@ coverRouter.post(
             });
           }
         }
-        return res.status(400).json({ error: (err as Error).message || 'Upload error.' });
+        return res.status(400).json({
+          error: requestFailureMessageFs(err, (err as Error).message || 'Upload error.'),
+        });
       }
       next();
     });
@@ -235,7 +246,9 @@ coverRouter.post(
       });
     } catch (e) {
       console.error('[cover] upload failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Cover upload failed.' });
+      res.status(500).json({
+        error: requestFailureMessageFs(e, (e as Error).message || 'Cover upload failed.'),
+      });
     }
   },
 );
@@ -263,6 +276,8 @@ coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) 
     res.status(204).end();
   } catch (e) {
     console.error('[cover] framing PATCH failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover framing save failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Cover framing save failed.'),
+    });
   }
 });

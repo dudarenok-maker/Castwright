@@ -23,7 +23,7 @@ import {
 } from '../workspace/paths.js';
 import { peekBook, withBookPathClaim } from '../workspace/book-op-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
+import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -196,6 +196,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     res.json({ bookId, manuscriptId, alreadyLoaded: false });
   } catch (e) {
     console.error('[samples] load failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to load sample.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Failed to load sample.'),
+    });
   }
 });
