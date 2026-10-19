@@ -101,8 +101,13 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     /* #3084 P23 — a saved endpoint default must fail the run with a code,
        not be swapped silently for getResolvedOllamaModel()'s Ollama default. */
     if (!opts.model) {
-      const savedEndpoint = parseEndpointModelId(getCachedUserSettings().defaultAnalysisModel);
-      if (savedEndpoint) throw new AnalyzerEndpointMissingError(savedEndpoint.endpointId, 'settings');
+      const settings = getCachedUserSettings();
+      const savedEndpoint = parseEndpointModelId(settings.defaultAnalysisModel);
+      /* The refusal stands either way; its copy depends on whether the endpoint is saved. */
+      if (savedEndpoint) {
+        const saved = settings.analyzerEndpoints.some((e) => e.id === savedEndpoint.endpointId);
+        throw new AnalyzerEndpointMissingError(savedEndpoint.endpointId, 'settings', saved ? 'engine-mismatch' : 'not-saved');
+      }
     }
     const ollamaUrl = getResolvedOllamaUrl();
     const ollamaModel = opts.model ?? getResolvedOllamaModel();

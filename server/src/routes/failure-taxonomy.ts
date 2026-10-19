@@ -572,6 +572,11 @@ function statusToFailureCode(
   return 'unknown';
 }
 
+/* The remediation for an `engine-mismatch` analyzer-endpoint-missing: the endpoint is saved, so the fix is the engine, not a new endpoint. */
+const ENDPOINT_ENGINE_MISMATCH_REMEDIATION =
+  'Set the analyzer engine to OpenAI-compatible (Model Manager, Analyzer engine) so the saved default analysis model is used, ' +
+  'or pick this endpoint model for the run directly.';
+
 function withCopy(code: FailureCode, userMessage: string, detail?: string, remediation?: string): AnalysisFailure {
   return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
@@ -1068,6 +1073,9 @@ export function classifyAnalysisFailure(
     };
   }
   if (err instanceof AnalyzerEndpointMissingError) {
+    if (err.reason === 'engine-mismatch') {
+      return withCopy('analyzer-endpoint-missing', err.message, undefined, ENDPOINT_ENGINE_MISMATCH_REMEDIATION);
+    }
     return withCopy(
       'analyzer-endpoint-missing',
       `${err.message} Pick another model.`,

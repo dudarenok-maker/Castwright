@@ -43,6 +43,24 @@ describe('selectAnalyzer — endpoint-shaped model ids (#3084 PR 3a, P23)', () =
     expect(err).toMatchObject({ endpointId: 'lab', source: 'settings' });
   });
 
+  it('a saved endpoint default whose endpoint IS saved, with the engine left on Ollama, is refused as an engine mismatch, not as a missing endpoint', () => {
+    const saved = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ geminiApiKey: null, analyzerEndpoints: [saved], defaultAnalysisModel: 'openai:lab::qwen3:30b', analysisEngine: 'local' });
+    const err = thrown(() => selectAnalyzer({}));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ endpointId: 'lab', source: 'settings', reason: 'engine-mismatch' });
+    expect((err as Error).message).toContain('"lab"');
+    expect((err as Error).message).toContain('analyzer engine');
+    expect((err as Error).message).not.toContain('not configured');
+    expect((err as Error).message).not.toContain('deleted');
+  });
+
+  it('an endpoint that is not saved keeps the not-configured message', () => {
+    _setUserSettingsCacheForTest({ geminiApiKey: null, defaultAnalysisModel: 'openai:lab::qwen3:30b' });
+    const err = thrown(() => selectAnalyzer({}));
+    expect(err).toMatchObject({ reason: 'not-saved' });
+    expect((err as Error).message).toContain('is not configured');
+  });
   it('still routes an Ollama tag that merely starts with "openai:" to Ollama', () => {
     const sel = selectAnalyzer({ model: 'openai:latest' });
     expect(sel.engine).toBe('local');

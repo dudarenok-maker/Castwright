@@ -236,14 +236,24 @@ const ENDPOINT_SOURCE_LABEL: Record<'settings' | 'env' | 'run-pick' | 'persona',
 /** A model id names an OpenAI-compatible endpoint that is not configured: from
     PR 3d, an id whose endpoint is not in saved settings (P23; before 3d, every
     endpoint id). Thrown by selection (PR 3a) and PR 3c's pre-run checks,
-    before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b). */
+    before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b).
+
+    `reason` says WHY, so the copy is true in each case it fires in: `not-saved` (the endpoint is not in
+    saved settings, e.g. deleted) or `engine-mismatch` (selectAnalyzer's deliberate P23 refusal: the
+    endpoint IS saved as the default analysis model but the analyzer engine is Ollama, and the run named
+    no model of its own). */
 export class AnalyzerEndpointMissingError extends Error {
   readonly code = 'ANALYZER_ENDPOINT_MISSING';
   constructor(
     readonly endpointId: string,
     readonly source: 'settings' | 'env' | 'run-pick' | 'persona',
+    readonly reason: 'not-saved' | 'engine-mismatch' = 'not-saved',
   ) {
-    super(`Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`);
+    super(
+      reason === 'engine-mismatch'
+        ? `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is saved as the default analysis model, but the analyzer engine is not set to OpenAI-compatible, so a run with no model of its own cannot use it.`
+        : `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`,
+    );
     this.name = 'AnalyzerEndpointMissingError';
   }
 }

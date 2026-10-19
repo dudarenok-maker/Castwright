@@ -297,10 +297,12 @@ export const FAILURE_REMEDIATIONS = {
       'endpoint, or pick a stronger model.',
   },
   'analyzer-endpoint-missing': {
-    userMessage: 'The run names an analyzer endpoint that is not configured (it may have been deleted).',
+    userMessage:
+      'The run names an analyzer endpoint it cannot use: the endpoint is not configured (it may have been deleted), ' +
+      'or it is the saved default analysis model while the analyzer engine is not set to OpenAI-compatible.',
     remediation:
-      'Pick a different model for this run. If the model came from ' +
-      'ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
+      'Pick a different model for this run, or set the analyzer engine to OpenAI-compatible if the endpoint is saved. ' +
+      'If the model came from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */

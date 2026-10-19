@@ -894,6 +894,15 @@ describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () =
     expect(r.userMessage).toContain('ANALYZER_PHASE0_MODEL');
   });
 
+  it('an engine-mismatch refusal says the endpoint is saved but the engine is not OpenAI-compatible, and points at the engine setting (never "not configured")', () => {
+    const r = classifyAnalysisFailure(new AnalyzerEndpointMissingError('lab', 'settings', 'engine-mismatch'), 'Analyzer');
+    expect(r.code).toBe('analyzer-endpoint-missing');
+    expect(r.userMessage).toContain('"lab"');
+    expect(r.userMessage).toContain('analyzer engine');
+    expect(r.userMessage).not.toMatch(/not configured|deleted|Pick another model/);
+    expect(r.remediation).toMatch(/analyzer engine/i);
+    expect(r.remediation).toMatch(/OpenAI-compatible/);
+  });
   it.each([
     ['schema', 'may not enforce'],
     ['json', 'constrains the structure'],
