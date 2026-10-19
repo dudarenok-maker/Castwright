@@ -2704,8 +2704,10 @@ export function buildNonStoryClassifier(opts: {
   manuscriptId: string;
   bookTitle: string | null;
   bookLanguage: string;
+  /** #3084 wave 3d — the caller's switch handler (log, relabel, mark the target): this call can be the one that switches. */
+  onFallback?: StageCall['onFallback'];
 }): ((ch: ThirdPartyGuardChapter) => Promise<boolean>) | undefined {
-  const { job, structureBudget, analyzer, manuscriptId, bookTitle, bookLanguage } = opts;
+  const { job, structureBudget, analyzer, manuscriptId, bookTitle, bookLanguage, onFallback } = opts;
   if (!analyzer.runNonStoryClassification) return undefined;
   return async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
     if (job.reasoningOverflowed) return false;
@@ -2713,7 +2715,7 @@ export function buildNonStoryClassifier(opts: {
     /* srv-61 — the SAME StageCall goes to the runner and withPassEval, so its
        fresh-per-call accumulator attaches to this call. */
     /* #3435 decision E — the job's signal, so ending the run aborts this call too. */
-    const nonStoryCall: StageCall = { language: bookLanguage, signal: job.controller.signal };
+    const nonStoryCall: StageCall = { language: bookLanguage, signal: job.controller.signal, onFallback };
     try {
       const out = await withPassEval(
         nonStoryCall,
@@ -3011,6 +3013,10 @@ export interface AnalysisJob {
   fallbackMarked?: Set<string>;
   /** #3084 P30 — set by releaseBusyAndPin once releaseEndpointRun has run; a later switch takes no mark. */
   endpointRunReleased?: boolean;
+  /** #3084 wave 3d — an Ollama-served selection (a primary) belongs to this run. The switch is sticky and
+      job.engine follows it, so it can read the target by the end while Ollama still holds the run pin
+      (keep_alive: -1); releaseBusyAndPin evicts on either. */
+  ollamaServed?: boolean;
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -3799,7 +3805,7 @@ function releaseBusyAndPin(job: AnalysisJob): void {
      isAnyAnalysisBusy) is still running — otherwise we'd evict a model that
      run still needs. Best-effort and fire-and-forget: a failed evict just means
      the model idles per its own keep_alive, and the next run re-warms it. */
-  if (job.engine === 'local' && !isAnyAnalyzerRunBusy()) {
+  if ((job.engine === 'local' || job.ollamaServed) && !isAnyAnalyzerRunBusy()) {
     void unloadResidentOllama().catch(() => {
       /* Ollama unreachable / already evicted — nothing to release. */
     });
@@ -4391,6 +4397,7 @@ export async function runMainAnalyzerJob(
        Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
        target box), and the estimate self-corrects from observed pace anyway. */
     const usesLocalAnalyzer = selection.engine === 'local' || phase1Selection.engine === 'local';
+    if (usesLocalAnalyzer) job.ollamaServed = true;
     const analyzerDevice: 'cuda' | 'cpu' | 'unknown' = usesLocalAnalyzer
       ? await detectOllamaDevice()
       : 'unknown';
@@ -6794,6 +6801,17 @@ export async function runMainAnalyzerJob(
       manuscriptId,
       bookTitle: recordRef.title ?? null,
       bookLanguage,
+      /* #3084 wave 3d — same relabel as the stage-1 call's switch handler (the shared phase-0 analyzer
+         is sticky, so whichever call switches first relabels the job). */
+      onFallback: ({ reason }) => {
+        if (selection.fallbackModel) {
+          activeModelId = selection.fallbackModel;
+          activeEngine = inferEngineFromModelId(selection.fallbackModel);
+          job.engine = activeEngine;
+          markFallbackActive(job, selection.fallbackModel);
+        }
+        console.log(`[analysis] ${manuscriptId}: ${reason}`);
+      },
     });
     const guarded = await stripThirdPartyFrontMatter(
       stage1.characters,
@@ -7962,6 +7980,7 @@ export async function runSubsetAnalyzerJob(
     let phase1ModelId = phase1Selection.model;
     /* #3084 P30 — reassigned together with phase1ModelId on a fallback switch. */
     let phase1Engine: AnalysisEngine = phase1Selection.engine;
+    if (selection.engine === 'local' || phase1Selection.engine === 'local') job.ollamaServed = true;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
        chapter's attributeChapterStage2 call in this subset/retry job, mirroring
        the main route's per-book budget above. */
@@ -8901,6 +8920,16 @@ export async function runSubsetAnalyzerJob(
       manuscriptId,
       bookTitle: record.title ?? null,
       bookLanguage,
+      /* #3084 wave 3d — same relabel as the stage-1 call's switch handler. */
+      onFallback: ({ reason }) => {
+        if (selection.fallbackModel) {
+          subsetModelId = selection.fallbackModel;
+          subsetEngine = inferEngineFromModelId(selection.fallbackModel);
+          job.engine = subsetEngine;
+          markFallbackActive(job, selection.fallbackModel);
+        }
+        console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
+      },
     });
     const guarded = await stripThirdPartyFrontMatter(
       stage1.characters,

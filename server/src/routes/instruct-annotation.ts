@@ -33,6 +33,7 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import { resolveCapacity } from '../analyzer/capacity.js';
+import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -188,6 +189,10 @@ instructAnnotationRouter.post(
     let releaseEndpointRun: () => void = () => {};
     /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
     let releaseFallbackRun: (() => void) | undefined;
+    /* #3084 wave 3d — the switch is sticky (FallbackAnalyzer), so after it every later chapter is sized for,
+       and labelled with, the target: reassigned together on the switch (spec §4). */
+    let activeEngine = selection.engine;
+    let activeModel = selection.model;
     try {
       releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
       for (let i = 0; i < chapterIds.length; i += 1) {
@@ -214,7 +219,7 @@ instructAnnotationRouter.post(
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
           charBudget: chapterChunkBudget(
-            resolveCapacity({ engine: selection.engine, model: selection.model }),
+            resolveCapacity({ engine: activeEngine, model: activeModel }),
             0,
             sentences.map((s) => s.text).join(' '),
             OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve system-prompt overhead so the whole request clears the Gemma TPM guard (#1682)
@@ -241,13 +246,17 @@ instructAnnotationRouter.post(
                 kind: 'throttle',
                 phaseId: 0,
                 chapterIndex: chapterId,
-                model: selection.model,
+                model: activeModel,
                 waitMs,
                 reason,
               }),
             /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
             onFallback: ({ reason }) => {
               console.log(`[instruct-annotation] ${reason}`);
+              if (selection.fallbackModel) {
+                activeModel = selection.fallbackModel;
+                activeEngine = inferEngineFromModelId(selection.fallbackModel);
+              }
               if (selection.fallbackModel && !releaseFallbackRun) {
                 releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds([selection.fallbackModel]));
               }

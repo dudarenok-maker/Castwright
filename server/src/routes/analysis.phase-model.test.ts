@@ -170,6 +170,10 @@ function registerStubManuscript(id: string, count: number): void {
   });
 }
 
+/* #3084 wave 3d — the end-of-run Ollama evict is observed through this mock; detectOllamaDevice is
+   called by any job whose selection is local. */
+const { unloadResidentOllamaMock } = vi.hoisted(() => ({ unloadResidentOllamaMock: vi.fn(async () => {}) }));
+vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: vi.fn(async () => 'unknown'), unloadResidentOllama: unloadResidentOllamaMock }));
 /* ── vi.mock for select-analyzer so the route picks our spy analyzers. ── */
 
 /* #3141 step 4 — the route-level suite below also needs a Phase 0 override
@@ -617,6 +621,96 @@ describe('phase events name the effective model after a silent local→gemini fa
     }
   }, 60_000);
 
+  it('#3084 wave 3d — a primary that recovers after the switch never receives a later chapter: it goes, sized for the target, to the target', async () => {
+    const small = analyzerEndpointSchema.parse({ id: 'small', name: 'Small', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 8192 });
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [small],
+      configOverrides: { 'analyzer.stage1.chunkCharBudget': 200_000, 'analyzer.ollama.numCtx': 32_768, 'analyzer.ollama.concurrency': 1 },
+    });
+    const primaryBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:small::m' }), 'x', []);
+    const targetBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }), 'x', []);
+    expect(targetBudget).toBeGreaterThan(primaryBudget);
+    const paragraph = 'The lamp guttered and the room went quiet. '.repeat(20);
+    /* Paragraph-separated so a chunker can divide it; over the primary's budget, under the target's. */
+    const body = Array.from({ length: Math.ceil((1.6 * primaryBudget) / paragraph.length) }, () => paragraph).join('\n\n');
+    expect(body.length).toBeGreaterThan(primaryBudget);
+    expect(body.length).toBeLessThan(targetBudget);
+
+    const manuscriptId = `test-fallback-sticky-${Date.now()}`;
+    putManuscript({
+      manuscriptId, format: 'plaintext', title: 'Sticky', wordCount: 1, byteSize: body.length * 2, uploadedAt: new Date().toISOString(),
+      sourceText: body + body,
+      chapterHints: [{ id: 1, title: 'One', body }, { id: 2, title: 'Two', body }] as unknown as ChapterHint[],
+    });
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primaryCalls: Array<{ chapterId: number; bodyChars: number | undefined }> = [];
+    const targetCalls: Array<{ chapterId: number; bodyChars: number | undefined }> = [];
+    const spy = buildSpyPhase0Analyzer();
+    /* A blip: the first call is unreachable, every later one would succeed (the primary recovered). */
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        primaryCalls.push({ chapterId, bodyChars: call.inputBody?.length });
+        if (primaryCalls.length === 1) throw new AnalyzerUnreachableError('connect ETIMEDOUT', 'openai');
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    const target: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        targetCalls.push({ chapterId, bodyChars: call.inputBody?.length });
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:small::m', fallbackModel: 'qwen3.5:4b' };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      /* Only the chunk that blipped ever went to the primary, and it fit the primary. */
+      expect(primaryCalls.length).toBe(1);
+      expect(primaryCalls[0].bodyChars!).toBeLessThanOrEqual(primaryBudget);
+      /* Chapter 2 went whole (over the primary's budget) to the target, never to the primary. */
+      expect(primaryCalls.some((c) => c.chapterId === 2)).toBe(false);
+      expect(targetCalls.some((c) => c.chapterId === 2 && c.bodyChars! > primaryBudget && c.bodyChars! <= targetBudget)).toBe(true);
+      expect(job.engine).toBe('local');
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 wave 3d — an Ollama primary that fell back to Gemini is still evicted when the run ends (job.engine no longer reads local)', async () => {
+    const manuscriptId = `test-fallback-evict-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    unloadResidentOllamaMock.mockClear();
+    const spy = buildSpyPhase0Analyzer();
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new LocalUnreachableError('connect ECONNREFUSED');
+      },
+    };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, spy), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'local';
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(job.engine).toBe('gemini');
+      await vi.waitFor(() => expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1));
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
   it('#3084 P30 — after a phase-1 switch, phase-1 events carry the target engine', async () => {
     const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // resolveCapacity({engine:'openai',...}) needs the endpoint saved
@@ -946,6 +1040,25 @@ describe('buildNonStoryClassifier — no non-story call after a reasoning overfl
     expect(job.reasoningOverflowed).toBeUndefined();
   });
 
+  it('#3084 wave 3d — the classification call announces a fallback switch through the caller\'s onFallback, so it is never silent', async () => {
+    const onFallback = vi.fn();
+    const run = vi.fn(async (_m: string, _c: number, _p: string, call: StageCall) => {
+      call.onFallback?.({ reason: 'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.6-flash)' });
+      return { nonStory: false };
+    });
+    const job = buildStubJob('m-nonstory-fallback');
+    const classify = buildNonStoryClassifier({
+      job,
+      structureBudget: { remainingWindows: 600 },
+      analyzer: { ...buildSpyPhase1Analyzer(), runNonStoryClassification: run as unknown as NonNullable<Analyzer['runNonStoryClassification']> },
+      manuscriptId: job.manuscriptId,
+      bookTitle: null,
+      bookLanguage: 'en',
+      onFallback,
+    })!;
+    await classify(chapter(1));
+    expect(onFallback).toHaveBeenCalledWith({ reason: 'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.6-flash)' });
+  });
   it('an abort still propagates', async () => {
     const run = vi.fn(async () => {
       throw new AnalysisAbortedError('paused');

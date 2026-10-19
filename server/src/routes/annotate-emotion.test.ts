@@ -521,7 +521,8 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
   it('#3084 A4 — a throw between selection and the chapter loop does not leak the endpoint mark', async () => {
     writeBook(SENTENCES);
     const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] }); // the saved target: later chapters are sized for it
     emotionEngineState.model = 'openai:lab::m';
     /* The window A4 names: buildCharsByChapter runs after selection and before the try. */
     const spy = vi.spyOn(chapterPacing, 'buildCharsByChapter').mockImplementationOnce(() => {
@@ -546,7 +547,8 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
   it('#3084 P30 — an emotion pass marks its fallback endpoint only once the fallback activates', async () => {
     writeBook(SENTENCES);
     const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] }); // the saved target: later chapters are sized for it
     emotionEngineState.model = 'openai:lab::m';
     emotionEngineState.fallbackModel = 'openai:spare::m';
     runEmotion.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
@@ -571,6 +573,31 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
       emotionEngineState.activate = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 wave 3d review — after the pass switches to a smaller fallback target, the next chapter is chunked for the target', async () => {
+    process.env.ANALYZER_NUM_CTX = '400'; // the local target's budget: 2000 chars; the gemini primary never splits
+    emotionEngineState.fallbackModel = 'qwen3.5:4b';
+    const chapter = (chapterId: number, base: number) =>
+      Array.from({ length: 12 }, (_, i) => ({ id: base + i, chapterId, characterId: 'narrator', text: 'C'.repeat(800) }));
+    writeBook([...chapter(1, 100), ...chapter(2, 200)]);
+    const callsByChapter = new Map<number, number>();
+    let switched = false;
+    runEmotion.mockImplementation(async (_m: string, chapterId: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      callsByChapter.set(chapterId, (callsByChapter.get(chapterId) ?? 0) + 1);
+      if (!switched) {
+        switched = true;
+        call.onFallback?.({ reason: 'switched' });
+      }
+      return { annotations: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+      expect(callsByChapter.get(1)).toBe(1); // sized for the primary, before the switch
+      expect(callsByChapter.get(2)).toBeGreaterThan(1); // sized for the target, after it
+    } finally {
+      emotionEngineState.fallbackModel = null;
     }
   });
 });
