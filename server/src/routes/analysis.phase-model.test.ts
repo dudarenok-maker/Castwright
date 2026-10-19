@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { buildNonStoryClassifier, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';
-import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
@@ -1154,4 +1154,130 @@ describe('buildNonStoryClassifier — no non-story call after a reasoning overfl
       }),
     ).toBeUndefined();
   });
+});
+
+/* #3084 wave 3d review pass 2 (D) — the JOBS' wiring of the fixes above: removing `onFallback` from a job's
+   buildNonStoryClassifier call, or the subset job's `job.ollamaServed = true`, left the suite green. These drive
+   the real jobs (not buildNonStoryClassifier with a handler of the test's own). */
+describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d)', () => {
+  /* The stage-1 spy names `ch1-char` / `ch2-char`; one line from `ch1-char` in chapter 1 (a front-region
+     chapter whose body never names it) makes it a Signal-2 candidate, so the job consults the classifier. */
+  const phase1WithOneLine: Analyzer = {
+    ...buildSpyPhase1Analyzer(),
+    async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+      return {
+        sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: chapterId === 1 ? 'ch1-char' : 'narrator', text: chapterId === 1 ? '"Lorem ipsum dolor sit amet," he said.' : 'lorem ipsum dolor sit amet.' }],
+      };
+    },
+  };
+
+  /* The subset route reaches the third-party guard only for a book whose stage 1 is already cached
+     (without it, it ends at resume_required after Phase 0). */
+  async function seedCachedStage1(manuscriptId: string): Promise<void> {
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      stage1: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          { id: 'ch1-char', name: 'Character_ch1', role: 'character', color: 'unset', evidence: [{ quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }] },
+        ],
+        chapters: [{ id: 1, title: 'Chapter 1' }, { id: 2, title: 'Chapter 2' }],
+      },
+    } as never);
+  }
+
+  /* Stage 1 and the rest work on the primary; only the non-story check finds it unreachable. */
+  function nonStoryBlip(): { selection: AnalyzerSelection; primaryNonStoryCalls: () => number } {
+    let primaryCalls = 0;
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runNonStoryClassification() {
+        primaryCalls += 1;
+        throw new LocalUnreachableError('connect ECONNREFUSED');
+      },
+    };
+    const target: Analyzer = { ...buildSpyPhase0Analyzer(), async runNonStoryClassification() { return { nonStory: false }; } };
+    return {
+      selection: { analyzer: new FallbackAnalyzer(primary, target), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' },
+      primaryNonStoryCalls: () => primaryCalls,
+    };
+  }
+
+  it('main: a switch made by the non-story check relabels the job (job.engine) and marks the target', async () => {
+    const manuscriptId = `test-nonstory-fallback-main-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const { selection, primaryNonStoryCalls } = nonStoryBlip();
+    setPhase1Selection(buildSelection(phase1WithOneLine, 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'local';
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(primaryNonStoryCalls(), 'precondition: the job consulted the non-story classifier').toBe(1);
+      expect(job.engine).toBe('gemini');
+      expect(job.fallbackMarked?.has('gemini-3.6-flash')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('subset: a switch made by the non-story check relabels the job (job.engine) and marks the target', async () => {
+    const manuscriptId = `test-nonstory-fallback-subset-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    await seedCachedStage1(manuscriptId);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const { selection, primaryNonStoryCalls } = nonStoryBlip();
+    const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+    job.engine = 'local';
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId) as never as { chapterHints: ChapterHint[] };
+      await runSubsetAnalyzerJob(job, recordRef as never, selection, buildSelection(phase1WithOneLine, 'phase1-test-model'), recordRef.chapterHints as never, true);
+      expect(primaryNonStoryCalls(), 'precondition: the job consulted the non-story classifier').toBe(1);
+      expect(job.engine).toBe('gemini');
+      expect(job.fallbackMarked?.has('gemini-3.6-flash')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('subset: an Ollama primary that fell back to Gemini is still evicted when the run ends (job.ollamaServed)', async () => {
+    const manuscriptId = `test-subset-evict-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    await seedCachedStage1(manuscriptId);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    unloadResidentOllamaMock.mockClear();
+    const p1 = buildSpyPhase1Analyzer();
+    const phase1Primary: Analyzer = {
+      ...p1,
+      async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+        throw new LocalUnreachableError('connect ECONNREFUSED');
+      },
+    };
+    const phase1Selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(phase1Primary, p1), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' };
+    const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+    job.engine = 'local';
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId) as never as { chapterHints: ChapterHint[] };
+      await runSubsetAnalyzerJob(job, recordRef as never, buildSelection(buildSpyPhase0Analyzer(), 'phase0-test-model'), phase1Selection, recordRef.chapterHints as never, true);
+      expect(job.engine, 'precondition: the job relabelled to the target').toBe('gemini');
+      await vi.waitFor(() => expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1));
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
 });
