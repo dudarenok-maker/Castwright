@@ -303,6 +303,13 @@ export function fallbackNames(
    the operator can fix it. Don't silently consume Gemini quota on a flaky local
    stack. */
 export class FallbackAnalyzer implements Analyzer {
+  /* #3084 wave 3d review (owner decision) — the switch is STICKY for this instance, which is one
+     job's (or one pass's) selection: after the first AnalyzerUnreachableError every later call goes
+     straight to the target, so the job's relabel (engine, model), its chunk sizing for the target and
+     its Ollama bookkeeping are all true, and a recovered primary never receives a chunk sized for the
+     target. Never reset: a run that fell back finishes on the target (script review's shape). */
+  private switchedReason: string | undefined;
+
   constructor(
     private readonly primary: Analyzer,
     private readonly fallback: Analyzer,
@@ -320,7 +327,17 @@ export class FallbackAnalyzer implements Analyzer {
     check?: { pass: FallbackPass; prompt: string },
   ): Promise<T> {
     const reason = fallbackReason(err, this.names);
+    this.switchedReason = reason;
     call.onFallback?.({ reason });
+    return this.runOnTarget(reason, call, run, check);
+  }
+
+  private async runOnTarget<T>(
+    reason: string,
+    call: StageCall,
+    run: (fallback: Analyzer) => Promise<T>,
+    check?: { pass: FallbackPass; prompt: string },
+  ): Promise<T> {
     if (check) this.guard?.(check.pass, check.prompt, call.inputBody); // throws before the target runs when over its budget
     try {
       return await run(this.fallback);
@@ -330,144 +347,67 @@ export class FallbackAnalyzer implements Analyzer {
     }
   }
 
-  async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
-    try {
-      return await this.primary.runStage1(manuscriptId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runStage1(manuscriptId, promptMd, call), { pass: 'stage1-book', prompt: promptMd });
-      }
-      throw err;
-    }
-  }
-
-  async runStage1Chapter(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
+  /* One routing rule for all eight methods: the primary first until the first switch, the target
+     alone after it (no second announcement — the first one already relabelled the job). */
+  private async route<T>(
     call: StageCall,
-  ): Promise<Stage1ChapterOutput> {
+    check: { pass: FallbackPass; prompt: string },
+    onPrimary: (primary: Analyzer) => Promise<T>,
+    onTarget: (fallback: Analyzer) => Promise<T>,
+  ): Promise<T> {
+    if (this.switchedReason !== undefined) return this.runOnTarget(this.switchedReason, call, onTarget, check);
     try {
-      return await this.primary.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
+      return await onPrimary(this.primary);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runStage1Chapter(manuscriptId, chapterId, promptMd, call), { pass: 'stage1', prompt: promptMd });
-      }
+      if (err instanceof AnalyzerUnreachableError) return await this.switchTo(err, call, onTarget, check);
       throw err;
     }
   }
 
-  async runStage2Chapter(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
-    call: StageCall,
-  ): Promise<Stage2ChapterOutput> {
-    try {
-      return await this.primary.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runStage2Chapter(manuscriptId, chapterId, promptMd, call), { pass: 'stage2', prompt: promptMd });
-      }
-      throw err;
-    }
+  runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
+    const run = (a: Analyzer) => a.runStage1(manuscriptId, promptMd, call);
+    return this.route(call, { pass: 'stage1-book', prompt: promptMd }, run, run);
   }
 
-  async runEmotionChapter(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
-    call: StageCall,
-  ): Promise<EmotionAnnotationOutput> {
-    try {
-      return await this.primary.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runEmotionChapter(manuscriptId, chapterId, promptMd, call), { pass: 'emotion', prompt: promptMd });
-      }
-      throw err;
-    }
+  runStage1Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage1ChapterOutput> {
+    const run = (a: Analyzer) => a.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'stage1', prompt: promptMd }, run, run);
   }
 
-  async runScriptReviewChapter(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
-    call: StageCall,
-  ): Promise<ScriptReviewOutput> {
-    try {
-      return await this.primary.runScriptReviewChapter(manuscriptId, chapterId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runScriptReviewChapter(manuscriptId, chapterId, promptMd, call), {
-          pass: 'script-review',
-          prompt: promptMd,
-        });
-      }
-      throw err;
-    }
+  runStage2Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage2ChapterOutput> {
+    const run = (a: Analyzer) => a.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'stage2', prompt: promptMd }, run, run);
   }
 
-  async runStage3Chapter(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
-    call: StageCall,
-  ): Promise<Stage3ChapterOutput> {
-    try {
-      return await this.primary.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runStage3Chapter(manuscriptId, chapterId, promptMd, call), { pass: 'stage3', prompt: promptMd });
-      }
-      throw err;
-    }
+  runEmotionChapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<EmotionAnnotationOutput> {
+    const run = (a: Analyzer) => a.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'emotion', prompt: promptMd }, run, run);
   }
 
-  async runAttributionEscalation(
+  runScriptReviewChapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<ScriptReviewOutput> {
+    const run = (a: Analyzer) => a.runScriptReviewChapter(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'script-review', prompt: promptMd }, run, run);
+  }
+
+  runStage3Chapter(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<Stage3ChapterOutput> {
+    const run = (a: Analyzer) => a.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'stage3', prompt: promptMd }, run, run);
+  }
+
+  runAttributionEscalation(
     manuscriptId: string,
     chapterId: number,
     windowIndex: number,
     prompt: string,
     call: StageCall,
   ): Promise<EscalationOutput | null> {
-    try {
-      return await this.primary.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call), {
-          pass: 'escalation',
-          prompt,
-        });
-      }
-      throw err;
-    }
+    const run = (a: Analyzer) => a.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
+    return this.route(call, { pass: 'escalation', prompt }, run, run);
   }
 
-  async runNonStoryClassification(
-    manuscriptId: string,
-    chapterId: number,
-    promptMd: string,
-    call: StageCall,
-  ): Promise<NonStoryClassificationOutput> {
-    try {
-      return await this.primary.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
-    } catch (err) {
-      if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof AnalyzerUnreachableError) {
-        return await this.switchTo(err, call, (f) => f.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call), {
-          pass: 'non-story',
-          prompt: promptMd,
-        });
-      }
-      throw err;
-    }
+  runNonStoryClassification(manuscriptId: string, chapterId: number, promptMd: string, call: StageCall): Promise<NonStoryClassificationOutput> {
+    const run = (a: Analyzer) => a.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
+    return this.route(call, { pass: 'non-story', prompt: promptMd }, run, run);
   }
 }
