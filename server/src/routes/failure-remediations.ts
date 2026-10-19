@@ -298,10 +298,12 @@ export const FAILURE_REMEDIATIONS = {
   },
   'analyzer-endpoint-missing': {
     userMessage:
-      'The run names an analyzer endpoint it cannot use: the endpoint is not configured (it may have been deleted), ' +
-      'or it is the saved default analysis model while the analyzer engine is not set to OpenAI-compatible.',
+      'The run names an analyzer model it cannot use: the endpoint is not configured (it may have been deleted), ' +
+      'or it is the saved default analysis model while the analyzer engine is not set to OpenAI-compatible, ' +
+      'or the analyzer engine is OpenAI-compatible and the saved model is not an endpoint model.',
     remediation:
-      'Pick a different model for this run, or set the analyzer engine to OpenAI-compatible if the endpoint is saved. ' +
+      'Pick a different model for this run, or make the analyzer engine and the default analysis model agree: ' +
+      'an endpoint model needs the OpenAI-compatible engine, and any other model needs the engine it belongs to. ' +
       'If the model came from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {

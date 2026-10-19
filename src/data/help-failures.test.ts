@@ -19,6 +19,14 @@ describe('help content (fe-29)', () => {
     }
     expect(e.title).toMatch(/cannot be used/i);
   });
+  it('the endpoint-missing entry covers every cause the code fires for (#3710 review pass 2 F)', () => {
+    const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'analyzer-endpoint-missing')!;
+    expect(e.userMessage).toMatch(/not configured/); // not saved / deleted
+    expect(e.userMessage).toMatch(/engine is not set to OpenAI-compatible/); // saved endpoint, wrong engine
+    expect(e.userMessage).toMatch(/not an endpoint model/); // OpenAI-compatible engine, a non-endpoint model
+    expect(e.remediation).toMatch(/OpenAI-compatible/);
+    expect(e.remediation).toMatch(/default analysis model/);
+  });
   it('the auth entry is source-neutral: it is no longer a Gemini-TTS-only entry (#3084 PR 3b review pass 2)', () => {
     const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'auth')!;
     expect(e.title).not.toMatch(/Gemini/);

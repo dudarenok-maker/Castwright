@@ -1262,6 +1262,15 @@ describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2
     }
     expect(live.userMessage).toContain('"gone"');
   });
+
+  it('the generic Help copy covers every cause the code fires for: not saved, saved endpoint on the wrong engine, and a non-endpoint model on the OpenAI-compatible engine', () => {
+    const help = FAILURE_REMEDIATIONS['analyzer-endpoint-missing'];
+    expect(help.userMessage).toMatch(/not configured/);
+    expect(help.userMessage).toMatch(/engine is not set to OpenAI-compatible/);
+    expect(help.userMessage).toMatch(/not an endpoint model/);
+    expect(help.remediation).toMatch(/OpenAI-compatible/);
+    expect(help.remediation).toMatch(/default analysis model/);
+  });
 });
 
 describe('Gemini key advice says the env var wins and needs a restart (#3084 PR 3b review pass 3 🟡2)', () => {
