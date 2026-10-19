@@ -71,6 +71,8 @@ export function ttsDeviceKeyFor(
 ): string | undefined {
   if (!modelKey) return undefined;
   const engine = engineForModelKey(modelKey);
+  /* Gemini TTS is a cloud call: it holds no card, the same answer as a CPU engine. */
+  if (engine === 'gemini') return 'cpu';
   const knob = DEVICE_KNOB[engine];
   const effective = knob && values ? values[knob]?.effective : undefined;
   if (typeof effective === 'string' && (/^cuda:\d+$/.test(effective) || effective === 'cpu')) return effective;

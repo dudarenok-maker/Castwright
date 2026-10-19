@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { defaultGpuForBaseUrl, endpointForModelId, analyzerSharesTtsDevice, ttsDeviceKeyFor, reportedTtsDevicesFrom, snapshotGpuFor } from './analyzer-endpoints';
+import { defaultGpuForBaseUrl, endpointForModelId, analyzerSharesTtsDevice, analyzerSharesGenerationDevice, ttsDeviceKeyFor, reportedTtsDevicesFrom, snapshotGpuFor } from './analyzer-endpoints';
 import type { AnalyzerEndpoint, ConfigValues } from './types';
 
 const ep = (id: string, gpu: string): AnalyzerEndpoint =>
@@ -87,5 +87,52 @@ describe('ttsDeviceKeyFor / reportedTtsDevicesFrom / endpointForModelId / snapsh
     expect(snapshotGpuFor(['openai:n::m', 'gemini-3.6-flash'], settings)).toBe('none');
     expect(snapshotGpuFor(['openai:gone::m'], settings)).toBe('any');
     expect(snapshotGpuFor(['qwen3.5:4b'], settings)).toBeUndefined();
+  });
+});
+
+describe('analyzerSharesGenerationDevice — Gemini TTS holds no card (#3710 review pass 2)', () => {
+  const allCpu = {
+    'tts.qwen.device': knob('tts.qwen.device', 'cpu'),
+    'tts.kokoro.device': knob('tts.kokoro.device', 'cpu'),
+    'tts.coqui.device': knob('tts.coqui.device', 'cpu'),
+  } as unknown as ConfigValues;
+  const onCuda0 = { ...allCpu, 'tts.qwen.device': knob('tts.qwen.device', 'cuda:0') } as unknown as ConfigValues;
+
+  it('a Gemini session model with no pins shares nothing with an endpoint on cuda:0', () => {
+    expect(analyzerSharesGenerationDevice({ engine: 'openai', endpointGpu: 'cuda:0', sessionModelKey: 'gemini-2.5-flash', values: allCpu })).toBe(false);
+  });
+
+  it('a Gemini-pinned character does not make a CPU session share the card', () => {
+    expect(
+      analyzerSharesGenerationDevice({
+        engine: 'openai',
+        endpointGpu: 'cuda:0',
+        sessionModelKey: 'kokoro-v1',
+        characters: [{ ttsEngine: 'gemini' }],
+        values: allCpu,
+      }),
+    ).toBe(false);
+  });
+
+  it('a Qwen session on the same card still shares it', () => {
+    expect(analyzerSharesGenerationDevice({ engine: 'openai', endpointGpu: 'cuda:0', sessionModelKey: 'qwen3-tts-0.6b', values: onCuda0 })).toBe(true);
+  });
+
+  it('a local-engine pin on the card still holds, Gemini alongside or not', () => {
+    expect(
+      analyzerSharesGenerationDevice({
+        engine: 'openai',
+        endpointGpu: 'cuda:0',
+        sessionModelKey: 'kokoro-v1',
+        characters: [{ ttsEngine: 'gemini' }, { ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-0.6b' }],
+        values: onCuda0,
+      }),
+    ).toBe(true);
+  });
+
+  it('an engine with no model key (piper) stays unknown and fails closed', () => {
+    expect(
+      analyzerSharesGenerationDevice({ engine: 'openai', endpointGpu: 'cuda:0', sessionModelKey: 'kokoro-v1', characters: [{ ttsEngine: 'piper' }], values: allCpu }),
+    ).toBe(true);
   });
 });

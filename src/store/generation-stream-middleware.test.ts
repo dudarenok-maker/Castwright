@@ -253,6 +253,40 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     expect(enqueueCalls()).toHaveLength(0);
   });
 
+  /* #3710 F4 / review pass 2 — a per-character pin can route a line to another engine than the session's. */
+  const pinStore = (pinnedEngine: 'qwen' | 'gemini') => {
+    const { store } = makeStore();
+    const knob = (key: string, effective: string) => ({ key, effective, source: 'override', locked: false, overridden: true });
+    store.dispatch({
+      type: 'config/fetch/fulfilled',
+      payload: {
+        groups: [],
+        descriptors: [],
+        values: { 'tts.kokoro.device': knob('tts.kokoro.device', 'cpu'), 'tts.qwen.device': knob('tts.qwen.device', 'cuda:0') },
+        cudaEnvShadow: false,
+        envCleanupCandidates: [],
+      },
+    });
+    store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'ann', name: 'Ann', ttsEngine: pinnedEngine } as never]));
+    store.dispatch(analysisActions.setActiveStream({ bookId: 'b1', engine: 'openai', gpu: 'cuda:0', state: 'running', model: 'openai:lab::m', phase: 'phase1', done: 1, total: 5, lastTickAt: Date.now() } as never));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    return store;
+  };
+
+  it('#3710 F4 — a character pinned to a local engine on the endpoint’s card holds the start, though the session model is on the CPU', async () => {
+    pinStore('qwen').dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  it('#3710 review pass 2 — a Gemini-pinned character holds no card, so a CPU session still starts', async () => {
+    pinStore('gemini').dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls().length).toBeGreaterThanOrEqual(1);
+  });
+
   it('#3084 — enqueues when the endpoint analysis runs on gpu none', async () => {
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
