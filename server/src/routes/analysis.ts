@@ -3022,6 +3022,25 @@ export interface AnalysisJob {
       (sticky for the run). Per job, so one job's switch never reaches another. Absent: the selection
       has a switch of its own. */
   fallbackSwitch?: RunFallbackSwitch;
+  /** #3084 wave 3d review pass 3 — the engine each phase is CURRENTLY on (a fallback switch moves its own
+      phase's entry). `engine` is derived from both by setPhaseEngine, so the cold-boot snapshot names
+      whoever holds a card across the whole run. */
+  phaseEngines?: { 0?: AnalysisEngine; 1?: AnalysisEngine };
+}
+
+/* #3084 wave 3d review pass 3 — Ollama beats an endpoint beats Gemini, so a mixed run is never
+   under-reported (the rule src/views/analysing.tsx applies to the same snapshot). */
+export function combineAnalysisEngines(engines: Array<AnalysisEngine | undefined>): AnalysisEngine {
+  if (engines.includes('local')) return 'local';
+  if (engines.includes('openai')) return 'openai';
+  return 'gemini';
+}
+
+/* Record one phase's current engine and re-derive job.engine from both. */
+function setPhaseEngine(job: AnalysisJob, phase: 0 | 1, engine: AnalysisEngine): void {
+  const engines = { ...job.phaseEngines, [phase]: engine };
+  job.phaseEngines = engines;
+  job.engine = combineAnalysisEngines([engines[0], engines[1]]);
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -4296,6 +4315,7 @@ export async function runMainAnalyzerJob(
      activeModelId on a fallback switch, so every later chunk budget and job.engine
      reflect the target, not the primary. */
   let activeEngine: AnalysisEngine = selection.engine;
+  setPhaseEngine(job, 0, selection.engine);
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
   /* #3435 — the Phase-1 label, hoisted so the terminal catch can name the
      Phase-1 model for a failure that happened there. Set where Phase 1's
@@ -4372,6 +4392,7 @@ export async function runMainAnalyzerJob(
     let phase1ModelId = phase1Selection.model;
     /* #3084 P30 — reassigned together with phase1ModelId on a fallback switch. */
     let phase1Engine: AnalysisEngine = phase1Selection.engine;
+    setPhaseEngine(job, 1, phase1Selection.engine);
     const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
     phase1TerminalLabel = phase1AnalyzerLabel;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
@@ -5211,7 +5232,7 @@ export async function runMainAnalyzerJob(
             if (selection.fallbackModel) {
               activeModelId = selection.fallbackModel;
               activeEngine = inferEngineFromModelId(selection.fallbackModel);
-              job.engine = activeEngine;
+              setPhaseEngine(job, 0, activeEngine);
               markFallbackActive(job, selection.fallbackModel);
             }
             console.log(`[analysis] ${manuscriptId}: ${reason}`); // #3084 P30 — never silent
@@ -6214,7 +6235,7 @@ export async function runMainAnalyzerJob(
           if (phase1Selection.fallbackModel) {
             phase1ModelId = phase1Selection.fallbackModel;
             phase1Engine = inferEngineFromModelId(phase1Selection.fallbackModel);
-            job.engine = phase1Engine;
+            setPhaseEngine(job, 1, phase1Engine);
             markFallbackActive(job, phase1Selection.fallbackModel);
           }
           console.log(`[analysis] ${manuscriptId}: ${reason}`);
@@ -6815,7 +6836,7 @@ export async function runMainAnalyzerJob(
         if (selection.fallbackModel) {
           activeModelId = selection.fallbackModel;
           activeEngine = inferEngineFromModelId(selection.fallbackModel);
-          job.engine = activeEngine;
+          setPhaseEngine(job, 0, activeEngine);
           markFallbackActive(job, selection.fallbackModel);
         }
         console.log(`[analysis] ${manuscriptId}: ${reason}`);
@@ -7984,6 +8005,7 @@ export async function runSubsetAnalyzerJob(
        below), so job.engine and every later chunk budget reflect the target. */
     let subsetModelId = selection.model;
     let subsetEngine: AnalysisEngine = selection.engine;
+    setPhaseEngine(job, 0, selection.engine);
     /* Plan 118 — Phase 1 (attribution) analyzer for the subset retry; equals
        `selection` when no split is configured. */
     const phase1Analyzer = phase1Selection.analyzer;
@@ -7992,6 +8014,7 @@ export async function runSubsetAnalyzerJob(
     let phase1ModelId = phase1Selection.model;
     /* #3084 P30 — reassigned together with phase1ModelId on a fallback switch. */
     let phase1Engine: AnalysisEngine = phase1Selection.engine;
+    setPhaseEngine(job, 1, phase1Selection.engine);
     if (selection.engine === 'local' || phase1Selection.engine === 'local') job.ollamaServed = true;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
        chapter's attributeChapterStage2 call in this subset/retry job, mirroring
@@ -8258,7 +8281,7 @@ export async function runSubsetAnalyzerJob(
           if (selection.fallbackModel) {
             subsetModelId = selection.fallbackModel;
             subsetEngine = inferEngineFromModelId(selection.fallbackModel);
-            job.engine = subsetEngine;
+            setPhaseEngine(job, 0, subsetEngine);
             markFallbackActive(job, selection.fallbackModel);
           }
           console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
@@ -8653,7 +8676,7 @@ export async function runSubsetAnalyzerJob(
               if (phase1Selection.fallbackModel) {
                 phase1ModelId = phase1Selection.fallbackModel;
                 phase1Engine = inferEngineFromModelId(phase1Selection.fallbackModel);
-                job.engine = phase1Engine;
+                setPhaseEngine(job, 1, phase1Engine);
                 markFallbackActive(job, phase1Selection.fallbackModel);
               }
               console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
@@ -8937,7 +8960,7 @@ export async function runSubsetAnalyzerJob(
         if (selection.fallbackModel) {
           subsetModelId = selection.fallbackModel;
           subsetEngine = inferEngineFromModelId(selection.fallbackModel);
-          job.engine = subsetEngine;
+          setPhaseEngine(job, 0, subsetEngine);
           markFallbackActive(job, selection.fallbackModel);
         }
         console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);

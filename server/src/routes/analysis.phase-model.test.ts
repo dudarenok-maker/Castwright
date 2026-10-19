@@ -1328,4 +1328,77 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
       _resetUserSettingsCache();
     }
   }, 60_000);
+  /* #3084 wave 3d review pass 3 (G) — job.engine names who holds a card across BOTH phases
+     (Ollama > endpoint > Gemini), the rule the frontend snapshot uses. A phase-0 switch must not
+     relabel the job to the target while phase 1 still runs on a healthy, different primary. */
+  describe('job.engine across split primaries', () => {
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    const ENDPOINT_MODEL = 'openai:lab::qwen3-30b';
+    type Primary = 'local' | 'openai';
+    const modelOf = (e: Primary): string => (e === 'local' ? 'qwen3.5:4b' : ENDPOINT_MODEL);
+    function downPhase0(e: Primary): AnalyzerSelection {
+      const err = e === 'local' ? new LocalUnreachableError('connect ECONNREFUSED') : new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      const primary: Analyzer = {
+        ...buildSpyPhase0Analyzer(),
+        async runNonStoryClassification() {
+          throw err;
+        },
+      };
+      const target: Analyzer = { ...buildSpyPhase0Analyzer(), async runNonStoryClassification() { return { nonStory: false }; } };
+      return { analyzer: new FallbackAnalyzer(primary, target), engine: e, model: modelOf(e), fallbackModel: 'gemini-3.6-flash' };
+    }
+    function healthyPhase1(e: Primary): AnalyzerSelection {
+      return { analyzer: new FallbackAnalyzer(phase1WithOneLine, phase1WithOneLine), engine: e, model: modelOf(e) === 'qwen3.5:4b' ? 'qwen3.5:9b' : ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash' };
+    }
+    const shapes: Array<[Primary, Primary, 'local' | 'openai']> = [
+      ['openai', 'local', 'local'],
+      ['local', 'openai', 'openai'],
+    ];
+    for (const [p0, p1, expected] of shapes) {
+      it(`main: phase 0 on ${p0} (down, switched to Gemini) + phase 1 on a healthy ${p1} reads ${expected}`, async () => {
+        _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+        const manuscriptId = `test-engine-split-main-${p0}-${Date.now()}`;
+        registerStubManuscript(manuscriptId, 2);
+        const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        setPhase1Selection(healthyPhase1(p1));
+        const job = buildStubJob(manuscriptId);
+        job.engine = p0;
+        try {
+          const { getManuscript } = await import('../store/manuscripts.js');
+          await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, downPhase0(p0), { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+          expect(job.fallbackMarked?.has('gemini-3.6-flash'), 'precondition: phase 0 switched').toBe(true);
+          expect(job.engine).toBe(expected);
+        } finally {
+          removeManuscript(manuscriptId);
+          await clearAnalysisCache(manuscriptId);
+          process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+          _resetUserSettingsCache();
+        }
+      }, 60_000);
+
+      it(`subset: phase 0 on ${p0} (down, switched to Gemini) + phase 1 on a healthy ${p1} reads ${expected}`, async () => {
+        _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+        const manuscriptId = `test-engine-split-subset-${p0}-${Date.now()}`;
+        registerStubManuscript(manuscriptId, 2);
+        await seedCachedStage1(manuscriptId);
+        const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+        job.engine = p0;
+        try {
+          const { getManuscript } = await import('../store/manuscripts.js');
+          const recordRef = getManuscript(manuscriptId) as never as { chapterHints: ChapterHint[] };
+          await runSubsetAnalyzerJob(job, recordRef as never, downPhase0(p0), healthyPhase1(p1), recordRef.chapterHints as never, true);
+          expect(job.fallbackMarked?.has('gemini-3.6-flash'), 'precondition: phase 0 switched').toBe(true);
+          expect(job.engine).toBe(expected);
+        } finally {
+          removeManuscript(manuscriptId);
+          await clearAnalysisCache(manuscriptId);
+          process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+          _resetUserSettingsCache();
+        }
+      }, 60_000);
+    }
+  });
 });
