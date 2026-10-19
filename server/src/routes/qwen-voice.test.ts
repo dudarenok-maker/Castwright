@@ -1036,6 +1036,9 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
       .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(409);
+    /* PR #3714 review -- the stat error's absolute preview path stays out of the body. */
+    expect(res.body.error).toBe('No staged preview voice to promote.');
+    expect(JSON.stringify(res.body)).not.toMatch(/ENOENT|\.pt\b/);
   });
 
   it('promote-voice 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {

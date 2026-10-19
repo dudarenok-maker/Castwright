@@ -895,9 +895,10 @@ qwenVoiceRouter.post(
     try {
       await stat(qwenVoicePtPath(previewVoiceId));
     } catch (e) {
-      return res
-        .status(409)
-        .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
+      /* PR #3714 review -- the stat error names the absolute preview path; it
+         goes to the log, never the body. */
+      console.warn('[qwen-voice] promote: no staged preview', e);
+      return res.status(409).json({ error: 'No staged preview voice to promote.' });
     }
     await rm(qwenVoicePtPath(realVoiceId), { force: true });
     await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
