@@ -57,6 +57,10 @@ export interface SelectAnalyzerOptions {
       selectAnalyzerForPhase sets it; any other caller passing `model` means a
       run pick. */
   modelSource?: 'env' | 'run-pick' | 'settings';
+  /** #3084 wave 3d review pass 2 — the run's fallback switch. A job selects one analyzer per phase,
+      so a switch one selection makes must be visible to the others routed to the same failed primary;
+      the job creates ONE and passes it to each of its selections. Omitted, the selection has its own. */
+  fallbackSwitch?: RunFallbackSwitch;
 }
 
 /** Resolved analyzer plus the metadata the route layer needs to label
@@ -76,6 +80,26 @@ export interface AnalyzerSelection {
    (shared case table with the frontend): `openai:<endpointId>::<model>` →
    openai, contains ':' → local (Ollama), else gemini. */
 
+/** What a run's selections share once any of them has fallen back (the owner decision: sticky for the
+    whole run). Keyed by the failed primary, so a different primary in the same run is not affected.
+    Per run — never module-global: one job's switch must not reach another job. */
+export class RunFallbackSwitch {
+  private readonly reasons = new Map<string, string>();
+  reasonFor(key: string): string | undefined {
+    return this.reasons.get(key);
+  }
+  /** The first switch wins; a later trip of the same key keeps the first reason. */
+  trip(key: string, reason: string): void {
+    if (!this.reasons.has(key)) this.reasons.set(key, reason);
+  }
+}
+
+/** The failed-primary identity a switch is keyed on: an endpoint model by its id; every Ollama
+    selection together (one daemon, as fallbackSelectionFor already assumes). */
+export function fallbackSwitchKey(primary: Pick<AnalyzerSelection, 'engine' | 'model'>): string {
+  return primary.engine === 'local' ? 'local' : `${primary.engine}:${primary.model}`;
+}
+
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelection {
   const engine = opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine();
   /* Plan 49 — read the Gemini API key via the resolver: env wins for CI /
@@ -94,7 +118,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
       throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'));
     }
     const primary = new OpenAIAnalyzer({ endpoint, apiKey: resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl), model: parsed.model });
-    return withFallback({ analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null });
+    return withFallback({ analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null }, opts.fallbackSwitch);
   }
 
   if (engine === 'local') {
@@ -111,7 +135,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     }
     const ollamaUrl = getResolvedOllamaUrl();
     const ollamaModel = opts.model ?? getResolvedOllamaModel();
-    return withFallback({ analyzer: new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel }), engine: 'local', model: ollamaModel, fallbackModel: null });
+    return withFallback({ analyzer: new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel }), engine: 'local', model: ollamaModel, fallbackModel: null }, opts.fallbackSwitch);
   }
 
   // engine === 'gemini'
@@ -164,12 +188,15 @@ export function fallbackReason(err: AnalyzerUnreachableError, names?: { primary:
 }
 
 /* #3084 P30 — wrap a primary in the configured fallback target, one hop, only when there is one. */
-function withFallback(primary: AnalyzerSelection): AnalyzerSelection {
+function withFallback(primary: AnalyzerSelection, runSwitch?: RunFallbackSwitch): AnalyzerSelection {
   const target = fallbackSelectionFor(primary);
   if (!target) return primary;
   return {
     ...primary,
-    analyzer: new FallbackAnalyzer(primary.analyzer, target.analyzer, fallbackNames(primary, target), targetInputGuard(target)),
+    analyzer: new FallbackAnalyzer(primary.analyzer, target.analyzer, fallbackNames(primary, target), targetInputGuard(target), {
+      switch: runSwitch ?? new RunFallbackSwitch(),
+      key: fallbackSwitchKey(primary),
+    }),
     fallbackModel: target.model,
   };
 }
@@ -308,19 +335,28 @@ export function fallbackNames(
    the operator can fix it. Don't silently consume Gemini quota on a flaky local
    stack. */
 export class FallbackAnalyzer implements Analyzer {
-  /* #3084 wave 3d review (owner decision) — the switch is STICKY for this instance, which is one
-     job's (or one pass's) selection: after the first AnalyzerUnreachableError every later call goes
-     straight to the target, so the job's relabel (engine, model), its chunk sizing for the target and
-     its Ollama bookkeeping are all true, and a recovered primary never receives a chunk sized for the
-     target. Never reset: a run that fell back finishes on the target (script review's shape). */
-  private switchedReason: string | undefined;
+  /* #3084 wave 3d review (owner decision) — the switch is STICKY for the RUN: after the first
+     AnalyzerUnreachableError every later call, of this selection and of every other selection of the
+     same run routed to the same failed primary (they share `run.switch`), goes straight to the target,
+     so the job's relabel (engine, model), its chunk sizing for the target and its Ollama bookkeeping
+     are all true, and a recovered primary never receives a chunk sized for the target. Never reset: a
+     run that fell back finishes on the target (script review's shape). A FallbackAnalyzer built without
+     `run` has a switch of its own (one selection). */
+  private readonly run: { switch: RunFallbackSwitch; key: string };
+  /* This instance has told ITS caller (call.onFallback) about the switch. A second selection that finds
+     the run already switched announces once, so its own job state relabels; the marks are idempotent
+     (markFallbackActive), so the target is not marked twice. */
+  private announced = false;
 
   constructor(
     private readonly primary: Analyzer,
     private readonly fallback: Analyzer,
     private readonly names?: { primary: string; target: string },
     private readonly guard?: FallbackInputGuard,
-  ) {}
+    run?: { switch: RunFallbackSwitch; key: string },
+  ) {
+    this.run = run ?? { switch: new RunFallbackSwitch(), key: 'self' };
+  }
 
   /* P30 — every switch is announced with both names; a target that is also unreachable fails
      naming both. Same instance rethrown, so its class, transport, cause and classification stay.
@@ -332,7 +368,8 @@ export class FallbackAnalyzer implements Analyzer {
     check?: { pass: FallbackPass; prompt: string },
   ): Promise<T> {
     const reason = fallbackReason(err, this.names);
-    this.switchedReason = reason;
+    this.run.switch.trip(this.run.key, reason);
+    this.announced = true;
     call.onFallback?.({ reason });
     return this.runOnTarget(reason, call, run, check);
   }
@@ -352,15 +389,22 @@ export class FallbackAnalyzer implements Analyzer {
     }
   }
 
-  /* One routing rule for all eight methods: the primary first until the first switch, the target
-     alone after it (no second announcement — the first one already relabelled the job). */
+  /* One routing rule for all eight methods: the primary first until the run's first switch, the target
+     alone after it (announced once per instance — the first announcement already relabelled the job). */
   private async route<T>(
     call: StageCall,
     check: { pass: FallbackPass; prompt: string },
     onPrimary: (primary: Analyzer) => Promise<T>,
     onTarget: (fallback: Analyzer) => Promise<T>,
   ): Promise<T> {
-    if (this.switchedReason !== undefined) return this.runOnTarget(this.switchedReason, call, onTarget, check);
+    const switched = this.run.switch.reasonFor(this.run.key);
+    if (switched !== undefined) {
+      if (!this.announced) {
+        this.announced = true;
+        call.onFallback?.({ reason: switched });
+      }
+      return this.runOnTarget(switched, call, onTarget, check);
+    }
     try {
       return await onPrimary(this.primary);
     } catch (err) {

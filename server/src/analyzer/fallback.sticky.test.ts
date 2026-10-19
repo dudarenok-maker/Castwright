@@ -4,7 +4,7 @@
    relabel and chunk resize after a switch are only true because of this. */
 
 import { describe, it, expect, vi } from 'vitest';
-import { FallbackAnalyzer } from './index.js';
+import { FallbackAnalyzer, RunFallbackSwitch, fallbackSwitchKey } from './index.js';
 import { LocalUnreachableError } from './ollama.js';
 import type { Analyzer, StageCall } from './index.js';
 
@@ -69,5 +69,51 @@ describe('FallbackAnalyzer — sticky switch', () => {
     await f.runStage1Chapter('m', 1, 'p', {});
     await f.runStage1Chapter('m', 2, 'p', {});
     expect(calls).toEqual(['primary:1', 'primary:2']);
+  });
+});
+
+/* Review pass 2, finding A (owner decision: sticky for the whole RUN) — a job holds one FallbackAnalyzer per
+   phase selection. A switch one of them makes is the run's switch: every other selection routed to the same
+   failed primary goes straight to the target, announcing itself once so its own job state relabels. */
+describe('FallbackAnalyzer — the switch is shared across a run via RunFallbackSwitch', () => {
+  it('sends a second selection of the same primary straight to the target, announcing it once', async () => {
+    const calls: string[] = [];
+    const sw = new RunFallbackSwitch();
+    const phase0 = new FallbackAnalyzer(analyzerOf('p0', calls, true), analyzerOf('t0', calls), undefined, undefined, { switch: sw, key: 'local' });
+    const phase1 = new FallbackAnalyzer(analyzerOf('p1', calls), analyzerOf('t1', calls), undefined, undefined, { switch: sw, key: 'local' });
+    const onFallback0 = vi.fn();
+    const onFallback1 = vi.fn();
+    await phase0.runStage1Chapter('m', 1, 'p', { onFallback: onFallback0 });
+    await phase1.runStage2Chapter('m', 1, 'p', { onFallback: onFallback1 });
+    await phase1.runStage2Chapter('m', 2, 'p', { onFallback: onFallback1 });
+    expect(calls).toEqual(['p0:1', 't0:1', 't1:1', 't1:2']);
+    expect(onFallback0).toHaveBeenCalledTimes(1);
+    expect(onFallback1).toHaveBeenCalledTimes(1);
+    expect(onFallback1.mock.calls[0][0].reason).toBe(onFallback0.mock.calls[0][0].reason);
+  });
+
+  it('leaves a selection of a different primary alone', async () => {
+    const calls: string[] = [];
+    const sw = new RunFallbackSwitch();
+    const a = new FallbackAnalyzer(analyzerOf('a', calls, true), analyzerOf('ta', calls), undefined, undefined, { switch: sw, key: 'local' });
+    const b = new FallbackAnalyzer(analyzerOf('b', calls), analyzerOf('tb', calls), undefined, undefined, { switch: sw, key: 'openai:openai:lab::m' });
+    await a.runStage1Chapter('m', 1, 'p', {});
+    await b.runStage2Chapter('m', 1, 'p', {});
+    expect(calls).toEqual(['a:1', 'ta:1', 'b:1']);
+  });
+
+  it('never leaks a switch into a run with its own RunFallbackSwitch', async () => {
+    const calls: string[] = [];
+    const one = new FallbackAnalyzer(analyzerOf('one', calls, true), analyzerOf('t1', calls), undefined, undefined, { switch: new RunFallbackSwitch(), key: 'local' });
+    const two = new FallbackAnalyzer(analyzerOf('two', calls), analyzerOf('t2', calls), undefined, undefined, { switch: new RunFallbackSwitch(), key: 'local' });
+    await one.runStage1Chapter('m', 1, 'p', {});
+    await two.runStage1Chapter('m', 1, 'p', {});
+    expect(calls).toEqual(['one:1', 't1:1', 'two:1']);
+  });
+
+  it('keys every local selection together and an endpoint by its model id', () => {
+    expect(fallbackSwitchKey({ engine: 'local', model: 'qwen3.5:9b' })).toBe(fallbackSwitchKey({ engine: 'local', model: 'gemma4:e4b' }));
+    expect(fallbackSwitchKey({ engine: 'openai', model: 'openai:lab::a' })).not.toBe(fallbackSwitchKey({ engine: 'openai', model: 'openai:lab::b' }));
+    expect(fallbackSwitchKey({ engine: 'openai', model: 'openai:lab::a' })).toBe(fallbackSwitchKey({ engine: 'openai', model: 'openai:lab::a' }));
   });
 });

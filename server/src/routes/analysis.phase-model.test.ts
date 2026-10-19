@@ -19,7 +19,7 @@ import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
 import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerUnreachableError } from '../analyzer/errors.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
-import { FallbackAnalyzer, targetInputGuard } from '../analyzer/index.js';
+import { FallbackAnalyzer, RunFallbackSwitch, fallbackSwitchKey, targetInputGuard } from '../analyzer/index.js';
 import { USER_SETTINGS_PATH, _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 import { estimateInputTokens } from '../analyzer/runner/prompt.js';
@@ -186,9 +186,13 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   );
   return {
     ...actual,
-    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1'; phaseModel?: string; model?: string }) => {
+    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1'; phaseModel?: string; model?: string; fallbackSwitch?: unknown }) => {
       const g = globalThis as Record<string, unknown>;
       (g.__phase_model_test_calls as unknown[] | undefined)?.push({ ...opts });
+      /* #3084 wave 3d — builds the phase-1 selection from what the job passed, like the real selector. */
+      if (opts.phase === 'phase1' && g.__phase_model_test_phase1_factory) {
+        return (g.__phase_model_test_phase1_factory as (o: unknown) => unknown)(opts);
+      }
       if (opts.phase === 'phase1' && g.__phase_model_test_phase1_selection) {
         return g.__phase_model_test_phase1_selection;
       }
@@ -213,6 +217,11 @@ function setPhase1Selection(sel: AnalyzerSelection): void {
 
 function clearPhase1Selection(): void {
   delete (globalThis as Record<string, unknown>).__phase_model_test_phase1_selection;
+  delete (globalThis as Record<string, unknown>).__phase_model_test_phase1_factory;
+}
+
+function setPhase1Factory(factory: (opts: { fallbackSwitch?: RunFallbackSwitch }) => AnalyzerSelection): void {
+  (globalThis as Record<string, unknown>).__phase_model_test_phase1_factory = factory;
 }
 
 function setPhase0Selection(sel: AnalyzerSelection): void {
@@ -683,6 +692,67 @@ describe('phase events name the effective model after a silent local→gemini fa
     }
   }, 60_000);
 
+  it('#3084 wave 3d review pass 2 — a phase-0 switch is the switch of the whole run: phase-1 calls go to the target, the recovered primary gets none, and the job names the engine serving', async () => {
+    const manuscriptId = `test-fallback-run-sticky-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 3);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const phase0Primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new LocalUnreachableError('connect ECONNREFUSED');
+      },
+    };
+    const phase1PrimaryCalls: number[] = [];
+    const phase1TargetCalls: number[] = [];
+    const p1 = buildSpyPhase1Analyzer();
+    const phase1Primary: Analyzer = {
+      ...p1,
+      async runStage2Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage2ChapterOutput> {
+        phase1PrimaryCalls.push(chapterId);
+        return p1.runStage2Chapter(m, chapterId, p, call);
+      },
+    };
+    const phase1Target: Analyzer = {
+      ...p1,
+      async runStage2Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage2ChapterOutput> {
+        phase1TargetCalls.push(chapterId);
+        return p1.runStage2Chapter(m, chapterId, p, call);
+      },
+    };
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'local';
+    job.fallbackSwitch = new RunFallbackSwitch();
+    const phase0: AnalyzerSelection = {
+      analyzer: new FallbackAnalyzer(phase0Primary, buildSpyPhase0Analyzer(), undefined, undefined, { switch: job.fallbackSwitch, key: fallbackSwitchKey({ engine: 'local', model: 'qwen3.5:4b' }) }),
+      engine: 'local',
+      model: 'qwen3.5:4b',
+      fallbackModel: 'gemini-3.6-flash',
+    };
+    /* What the real selector does with the switch the job hands it. */
+    setPhase1Factory((o) => ({
+      analyzer: new FallbackAnalyzer(phase1Primary, phase1Target, undefined, undefined, { switch: o.fallbackSwitch ?? new RunFallbackSwitch(), key: fallbackSwitchKey({ engine: 'local', model: 'qwen3.5:9b' }) }),
+      engine: 'local',
+      model: 'qwen3.5:9b',
+      fallbackModel: 'gemini-3.6-flash',
+    }));
+    const events = attachEventCapture(job);
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(phase1PrimaryCalls).toEqual([]);
+      expect(phase1TargetCalls.length).toBeGreaterThan(0);
+      /* The cold-boot snapshot reads job.engine: it names who is serving. */
+      expect(job.engine).toBe('gemini');
+      const phase1Events = (events as Array<CapturedEvent & { model?: string; engine?: string }>).filter((e) => e.kind === 'phase' && e.phaseId === 1 && e.model);
+      expect(phase1Events.some((e) => e.model === 'gemini-3.6-flash' && e.engine === 'gemini')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
   it('#3084 wave 3d — an Ollama primary that fell back to Gemini is still evicted when the run ends (job.engine no longer reads local)', async () => {
     const manuscriptId = `test-fallback-evict-${Date.now()}`;
     registerStubManuscript(manuscriptId, 2);
@@ -778,6 +848,10 @@ describe('POST /:id/analysis honours a per-run phase1Model (#3141 step 4)', () =
       expect(phase0Call?.phaseModel, 'no phase0Model was sent, so opts.phaseModel must be undefined').toBeUndefined();
       expect(phase1Call, 'route must call selectAnalyzerForPhase for phase1').toBeDefined();
       expect(phase1Call?.phaseModel).toBe('route-test-phase1-override');
+      /* #3084 wave 3d — both of the run's selections get the SAME switch, so a phase-0 fallback is the run's. */
+      const switchOf = (c: unknown) => (c as { fallbackSwitch?: unknown }).fallbackSwitch;
+      expect(switchOf(phase0Call)).toBeInstanceOf(RunFallbackSwitch);
+      expect(switchOf(phase1Call)).toBe(switchOf(phase0Call));
 
       const settingsAfter = existsSync(USER_SETTINGS_PATH) ? readFileSync(USER_SETTINGS_PATH) : null;
       expect(

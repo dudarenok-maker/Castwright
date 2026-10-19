@@ -20,7 +20,7 @@ import {
 } from '../analyzer/analyzer-concurrency.js';
 import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
-import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
+import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
   isPerPhaseModelSelectionActive,
@@ -3017,6 +3017,11 @@ export interface AnalysisJob {
       job.engine follows it, so it can read the target by the end while Ollama still holds the run pin
       (keep_alive: -1); releaseBusyAndPin evicts on either. */
   ollamaServed?: boolean;
+  /** #3084 wave 3d review pass 2 — this run's fallback switch, shared by every analyzer selection the run
+      makes (phase 0, phase 1): a switch one makes sends the others' calls straight to the target too
+      (sticky for the run). Per job, so one job's switch never reaches another. Absent: the selection
+      has a switch of its own. */
+  fallbackSwitch?: RunFallbackSwitch;
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -4046,10 +4051,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      function scope: Task 3d.1 reads it. */
   let preflight: PreflightTarget[];
   let selection: AnalyzerSelection;
+  const fallbackSwitch = new RunFallbackSwitch(); // #3084 wave 3d — this run's, handed to the job below
   try {
     preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
     runAnalyzerPreflight(preflight, userSettings, preflightDigests);
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model, fallbackSwitch });
   } catch (e) {
     /* #3084 P23/P14 — one coded event for every check or selection failure: 3b Task 3b.1a's
        helper classifies each class, never returns null, and carries its detail. This `catch`
@@ -4105,6 +4111,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     kind: 'main',
     bookDir: record.bookDir ?? null,
     engine: selection.engine,
+    fallbackSwitch,
     replay: {
       logs: [],
       lastPhase: null,
@@ -4357,6 +4364,7 @@ export async function runMainAnalyzerJob(
       phase: 'phase1',
       model: opts.requestedModel,
       phaseModel: opts.requestedPhase1Model,
+      fallbackSwitch: job.fallbackSwitch,
     });
     const phase1Analyzer = phase1Selection.analyzer;
     /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
@@ -7818,6 +7826,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   let preflight: PreflightTarget[];
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
+  const fallbackSwitch = new RunFallbackSwitch(); // #3084 wave 3d — one switch for both of this run's selections
   try {
     preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
     runAnalyzerPreflight(preflight, userSettings, preflightDigests);
@@ -7825,11 +7834,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       phase: 'phase0',
       model: requestedModel,
       phaseModel: requestedPhase0Model,
+      fallbackSwitch,
     });
     phase1Selection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: requestedModel,
       phaseModel: requestedPhase1Model,
+      fallbackSwitch,
     });
   } catch (e) {
     send(analyzerSelectionErrorEvent(e)); // P23/P14 — the shared coded event, checks included
@@ -7853,6 +7864,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     subsetChapterIds: toRun.map((t) => t.id),
     bookDir: record.bookDir ?? null,
     engine: selection.engine,
+    fallbackSwitch,
     replay: {
       logs: [],
       lastPhase: null,
