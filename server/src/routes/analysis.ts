@@ -36,7 +36,7 @@ import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTarg
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
-import { parseEndpointModelId, inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
+import { parseEndpointModelId, type AnalysisEngine } from '../analyzer/model-id.js';
 import {
   stripThirdPartyFrontMatter,
   type ThirdPartyGuardChapter,
@@ -5229,9 +5229,9 @@ export async function runMainAnalyzerJob(
              persist `job.engine` for the reverse local-analyzer guard, mark the target busy
              only now (#3084 P30 — never at job start), and announce the switch. */
           onFallback: ({ reason }) => {
-            if (selection.fallbackModel) {
+            if (selection.fallbackModel && selection.fallbackEngine) {
               activeModelId = selection.fallbackModel;
-              activeEngine = inferEngineFromModelId(selection.fallbackModel);
+              activeEngine = selection.fallbackEngine;
               setPhaseEngine(job, 0, activeEngine);
               markFallbackActive(job, selection.fallbackModel);
             }
@@ -6232,9 +6232,9 @@ export async function runMainAnalyzerJob(
            for immediate feedback), persist `job.engine`, and mark the target busy only
            now (#3084 P30 — never at job start). */
         onFallback: ({ reason }) => {
-          if (phase1Selection.fallbackModel) {
+          if (phase1Selection.fallbackModel && phase1Selection.fallbackEngine) {
             phase1ModelId = phase1Selection.fallbackModel;
-            phase1Engine = inferEngineFromModelId(phase1Selection.fallbackModel);
+            phase1Engine = phase1Selection.fallbackEngine;
             setPhaseEngine(job, 1, phase1Engine);
             markFallbackActive(job, phase1Selection.fallbackModel);
           }
@@ -6833,9 +6833,9 @@ export async function runMainAnalyzerJob(
       /* #3084 wave 3d — same relabel as the stage-1 call's switch handler (the shared phase-0 analyzer
          is sticky, so whichever call switches first relabels the job). */
       onFallback: ({ reason }) => {
-        if (selection.fallbackModel) {
+        if (selection.fallbackModel && selection.fallbackEngine) {
           activeModelId = selection.fallbackModel;
-          activeEngine = inferEngineFromModelId(selection.fallbackModel);
+          activeEngine = selection.fallbackEngine;
           setPhaseEngine(job, 0, activeEngine);
           markFallbackActive(job, selection.fallbackModel);
         }
@@ -8278,9 +8278,9 @@ export async function runSubsetAnalyzerJob(
            Re-label so later events read the reassigned subsetModelId/subsetEngine, persist
            job.engine, and mark the target busy only now (never at job start). */
         onFallback: ({ reason }) => {
-          if (selection.fallbackModel) {
+          if (selection.fallbackModel && selection.fallbackEngine) {
             subsetModelId = selection.fallbackModel;
-            subsetEngine = inferEngineFromModelId(selection.fallbackModel);
+            subsetEngine = selection.fallbackEngine;
             setPhaseEngine(job, 0, subsetEngine);
             markFallbackActive(job, selection.fallbackModel);
           }
@@ -8673,9 +8673,9 @@ export async function runSubsetAnalyzerJob(
             onChunk: (info) => emitHeartbeat(1, ch.id, info),
             /* #3084 P30 — the primary went unreachable → switched to the configured target. */
             onFallback: ({ reason }) => {
-              if (phase1Selection.fallbackModel) {
+              if (phase1Selection.fallbackModel && phase1Selection.fallbackEngine) {
                 phase1ModelId = phase1Selection.fallbackModel;
-                phase1Engine = inferEngineFromModelId(phase1Selection.fallbackModel);
+                phase1Engine = phase1Selection.fallbackEngine;
                 setPhaseEngine(job, 1, phase1Engine);
                 markFallbackActive(job, phase1Selection.fallbackModel);
               }
@@ -8957,9 +8957,9 @@ export async function runSubsetAnalyzerJob(
       bookLanguage,
       /* #3084 wave 3d — same relabel as the stage-1 call's switch handler. */
       onFallback: ({ reason }) => {
-        if (selection.fallbackModel) {
+        if (selection.fallbackModel && selection.fallbackEngine) {
           subsetModelId = selection.fallbackModel;
-          subsetEngine = inferEngineFromModelId(selection.fallbackModel);
+          subsetEngine = selection.fallbackEngine;
           setPhaseEngine(job, 0, subsetEngine);
           markFallbackActive(job, selection.fallbackModel);
         }

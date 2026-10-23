@@ -65,7 +65,7 @@ function buildSpyAnalyzerSelection(analyzer: Analyzer, model: string): AnalyzerS
     analyzer,
     engine: 'gemini',
     model,
-    fallbackModel: null,
+    fallbackModel: null, fallbackEngine: null,
   };
 }
 

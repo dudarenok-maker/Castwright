@@ -24,7 +24,7 @@ import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 
 const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
 const target = (t: string) => ({ configOverrides: { 'analyzer.fallback.target': t } });
-const sel = (engine: AnalyzerSelection['engine'], model: string) => ({ analyzer: {} as never, engine, model, fallbackModel: null }) as AnalyzerSelection;
+const sel = (engine: AnalyzerSelection['engine'], model: string) => ({ analyzer: {} as never, engine, model, fallbackModel: null, fallbackEngine: null }) as AnalyzerSelection;
 
 afterEach(() => {
   _resetUserSettingsCache();
@@ -47,6 +47,23 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     const s = selectAnalyzer({ model: 'openai:lab::qwen3-30b' });
     expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
     expect(s.fallbackModel).toBe('qwen3.5:9b');
+  });
+
+  it('#3084 wave 3d review pass 4 (K) — the selection carries the real engine of the target, so a tagless Ollama model ("llama3") is local, not Gemini', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'openai:lab::qwen3-30b', configOverrides: { 'analyzer.fallback.target': 'local', 'analyzer.ollama.model': 'llama3' } });
+    expect(selectAnalyzer({ model: 'openai:lab::qwen3-30b' })).toMatchObject({ fallbackModel: 'llama3', fallbackEngine: 'local' });
+    process.env.GEMINI_API_KEY = 'k';
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
+    expect(selectAnalyzer({ model: 'openai:lab::qwen3-30b' })).toMatchObject({ fallbackEngine: 'gemini' });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, ...target('openai:lab::qwen3-30b') });
+    expect(selectAnalyzer({ model: 'qwen3.5:4b' })).toMatchObject({ fallbackEngine: 'openai' });
+    expect(selectAnalyzer({ model: 'gemini-3.5-flash-lite' }).fallbackEngine).toBeNull();
+  });
+
+  it('an explicit engine selects that engine for a model id the id rule would misread (a tagless Ollama model), with no Gemini key', () => {
+    const s = selectAnalyzer({ model: 'llama3', engine: 'local' });
+    expect(s.analyzer).toBeInstanceOf(OllamaAnalyzer);
+    expect(s).toMatchObject({ engine: 'local', model: 'llama3' });
   });
 
   it('with an endpoint id as the saved default, local is OLLAMA_MODEL, else the analyzer.ollama.model override, else the shipped default — never the endpoint id', () => {

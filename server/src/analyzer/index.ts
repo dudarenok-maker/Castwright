@@ -53,6 +53,10 @@ export interface SelectAnalyzerOptions {
       shape, so the route layer is responsible for keeping override and
       engine in sync. */
   model?: string;
+  /** The engine `model` belongs to, when the caller already knows it (a fallback target's
+      `AnalyzerSelection.fallbackEngine`). Omitted, it is inferred from `model`, which misreads a
+      tagless Ollama model as Gemini. */
+  engine?: AnalysisEngine;
   /** #3084 P23 — where `model` came from, named by AnalyzerEndpointMissingError.
       selectAnalyzerForPhase sets it; any other caller passing `model` means a
       run pick. */
@@ -74,6 +78,10 @@ export interface AnalyzerSelection {
   /** The fallback target's model id when the primary is wrapped in FallbackAnalyzer
       (#3084 P30, analyzer.fallback.target). Null when there is no wrap. */
   fallbackModel: string | null;
+  /** The fallback target's own engine, as `withFallback` built it. Never infer it from `fallbackModel`:
+      a tagless Ollama model ("llama3") reads as Gemini to the model-id rule. Null exactly when
+      `fallbackModel` is. */
+  fallbackEngine: AnalysisEngine | null;
 }
 
 /* Engine inference from a per-request model id lives in ./model-id.ts
@@ -101,7 +109,7 @@ export function fallbackSwitchKey(primary: Pick<AnalyzerSelection, 'engine' | 'm
 }
 
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelection {
-  const engine = opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine();
+  const engine = opts.engine ?? (opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine());
   /* Plan 49 — read the Gemini API key via the resolver: env wins for CI /
      power users, then falls through to the UI-saved user-settings field.
      The previous `process.env.GEMINI_API_KEY` read missed the latter. */
@@ -118,7 +126,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
       throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'), parsed ? 'not-saved' : 'not-an-endpoint');
     }
     const primary = new OpenAIAnalyzer({ endpoint, apiKey: resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl), model: parsed.model });
-    return withFallback({ analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null }, opts.fallbackSwitch);
+    return withFallback({ analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null, fallbackEngine: null }, opts.fallbackSwitch);
   }
 
   if (engine === 'local') {
@@ -135,7 +143,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     }
     const ollamaUrl = getResolvedOllamaUrl();
     const ollamaModel = opts.model ?? getResolvedOllamaModel();
-    return withFallback({ analyzer: new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel }), engine: 'local', model: ollamaModel, fallbackModel: null }, opts.fallbackSwitch);
+    return withFallback({ analyzer: new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel }), engine: 'local', model: ollamaModel, fallbackModel: null, fallbackEngine: null }, opts.fallbackSwitch);
   }
 
   // engine === 'gemini'
@@ -152,6 +160,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     engine: 'gemini',
     model,
     fallbackModel: null,
+    fallbackEngine: null,
   };
 }
 
@@ -198,6 +207,7 @@ function withFallback(primary: AnalyzerSelection, runSwitch?: RunFallbackSwitch)
       key: fallbackSwitchKey(primary),
     }),
     fallbackModel: target.model,
+    fallbackEngine: target.engine,
   };
 }
 
@@ -305,7 +315,7 @@ function checkedTarget(
     runAttributionEscalation: async (...a) => (await get()).runAttributionEscalation(...a),
     runNonStoryClassification: async (...a) => (await get()).runNonStoryClassification!(...a),
   };
-  return { analyzer, engine, model, fallbackModel: null };
+  return { analyzer, engine, model, fallbackModel: null, fallbackEngine: null };
 }
 
 /** Names for the announcement: the primary's model (endpoint name · model for an endpoint) and

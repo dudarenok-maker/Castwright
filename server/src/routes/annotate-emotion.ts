@@ -34,7 +34,6 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import { resolveCapacity } from '../analyzer/capacity.js';
-import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -254,9 +253,9 @@ annotateEmotionRouter.post(
             /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
             onFallback: ({ reason }) => {
               console.log(`[annotate-emotion] ${reason}`);
-              if (selection.fallbackModel) {
+              if (selection.fallbackModel && selection.fallbackEngine) {
                 activeModel = selection.fallbackModel;
-                activeEngine = inferEngineFromModelId(selection.fallbackModel);
+                activeEngine = selection.fallbackEngine;
               }
               if (selection.fallbackModel && !releaseFallbackRun) {
                 releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds([selection.fallbackModel]));

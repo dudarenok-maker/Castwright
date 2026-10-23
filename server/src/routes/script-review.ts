@@ -31,7 +31,6 @@ import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js'
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { selectAnalyzer, fallbackNames, type StageCall, type AnalyzerSelection } from '../analyzer/index.js';
 import { resolveAnalyzerFallbackTarget } from '../analyzer/fallback-target.js';
-import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 import { unloadResidentOllama } from './ollama-health.js';
@@ -759,9 +758,9 @@ async function runScriptReviewJob(
     if (fellBack) return;
     fellBack = true;
     // Re-select the configured fallback target, so subsequent chapters skip the dead primary entirely.
-    if (selection.fallbackModel) activeSelection = selectAnalyzer({ model: selection.fallbackModel });
+    if (selection.fallbackModel && selection.fallbackEngine) activeSelection = selectAnalyzer({ model: selection.fallbackModel, engine: selection.fallbackEngine });
     releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds(selection.fallbackModel ? [selection.fallbackModel] : []));
-    if (selection.engine !== 'local' && selection.fallbackModel !== null && inferEngineFromModelId(selection.fallbackModel) === 'local') {
+    if (selection.engine !== 'local' && selection.fallbackEngine === 'local') {
       markReviewBusy(located.bookDir);
       pinnedLocalFallback = true;
     }
@@ -796,7 +795,7 @@ async function runScriptReviewJob(
       return;
     }
     if (!warm.ok) {
-      if (selection.fallbackModel === null) {
+      if (selection.fallbackModel === null || selection.fallbackEngine === null) {
         // No fallback (no key, or cloud fallback opted out) — surface the
         // distinct cause so Retry copy tells "Ollama down" from "load too slow".
         const base =
@@ -813,7 +812,7 @@ async function runScriptReviewJob(
       // A fallback target exists (resolved, with a usable key/endpoint) — don't abort
       // a setup that works today.
       /* #3084 P30 — name the model that failed and the target the review moves to. */
-      const names = fallbackNames(activeSelection, { engine: inferEngineFromModelId(selection.fallbackModel), model: selection.fallbackModel });
+      const names = fallbackNames(activeSelection, { engine: selection.fallbackEngine, model: selection.fallbackModel });
       warmFailSwitchReason = `${warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable'} (${names.primary}) — switched to ${names.target}`;
     }
   }

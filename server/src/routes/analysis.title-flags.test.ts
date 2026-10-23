@@ -86,7 +86,7 @@ function phase1Selection(): AnalyzerSelection {
     runStage3Chapter: () => Promise.reject(new Error('not used')),
     runAttributionEscalation: () => Promise.resolve(null),
   };
-  return { analyzer, engine: 'gemini', model: 'phase1-model', fallbackModel: null };
+  return { analyzer, engine: 'gemini', model: 'phase1-model', fallbackModel: null, fallbackEngine: null };
 }
 
 /* Seeds an analysed book whose state.json chapters carry the given fields,

@@ -121,7 +121,7 @@ afterEach(() => {
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 function stage2For(chapterId: number): Stage2ChapterOutput {

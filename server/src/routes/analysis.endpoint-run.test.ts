@@ -56,7 +56,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    selectAnalyzerForPhase: () => ({ analyzer, engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: runState.fallbackModel }),
+    selectAnalyzerForPhase: () => ({ analyzer, engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: runState.fallbackModel, fallbackEngine: runState.fallbackModel ? 'openai' : null }),
   };
 });
 

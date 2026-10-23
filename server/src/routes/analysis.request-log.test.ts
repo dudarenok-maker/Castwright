@@ -103,7 +103,7 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
         analyzer,
         engine: 'gemini',
         model: opts.model ?? 'stub-default-model',
-        fallbackModel: null,
+        fallbackModel: null, fallbackEngine: null,
       };
       return sel;
     },

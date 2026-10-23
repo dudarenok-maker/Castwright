@@ -120,7 +120,7 @@ function buildSpyPhase1Analyzer(): Analyzer {
 }
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 function buildStubJob(manuscriptId: string): AnalysisJob {
@@ -417,6 +417,7 @@ describe('phase events name the effective model after a silent local→gemini fa
       engine: 'local',
       model: LOCAL_MODEL,
       fallbackModel: FALLBACK_MODEL,
+      fallbackEngine: 'gemini',
     };
     /* phase-1 uses a plain working spy so the test never touches a real backend. */
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
@@ -470,7 +471,7 @@ describe('phase events name the effective model after a silent local→gemini fa
       analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()),
       engine: 'openai',
       model: 'openai:lab::qwen3-30b',
-      fallbackModel: 'qwen3.5:4b',
+      fallbackModel: 'qwen3.5:4b', fallbackEngine: 'local',
     };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
@@ -548,7 +549,7 @@ describe('phase events name the effective model after a silent local→gemini fa
       analyzer: new FallbackAnalyzer(primary, target, undefined, targetInputGuard({ engine: 'local', model: 'qwen3.5:4b' })),
       engine: 'openai',
       model: 'openai:big::qwen3-30b',
-      fallbackModel: 'qwen3.5:4b',
+      fallbackModel: 'qwen3.5:4b', fallbackEngine: 'local',
     };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
@@ -614,7 +615,7 @@ describe('phase events name the effective model after a silent local→gemini fa
     };
     /* No guard: chapter 1 reaches the target oversized (it was sized before the switch); chapter 2,
        started after it, must be sized for Ollama by the chunk budget alone. */
-    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:big::qwen3-30b', fallbackModel: 'qwen3.5:4b' };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:big::qwen3-30b', fallbackModel: 'qwen3.5:4b', fallbackEngine: 'local' };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
     try {
@@ -672,7 +673,7 @@ describe('phase events name the effective model after a silent local→gemini fa
         return spy.runStage1Chapter(m, chapterId, p, call);
       },
     };
-    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:small::m', fallbackModel: 'qwen3.5:4b' };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:small::m', fallbackModel: 'qwen3.5:4b', fallbackEngine: 'local' };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
     try {
@@ -727,14 +728,14 @@ describe('phase events name the effective model after a silent local→gemini fa
       analyzer: new FallbackAnalyzer(phase0Primary, buildSpyPhase0Analyzer(), undefined, undefined, { switch: job.fallbackSwitch, key: fallbackSwitchKey({ engine: 'local', model: 'qwen3.5:4b' }) }),
       engine: 'local',
       model: 'qwen3.5:4b',
-      fallbackModel: 'gemini-3.6-flash',
+      fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini',
     };
     /* What the real selector does with the switch the job hands it. */
     setPhase1Factory((o) => ({
       analyzer: new FallbackAnalyzer(phase1Primary, phase1Target, undefined, undefined, { switch: o.fallbackSwitch ?? new RunFallbackSwitch(), key: fallbackSwitchKey({ engine: 'local', model: 'qwen3.5:9b' }) }),
       engine: 'local',
       model: 'qwen3.5:9b',
-      fallbackModel: 'gemini-3.6-flash',
+      fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini',
     }));
     const events = attachEventCapture(job);
     try {
@@ -766,7 +767,7 @@ describe('phase events name the effective model after a silent local→gemini fa
         throw new LocalUnreachableError('connect ECONNREFUSED');
       },
     };
-    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, spy), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, spy), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
     job.engine = 'local';
@@ -794,7 +795,7 @@ describe('phase events name the effective model after a silent local→gemini fa
         throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
       },
     };
-    setPhase1Selection({ analyzer: new FallbackAnalyzer(phase1Primary, buildSpyPhase1Analyzer()), engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: 'qwen3.5:4b' });
+    setPhase1Selection({ analyzer: new FallbackAnalyzer(phase1Primary, buildSpyPhase1Analyzer()), engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: 'qwen3.5:4b', fallbackEngine: 'local' });
     const job = buildStubJob(manuscriptId);
     const events = attachEventCapture(job);
     try {
@@ -1246,7 +1247,7 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
     };
     const target: Analyzer = { ...buildSpyPhase0Analyzer(), async runNonStoryClassification() { return { nonStory: false }; } };
     return {
-      selection: { analyzer: new FallbackAnalyzer(primary, target), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' },
+      selection: { analyzer: new FallbackAnalyzer(primary, target), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' },
       primaryNonStoryCalls: () => primaryCalls,
     };
   }
@@ -1312,7 +1313,7 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
         throw new LocalUnreachableError('connect ECONNREFUSED');
       },
     };
-    const phase1Selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(phase1Primary, p1), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash' };
+    const phase1Selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(phase1Primary, p1), engine: 'local', model: 'qwen3.5:4b', fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
     const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
     job.engine = 'local';
     try {
@@ -1345,10 +1346,10 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
         },
       };
       const target: Analyzer = { ...buildSpyPhase0Analyzer(), async runNonStoryClassification() { return { nonStory: false }; } };
-      return { analyzer: new FallbackAnalyzer(primary, target), engine: e, model: modelOf(e), fallbackModel: 'gemini-3.6-flash' };
+      return { analyzer: new FallbackAnalyzer(primary, target), engine: e, model: modelOf(e), fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
     }
     function healthyPhase1(e: Primary): AnalyzerSelection {
-      return { analyzer: new FallbackAnalyzer(phase1WithOneLine, phase1WithOneLine), engine: e, model: modelOf(e) === 'qwen3.5:4b' ? 'qwen3.5:9b' : ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash' };
+      return { analyzer: new FallbackAnalyzer(phase1WithOneLine, phase1WithOneLine), engine: e, model: modelOf(e) === 'qwen3.5:4b' ? 'qwen3.5:9b' : ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
     }
     const shapes: Array<[Primary, Primary, 'local' | 'openai']> = [
       ['openai', 'local', 'local'],
@@ -1401,4 +1402,92 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
       }, 60_000);
     }
   });
+});
+
+/* #3084 wave 3d review pass 4 (K) — a fallback target's engine is the one the selection built it with
+   (`fallbackEngine`), never inferred from its model id: a tagless Ollama model ("llama3", the
+   analyzer.ollama.model knob is a free string) reads as Gemini to the id rule. */
+describe('a tagless Ollama fallback target is Ollama (#3084 wave 3d review pass 4, K)', () => {
+  const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const ENDPOINT_MODEL = 'openai:lab::qwen3-30b';
+  const phase1WithOneLine: Analyzer = {
+    ...buildSpyPhase1Analyzer(),
+    async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+      return {
+        sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: chapterId === 1 ? 'ch1-char' : 'narrator', text: chapterId === 1 ? '"Lorem ipsum dolor sit amet," he said.' : 'lorem ipsum dolor sit amet.' }],
+      };
+    },
+  };
+  /* The endpoint primary works for stage 1 and the rest; only the non-story check finds it down. */
+  function endpointDownTaglessLocal(): AnalyzerSelection {
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runNonStoryClassification() {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const target: Analyzer = { ...buildSpyPhase0Analyzer(), async runNonStoryClassification() { return { nonStory: false }; } };
+    return { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: 'llama3', fallbackEngine: 'local' };
+  }
+  async function seedCachedStage1(manuscriptId: string): Promise<void> {
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      stage1: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          { id: 'ch1-char', name: 'Character_ch1', role: 'character', color: 'unset', evidence: [{ quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }] },
+        ],
+        chapters: [{ id: 1, title: 'Chapter 1' }, { id: 2, title: 'Chapter 2' }],
+      },
+    } as never);
+  }
+
+  it('main: job.engine reads local after the switch, and the end-of-run Ollama evict happens', async () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    const manuscriptId = `test-tagless-local-main-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    unloadResidentOllamaMock.mockClear();
+    setPhase1Selection(buildSelection(phase1WithOneLine, 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'openai';
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, endpointDownTaglessLocal(), { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(job.fallbackMarked?.has('llama3'), 'precondition: the run switched to the target').toBe(true);
+      expect(job.engine).toBe('local');
+      await vi.waitFor(() => expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1));
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('subset: job.engine reads local after the switch, and the end-of-run Ollama evict happens', async () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    const manuscriptId = `test-tagless-local-subset-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    await seedCachedStage1(manuscriptId);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    unloadResidentOllamaMock.mockClear();
+    const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+    job.engine = 'openai';
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId) as never as { chapterHints: ChapterHint[] };
+      await runSubsetAnalyzerJob(job, recordRef as never, endpointDownTaglessLocal(), buildSelection(phase1WithOneLine, 'phase1-test-model'), recordRef.chapterHints as never, true);
+      expect(job.fallbackMarked?.has('llama3'), 'precondition: the run switched to the target').toBe(true);
+      expect(job.engine).toBe('local');
+      await vi.waitFor(() => expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1));
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
 });

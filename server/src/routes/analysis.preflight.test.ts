@@ -174,7 +174,7 @@ describe('analysis POSTs — digest read on the new-job path only, live job re-c
     return { promise, resolve };
   }
   /* No case reaches an analyzer call, so selection never has to build a real analyzer. */
-  const stubSelection = () => ({ analyzer: {}, engine: 'local', model: 'qwen3.5:4b', fallbackModel: null });
+  const stubSelection = () => ({ analyzer: {}, engine: 'local', model: 'qwen3.5:4b', fallbackModel: null, fallbackEngine: null });
   /* Each POST selects phase 0 once per job it creates, and nothing else selects phase 0
      (runMainAnalyzerJob selects phase 1 only, and only after its first await). */
   const phase0Selections = () => selectSpy.mock.calls.filter(([opts]) => (opts as { phase: string }).phase === 'phase0').length;

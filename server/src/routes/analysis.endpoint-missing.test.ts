@@ -137,7 +137,7 @@ describe('analysis selection call sites report analyzer-endpoint-missing (#3084 
       res: { end: () => {} } as unknown as import('express').Response,
       keepAlive,
     });
-    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-endpoint-missing-test', fallbackModel: null };
+    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-endpoint-missing-test', fallbackModel: null, fallbackEngine: null };
     try {
       await runMainAnalyzerJob(job, getManuscript(id) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
       expect(events.find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });

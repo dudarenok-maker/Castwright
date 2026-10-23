@@ -156,7 +156,7 @@ afterAll(() => {
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 function setPhase1Selection(sel: AnalyzerSelection): void {

@@ -108,6 +108,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
       engine: engineState.engine,
       model: 'test-model',
       fallbackModel: null,
+      fallbackEngine: null,
     })),
   };
 });
@@ -149,11 +150,12 @@ vi.mock('../analyzer/index.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    selectAnalyzer: selectAnalyzerMock.mockImplementation((opts?: { model?: string }) => ({
+    selectAnalyzer: selectAnalyzerMock.mockImplementation((opts?: { model?: string; engine?: string }) => ({
       analyzer: fakeAnalyzer,
-      engine: 'gemini',
+      engine: opts?.engine ?? 'gemini',
       model: opts?.model ?? 'gemini-fallback-model',
       fallbackModel: null,
+      fallbackEngine: null,
     })),
   };
 });
@@ -832,6 +834,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: null,
+        fallbackEngine: null,
       }));
       warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
 
@@ -861,6 +864,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: null,
+        fallbackEngine: null,
       }));
       warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'load_timeout', status: 504, error: 'slow' });
 
@@ -891,6 +895,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: null, // gate off ⇒ selectAnalyzer wired no fallback
+        fallbackEngine: null,
       }));
       warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'down' });
       // Key present (env) + cloud fallback opted OUT — the legacy step reads 'off'.
@@ -927,6 +932,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: 'gemma-4-31b-it',
+        fallbackEngine: 'gemini',
       }));
       warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
       runReview.mockResolvedValue({ ops: [] });
@@ -942,7 +948,7 @@ describe('POST /api/books/:bookId/script-review', () => {
       // switchToFallback re-selected via the (mocked) selectAnalyzer, so the
       // fallback model id it was asked for is the ORIGINAL selection's
       // fallbackModel, not the dead local model.
-      expect(selectAnalyzerMock).toHaveBeenCalledWith({ model: 'gemma-4-31b-it' });
+      expect(selectAnalyzerMock).toHaveBeenCalledWith({ model: 'gemma-4-31b-it', engine: 'gemini' });
       // Both chapters still get reviewed, on the switched-to analyzer.
       expect(runReview).toHaveBeenCalled();
       expect(events.find((e) => e.kind === 'result')).toMatchObject({ done: true, reviewedChapters: 2 });
@@ -964,6 +970,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: null,
+        fallbackEngine: null,
       }));
       const warmGate = makeGate<{ ok: false; status: number; error: string }>();
       warmOllamaModelMock.mockImplementation(
@@ -1006,6 +1013,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         engine: 'local',
         model: 'qwen3.5:9b',
         fallbackModel: 'gemma-4-31b-it',
+        fallbackEngine: 'gemini',
       }));
       // Warm succeeds (default mock: { ok: true }) — the fallback only fires
       // mid-run, via onFallback on chapter 2's call, AFTER chapter 1 has
@@ -1196,15 +1204,15 @@ describe('POST /api/books/:bookId/script-review', () => {
 
   const lab = () => analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
   const spare = () => analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
-  const reviewOn = (fallbackModel: string) => {
+  const reviewOn = (fallbackModel: string, fallbackEngine: string) => {
     const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
-    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel }));
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel, fallbackEngine }));
   };
 
   it('#3084 P30 — a healthy review holds no mark for its fallback endpoint on the same card', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
-    reviewOn('openai:spare::m');
+    reviewOn('openai:spare::m', 'openai');
     let spareBusy: boolean | undefined;
     runReview.mockImplementation(async () => {
       spareBusy = isEndpointBusy('spare');
@@ -1224,7 +1232,7 @@ describe('POST /api/books/:bookId/script-review', () => {
   it('#3084 P30 — once the review falls back, its endpoint target is marked until the review ends', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
-    reviewOn('openai:spare::m');
+    reviewOn('openai:spare::m', 'openai');
     let spareBusy: boolean | undefined;
     runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
       call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to endpoint Spare (m)' });
@@ -1248,7 +1256,7 @@ describe('POST /api/books/:bookId/script-review', () => {
   it('#3084 P30 — a healthy endpoint review whose fallback target is local does not pin Ollama', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
-    reviewOn('qwen3.5:4b');
+    reviewOn('qwen3.5:4b', 'local');
     let busyDuringCall: boolean | undefined;
     runReview.mockImplementation(async () => {
       busyDuringCall = isAnyAnalyzerRunBusy();
@@ -1266,7 +1274,7 @@ describe('POST /api/books/:bookId/script-review', () => {
   it('#3084 P30 — once an endpoint review falls back to local, the Ollama review pin holds until the end, then releases and unloads what the target loaded', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
-    reviewOn('qwen3.5:4b');
+    reviewOn('qwen3.5:4b', 'local');
     let busyAfterSwitch: boolean | undefined;
     runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
       call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to Ollama (qwen3.5:4b)' });
@@ -1285,17 +1293,41 @@ describe('POST /api/books/:bookId/script-review', () => {
     }
   });
 
+  it('#3084 wave 3d review pass 4 (K) — a tagless Ollama target ("llama3") is re-selected as Ollama, pins the review, and unloads at the end', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
+    reviewOn('llama3', 'local'); // no ":" — the model-id rule would read it as Gemini
+    let busyAfterSwitch: boolean | undefined;
+    runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to Ollama (llama3)' });
+      busyAfterSwitch = isAnyAnalyzerRunBusy();
+      return { ops: [] };
+    });
+    unloadResidentOllamaMock.mockClear();
+    selectAnalyzerMock.mockClear();
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(selectAnalyzerMock).toHaveBeenCalledWith({ model: 'llama3', engine: 'local' });
+      expect(busyAfterSwitch).toBe(true);
+      expect(isAnyAnalyzerRunBusy()).toBe(false);
+      expect(unloadResidentOllamaMock).toHaveBeenCalledTimes(1);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
   /* #3710 F5 — an Ollama primary whose warm step fails switches to the fallback target. */
-  const warmFailOnto = (fallbackModel: string) => {
+  const warmFailOnto = (fallbackModel: string, fallbackEngine: string) => {
     const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
-    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'local', model: 'qwen3.5:9b', fallbackModel }));
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'local', model: 'qwen3.5:9b', fallbackModel, fallbackEngine }));
     warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
   };
 
   it('#3710 F5 — a warm-fail switch whose target key is bound to another host reports auth, not internal_error', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [spare()] });
-    warmFailOnto('openai:spare::m');
+    warmFailOnto('openai:spare::m', 'openai');
     selectAnalyzerMock.mockImplementationOnce(() => {
       throw new AnalyzerKeyOriginError('spare', 'Spare');
     });
@@ -1314,7 +1346,7 @@ describe('POST /api/books/:bookId/script-review', () => {
   it('#3710 F5 — a throw between the warm-fail switch and the review loop does not leak the target endpoint mark', async () => {
     writeBook(SENTENCES);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [spare()] });
-    warmFailOnto('openai:spare::m');
+    warmFailOnto('openai:spare::m', 'openai');
     hydrateState.throwNext = true;
     try {
       await request(app).post(`/api/books/${bookId}/script-review`).send({});
@@ -2452,6 +2484,7 @@ describe('POST /api/books/:bookId/script-review — unset book language (Task 6 
       engine: 'local',
       model: 'qwen3.5:9b',
       fallbackModel: null,
+      fallbackEngine: null,
     }));
     warmOllamaModelMock.mockRejectedValueOnce(new Error('warm step exploded'));
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });

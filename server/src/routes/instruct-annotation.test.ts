@@ -40,6 +40,7 @@ const { runStage3, engineState: instructEngineState } = vi.hoisted(() => ({
     selectError: null as Error | null,
     model: 'test-model' as string,
     fallbackModel: null as string | null,
+    fallbackEngine: null as 'gemini' | 'local' | 'openai' | null,
     activate: false,
   },
 }));
@@ -81,6 +82,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
         engine: instructEngineState.engine,
         model: instructEngineState.model,
         fallbackModel: instructEngineState.fallbackModel,
+        fallbackEngine: instructEngineState.fallbackEngine,
       };
     },
   };
@@ -559,6 +561,7 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] }); // the saved target: later chapters are sized for it
     instructEngineState.model = 'openai:lab::m';
     instructEngineState.fallbackModel = 'openai:spare::m';
+    instructEngineState.fallbackEngine = 'openai';
     runStage3.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
       if (instructEngineState.activate) call.onFallback?.({ reason: 'switched' });
       return { annotations: [] };
@@ -578,6 +581,7 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     } finally {
       instructEngineState.model = 'test-model';
       instructEngineState.fallbackModel = null;
+      instructEngineState.fallbackEngine = null;
       instructEngineState.activate = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
@@ -587,6 +591,7 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
   it('#3084 wave 3d review — after the pass switches to a smaller fallback target, the next chapter is chunked for the target', async () => {
     process.env.ANALYZER_NUM_CTX = '400'; // the local target's budget: 2000 chars; the gemini primary never splits
     instructEngineState.fallbackModel = 'qwen3.5:4b';
+    instructEngineState.fallbackEngine = 'local';
     const chapter = (chapterId: number, base: number) =>
       Array.from({ length: 12 }, (_, i) => ({ id: base + i, chapterId, characterId: 'narrator', text: 'C'.repeat(800) }));
     writeBook([...chapter(1, 100), ...chapter(2, 200)]);
@@ -606,6 +611,34 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
       expect(callsByChapter.get(2)).toBeGreaterThan(1); // sized for the target, after it
     } finally {
       instructEngineState.fallbackModel = null;
+      instructEngineState.fallbackEngine = null;
+    }
+  });
+
+  it('#3084 wave 3d review pass 4 (K) — a tagless Ollama target ("llama3") is chunked for Ollama after the switch, not for Gemini', async () => {
+    process.env.ANALYZER_NUM_CTX = '400'; // the local target's budget: 2000 chars; the gemini primary never splits
+    instructEngineState.fallbackModel = 'llama3'; // no ":" — an id the model-id rule reads as Gemini
+    instructEngineState.fallbackEngine = 'local';
+    const chapter = (chapterId: number, base: number) =>
+      Array.from({ length: 12 }, (_, i) => ({ id: base + i, chapterId, characterId: 'narrator', text: 'C'.repeat(800) }));
+    writeBook([...chapter(1, 100), ...chapter(2, 200)]);
+    const callsByChapter = new Map<number, number>();
+    let switched = false;
+    runStage3.mockImplementation(async (_m: string, chapterId: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      callsByChapter.set(chapterId, (callsByChapter.get(chapterId) ?? 0) + 1);
+      if (!switched) {
+        switched = true;
+        call.onFallback?.({ reason: 'switched' });
+      }
+      return { annotations: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+      expect(callsByChapter.get(1)).toBe(1); // sized for the primary, before the switch
+      expect(callsByChapter.get(2)).toBeGreaterThan(1); // sized for the target, after it
+    } finally {
+      instructEngineState.fallbackModel = null;
+      instructEngineState.fallbackEngine = null;
     }
   });
 });

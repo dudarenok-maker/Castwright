@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 function buildPhase1Analyzer(): Analyzer {
