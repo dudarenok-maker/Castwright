@@ -3,6 +3,7 @@
    the underlying console as separate arguments (so error objects still
    pretty-print rather than coercing to "[object Object]"). */
 
+import { format } from 'node:util';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { formatTimestamp, installTimestamps } from './logger.js';
 
@@ -91,5 +92,23 @@ describe('installTimestamps', () => {
     console.log('second');
     expect(captured.log[0][0]).toBe('2026-05-15 10:00:00.000');
     expect(captured.log[1][0]).toBe('2026-05-15 11:30:00.500');
+  });
+
+  /* The timestamp is ALWAYS Node's format argument, so printf specifiers in a
+     caller's own first argument are never interpreted (logger.ts relies on
+     this; server code therefore has no working `%s` placeholders). Rendered
+     with util.format, exactly as Node renders the real console call. */
+  it('renders a template-literal first argument with specifiers in the value literally', () => {
+    installTimestamps();
+    console.warn(`failed for ${'evil%s%o'}`, new Error('boom'));
+    const line = format(...captured.warn[0]);
+    expect(line).toContain('failed for evil%s%o');
+    expect(line).toContain('boom');
+  });
+
+  it('does not substitute a %s placeholder in the first argument', () => {
+    installTimestamps();
+    console.log('[x] drained manuscript=%s', 'm_123');
+    expect(format(...captured.log[0])).toMatch(/\[x\] drained manuscript=%s m_123$/);
   });
 });

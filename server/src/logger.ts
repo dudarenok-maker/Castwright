@@ -6,7 +6,15 @@
 
    The timestamp is emitted as its own leading argument so non-string args
    (e.g. error objects) still get Node's default pretty-printing — a
-   single-string concat would coerce them to "[object Object]". */
+   single-string concat would coerce them to "[object Object]".
+
+   Because the timestamp is always Node's format argument, printf specifiers
+   in a caller's own first argument are never interpreted either. That
+   neutralises format-string injection from request-derived ids in
+   template-literal messages, and it is relied upon (pinned by logger.test.ts:
+   "renders a template-literal first argument…"). The flip side: `%s`
+   placeholders do NOT work in server code — build the message with a
+   template literal instead. */
 
 const METHODS = ['log', 'info', 'warn', 'error', 'debug'] as const;
 

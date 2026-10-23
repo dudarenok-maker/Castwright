@@ -150,3 +150,45 @@ rather than re-fixed, and the gate does not apply.
 | file:line | rule | justification |
 |---|---|---|
 | `server/src/app.ts:182` (`resolveWorkspaceStaticCandidate`) | js/path-injection | `realpathSync` sits inside the containment guard itself; guard is thorough (realpath canonicalisation, fail-closed, separator-strict `isContainedIn`, per-request allowlist) but not a CodeQL-recognized sanitizer; same argument as alerts #150–#153 and #171 |
+
+## Alerts #227–#236 — the #3721 security sweep (for dismissal)
+
+Dismissed on **2026-10-23** (#227–#232, #234, #235); #233 and #236 are to be
+dismissed after this change merges. The GitHub dismissal comments point back to
+this file.
+
+- **`py/stack-trace-exposure` (#227–#231, `false positive`)** — five more
+  `{"detail": str(exc)}` echoes in `server/tts-sidecar/main.py` (`:12201`,
+  `:12652`, `:12679`, `:13015`, `:11973`), the same shape as the four recorded
+  above. Each exception class (`DesignContentionTimeoutError`,
+  `VoiceLanguageUnsupportedError`) builds its message from a fixed template plus
+  curated values — never a traceback, path, or third-party text — and the
+  sites carry the audited `# exc-text-safe:` marker.
+- **`js/incomplete-multi-character-sanitization` (#232, `used in tests`)** —
+  `scripts/tests/stamp-publish-token.test.mjs:36`: a test asserting that
+  stripping HTML comments hides a token; not sanitization of untrusted HTML.
+- **`js/incomplete-sanitization` (#234, `used in tests`)** —
+  `scripts/tests/npm-check-onbox-register-routing.test.mjs:53`: a test-only
+  `quoteArg` helper building a spawn command from hardcoded arguments.
+- **`js/insufficient-password-hash` (#235, `false positive`)** —
+  `server/src/analyzer/catalog/gemini-catalog.ts:100`: SHA-256 of the Gemini API
+  key is an in-memory cache key (`keyHash`) scoping the model catalog to the
+  active key. It is not password storage.
+- **`js/tainted-format-string` (#233 `routes/book-state.ts:606`, #236
+  `routes/revisions.ts:271`)** — request-derived ids sit in a template-literal
+  first argument of a `console` call. In the running server this is neutralised:
+  `installTimestamps()` (`server/src/logger.ts`, installed at boot in
+  `server/src/index.ts`) always passes the timestamp as Node's format argument,
+  so a caller's own first argument is never interpreted as a format string.
+  `server/src/logger.test.ts` ("renders a template-literal first argument…")
+  pins this against the real patch. A consequence recorded in the same change:
+  `%s` placeholders do not work in server code, and the sites that used them were
+  rewritten as template literals.
+
+| alert | rule | justification |
+|---|---|---|
+| #227–#231, `server/tts-sidecar/main.py` | py/stack-trace-exposure | `str(exc)` of a curated sidecar exception; fixed template plus curated values; `exc-text-safe` marker |
+| #232, `scripts/tests/stamp-publish-token.test.mjs:36` | js/incomplete-multi-character-sanitization | test asserting HTML-comment stripping hides a token; used in tests |
+| #234, `scripts/tests/npm-check-onbox-register-routing.test.mjs:53` | js/incomplete-sanitization | test-only `quoteArg` over hardcoded arguments; used in tests |
+| #235, `server/src/analyzer/catalog/gemini-catalog.ts:100` | js/insufficient-password-hash | SHA-256 of an API key as an in-memory cache key, not password storage; false positive |
+| #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismiss after merge |

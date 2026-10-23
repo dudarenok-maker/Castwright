@@ -2197,10 +2197,8 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     const final = (await readEntry(voiceUuid)) ?? updated;
     if (purgeResult.failed.length > 0) {
       console.warn(
-        '[voice-library] revoke for "%s" left %d artifact(s) ' +
+        `[voice-library] revoke for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
           'un-erased:',
-        voiceUuid,
-        purgeResult.failed.length,
         purgeResult.failed,
       );
     }
@@ -2308,10 +2306,8 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
       const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
       if (purgeResult.failed.length > 0) {
         console.warn(
-          '[voice-library] delete for "%s" left %d artifact(s) ' +
+          `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
             'un-erased — the entry is RETAINED so the consent gates still cover them:',
-          voiceUuid,
-          purgeResult.failed.length,
           purgeResult.failed,
         );
         return res.status(200).json({

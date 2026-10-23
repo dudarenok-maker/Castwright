@@ -664,14 +664,11 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
     (err) => {
       if (!err) return;
       const status = (err as { status?: number }).status ?? 500;
-      /* Static format string with %s placeholders — the tainted `path` /
-         `err.message` are arguments, never the format itself (js/tainted-
-         format-string). */
+      /* Template literal, not `%s` placeholders: logger.ts's timestamp patch
+         makes the first argument Node's format string, so a `%s` here would
+         print literally (logger.test.ts pins this). */
       console.error(
-        '[export] sendFile failed for %s%s: %s',
-        path,
-        res.headersSent ? ' (after headers sent)' : '',
-        err.message,
+        `[export] sendFile failed for ${path}${res.headersSent ? ' (after headers sent)' : ''}: ${err.message}`,
         { status },
       );
       if (!res.headersSent) res.status(status).end();
