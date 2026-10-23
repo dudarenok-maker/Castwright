@@ -5,7 +5,12 @@ import { fetch as undiciFetch, Agent } from 'undici';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
-import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
+import {
+  OllamaTransport,
+  ANALYZER_DISPATCHER,
+  classifyConnectError,
+  PERSONA_ABSOLUTE_MAX_MS,
+} from './transports/ollama-transport.js';
 import { redactKnownSecrets } from './redact.js';
 /* #3084 A9 — through the leaf gate. */
 import { loadKnownAnalyzerSecrets } from './known-secrets-gate.js';
@@ -13,11 +18,11 @@ import { resolveNumPredict, resolveOllamaTemperature } from './ollama-settings.j
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
 import { StageRunner } from './runner/stage-runner.js';
 import { adaptSchemaForOllama } from './runner/schema-adapters.js';
-import { PERSONA_ABSOLUTE_MAX_MS, type StructuredOutputMode } from './runner/transport.js';
+import type { StructuredOutputMode } from './runner/transport.js';
 import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
 import { configValue } from '../config/resolver.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
-export { ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
+export { ANALYZER_DISPATCHER, classifyConnectError, PERSONA_ABSOLUTE_MAX_MS } from './transports/ollama-transport.js';
 export {
   resolveOllamaTemperature, resolveOllamaRetryTemperature,
   resolveKeepAliveSeconds, hasKeepAliveOverride, keepAliveFor,
@@ -40,10 +45,6 @@ interface OllamaOptions {
       module-level ANALYZER_DISPATCHER singleton. */
   dispatcher?: Agent;
 }
-
-/* The persona ceiling lives in runner/transport.ts (#3084 W4, owner decision 4.3-B1); re-exported
-   so existing importers keep working. */
-export { PERSONA_ABSOLUTE_MAX_MS };
 
 export class OllamaAnalyzer extends TransportAnalyzer {
   constructor(opts: OllamaOptions) {
