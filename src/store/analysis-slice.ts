@@ -173,11 +173,23 @@ export const analysisSlice = createSlice({
       }
       if (typeof action.payload.model === 'string') snap.model = action.payload.model;
       if (action.payload.engine !== undefined) {
-        /* Only an endpoint run carries a card; its earlier card stays held until the run ends, so the
-           new one is combined with it (the start snapshot's rule). */
-        const held = snap.engine === 'openai' ? snap.gpu : undefined;
-        snap.engine = action.payload.engine;
-        snap.gpu = action.payload.engine === 'openai' ? combineSnapshotGpus([held, action.payload.gpu]) : undefined;
+        /* A switch may only WIDEN what a running analysis holds, never narrow it (fail closed): a mixed-split
+           run stamps only the switched-to targets, while the other phase still holds its own card. So the
+           incoming engine is combined with the snapshot's by the server's precedence (Ollama > endpoint >
+           Gemini), and an endpoint card is combined with the one already held. A cold-boot `openai` seed
+           carries no card, which reads as `any` (unknown holds everything). */
+        const prior = snap.engine;
+        const incoming = action.payload.engine;
+        const engine: AnalysisEngine =
+          prior === 'local' || incoming === 'local' ? 'local' : prior === 'openai' || incoming === 'openai' ? 'openai' : 'gemini';
+        if (engine === 'local') snap.gpu = prior === 'local' ? snap.gpu : undefined;
+        else if (engine === 'gemini') snap.gpu = undefined;
+        else
+          snap.gpu = combineSnapshotGpus([
+            prior === 'openai' ? (snap.gpu ?? 'any') : undefined,
+            incoming === 'openai' ? action.payload.gpu : undefined,
+          ]);
+        snap.engine = engine;
       }
       const phaseChanged =
         typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;

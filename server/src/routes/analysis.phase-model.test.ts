@@ -1546,6 +1546,43 @@ describe('phase events name the run engine and card after a fallback switch (#30
     expect(switched.length).toBeGreaterThan(0);
     expect(switched.every((e) => e.analysisEngine === 'openai' && e.analysisGpu === 'cuda:0')).toBe(true);
   }, 60_000);
+
+  /* Review pass 5 (N) — the contract the client relies on in a mixed split: the stamp names the
+     switched-to targets' card ONLY. Phase 1 stays on its own healthy endpoint primary (cuda:1), which the
+     stamp does not mention, so the frontend must combine it with the card the snapshot already holds
+     (analysis-slice applyAnalysisSnapshotTick) rather than take the stamp as-is. */
+  it('mixed split: phase 0 switches to an off-card target while phase 1 stays on a card; the stamp carries the target card only', async () => {
+    const heldByPhase1 = analyzerEndpointSchema.parse({ id: 'held', name: 'Held', baseUrl: 'http://127.0.0.1:8082/v1', gpu: 'cuda:1', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare, heldByPhase1] });
+    const manuscriptId = `test-run-engine-mixed-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const phase0: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()), engine: 'openai', model: 'openai:spare::m', fallbackModel: 'openai:lab::m', fallbackEngine: 'openai' };
+    setPhase1Selection({ analyzer: buildSpyPhase1Analyzer(), engine: 'openai', model: 'openai:held::m', fallbackModel: null, fallbackEngine: null });
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'openai';
+    const events = attachEventCapture(job);
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(job.fallbackMarked?.has('openai:lab::m'), 'precondition: phase 0 switched').toBe(true);
+      const stamped = (events.filter((e) => e.kind === 'phase') as RunPhaseEvent[]).filter((e) => e.analysisEngine !== undefined);
+      expect(stamped.length).toBeGreaterThan(0);
+      expect(stamped.every((e) => e.analysisEngine === 'openai' && e.analysisGpu === 'none')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
 });
 
 /* #3084 wave 3d review pass 4 (L) — job.engine names who holds a card across BOTH phases, and every
