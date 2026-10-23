@@ -340,7 +340,8 @@ async function applyRestructureClaimed(
        the new file's sha, and a restart would trust them. A record with no sha,
        or one that no longer matches the file (or whose file is gone, so the
        book cannot hydrate after a restart anyway), has no entry worth writing:
-       the file is removed (best-effort) and the restructure proceeds. */
+       the file is removed (best-effort, once the state.json write has landed)
+       and the restructure proceeds. */
     let diskSha256: string | null = null;
     try {
       diskSha256 = sha256Hex(await readFile(join(bookDir, safeSegment(state.manuscriptFile))));
@@ -353,9 +354,6 @@ async function applyRestructureClaimed(
       console.warn(
         `[chapters-restructure] ${manuscriptId}: chapter bodies are not from the manuscript on disk; skipping manuscript-hints.json`,
       );
-      await removeManuscriptHints(bookDir).catch((err) => {
-        console.warn(`[chapters-restructure] ${manuscriptId}: could not remove manuscript-hints.json`, err);
-      });
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
@@ -390,6 +388,14 @@ async function applyRestructureClaimed(
     // state is recoverable via the reconciliation filter in
     // book-state.ts:166-185.
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
+    /* The stale file goes only AFTER the state write landed: removed first, a
+       failed state write would leave the previous structure with no hints file
+       and a restart would re-parse against it (#3703). Best-effort. */
+    if (!bodiesCurrent) {
+      await removeManuscriptHints(bookDir).catch((err) => {
+        console.warn(`[chapters-restructure] ${manuscriptId}: could not remove manuscript-hints.json`, err);
+      });
+    }
     /* #3400 -- merged-away tombstones ride along (the client's save after the
        remap applies the same rule), so a restructure no longer wipes them. */
     await writeJsonAtomic(editsPath, {

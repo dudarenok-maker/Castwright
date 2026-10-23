@@ -164,6 +164,13 @@ afterEach(() => {
   stateWriteSpy.fail = false;
 });
 
+/* Stamp the cached record with a sha that is not the manuscript's, as if the
+   file had been edited after the record was cached. */
+async function makeRecordStale(): Promise<void> {
+  const { getManuscript, putManuscript } = await import('../store/manuscripts.js');
+  putManuscript({ ...getManuscript(MANUSCRIPT_ID)!, sourceSha256: 'stale-sha' });
+}
+
 describe('restructure persists manuscript-hints.json (#3703)', () => {
   it('merge writes the merged bodies keyed to state.json uuids', async () => {
     const res = await request(app)
@@ -234,5 +241,50 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
     expect(record!.chapterHints[0]!.body).toContain('Alpha first.');
     expect(record!.chapterHints[0]!.body).toContain('Beta first.');
     expect(record!.chapterHints[1]!.body).toContain('Gamma first.');
+  });
+
+  it('a stale-body restructure whose state.json write fails keeps the previous hints file', async () => {
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(merge.status).toBe(200);
+    const before = readFileSync(hintsPath());
+
+    // The cached record's bodies no longer match the manuscript on disk.
+    await makeRecordStale();
+
+    stateWriteSpy.fail = true;
+    const reorder = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(500);
+    stateWriteSpy.fail = false;
+
+    // The previous structure still stands, so its hints file must too.
+    expect(existsSync(hintsPath())).toBe(true);
+    expect(readFileSync(hintsPath()).equals(before)).toBe(true);
+
+    // A restart hydrates the merged structure that landed, not a fresh parse.
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
+    expect(record?.chapterHints).toHaveLength(2);
+    expect(record!.chapterHints[0]!.body).toContain('Beta first.');
+  });
+
+  it('a stale-body restructure whose state.json write lands removes the stale hints file', async () => {
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(merge.status).toBe(200);
+    expect(existsSync(hintsPath())).toBe(true);
+
+    await makeRecordStale();
+
+    const reorder = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(200);
+    expect(existsSync(hintsPath())).toBe(false);
   });
 });
