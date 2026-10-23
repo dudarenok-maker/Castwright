@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/* Read once at module load by synthesise-chapter.ts, so it must be set before any import. */
+/* Read once at module load by tts/synth-call-timeout.ts, so it must be set before any import. */
 vi.hoisted(() => {
   process.env.SIDECAR_CALL_TIMEOUT_MS = '60';
 });
