@@ -4207,7 +4207,9 @@ paths:
             manuscript changed while it was being prepared; retry), `book_moved`
             (the book was moved outside the app while it was being re-parsed;
             an in-app rename waits for the re-parse instead; reload and retry),
-            or absent (the manuscript file is missing on disk).
+            `book_busy` (a long job — render, analysis, scoring, voice design,
+            script review or export — holds the book; stop it or wait for it
+            to finish), or absent (the manuscript file is missing on disk).
           content:
             application/json:
               schema:
@@ -4217,7 +4219,7 @@ paths:
                   error: { type: string }
                   code:
                     type: string
-                    enum: [manuscript_changed, book_moved]
+                    enum: [manuscript_changed, book_moved, book_busy]
         '500':
           description: |
             Re-parse failed (including the book's state file being unreadable
@@ -4268,7 +4270,10 @@ paths:
           description: |
             Refused (nothing was written). `code` is `book_moved` (the book was
             moved outside the app while it was being re-parsed; an in-app
-            rename waits for the replace instead; reload and retry).
+            rename waits for the replace instead; reload and retry), or
+            `book_busy` (a long job — render, analysis, scoring, voice design,
+            script review or export — holds the book; stop it or wait for it
+            to finish).
           content:
             application/json:
               schema:
@@ -4278,7 +4283,7 @@ paths:
                   error: { type: string }
                   code:
                     type: string
-                    enum: [book_moved]
+                    enum: [book_moved, book_busy]
         '500':
           description: |
             Parsing or replacing failed (including the book's state file being

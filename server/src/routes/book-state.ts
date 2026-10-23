@@ -937,14 +937,25 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
   export: 'exporting',
 };
 
-function busySentence(kinds: BookJobKind[], action: 'rename' | 'delete'): string {
+function busySentence(
+  kinds: BookJobKind[],
+  action: 'rename' | 'delete' | 'reparse' | 'replace',
+): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
   }
   const what = [...new Set(kinds.map((k) => BUSY_PHRASE[k]))].join(', ');
-  return action === 'rename'
-    ? `This book is busy (${what}). Wait for it to finish before renaming it — a rename now would split the book across two folders.`
-    : `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
+  if (action === 'rename') {
+    return `This book is busy (${what}). Wait for it to finish before renaming it — a rename now would split the book across two folders.`;
+  }
+  if (action === 'delete') {
+    return `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
+  }
+  /* #3717 — reparse / replace-manuscript are refused like the movers: both
+     delete cast.json and the audio/ directory under a job still writing them. */
+  return action === 'reparse'
+    ? `This book is busy (${what}). Stop it or wait for it to finish, then re-parse it.`
+    : `This book is busy (${what}). Stop it or wait for it to finish, then replace its manuscript.`;
 }
 
 /* #3711 — the 409 for each refusal the sanctioned movers raise. Every body is
@@ -1717,7 +1728,9 @@ async function prepareReparse(
    silently. The reparse logs how many edits were carried forward.
 
    Frontend confirms with the user before calling. Returns the fresh state
-   so the library / open-book flow can re-hydrate without a second round-trip. */
+   so the library / open-book flow can re-hydrate without a second round-trip.
+   Refused with 409 `book_busy` while any long job is registered for the book
+   (#3717) — see the first check inside the `withBookOp` callback. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
   try {
     /* #3711 — two-span: parse off a `peekBook` with no lock held, then commit
@@ -1726,6 +1739,17 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (prep === 'gone') return res.status(404).json({ error: 'Book not found.' });
     const outcome = await withBookOp(req.params.bookId, async (book) => {
       const { bookDir, state } = book;
+
+      /* #3717 — refuse while ANY long job is registered for the book, FIRST:
+         a reparse deletes `cast.json` and the `audio/` directory and resets
+         revisions while that job may still be writing them (a render exporting
+         chapter audio, an analysis writing the cache). `runBookJob` registers
+         its token inside `withBookOp`, so this check cannot race a
+         registration. */
+      const kinds = bookJobKinds(book.bookId);
+      if (kinds.length > 0) {
+        return { status: 409, body: { error: busySentence(kinds, 'reparse'), code: 'book_busy' } };
+      }
 
       /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
          deleted or rewritten (applyReparse's state write + Promise.all). */
@@ -1771,7 +1795,9 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
    reuse/voice carryover is snapshotted so designed voices resurrect for
    characters that still match on the next analysis, and analysis cache / cast
    / audio are cleared. Book identity (bookId, dir, title/author/series, cover)
-   is untouched — this is NOT a re-import. */
+   is untouched — this is NOT a re-import. Refused with 409 `book_busy` while
+   any long job is registered for the book (#3717) — see the first check inside
+   the `withBookOp` callback. */
 bookStateRouter.post(
   '/:bookId/replace-manuscript',
   manuscriptUpload.single('file'),
@@ -1794,6 +1820,17 @@ bookStateRouter.post(
 
       const outcome = await withBookOp(req.params.bookId, async (book) => {
         const { bookDir } = book;
+
+        /* #3717 — refuse while ANY long job is registered for the book, FIRST:
+           a replace-manuscript deletes `cast.json` and the `audio/` directory
+           and resets revisions while that job may still be writing them (a
+           render exporting chapter audio, an analysis writing the cache).
+           `runBookJob` registers its token inside `withBookOp`, so this check
+           cannot race a registration. */
+        const kinds = bookJobKinds(book.bookId);
+        if (kinds.length > 0) {
+          return { status: 409, body: { error: busySentence(kinds, 'replace'), code: 'book_busy' } };
+        }
 
         /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
            writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
