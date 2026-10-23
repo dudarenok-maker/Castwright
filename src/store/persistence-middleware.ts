@@ -7,7 +7,8 @@
    Leaving a book sends its queued writes at once (#3395 pass 4, S3).
 
    Skipped when no bookId is in scope (library browsing, fresh upload
-   before confirm). Under VITE_USE_MOCKS, PUTs still flow — the mock api
+   before confirm), and when the slices hold a different book than the stage
+   (the window after openBook, before hydrate — #3624). Under VITE_USE_MOCKS, PUTs still flow — the mock api
    keeps an in-memory state map (MOCK_BOOK_STATES in src/lib/api.ts) so
    the round-trip works for design fixtures and jsdom tests. */
 
@@ -268,6 +269,17 @@ const PERSIST_RULES: Record<
 
 };
 
+/* Rules whose patch is keyed by the book itself, not by the loaded slices.
+   `bookMeta.saved` is a Record<bookId, …> and commitDraft's build indexes it
+   with the stage's book, so it can never carry another book's content. Gating
+   it would drop a correct edit and leave the optimistic `saved[A]` /
+   `lastCommitted` snapshot (#2230) claiming a save that never happened. */
+const BOOK_KEYED_RULES = new Set(['bookMeta/commitDraft']);
+
+/* Persisted action types, exported for tests only so a regression suite can
+   loop over every rule (including ones added later). */
+export const PERSISTED_ACTION_TYPES = Object.keys(PERSIST_RULES);
+
 function bookIdFromState(s: PersistableRootState): string | null {
   const stage = s.ui.stage as { bookId?: string };
   return stage.bookId ?? null;
@@ -418,6 +430,21 @@ export const persistenceMiddleware: Middleware = (store) => {
     const rule = PERSIST_RULES[type];
     if (!rule) return result;
     if (!bookId) return result;
+
+    /* #3624 — the patch is built from the slices as they are RIGHT NOW, but
+       the target comes from the stage. Between `openBook(A)` and A's hydrate
+       the stage says A while cast / manuscript / changeLog still hold B, so an
+       edit here would write B's content into A's files. `manuscript.bookId` is
+       the loaded-book identity (cast and changeLog hydrate in the same tick, so
+       it stands in for them — same proxy as preview-thunks, #3594). Drop the
+       write silently. A null identity records no other book, so it persists. */
+    const held = after.manuscript?.bookId ?? null;
+    if (held !== null && held !== bookId && !BOOK_KEYED_RULES.has(type)) {
+      console.warn(
+        `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,
+      );
+      return result;
+    }
 
     const key = flushKey(bookId, rule.slice);
     pending.set(key, rule.build(after, bookId));
