@@ -11,6 +11,7 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { updateStateAtDir } from '../workspace/book-state-update.js';
 import { coverImagePath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
@@ -165,8 +166,17 @@ export async function backgroundFetchCover(
       return;
     }
     const jpeg = await fetchCoverJpeg(top.coverUrl);
-    const dest = coverImagePath(bookDir);
-    if (!(await patchStateCover(bookDir, top, () => writeCoverFile(dest, jpeg)))) return;
+    /* #3711 — the fetch above ran outside any lock (it can be slow); the WRITE runs
+       under book-op, on the folder the book lives in NOW, so a rename that landed
+       while the fetch was in flight gets the cover in the new folder rather than a
+       recreated old one. `bookDir` is only the resolve hint. */
+    const written = await withBookOp(
+      bookId,
+      ({ bookDir: current }) =>
+        patchStateCover(current, top, () => writeCoverFile(coverImagePath(current), jpeg)),
+      { hintDir: bookDir },
+    );
+    if (written === BOOK_GONE || !written) return;
     console.log(`[cover] fetched ${top.id} (${top.source}) for ${bookId}`);
   } catch (e) {
     console.warn(`[cover] background fetch failed for ${bookId}: ${(e as Error).message}`);

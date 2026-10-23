@@ -34,6 +34,7 @@ let bookDir: string;
 let statePath: string;
 let withStateJsonLock: typeof import('../workspace/file-lock.js').withStateJsonLock;
 let waitersFor: typeof import('../workspace/file-lock.js').__stateJsonWaitersForTest;
+let bookOpWaiters: typeof import('../workspace/file-lock.js').__keyWaitersForTest;
 let saveAnalysisCache: typeof import('../store/analysis-cache.js').saveAnalysisCache;
 let loadAnalysisCache: typeof import('../store/analysis-cache.js').loadAnalysisCache;
 
@@ -64,6 +65,7 @@ beforeAll(async () => {
   ]);
   withStateJsonLock = lock.withStateJsonLock;
   waitersFor = lock.__stateJsonWaitersForTest;
+  bookOpWaiters = lock.__keyWaitersForTest;
   saveAnalysisCache = cache.saveAnalysisCache;
   loadAnalysisCache = cache.loadAnalysisCache;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
@@ -198,15 +200,18 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
     expect(moved.prosodyAnnotated).toBeUndefined();
   });
 
-  it('reparse queued behind a folder move -> 409, analysis cache intact, nothing written at the old path', async () => {
+  /* #3711 (PR #3714, merge-surfaced G) -- the moved book still exists, so the
+     reparse / replace-manuscript refusal is 409 `book_moved`, not 404. */
+  it('reparse queued behind a folder move -> 409 book_moved, analysis cache intact, nothing written at the old path', async () => {
     await saveAnalysisCache('m_absent', { chapters: { 1: [] } });
     const res = await queueBehind(() => request(app).post(`/api/books/${bookId}/reparse`), moveBook);
-    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_moved');
     expect(Object.keys((await loadAnalysisCache('m_absent')).chapters)).toEqual(['1']);
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript (SAME extension) queued behind a folder move -> 409, the moved book keeps its manuscript bytes', async () => {
+  it('replace-manuscript (SAME extension) queued behind a folder move -> 409 book_moved, the moved book keeps its manuscript bytes', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -214,12 +219,13 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n\nChapter 2\n\nMore.\n'), 'new.txt'),
       moveBook,
     );
-    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_moved');
     expect(readFileSync(join(movedDir(), 'manuscript.txt'), 'utf8')).toBe('Chapter 1\n\nSome text here.\n');
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript (DIFFERENT extension) queued behind a folder move -> 409, no orphan manuscript.md in the moved folder', async () => {
+  it('replace-manuscript (DIFFERENT extension) queued behind a folder move -> 409 book_moved, no orphan manuscript.md in the moved folder', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -227,12 +233,13 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n'), 'new.md'),
       moveBook,
     );
-    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_moved');
     expect(readdirSync(movedDir()).sort()).toEqual(['.audiobook', 'manuscript.txt']);
     expect(existsSync(bookDir)).toBe(false);
   });
 
-  it('replace-manuscript queued behind a folder move -> 409, the moved book keeps its manuscript file', async () => {
+  it('replace-manuscript queued behind a folder move -> 409 book_moved, the moved book keeps its manuscript file', async () => {
     const res = await queueBehind(
       () =>
         request(app)
@@ -240,7 +247,8 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
           .attach('file', Buffer.from('Chapter 1\n\nReplaced.\n'), 'new.md'),
       moveBook,
     );
-    expect(res.status).toBe(409); // the book still exists at its new folder (#3400 pass 11)
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_moved');
     const moved = JSON.parse(readFileSync(join(movedDir(), '.audiobook', 'state.json'), 'utf8')) as {
       manuscriptFile: string;
     };
@@ -368,6 +376,34 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
   it('DELETE queued behind a folder move deletes the MOVED book (not a 204 for a no-op)', async () => {
     const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), moveBook);
     expect(res.status).toBe(204);
+    expect(existsSync(movedDir())).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('DELETE queued behind a folder removal -> 204 and nothing is recreated (#3711)', async () => {
+    const res = await queueBehind(() => request(app).delete(`/api/books/${bookId}`), deleteBook);
+    expect(res.status).toBe(204);
+    expect(existsSync(bookDir)).toBe(false);
+    expect(existsSync(movedDir())).toBe(false);
+  });
+
+  it('DELETE queued behind an in-process rename PUT deletes the MOVED book (book-op ordering)', async () => {
+    /* #3711 — the move is a real in-process rename PUT: it holds book-op, so the
+       DELETE queues behind it on book-op (not on the old state-json key) and
+       resolves the book AFTER the move. The out-of-process variant above is
+       `removeBookFolder`'s own re-resolve under its lock. */
+    let renameRes!: Promise<request.Response>;
+    let deleteRes!: Promise<request.Response>;
+    await withStateJsonLock(statePath, async () => {
+      renameRes = Promise.resolve(
+        request(app).put(`/api/books/${bookId}/state`).send({ slice: 'state', patch: { title: MOVED_TITLE } }),
+      );
+      await waitUntilQueued(statePath);
+      deleteRes = Promise.resolve(request(app).delete(`/api/books/${bookId}`));
+      while (bookOpWaiters(`book-op:${bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
+    });
+    expect((await renameRes).status).toBe(204);
+    expect((await deleteRes).status).toBe(204);
     expect(existsSync(movedDir())).toBe(false);
     expect(existsSync(bookDir)).toBe(false);
   });

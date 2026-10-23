@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { withCastLock } from './cast-lock.js';
+import { withBookOp } from './book-op-lock.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import type { BookStateJson } from './scan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
@@ -109,8 +110,10 @@ export async function scanLibraryVoiceUsage(voiceUuid: string): Promise<LibraryV
     locking) still holds because nothing else in this call chain also takes
     a cast lock. */
 export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<void> {
-  for await (const { bookDir } of walkConfirmedCasts()) {
-    await withCastLock(bookDir, async () => {
+  /* The per-book read-through-write, under that book's cast lock. Its caller holds
+     the book's book-op (a book with an id) or nothing (one without). */
+  const clearBook = (bookDir: string): Promise<void> =>
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastJson>(castJsonPath(bookDir));
       if (!cast) return;
 
@@ -135,5 +138,36 @@ export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<vo
         await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
       }
     });
+
+  /* #3711 -- the caller (DELETE /:voiceUuid) holds the library-voice lock, so
+     the lock order is library-voice -> book-op -> cast, taken PER BOOK, one
+     book-op at a time (never nested). The book is resolved under its book-op
+     and the scope (still a confirmed cast) re-checked on the fresh state, so a
+     book deleted since the walk saw it is skipped; a rename queued behind this
+     write lands after it. Books already written are remembered by their
+     RESOLVED folder, not their bookId: a book that moved, between the
+     lock-free scan and its step, into a folder the walk has yet to reach
+     resolves to the folder already written and is skipped there, while the
+     twins of a duplicated bookId resolve to different folders and both get the
+     write (PR #3714 review pass 1). A book that moves into a later folder AFTER
+     its step is reached and cleared again -- harmless, the clear is idempotent. */
+  const seen = new Set<string>();
+  for await (const { bookDir, state } of walkConfirmedCasts()) {
+    if (!state.bookId) {
+      /* No bookId: the resolver can never match this book, so no route can move
+         it -- it still gets the write, under its cast lock alone. */
+      await clearBook(bookDir);
+      continue;
+    }
+    await withBookOp(
+      state.bookId,
+      async (b) => {
+        if (seen.has(b.bookDir)) return;
+        seen.add(b.bookDir);
+        if (!b.state.castConfirmed) return;
+        await clearBook(b.bookDir);
+      },
+      { hintDir: bookDir },
+    );
   }
 }

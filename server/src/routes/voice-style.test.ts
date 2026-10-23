@@ -163,6 +163,24 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-style/generate', () =>
     expect(res.body.error).toMatch(/GEMINI_API_KEY/);
   });
 
+  /* #3711 PR #3714 — a node fs error's message embeds the absolute path it
+     failed on; the 500 body must not carry it (LAN HTTPS). */
+  it('answers a curated 500 for a node fs error, never its path', async () => {
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const path = join(workspaceRoot, 'books', 'x', '.audiobook', 'cast.json');
+    generateVoiceStylePersona.mockRejectedValue(
+      Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), {
+        code: 'EBUSY',
+        syscall: 'open',
+        path,
+      }),
+    );
+    const res = await request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('EBUSY');
+  });
+
   /* #1981 — two concurrent /generate calls for DIFFERENT characters in the
      SAME book race that book's cast.json. Unlocked, both requests' readJson
      resolve before either writeJsonAtomic lands, so the later write replays

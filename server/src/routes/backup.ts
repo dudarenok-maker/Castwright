@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { listBackups, backupBook, restoreBackup, BackupRestoreError } from '../workspace/auto-backup.js';
 import { getResolvedBackupConfig } from '../workspace/user-settings.js';
 
@@ -20,14 +21,14 @@ backupRouter.get('/:bookId/backups', async (req: Request, res: Response) => {
 
 backupRouter.post('/:bookId/backups/now', async (req: Request, res: Response) => {
   const { bookId } = req.params;
-  const found = await findBookByBookId(bookId);
-  if (!found) return res.status(404).json({ error: 'book not found' });
   const { retention } = getResolvedBackupConfig();
-  /* No minIntervalMs → force a snapshot regardless of cadence. */
-  const file = await backupBook(
-    { bookId, bookDir: found.bookDir },
-    { keep: retention, now: new Date() },
+  /* #3711 — under the book's `book-op` lock, resolved UNDER it, so the snapshot
+     reads the folder the book is in NOW (a rename queued ahead of it has landed). */
+  const file = await withBookOp(bookId, (found) =>
+    /* No minIntervalMs → force a snapshot regardless of cadence. */
+    backupBook({ bookId, bookDir: found.bookDir }, { keep: retention, now: new Date() }),
   );
+  if (file === BOOK_GONE) return res.status(404).json({ error: 'book not found' });
   if (!file) return res.status(409).json({ error: 'no state.json to back up' });
   res.json({ ok: true, file });
 });
@@ -37,7 +38,11 @@ backupRouter.post('/:bookId/backups/restore', async (req: Request, res: Response
   const file = (req.body as { backupFile?: unknown })?.backupFile;
   if (typeof file !== 'string') return res.status(400).json({ error: 'backupFile required' });
   try {
-    await restoreBackup(bookId, file);
+    /* #3711 — the restore overwrites state.json, so it runs under the book's
+       `book-op` lock and a folder rename can't interleave (`restoreBackup`
+       resolves the folder itself, now under the lock). */
+    const outcome = await withBookOp(bookId, () => restoreBackup(bookId, file));
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'book not found' });
     res.json({ ok: true });
   } catch (err) {
     if (err instanceof BackupRestoreError) {

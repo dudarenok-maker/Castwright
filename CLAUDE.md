@@ -581,36 +581,65 @@ Design rationale:
   level only, a locked function must not call another locked function on the
   same book; (2) the read goes inside the lock, and so does every decision
   derived from it — wrapping only the write buys nothing at all; (3) two or
-  more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
-  order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests deadlock. The per-book
-  `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
-  outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. The per-book `book` lock
-  (`workspace/book-lock.ts`, #3400) sits between them, and the per-book
-  `state-json` lock (`withStateJsonLock`, `workspace/file-lock.ts`, #3700) is
-  the innermost **leaf** — the full order is
-  **`design` → `library-voice` → `cast` → `book` → `state-json`**, with `revisions`
-  a separate leaf beside it (never nested with `state-json`). `book` may be taken
-  while holding `cast` (the cast merge's `manuscript-edits.json` rewrite), but no
-  holder of it may take `cast`, `design` or `library-voice`; it is the
-  operation-level lock a chapter restructure holds across its read -> multi-file
-  write, and every `state.json` read-modify-write that derives from a read goes
-  through it (`workspace/book-state-update.ts`, enforced by
-  `workspace/state-lock.guard.test.ts`). `state-json` is taken INSIDE `book`
-  (or alone, by the paths that hold no `book`: `DELETE`, the bundle-import overwrite
-  (`scan-import-folder.ts`), import / samples creation, reparse's presence gate, the
-  render finalize and the generation failure persist), only
-  around the fresh re-read + write (`updateStateJsonLocked`, `state-migrate.ts`);
-  nothing else is taken while it is held — the one nesting is the folder-renaming
-  PUT, which also keys the destination path's `state-json`. The read goes inside
+  more books → `withCastLocks`, never nested `withCastLock`s; (4) the global
+  lock order is **`design` → `library-voice` → `book-op` → `book-path-claim` →
+  `cast` → `book` → `state-json`**, with `cast` → `cast-id-history` — never
+  acquire an earlier class while holding a later one, or two requests
+  deadlock. The per-book `revisions` lock (`workspace/revisions-store.ts`,
+  plan 285) is a **leaf** outside that chain: nothing but revisions.json is
+  written under it and no other lock is taken while it is held (never nested
+  with `state-json`). The per-book `book` lock (`workspace/book-lock.ts`,
+  #3400) is NOT the same lock as `book-op` (below): `book-op` is the
+  operation-and-move lock, `book` the narrower state.json /
+  manuscript-edits.json consistency lock — keyed by bookId, re-entrant within
+  one async context, no acquisition timeout, and **always taken inside
+  `book-op`** (or by a path that holds no `book-op`, such as the scan's
+  self-heal); **no `book` holder ever takes `book-op`, and no path takes
+  `book` before `cast`**. `book` may be taken while holding `cast` (the cast
+  merge's `manuscript-edits.json` rewrite), but no holder of it may take
+  `cast`, `design` or `library-voice`; it is the lock a chapter restructure
+  holds across its read -> multi-file write (inside `book-op` and the
+  `restructure-gate` claim: `book-op` → gate → `book`), and every
+  `state.json` read-modify-write that derives from a read goes through it
+  (`workspace/book-state-update.ts`, enforced by
+  `workspace/state-lock.guard.test.ts`). `moveBookFolder` takes it itself,
+  inside the path claim. The per-book `state-json` lock (`withStateJsonLock`,
+  `workspace/file-lock.ts`, #3700) is the innermost **leaf**: taken INSIDE
+  `book` (or alone, by the paths that hold no `book`: `DELETE`, the
+  bundle-import overwrite (`scan-import-folder.ts`), import / samples
+  creation, reparse's presence gate, the render finalize and the generation
+  failure persist), only around the fresh re-read + write
+  (`updateStateJsonLocked`, `state-migrate.ts`); nothing else is taken while
+  it is held — the one nesting is the folder move, which also keys the
+  destination path's `state-json`. The read goes inside
   it, an absent `state.json` answers 404 and writes nothing, and
   `workspace/state-json-lock.guard.test.ts` fails the build on an unlocked
   `writeStateJsonAtomic`. Accept/reject and `restore-unrecorded`
   additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
-  while holding `revisions`. Since #2260 that
+  while holding `revisions`. **The per-book operation lock `book-op:<bookId>`
+  (`withBookOp`/`withBookOps`, `workspace/book-op-lock.ts`, plan 288, #3711)
+  is what stops a folder rename/delete splitting a book across two folders.**
+  `revisions`, `state-json`, `revision-op`, `listen-stats` and
+  `script-review-ledger` all nest under it (the first two as leaves). Every
+  `/:bookId` write is **quick** or **long**: a quick operation (everything that
+  writes the book folder, including bounded sidecar calls) holds book-op for its
+  whole span; a long one (an unbounded model/sidecar/LLM call, an unbounded wait,
+  a whole-book encode/archive) holds none and registers only through
+  `runBookJob` (`workspace/book-jobs.ts`) — the sole registration function, so
+  every exit path releases — and a rename/delete of that book is then refused
+  with a 409 `book_busy`. A quick operation that must do slow, write-free prep
+  first may `peekBook` (lock-free, never feeds a write), then re-resolve and
+  re-validate inside `withBookOp` (the two-span pattern); otherwise nothing
+  resolves a book before its lock. **Never nest `withBookOp`** — two or more
+  books go through `withBookOps`, a walker takes one book's book-op per step —
+  and never call `runBookJob`, `withDesignLock` or `withLibraryVoiceLock`
+  while holding one. Book folders are only moved/removed through
+  `moveBookFolder`/`removeBookFolder`, which demand a live book-op handle.
+  `workspace/book-op-lock.guard.test.ts` fails the build on a mover outside
+  those, an unguarded `/:bookId` write handler, a resolve before the lock, or
+  a long-job file missing its `runBookJob`. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
@@ -684,11 +713,22 @@ Design rationale:
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
-  and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twenty-one sites (`book-state` ×4, `voice-library` ×3,
-  `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
-  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  and leaves every other body verbatim, or its sibling `requestFailureMessageFs`,
+  which also answers a fixed path-free sentence for a node fs error (a `code`
+  plus `syscall`/`path`: write EBUSY / ENOSPC / EPERM embed the absolute path
+  too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
+  and is what the whole-request handlers in `book-state`,
+  `chapters-restructure`, `cover`, `voice-library`, `voices`, `import` and
+  `samples` (and `voice-style`'s single generate) whose fallback is the
+  error's own message use (#3711) —
+  `git grep requestFailureMessage` matches both and enumerates all
+  seventy-eight call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  `chapters-restructure` ×6, `cast-design` ×4
+  (both arms of its defensive outer plus the job's two terminal `error` events),
+  `voices` ×4, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
+  `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
+  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
@@ -701,8 +741,9 @@ Design rationale:
   so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
-  final round) — except downstream of `withStateJsonLock` alone, which already
-  curates its own message. See each site's own comment.
+  final round) — except downstream of `withStateJsonLock` or `withBookOp`
+  alone, each of which already curates its own message (`withBookOp` keeps the
+  timeout `code` too). See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

@@ -1666,6 +1666,8 @@ describe('plan 286 — restructure drops stale A/B entries', () => {
     err.mockRestore();
     expect(res.status).toBe(200);
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(errorCalls).toBeGreaterThan(0);
   });
 });
@@ -2407,6 +2409,8 @@ describe('restructure while an analysis job runs', () => {
         expect(res.body.code).toBe('analysis_running');
         expect(res.body.error).toMatch(/analysis/i);
         expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+        /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+        expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
         expect(stateBefore()).toBe(s);
         expect(editsBefore()).toBe(e);
       } finally {
@@ -2540,5 +2544,54 @@ describe('the manuscript slice of the state PUT waits for the book lock (#3400)'
     expect(readEdits().sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe(
       'Edited while held.',
     );
+  });
+});
+
+/* #3711 reconciled with #3594 -- a restructure takes its locks in the order
+   book-op -> restructure gate -> book: while a `book`-only holder (the scan's
+   self-heal shape) owns the book lock, the restructure has already claimed
+   book-op (a second book-op caller queues) and the analysis gate, and has
+   written nothing. */
+describe('a restructure takes book-op, then the gate, then the book lock (#3711)', () => {
+  it('holds book-op and the gate while it waits for the book lock, then lands', async () => {
+    const { withBookLock } = await import('../workspace/book-lock.js');
+    const { isRestructuring } = await import('../workspace/restructure-gate.js');
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
+    /* Settle the scan's self-heal writes first (they take the book lock). */
+    const { findBookByBookId } = await import('../workspace/scan.js');
+    await findBookByBookId(bookId);
+    const before = readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8');
+
+    let release!: () => void;
+    let entered!: () => void;
+    const holderIn = new Promise<void>((r) => (entered = r));
+    const holder = withBookLock(bookId, async () => {
+      entered();
+      await new Promise<void>((r) => (release = r));
+    });
+    await holderIn;
+
+    const merge = request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] })
+      .then((r) => r);
+    await vi.waitFor(() => expect(isRestructuring(MANUSCRIPT_ID)).toBe(true), { timeout: 5_000 });
+
+    let sawChapters = -1;
+    const queued = withBookOp(bookId, async (b) => {
+      sawChapters = b.state.chapters.length;
+    });
+    await vi.waitFor(() => expect(__keyWaitersForTest(`book-op:${bookId}`)).toBeGreaterThanOrEqual(1), {
+      timeout: 5_000,
+    });
+    expect(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')).toBe(before);
+
+    release();
+    await holder;
+    expect((await merge).status).toBe(200);
+    await queued;
+    expect(sawChapters).toBe(2);
+    expect(isRestructuring(MANUSCRIPT_ID)).toBe(false);
   });
 });

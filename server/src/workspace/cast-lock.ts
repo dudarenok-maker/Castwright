@@ -15,13 +15,22 @@
  *   2. The read goes inside the lock, and so does every decision derived from
  *      it. Wrapping only the write buys nothing at all.
  *   3. Two or more books -> withCastLocks, never nested withCastLocks.
- *   4. Global lock order: design -> library-voice -> cast. Never acquire an
- *      earlier class while holding a later one. The DELETE library-voice path
- *      holds `library-voice:<uuid>` across clearLibraryVoiceReferences, which
- *      takes a cast lock per book — so POST /assign must take library-voice
- *      BEFORE its cast lock, not after. The other order is an AB/BA cycle:
- *      both requests block until one of them hits `withKeyLock`'s acquisition
- *      timeout.
+ *   4. Global lock order: design -> library-voice -> book-op -> book-path-claim
+ *      -> cast -> book -> state-json, with cast -> cast-id-history (#3711
+ *      inserted book-op and book-path-claim, see workspace/book-op-lock.ts;
+ *      #3594's per-book `book` lock, workspace/book-lock.ts, sits after cast
+ *      and is always taken inside book-op). Never acquire an earlier class while
+ *      holding a later one. The DELETE library-voice path holds
+ *      `library-voice:<uuid>` across clearLibraryVoiceReferences, which takes
+ *      `book-op` then a cast lock per book — so POST /assign must take
+ *      library-voice BEFORE its book-op and cast lock, not after. The other
+ *      order is an AB/BA cycle: both requests block until one of them hits
+ *      `withKeyLock`'s acquisition timeout. Never nest `withBookOp`; two or
+ *      more books go through `withBookOps`.
+ *
+ *      The per-book revisions, state-json, revision-op, listen-stats and
+ *      script-review-ledger locks all nest UNDER book-op; the leaf notes below
+ *      still hold.
  *
  *      The per-book REVISIONS lock (`revisions:<abs bookDir>`,
  *      revisions-store.ts, plan 285) is a LEAF outside this order: its holder

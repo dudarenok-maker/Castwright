@@ -11,6 +11,9 @@ import {
   LOCK_CONTENTION_ITEM_REASON,
   requestFailureMessage,
   LOCK_CONTENTION_REQUEST_ERROR,
+  requestFailureMessageFs,
+  FS_FAILURE_REQUEST_ERROR,
+  FS_PERMANENT_FAILURE_REQUEST_ERROR,
 } from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
@@ -422,5 +425,77 @@ describe('__stateJsonWaitersForTest (#3700)', { retry: 0 }, () => {
     release();
     await Promise.all([holder, w1, w2]);
     expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+  });
+});
+
+/* #3711 PR #3714 -- a node fs error (write EBUSY / ENOSPC / EPERM) carries the
+   absolute path it failed on in its message, and the book routes used to answer
+   that message verbatim over LAN HTTPS. `requestFailureMessageFs` is
+   `requestFailureMessage` plus that class. */
+describe('requestFailureMessageFs (#3711)', () => {
+  const fsError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
+    Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, syscall, path, errno: -4082 });
+
+  it('curates a node fs error, whatever its code', () => {
+    const path = 'C:\\Users\\me\\books\\A\\S\\T\\.audiobook\\state.json';
+    for (const code of ['EBUSY', 'ENOSPC', 'EPERM', 'EACCES', 'EIO', 'EROFS', 'EAGAIN', 'EMFILE']) {
+      const body = requestFailureMessageFs(fsError(code, 'open', path), 'Merge failed.');
+      expect([FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]).toContain(body);
+      expect(body).not.toContain('C:');
+      expect(body).not.toContain(code);
+    }
+    /* `path` alone, or `syscall` alone, is enough to recognise the class. */
+    expect(
+      requestFailureMessageFs(Object.assign(new Error(`EBUSY '${path}'`), { code: 'EBUSY', path }), 'x'),
+    ).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(
+      requestFailureMessageFs(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC', syscall: 'write' }), 'x'),
+    ).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+  });
+
+  /* PR #3714 review pass 5 -- a retry cannot fix a full disk or a permission
+     error, so their body never says "Try again"; a transient one still does. */
+  it('says "Try again" only for a transient fs error', () => {
+    const path = 'C:\\w\\state.json';
+    for (const code of ['ENOSPC', 'EACCES', 'EROFS']) {
+      const body = requestFailureMessageFs(fsError(code, 'write', path), 'x');
+      expect(body).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+      expect(body).not.toMatch(/try again/i);
+    }
+    for (const code of ['EBUSY', 'EPERM', 'EIO', 'EAGAIN', 'EMFILE']) {
+      expect(requestFailureMessageFs(fsError(code, 'open', path), 'x')).toBe(FS_FAILURE_REQUEST_ERROR);
+    }
+    expect(FS_FAILURE_REQUEST_ERROR).toMatch(/Try again/);
+  });
+
+  it('still curates a lock-acquisition expiry exactly as requestFailureMessage does', () => {
+    expect(
+      requestFailureMessageFs(new LockAcquisitionTimeoutError('C:\\w\\cast.json', 10_000), 'x'),
+    ).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
+  it('passes a deliberate message through verbatim', () => {
+    expect(requestFailureMessageFs(new Error('Chapter 9 not found'), 'Chapter 9 not found')).toBe(
+      'Chapter 9 not found',
+    );
+    /* A coded error that is not a node fs error (no syscall, no path). */
+    expect(
+      requestFailureMessageFs(Object.assign(new Error('nope'), { code: 'EPERM' }), 'nope'),
+    ).toBe('nope');
+    expect(requestFailureMessageFs(null, 'Failed to toggle held.')).toBe('Failed to toggle held.');
+  });
+
+  it('the curated body names no path, syscall or code', () => {
+    for (const body of [FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]) {
+      expect(body).not.toMatch(/[A-Z]:\\|\/|E[A-Z]{3,}|\bopen\b|\bwrite\b/);
+    }
+  });
+
+  /* PR #3714 review pass 6 -- the voice library, the voices catalog and
+     POST /import answer these bodies too, and none of them has a book. */
+  it('the curated body names no book', () => {
+    for (const body of [FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]) {
+      expect(body).not.toMatch(/\bbook/i);
+    }
   });
 });

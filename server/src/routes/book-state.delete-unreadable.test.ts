@@ -72,6 +72,20 @@ beforeEach(async () => {
   );
 });
 
+/** Event-based (PR #3714): resolve once `queued()` reports the DELETE genuinely
+ *  waiting on the held lock, never a fixed sleep. Releases the holder on timeout
+ *  so a failure does not leave the lock held for the next test. */
+async function waitUntilQueued(queued: () => number, release: () => void, what: string): Promise<void> {
+  const deadline = Date.now() + 8000;
+  while (queued() < 1) {
+    if (Date.now() > deadline) {
+      release();
+      throw new Error(`timed out waiting for the DELETE to queue on ${what}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 describe('DELETE /api/books/:bookId on an unreadable book', () => {
   it('precondition: the torn book is listed as unreadable', async () => {
     const b = (await listed()).find((x) => x.bookId === tornId);
@@ -100,6 +114,39 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(freshDir)).toBe(false);
     expect((await listed()).some((b) => b.bookId === freshId)).toBe(false);
     expect(existsSync(tornDir)).toBe(true);
+  });
+
+  /* #3711 merge with #3625: a stateless book has no bookId-bearing state, so
+     `withBookOp` cannot lock it; its removal is judged and run under the
+     workspace path claim instead (every creator and mover holds it), so a
+     creator mid-way through laying a book down at that path cannot have the
+     folder removed under it. */
+  it('removes a not_analysed book only once the book path claim is free', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const { withBookPathClaim } = await import('../workspace/book-op-lock.js');
+    const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
+    const fresh = 'Claimed Fresh Book';
+    const freshDir = join(workspaceRoot, 'books', AUTHOR, SERIES, fresh);
+    mkdirSync(freshDir, { recursive: true });
+    writeFileSync(join(freshDir, 'manuscript.txt'), 'x');
+    let release!: () => void;
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withBookPathClaim(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
+    const del = request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, fresh)}`).then((r) => r);
+    await waitUntilQueued(() => __keyWaitersForTest('book-path-claim'), release, 'the book path claim');
+    expect(existsSync(freshDir)).toBe(true);
+    release();
+    await held;
+    expect((await del).status).toBe(204);
+    expect(existsSync(freshDir)).toBe(false);
   });
 
   /* #3625 delta review 3 (M13): the status filter is the only thing that stops
@@ -196,13 +243,23 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     const located = await findBookByBookId(healthyId);
     expect(located?.bookDir).toBe(healthyDir);
     const statePath = join(healthyDir, '.audiobook', 'state.json');
-    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
     /* Hold the book's lock, start the DELETE (it resolves the folder, then
        queues on the lock), and swap another book's state in before releasing. */
     let release!: () => void;
-    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete(`/api/books/${healthyId}`).then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    await waitUntilQueued(() => __stateJsonWaitersForTest(statePath), release, 'the state-json lock');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -228,7 +285,7 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
      state's bookId differs from the folder-derived id, so the stateless fallback
      cannot remove it instead: only the in-lock branch can. */
   it('removes the folder when its state (main and every backup) is torn while the DELETE waits on the lock', async () => {
-    const { withStateJsonLock } = await import('../workspace/file-lock.js');
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
     const title = 'Torn While Waiting';
     const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
     const statePath = join(dir, '.audiobook', 'state.json');
@@ -247,9 +304,19 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
       }),
     );
     let release!: () => void;
-    const held = withStateJsonLock(statePath, () => new Promise<void>((r) => (release = r)));
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
     const del = request(app).delete('/api/books/torn-while-waiting-id').then((r) => r);
-    await new Promise((r) => setTimeout(r, 200));
+    await waitUntilQueued(() => __stateJsonWaitersForTest(statePath), release, 'the state-json lock');
     writeFileSync(statePath, '{ torn');
     writeFileSync(`${statePath}.bak.1`, '{ torn');
     release();
@@ -258,6 +325,62 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(res.status).toBe(204);
     expect(existsSync(dir)).toBe(false);
     expect(existsSync(healthyDir)).toBe(true);
+  });
+
+  /* #3711 pass 4: a stateless book that becomes a real book (a state with a
+     bookId lands) while the DELETE waits on the state-json lock is no longer
+     stateless - removing it would bypass that id's book-op lock. */
+  it('refuses 409 book_changed when the stateless folder gains a real bookId while the DELETE waits', async () => {
+    const { withStateJsonLock, __stateJsonWaitersForTest } = await import('../workspace/file-lock.js');
+    const { makeBookId } = await import('../workspace/paths.js');
+    const title = 'Becomes Real';
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    const statePath = join(dir, '.audiobook', 'state.json');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'manuscript.txt'), 'x');
+    let release!: () => void;
+    let acquired!: () => void;
+    const holding = new Promise<void>((r) => (acquired = r));
+    const held = withStateJsonLock(
+      statePath,
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+          acquired();
+        }),
+    );
+    await holding;
+    const del = request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, title)}`).then((r) => r);
+    /* Event-based (PR #3714 review pass 4): wait until the DELETE is genuinely
+       queued on this folder's state-json lock, never a fixed sleep. */
+    const deadline = Date.now() + 8000;
+    while (__stateJsonWaitersForTest(statePath) < 1) {
+      if (Date.now() > deadline) {
+        release();
+        throw new Error('timed out waiting for the DELETE to queue on the state-json lock');
+      }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        bookId: 'now-a-real-book',
+        manuscriptId: 'm_real',
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    release();
+    await held;
+    const res = await del;
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_changed');
+    expect(existsSync(dir)).toBe(true);
   });
 
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {

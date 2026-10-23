@@ -41,7 +41,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook, withBookOps } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
@@ -79,12 +79,12 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
     return res.status(400).json({ error: 'Source and target must differ — nothing to override.' });
   }
 
-  const sourceLocated = await findBookByBookId(sourceBookId);
-  if (!sourceLocated)
-    return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
-  const targetLocated = await findBookByBookId(targetBookId);
-  if (!targetLocated)
-    return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
+  /* #3711 -- both books' book-op (sorted, deduped: the same-book case is one
+     handle), then both cast locks; the handles are resolved UNDER the locks so a
+     rename of either book lands after this. */
+  const outcome = await withBookOps([sourceBookId, targetBookId], async (books) => {
+  const sourceLocated = books.find((b) => b.bookId === sourceBookId)!;
+  const targetLocated = books.find((b) => b.bookId === targetBookId)!;
 
   /* #1981 (Task 8) — this route writes up to two books' cast.json.
      withCastLocks dedupes+sorts, so the same-book case below (its guard
@@ -175,6 +175,15 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
 
     return res.json({ source: mergedSource, target: mergedTarget });
   });
+  });
+  if (outcome === BOOK_GONE) {
+    /* Which side vanished only matters for the sentence; peekBook is read-only. */
+    const source = await peekBook(sourceBookId);
+    return res.status(404).json({
+      error: source ? `Target book "${targetBookId}" not found.` : `Source book "${sourceBookId}" not found.`,
+    });
+  }
+  return outcome;
 });
 
 /* Shared merge derivation for both the same-book and cross-book branches

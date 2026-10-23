@@ -29,7 +29,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, peekBook, withBookOps } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
@@ -89,35 +89,35 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     });
   }
 
-  const sourceLocated = await findBookByBookId(sourceBookId);
-  if (!sourceLocated)
-    return res.status(404).json({ error: `Source book "${sourceBookId}" not found.` });
-  const targetLocated = await findBookByBookId(targetBookId);
-  if (!targetLocated)
-    return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
+  /* #3711 -- both books' book-op (sorted, so the opposite-role call cannot AB/BA),
+     then both cast locks; the handles are resolved UNDER the locks, so a rename
+     of either book queued behind this call lands after it. */
+  const outcome = await withBookOps([sourceBookId, targetBookId], async (books) => {
+    const sourceLocated = books.find((b) => b.bookId === sourceBookId)!;
+    const targetLocated = books.find((b) => b.bookId === targetBookId)!;
 
-  /* Series-scope guard: same author + series, neither standalone.
-     Mirrors the filter scanSeriesCharactersForBookId applies, so the
-     frontend's dropdown and the server's accept-set stay aligned. */
-  if (
-    sourceLocated.state.author !== targetLocated.state.author ||
-    sourceLocated.state.series !== targetLocated.state.series ||
-    sourceLocated.state.isStandalone === true ||
-    targetLocated.state.isStandalone === true
-  ) {
-    return res.status(404).json({
-      error: 'Target book is not a series-mate of the source book.',
-    });
-  }
+    /* Series-scope guard: same author + series, neither standalone.
+       Mirrors the filter scanSeriesCharactersForBookId applies, so the
+       frontend's dropdown and the server's accept-set stay aligned. */
+    if (
+      sourceLocated.state.author !== targetLocated.state.author ||
+      sourceLocated.state.series !== targetLocated.state.series ||
+      sourceLocated.state.isStandalone === true ||
+      targetLocated.state.isStandalone === true
+    ) {
+      return res.status(404).json({
+        error: 'Target book is not a series-mate of the source book.',
+      });
+    }
 
-  /* #1981 (Task 8) — this route touches TWO books' cast.json (target's
-     aliases write, source's profile/voice write). withCastLocks holds both
-     for the whole read-through-write span, sorted so a concurrent call with
-     the books in the opposite role (this book as someone else's target)
-     can't AB/BA against it. The read and every decision derived from it
-     (aliasesChanged, voiceIdChanged, shouldDenormaliseVoice, profileChanged)
-     live inside the lock, per rule 2. */
-  return withCastLocks([sourceLocated.bookDir, targetLocated.bookDir], async () => {
+    /* #1981 (Task 8) -- this route touches TWO books' cast.json (target's
+       aliases write, source's profile/voice write). withCastLocks holds both
+       for the whole read-through-write span, sorted so a concurrent call with
+       the books in the opposite role (this book as someone else's target)
+       can't AB/BA against it. The read and every decision derived from it
+       (aliasesChanged, voiceIdChanged, shouldDenormaliseVoice, profileChanged)
+       live inside the lock, per rule 2. */
+    return withCastLocks([sourceLocated.bookDir, targetLocated.bookDir], async () => {
     const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
     const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
     if (!sourceCast?.characters?.length) {
@@ -291,7 +291,16 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
           }
         : undefined,
     });
+    });
   });
+  if (outcome === BOOK_GONE) {
+    /* Which side vanished only matters for the sentence; peekBook is read-only. */
+    const source = await peekBook(sourceBookId);
+    return res.status(404).json({
+      error: source ? `Target book "${targetBookId}" not found.` : `Source book "${sourceBookId}" not found.`,
+    });
+  }
+  return outcome;
 });
 
 /* Build the aliases list to write back on target. Identical to

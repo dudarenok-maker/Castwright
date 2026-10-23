@@ -137,7 +137,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { retireCharacterId, loadCastIdHistory } from '../store/cast-id-history.js';
@@ -245,9 +245,10 @@ castLinkOrphanRouter.post(
       return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-    const { bookDir } = located;
+    /* #3711 — book-op outermost, held across the whole span: the alias +
+       edge-cleanup writes below (each under its own cast lock) hit the folder
+       resolved here, even when a rename is queued behind this request. */
+    const outcome = await withBookOp(bookId, async ({ bookDir }) => {
 
     /* Decision 3 — plain, unlocked read: this read only validates that
        `characterId` is a live character (404 otherwise) and is never paired
@@ -384,6 +385,11 @@ castLinkOrphanRouter.post(
       resolution: resolution?.via ?? null,
       resolvedCharacterId: resolution?.character.id,
     });
+    });
+    if (outcome === BOOK_GONE) {
+      return res.status(404).json({ error: `Book "${bookId}" not found.` });
+    }
+    return outcome;
   },
 );
 

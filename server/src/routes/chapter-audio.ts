@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
@@ -408,27 +409,28 @@ chapterAudioRouter.post(
     }
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId)) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
-    const chapter = located.state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
+    /* #3711 — book-op outermost (book-op -> revision-op): the pending check and
+       the audio step run in the folder resolved under the lock, even with a
+       rename queued behind. */
+    let outcome: 'restored' | 'none' | 'not-found' | 'has-revision' | 'revisions-unreadable';
     try {
-      if (await hasPendingForChapter(located.bookDir, located.state.chapters, chapter.id)) {
-        return res.status(409).json({
-          error: 'has_revision',
-          message: "This chapter has an older pending review — resolve it from the chapter's review first.",
-        });
-      }
-    } catch (e) {
-      console.error('[chapter-audio] restore-unrecorded: revisions.json unreadable', e);
-      return res.status(500).json({ error: "Couldn't read this chapter's review state." });
-    }
-    const root = audioDir(located.bookDir);
-    let outcome: 'restored' | 'none';
-    try {
-      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-        restorePreviousAudio(root, chapter.slug),
-      );
+      const done = await withBookOp(req.params.bookId, async (located) => {
+        const chapter = located.state.chapters.find((c) => c.id === chapterId);
+        if (!chapter) return 'not-found' as const;
+        try {
+          if (await hasPendingForChapter(located.bookDir, located.state.chapters, chapter.id)) {
+            return 'has-revision' as const;
+          }
+        } catch (e) {
+          console.error('[chapter-audio] restore-unrecorded: revisions.json unreadable', e);
+          return 'revisions-unreadable' as const;
+        }
+        const root = audioDir(located.bookDir);
+        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+          restorePreviousAudio(root, chapter.slug),
+        );
+      });
+      outcome = done === BOOK_GONE ? 'not-found' : done;
     } catch (e) {
       console.error('[chapter-audio] restore-unrecorded failed', e);
       if (isLockAcquisitionTimeout(e)) {
@@ -436,6 +438,14 @@ chapterAudioRouter.post(
       }
       return res.status(500).json({ error: 'restore_failed', message: "Couldn't restore the earlier take — try Reject again." });
     }
+    if (outcome === 'not-found') return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
+    if (outcome === 'has-revision') {
+      return res.status(409).json({
+        error: 'has_revision',
+        message: "This chapter has an older pending review — resolve it from the chapter's review first.",
+      });
+    }
+    if (outcome === 'revisions-unreadable') return res.status(500).json({ error: "Couldn't read this chapter's review state." });
     if (outcome === 'none') return res.status(404).json({ error: 'no_previous_audio', message: 'No preserved previous audio.' });
     return res.status(204).end();
   },

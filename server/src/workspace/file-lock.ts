@@ -49,9 +49,16 @@ const waiters = new Map<string, number>();
    withCastLocks quirk): every nested acquisition adds one full budget, so the
    effective worst case is depth x this. withCastLocks chains one withKeyLock
    per book, so a two-book route is 2 deep; voice-library.ts's POST /assign
-   takes `library-voice:<uuid>` then a cast lock, so it is 2 deep; and its
-   DELETE path holds `library-voice:<uuid>` while clearLibraryVoiceReferences
-   takes a cast lock per confirmed book, so it is N+1 deep for N books. */
+   takes `library-voice:<uuid>` then the target book's `book-op:<bookId>` then a
+   cast lock (#3711), so it is 3 deep; and its DELETE path holds
+   `library-voice:<uuid>` while clearLibraryVoiceReferences takes, per confirmed
+   book, `book-op` then a cast lock (library-voice -> book-op -> cast, one book
+   at a time), so it is 2N+1 acquisitions for N books. A book-op never nests
+   inside another book-op: two or more books go through withBookOps. The
+   per-book `book` lock (book-lock.ts) is NOT a withKeyLock and adds no budget:
+   it has no acquisition timeout, so only the `state-json` leaf inside it bounds
+   a wait there. Full order: design -> library-voice -> book-op ->
+   book-path-claim -> cast -> book -> state-json. */
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
 
 /** Stable discriminator carried by `LockAcquisitionTimeoutError`. */
@@ -219,6 +226,43 @@ export function requestFailureMessage(err: unknown, fallback: string): string {
   return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_REQUEST_ERROR : fallback;
 }
 
+/* #3711 PR #3714 -- the body for a node fs error (EBUSY / ENOSPC / EPERM on a
+   read or write). Its own message embeds the absolute path it failed on, the
+   same LAN leak as a lock key. */
+export const FS_FAILURE_REQUEST_ERROR = 'Files could not be read or written right now. Try again.';
+
+/* PR #3714 review pass 5 -- the body for an fs error a retry cannot fix (a full
+   disk, a permission or read-only refusal): it never promises "Try again". */
+export const FS_PERMANENT_FAILURE_REQUEST_ERROR =
+  'Files could not be read or written. Check free disk space and folder permissions.';
+const PERMANENT_FS_CODES = new Set(['ENOSPC', 'EACCES', 'EROFS']);
+
+/** A node fs error: a string `code` plus the `syscall` or `path` node sets on
+ *  every one. A deliberate error that merely carries a code is not one. */
+function isFsError(err: unknown): boolean {
+  const e = err as { code?: unknown; syscall?: unknown; path?: unknown } | null;
+  return (
+    !!e && typeof e.code === 'string' && (typeof e.syscall === 'string' || typeof e.path === 'string')
+  );
+}
+
+/** `requestFailureMessage` plus the node fs error class, which answers
+ *  `FS_FAILURE_REQUEST_ERROR` (`FS_PERMANENT_FAILURE_REQUEST_ERROR` for a full
+ *  disk or a permission refusal; the raw error goes to the log). Used by the
+ *  whole-request handlers whose fallbacks are `(e as Error).message` (CLAUDE.md
+ *  lists them); every other error's message,
+ *  deliberate user-facing ones included, still passes through verbatim. */
+export function requestFailureMessageFs(err: unknown, fallback: string): string {
+  if (isLockAcquisitionTimeout(err)) return LOCK_CONTENTION_REQUEST_ERROR;
+  if (isFsError(err)) {
+    console.error('[file-lock] fs error curated out of a response body', err);
+    return PERMANENT_FS_CODES.has((err as { code: string }).code)
+      ? FS_PERMANENT_FAILURE_REQUEST_ERROR
+      : FS_FAILURE_REQUEST_ERROR;
+  }
+  return fallback;
+}
+
 function decrementWaiters(key: string): void {
   const n = (waiters.get(key) ?? 1) - 1;
   if (n <= 0) waiters.delete(key);
@@ -324,16 +368,22 @@ export function __chainsSizeForTest(): number {
   return chains.size;
 }
 
-/** Test-only: how many callers are currently queued (waiting to acquire) on the
- *  `state-json` lock for `statePath`. Lets a test wait for a request to be
- *  genuinely blocked on the lock rather than sleeping and hoping. */
+/** Test-only: how many callers are currently queued (waiting to acquire) on
+ *  `key`. Lets a test wait for a request to be genuinely blocked on a lock
+ *  (e.g. `book-op:<bookId>`) rather than sleeping and hoping. */
+export function __keyWaitersForTest(key: string): number {
+  return waiters.get(key) ?? 0;
+}
+
+/** Test-only: `__keyWaitersForTest` for the `state-json` lock of `statePath`. */
 export function __stateJsonWaitersForTest(statePath: string): number {
-  return waiters.get(`state-json:${statePath}`) ?? 0;
+  return __keyWaitersForTest(`state-json:${statePath}`);
 }
 
 /** #3700 — serialise a read-modify-write of one book's `.audiobook/state.json`
- *  across concurrent chapter renders. A LEAF lock (outside the design ->
- *  library-voice -> cast order): hold it only across the single
+ *  across concurrent chapter renders. The innermost LEAF lock (design ->
+ *  library-voice -> book-op -> book-path-claim -> cast -> book -> state-json):
+ *  hold it only across the single
  *  read-through-write, never while taking another lock. Without it two sibling
  *  chapters finalizing together both read the same snapshot and the second
  *  write clobbered the first chapter's stamp (and on Windows the read could land

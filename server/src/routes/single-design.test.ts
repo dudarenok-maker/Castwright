@@ -666,6 +666,25 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
 
     expect(designLock.isDesignBusy(bookDir)).toBe(false);
   });
+
+  it('answers a curated 500 when the design job throws before it responds (#3711 review)', async () => {
+    readJsonFailAfter = {
+      path: castJsonPath(bookDir),
+      passThroughCalls: 0,
+      error: new LockAcquisitionTimeoutError(
+        'cast:C:/Users/real-name/books/Some Author/Some Series/Some Title/.audiobook/cast.json',
+        10_000,
+      ),
+    };
+    readJsonCallCounts.clear();
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b', preview: true });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('real-name');
+    expect(designLock.isDesignBusy(bookDir)).toBe(false);
+  });
 });
-
-

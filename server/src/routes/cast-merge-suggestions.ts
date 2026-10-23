@@ -15,6 +15,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { performCastMerge, didCastMergeApply } from './cast-merge.js';
@@ -58,10 +59,11 @@ castMergeSuggestionsRouter.post(
       return res.status(400).json({ error: 'sourceId and targetId are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-
-    await dismissSuggestion(located.bookDir, sourceId, targetId);
+    /* #3711 — book-op outermost so the write lands in the book's current folder. */
+    const outcome = await withBookOp(bookId, (located) =>
+      dismissSuggestion(located.bookDir, sourceId, targetId),
+    );
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     return res.json({});
   },
 );
@@ -85,14 +87,17 @@ castMergeSuggestionsRouter.post(
       return res.status(400).json({ error: 'sourceId and targetId must differ.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
-
+    /* #3711 — book-op outermost, held across the merge AND the follow-up
+       dismiss (both write the book folder). The existing curated-failure seam
+       below runs INSIDE the callback unchanged; a book-op acquisition timeout
+       (which never reached it) is curated by the outer catch. */
+    let outcome;
     try {
-      await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
-    } catch (err) {
-      /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
+      outcome = await withBookOp(bookId, async ({ bookDir, state }) => {
+        try {
+          await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+        } catch (err) {
+          /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
          `performCastMerge` is DEFERRED, not aborting: it is parked at the
          retirement site and rethrown only once cast.json, manuscript-edits
          .json, the analysis cache and the `cast-merges` journal have all been
@@ -131,21 +136,21 @@ castMergeSuggestionsRouter.post(
          Its own failure is swallowed deliberately — the timeout is the more
          informative error and must be what the user sees, and a failed
          dismiss is no worse than not attempting one. */
-      if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
-        try {
-          await dismissSuggestion(bookDir, sourceId, targetId);
-        } catch (dismissErr) {
-          console.warn(
-            '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
-            dismissErr,
-          );
-        }
-      }
-      const e = err as { status?: number; error?: string };
-      if (e.status && e.error) {
-        return res.status(e.status).json({ error: e.error });
-      }
-      /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
+          if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
+            try {
+              await dismissSuggestion(bookDir, sourceId, targetId);
+            } catch (dismissErr) {
+              console.warn(
+                '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
+                dismissErr,
+              );
+            }
+          }
+          const e = err as { status?: number; error?: string };
+          if (e.status && e.error) {
+            return res.status(e.status).json({ error: e.error });
+          }
+          /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
          sibling `POST /cast/merge` handler, including the retraction. The
          claim recorded here through round 4 ("a throw without `{status,
          error}` used to reach Express 5's default handler and come back as
@@ -158,15 +163,23 @@ castMergeSuggestionsRouter.post(
          user's workspace. Curated body for the lock-timeout class, generic
          body for everything else; the full error still goes to the log. See
          `cast-merge.ts`'s handler for the long version. */
-      console.error('[cast-merge-suggestions] accept failed', err);
-      if (isLockAcquisitionTimeout(err)) {
-        return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
-      }
-      return res.status(500).json({ error: 'Internal server error.' });
-    }
+          console.error('[cast-merge-suggestions] accept failed', err);
+          if (isLockAcquisitionTimeout(err)) {
+            return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+          }
+          return res.status(500).json({ error: 'Internal server error.' });
+        }
 
-    /* Drop the suggestion only after a successful merge. */
-    await dismissSuggestion(bookDir, sourceId, targetId);
-    return res.json({});
+        /* Drop the suggestion only after a successful merge. */
+        await dismissSuggestion(bookDir, sourceId, targetId);
+        return res.json({});
+      });
+    } catch (err) {
+      if (!isLockAcquisitionTimeout(err)) throw err;
+      console.error('[cast-merge-suggestions] accept failed', err);
+      return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    }
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );

@@ -30,12 +30,12 @@ import {
   bookDirByDisplay,
   dotAudiobook,
   ensureWorkspace,
-  makeBookId,
   stateJsonPath,
   slug,
 } from '../workspace/paths.js';
+import { mintBookId, withBookPathClaim } from '../workspace/book-op-lock.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
+import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -182,7 +182,9 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       return res.status(415).json({ error: e.message });
     }
     console.error('[import] parse failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Import failed.' });
+    return res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Import failed.'),
+    });
   }
 });
 
@@ -372,7 +374,6 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     const bookDir = bookDirByDisplay(author, series, title);
 
     const manuscriptId = 'mns_' + nanoid(10);
-    const bookId = makeBookId(author, series, title);
     /* MOBI and AZW3 share the same ManuscriptFormat ('mobi') but the file
        extension matters at re-parse time: .azw3 routes to initKf8File,
        .mobi routes to initMobiFile. Preserve the original extension when
@@ -406,35 +407,18 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         titleSynthesized: c.titleSynthesized || undefined,
       };
     });
-    const state: BookStateJsonWrite = {
-      bookId,
-      manuscriptId,
-      title,
-      author,
-      series,
-      seriesPosition,
-      isStandalone,
-      manuscriptFile,
-      castConfirmed: false,
-      chapters: chaptersWithSlug.map((c) => ({
-        id: c.id,
-        title: c.title,
-        slug: c.slug,
-        excluded: c.excluded,
-        titleSynthesized: c.titleSynthesized,
-      })),
-      coverGradient: deterministicGradient(bookId),
-      createdAt: now,
-      updatedAt: now,
-      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      language,
-    };
-    /* #3625 — the existing-book 409 check, the folder creation and the
-       state.json write are ONE span: two concurrent confirms of one title
-       would otherwise both pass the check and the second state.json (with its
-       own manuscriptId) would overwrite the first. */
-    const collided = await withStateJsonLock(stateJsonPath(bookDir), async () => {
-      if (existsSync(bookDir)) return true;
+    /* #3711 — the path claim covers "is this Author/Series/Title path free ->
+       mint a bookId nothing else carries -> create the folder -> first
+       state.json write", so a rename into the same path or a twin import cannot
+       interleave. The id is `makeBookId(...)` unless a book RENAMED away from
+       this path still holds it; then the title slug gets a `-2` suffix, so two
+       books never share an id. Inside the claim, the existing-book check, the
+       folder creation and the state.json write are ONE span under the target's
+       state-json lock (#3625): a second confirm of the same title cannot pass the
+       check and overwrite the first's state.json. */
+    const created = await withBookPathClaim(() => withStateJsonLock(stateJsonPath(bookDir), async () => {
+      if (existsSync(bookDir)) return null;
+      const bookId = await mintBookId(author, series, title);
       await mkdir(bookDir, { recursive: true });
       await mkdir(dotAudiobook(bookDir), { recursive: true });
       await mkdir(join(bookDir, 'audio'), { recursive: true });
@@ -445,13 +429,37 @@ importRouter.post('/books', async (req: Request, res: Response) => {
          too (parseText strips headings + injects audio tags, so re-parsing
          the already-stripped-and-tagged text produces wrong chapters). */
       await writeFile(manuscriptPath, entry.originalBuffer);
+      const state: BookStateJsonWrite = {
+        bookId,
+        manuscriptId,
+        title,
+        author,
+        series,
+        seriesPosition,
+        isStandalone,
+        manuscriptFile,
+        castConfirmed: false,
+        chapters: chaptersWithSlug.map((c) => ({
+          id: c.id,
+          title: c.title,
+          slug: c.slug,
+          excluded: c.excluded,
+          titleSynthesized: c.titleSynthesized,
+        })),
+        coverGradient: deterministicGradient(bookId),
+        createdAt: now,
+        updatedAt: now,
+        chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+        language,
+      };
       await writeStateJsonAtomic(stateJsonPath(bookDir), state);
-      return false;
-    });
-    if (collided) {
+      return bookId;
+    }));
+    if (created === null) {
       const suggestedTitle = `${title} (2)`;
       return res.status(409).json({ error: 'slug_collision', suggestedTitle });
     }
+    const bookId = created;
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be
@@ -507,6 +515,8 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[import] confirm failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Confirm failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Confirm failed.'),
+    });
   }
 });

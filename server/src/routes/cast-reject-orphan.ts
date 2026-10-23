@@ -225,7 +225,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -352,17 +352,16 @@ castRejectOrphanRouter.post(
       return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-    const { bookDir } = located;
-
+    /* #3711 — book-op outermost: the cast.json + cast-id-history.json writes
+       below hit the folder resolved here, even with a rename queued behind. */
+    const outcome = await withBookOp(bookId, ({ bookDir }) =>
     /* #1981 — the read is inside the lock; the 409/404 checks and the
        notLinkedTo mutation below are all decisions derived from it. The
        id-history writes (forgetSupersededId / rejectOrphanedId) are a
        DIFFERENT file — the cast lock doesn't cover them, they're just along
        for the ride inside this span, mirroring cast-merge.ts's
        retireCharacterId precedent. */
-    return withCastLock(bookDir, async () => {
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -526,7 +525,11 @@ castRejectOrphanRouter.post(
         resolution: resolution?.via ?? null,
         resolvedCharacterId: resolution?.character.id,
       });
-    });
+    }));
+    if (outcome === BOOK_GONE) {
+      return res.status(404).json({ error: `Book "${bookId}" not found.` });
+    }
+    return outcome;
   },
 );
 
@@ -556,15 +559,13 @@ castRejectOrphanRouter.delete(
       return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
-    const { bookDir } = located;
-
+    /* #3711 — book-op outermost; see the POST above. */
+    const outcome = await withBookOp(bookId, ({ bookDir }) =>
     /* #1981 Task 12 (static guard, caught by the merge with the cast-lock
        sweep): this DELETE does a cast.json read-modify-write just like the
        POST above, so it takes the same per-book lock. It was written before
        withCastLock existed and the guard test is what surfaced it. */
-    return withCastLock(bookDir, async () => {
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -762,7 +763,11 @@ castRejectOrphanRouter.delete(
         supersededByOther: supersededByOther.length ? supersededByOther : undefined,
         targetNotLive: targetNotLive.length ? targetNotLive : undefined,
       });
-    });
+    }));
+    if (outcome === BOOK_GONE) {
+      return res.status(404).json({ error: `Book "${bookId}" not found.` });
+    }
+    return outcome;
   },
 );
 

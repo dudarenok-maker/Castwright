@@ -2,8 +2,13 @@
    book-state PUT (#3400). A leaf module: imports nothing, so any route can
    take it without closing an import cycle.
 
-   Lock order (global): `design` -> `library-voice` -> `cast` -> `book` ->
-   `state-json` (a leaf), with `revisions` a separate leaf beside it. `book` is
+   Lock order (global, reconciled with #3711): `design` -> `library-voice` ->
+   `book-op` -> `book-path-claim` -> `cast` -> `book` -> `state-json` (a leaf),
+   with `revisions` a separate leaf beside it. `book-op` (book-op-lock.ts) is the
+   operation-and-move lock; this one is always taken INSIDE it (or by a path
+   that holds no book-op, such as the scan heal), and no holder of this lock
+   ever takes `book-op` -- `moveBookFolder` takes this lock itself, inside the
+   path claim. `book` is
    taken while holding `cast` (the cast merge's manuscript-edits.json rewrite,
    and the scan heal reached from a cast-lock holder) and NEVER the other way
    round -- no holder of this lock may take `cast`, `design` or `library-voice`

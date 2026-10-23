@@ -306,6 +306,8 @@ recite:
     the lock is released, against a path it resolved before it (a change-log
     write, a cast delete, a slug rewrite), land in a folder a queued
     folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
+    Fixed for moves by `book-op` + `book-jobs` (#3711): a move/delete holds
+    `book-op:<bookId>` exclusively and is refused while a long job is registered.
 30. **An op list computed before a later pass changes its keys, then patched
     only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
     PR #3594 gate pass 3: the audio rename ops were computed from the first
@@ -436,6 +438,68 @@ recite:
     the two can name different places; test by forcing the move between the two
     (hold one of the earlier steps open) and assert nothing was installed and
     the moved book is untouched.
+39. **A book-folder writer outside `withBookOp` and outside a `runBookJob`
+    `fn`** — #3711 / plan 288. The writer is a quick operation that takes no
+    `book-op`, or a long job that never registered, or one whose write escapes
+    its registration: an un-awaited child that writes the book after the parent's
+    token is released (generation's `afterChapterFinalized`, scoring), a
+    registration released at a deadline while its units still run (analysis's
+    `MAIN_DRAIN_DEADLINE_MS`), or a book resolved before the lock (`findBookBy*`
+    ahead of `withBookOp`, a `peekBook` result fed into a write). A folder move
+    then lands mid-operation and the next write recreates the old folder.
+    Checkable: for every route or job that writes under a book folder, hold its
+    `book-op` or its job (gate the work), queue a rename/delete, and assert the
+    rename waits (quick) or gets 409 `book_busy` (long) with the old path never
+    recreated; also confirm the token is released on every exit path (sync throw,
+    early return, rejection) and not before the last child settles.
+40. **A shared index or cache seeded from a caller-supplied hint, so one
+    caller's guess becomes every caller's answer** — PR #3714 pass 1 (#3711,
+    `book-op-lock.ts` `accept()`): a resolve accepted the caller's `hintDir`
+    and then wrote it into the process-wide `bookId -> bookDir` index. A
+    startup sweep locks each walked folder by its own path as the hint, so for
+    a bookId two folders carry it indexed the SECOND twin; every later
+    resolve-by-id then wrote the twin the unlocked first-match GET does not
+    show. The hint was correct for that one caller and wrong as a shared
+    answer. Pass 2 found the same shape reachable through a swallowed read
+    error: a walk that could not read one folder counted as authoritative
+    discovery. Checkable: for every write to a shared map, cache or index,
+    list where the written value came from — authoritative discovery (a full
+    walk that saw every candidate, the key's own verified entry) versus
+    caller-supplied input (a hint, a request param, a walker's current
+    folder, a partial walk) — and confirm only the former writes it; then
+    test by resolving once through the non-authoritative input and asserting
+    the next resolve WITHOUT it still answers what the unlocked reader does.
+41. **A fail-closed guard whose scope is wider than its uncertainty — one
+    unreadable, unrelated record blocks every operation** — PR #3714 pass 3
+    (#3711, `book-op-lock.ts` `resolveBook`): pass 2 rightly stopped a
+    `state.json` read error being read as "not this book" (catalogue 1), but
+    the fix failed the whole resolve on ANY unreadable folder the walk passed,
+    including folders that could not change the answer. One `EBUSY` or
+    `EISDIR` sibling then 500'd every autosave, rename, delete, job
+    registration and peek of every book sorting after it, permanently (that
+    book could never become indexed), and blocked every import. The
+    uncertainty was one folder's identity; the failure was the library.
+    Checkable: for each fail-closed branch, name what the unknown input could
+    change about the answer, and confirm the operation fails only when the
+    unknown could change THIS operation's outcome (the target itself, a known
+    twin, an id it might carry); then test with an unreadable record that
+    cannot matter (an unrelated sibling sorting first) and assert the
+    operation still succeeds, alongside the case where it can matter and must
+    still fail.
+42. **A cache fill whose read precedes an invalidation and whose write follows
+    it reinstates the invalidated value** — PR #3714 pass 6 (#3711,
+    `store/manuscripts.ts` `getOrHydrateManuscript`): the hydrate read and
+    parsed the manuscript with no lock held, then stored the record
+    unconditionally. A bundle overwrite's eviction (or replace-manuscript's
+    `putManuscript`) that landed during the parse was undone by that store, so
+    the replaced manuscript went back into memory until a restart, and a
+    chapter restructure rebuilt `state.chapters` from it. The invalidation was
+    correct and locked; the fill raced it from outside the lock. Checkable: for
+    every cache write, does it verify nothing invalidated the key since its
+    read began (a per-key version or generation captured before the read and
+    compared before the write, or the fill held under the writer's lock)?
+    Then test by gating the fill between its read and its write, landing the
+    invalidation, releasing, and asserting the cache holds the new value.
 
 ### Keeping the catalogue current
 

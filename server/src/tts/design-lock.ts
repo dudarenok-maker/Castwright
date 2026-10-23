@@ -14,7 +14,15 @@
    state (a main + a subset job can coexist); design is single-job-per-book.
    Everything keys on `bookDir` — the one identifier both routes hold (the
    analysis route works in manuscriptId, the design routes in bookId, but both
-   resolve a bookDir). */
+   resolve a bookDir).
+
+   LOCK ORDER (#3711, reconciled with #3594): design -> library-voice -> book-op
+   -> book-path-claim -> cast -> book -> state-json. `withDesignLock` is held only inside design jobs, which hold no book-op;
+   the series sweeps it wraps take a book-op per OTHER book INSIDE it, because
+   those books are not registered. Nothing that holds a book-op takes the design
+   lock, and a design job's book-folder protection against a rename is its
+   `runBookJob` registration (workspace/book-jobs.ts), not this path-keyed busy
+   registry. */
 
 /* Per-bookDir promise chain — the same idiom as generation's
    `serializeQueueMutation`. A waiter chains onto the tail; the lock is released
@@ -68,7 +76,6 @@ export function _designChainsSizeForTests(): number {
 
 const analysisBusy = new Map<string, number>(); // bookDir → ref count (main + subset)
 const reviewBusy = new Map<string, number>(); // bookDir → ref count (script-review runs)
-const reparseBusy = new Map<string, number>(); // bookDir -> ref count (reparse / replace-manuscript)
 const designBusy = new Set<string>(); // bookDir of an active bulk-design job
 
 export function markAnalysisBusy(bookDir: string): void {
@@ -81,22 +88,6 @@ export function clearAnalysisBusy(bookDir: string): void {
 }
 export function isAnalysisBusy(bookDir: string): boolean {
   return (analysisBusy.get(bookDir) ?? 0) > 0;
-}
-
-/* #3400 pass 10 -- a reparse / replace-manuscript run for this book. Ref-counted
-   pure predicate like analysisBusy (no lock, never waits); the folder-renaming
-   PUT /state refuses with 409 while it is set, because the run's destructive
-   steps resolve the book folder before the rename could be observed. */
-export function markReparseBusy(bookDir: string): void {
-  reparseBusy.set(bookDir, (reparseBusy.get(bookDir) ?? 0) + 1);
-}
-export function clearReparseBusy(bookDir: string): void {
-  const n = (reparseBusy.get(bookDir) ?? 0) - 1;
-  if (n <= 0) reparseBusy.delete(bookDir);
-  else reparseBusy.set(bookDir, n);
-}
-export function isReparseBusy(bookDir: string): boolean {
-  return (reparseBusy.get(bookDir) ?? 0) > 0;
 }
 
 export function markDesignBusy(bookDir: string): void {

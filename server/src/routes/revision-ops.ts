@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { audioDir } from '../workspace/paths.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
@@ -67,12 +67,13 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
   try {
     const parsed = parseSelection((req.body ?? {}).selection);
     if (!parsed.ok) return res.status(400).json({ error: 'invalid_selection', message: parsed.message });
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
-    const { bookDir, state } = located;
+    /* #3711 — book-op outermost (order: book-op -> revision-op -> revisions), held
+       across all three steps so a folder rename queued behind this accept lands
+       after the audio step and the revisions.json commit. */
+    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
     const chapters: ChapterRef[] = state.chapters;
 
-    return await serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
+    return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
       /* Step 1 — under the lock. */
       const begin = await beginRevisionOp(bookDir, chapters, 'accept', revisionId);
       if (begin.kind === 'proceed' && !held) return { retryUnder: begin.chapter.id };
@@ -108,6 +109,9 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
       }
       return res.json(toRevisionsState(bookId, commit.file));
     });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
+    return outcome;
   } catch (e) {
     console.error('[revision-ops] accept failed', e);
     /* Plan 285 — the store takes the per-book revisions lock, whose key embeds
@@ -119,12 +123,11 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
 revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Request, res: Response) => {
   const { bookId, revisionId } = req.params;
   try {
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
-    const { bookDir, state } = located;
+    /* #3711 — book-op outermost; see accept above. */
+    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
     const chapters: ChapterRef[] = state.chapters;
 
-    return await serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
+    return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
       const begin = await beginRevisionOp(bookDir, chapters, 'reject', revisionId);
       if (begin.kind === 'proceed' && !held) return { retryUnder: begin.chapter.id };
       if (begin.kind === 'already-done') return res.json(toRevisionsState(bookId, begin.file));
@@ -169,6 +172,9 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
       }
       return res.json(toRevisionsState(bookId, commit.file));
     });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
+    return outcome;
   } catch (e) {
     console.error('[revision-ops] reject failed', e);
     return res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to reject revision.')) });
@@ -178,9 +184,11 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
 revisionOpsRouter.post('/:bookId/drift/:driftId/dismiss', async (req: Request, res: Response) => {
   const { bookId, driftId } = req.params;
   try {
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
-    const file = await dismissDriftId(located.bookDir, located.state.chapters, driftId);
+    /* #3711 — book-op outermost; see accept above. */
+    const file = await withBookOp(bookId, (located) =>
+      dismissDriftId(located.bookDir, located.state.chapters, driftId),
+    );
+    if (file === BOOK_GONE) return res.status(404).json({ error: 'book_not_found', message: 'Book not found.' });
     return res.json(toRevisionsState(bookId, file));
   } catch (e) {
     console.error('[revision-ops] dismiss failed', e);
