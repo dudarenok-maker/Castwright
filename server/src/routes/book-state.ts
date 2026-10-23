@@ -1982,9 +1982,14 @@ bookStateRouter.post(
         if (state.manuscriptId) {
           const rec = getManuscript(state.manuscriptId);
           if (rec) {
-            rec.chapterHints = rec.chapterHints.map((h) =>
-              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-            );
+            /* Replace, never mutate in place: only `putManuscript` moves the
+               version a cold hydrate checks before it caches (#3703). */
+            putManuscript({
+              ...rec,
+              chapterHints: rec.chapterHints.map((h) =>
+                h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+              ),
+            });
           }
         }
 

@@ -6,7 +6,7 @@
    2. Atomically write manuscript-hints.json (the restructured chapter bodies,
       #3703; first, so its failure changes nothing), state.json (rotating
       backup) and manuscript-edits.json.
-   3. Mutate the in-memory ManuscriptRecord.chapterHints so subsequent
+   3. Replace the in-memory ManuscriptRecord (putManuscript) so subsequent
       analysis / generation calls see the new structure.
    4. Apply the audio op plan via rewriteChapterSlugs (delete content-
       changed chapter audio; rename renumbered-only chapter audio +
@@ -82,7 +82,7 @@ import { safeSegment } from '../util/safe-path.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { getOrHydrateManuscript, putManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -185,7 +185,7 @@ async function prepareRestructure(
     (the lock is taken at the handler, one level only), then takes the
     restructure gate and main's per-book `book` lock itself (#3594), in the
     order book-op -> gate -> book. Writes manuscript-hints.json (#3703) +
-    state.json + manuscript-edits.json, mutates the in-memory ManuscriptRecord.chapterHints,
+    state.json + manuscript-edits.json, replaces the in-memory ManuscriptRecord (new chapterHints),
     applies audio ops, clears the analysis cache. `advisoryValid` is false when
     the manuscript changed since `prepareRestructure` parsed it: the advisory
     title flags (and a route's own parse) are then dropped silently -- they only
@@ -405,7 +405,10 @@ async function applyRestructureClaimed(
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
-  record.chapterHints = result.hints;
+  /* Replace the record, never mutate it in place: a cold hydrate still parsing
+     checks the store's per-id version before it caches, and only `putManuscript`
+     moves that (#3703). The spread keeps `sourceSha256` and every other field. */
+  putManuscript({ ...record, chapterHints: result.hints });
 
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
