@@ -8,7 +8,7 @@ const { putBookState } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
-import { persistenceMiddleware, flushBookPersistence } from './persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence, type BookFlushOutcome } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
@@ -36,7 +36,10 @@ const advance = async (ms: number) => {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  putBookState.mockClear();
+  /* mockReset (not mockClear): the #3421 retry tests install persistent
+     rejections that must not leak into the next test. */
+  putBookState.mockReset();
+  putBookState.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -389,16 +392,117 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
     expect(mw(flushBookPersistence('book-1'))).toBeNull();
   });
 
-  it('flushBookPersistence still resolves when the in-flight PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('boom'));
+  it('flushBookPersistence never rejects when the PUT keeps failing: it resolves with the failed slice (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
     const state: Record<string, unknown> = baseState();
-    const next = vi.fn((x) => x);
-    const mw = persistenceMiddleware(makeStore(state))(next);
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const order: string[] = [];
+    (store.dispatch as ReturnType<typeof vi.fn>).mockImplementation((a: { type: string }) => {
+      if (a.type === 'notifications/pushToast') order.push('toast');
+    });
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    void waited.then(() => order.push('resolved'));
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    await advance(2000);
+    expect(putBookState).toHaveBeenCalledTimes(3);
+    await advance(4000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    const toast = (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.type === 'notifications/pushToast');
+    expect(toast.payload).toEqual(
+      expect.objectContaining({ kind: 'error', dedupeKey: 'book-persist-failed:book-1' }),
+    );
+    expect(order).toEqual(['toast', 'resolved']);
+    err.mockRestore();
+  });
+
+  it('re-sends a transient failure with the captured patch, and the flush waits for it (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     mw({ type: 'cast/setCharacters' });
-    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<void>;
-    await expect(waited).resolves.toBeUndefined();
+    /* Leaving the book sends the write at once; then the roster changes. */
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    state.cast = { characters: [{ id: 'someone-else' }] };
+    await advance(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    let settled = false;
+    void waited.then(() => {
+      settled = true;
+    });
+    await advance(999);
+    expect(settled).toBe(false);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    expect(putBookState.mock.calls[1]).toEqual(putBookState.mock.calls[0]);
+    expect(putBookState.mock.calls[1][1].patch).toEqual({ characters: [{ id: 'halloran' }] });
+    await expect(waited).resolves.toEqual({ failedSlices: [] });
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.type === 'notifications/pushToast',
+      ),
+    ).toBe(false);
+    err.mockRestore();
+  });
+
+  it('does not re-send a 4xx refusal (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it('a newer write supersedes a pending retry (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+
+    /* During the backoff, the user edits again. */
+    state.cast = { characters: [{ id: 'newer' }] };
+    mw({ type: 'cast/setCharacters' });
+    await vi.runAllTimersAsync();
+    await waited;
+
+    const patches = putBookState.mock.calls.map((c) => c[1].patch);
+    expect(patches).toEqual([{ characters: [{ id: 'halloran' }] }, { characters: [{ id: 'newer' }] }]);
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.payload?.dedupeKey === 'book-persist-failed:book-1',
+      ),
+    ).toBe(false);
     err.mockRestore();
   });
 });
@@ -505,7 +609,7 @@ describe('bulk-reassign persistence', () => {
   });
 
   it('surfaces an error toast when a bulk apply PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(
       manuscriptActions.setSentencesCharacterBulk({
@@ -520,7 +624,7 @@ describe('bulk-reassign persistence', () => {
   });
 
   it('surfaces an error toast when an undo PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(manuscriptActions.undoBulkReassign());
     await vi.runAllTimersAsync();
@@ -528,15 +632,17 @@ describe('bulk-reassign persistence', () => {
     expect(toasts.some((t) => t.kind === 'error')).toBe(true);
   });
 
-  it('does NOT toast when a non-bulk manuscript edit PUT fails (scope)', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+  it('a non-bulk manuscript edit PUT failure raises the generic save toast, not the bulk one (scope)', async () => {
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(
       manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' }),
     );
     await vi.runAllTimersAsync();
-    const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
-    expect(toasts.length).toBe(0);
+    const toasts = (store.getState() as { notifications: { toasts: { kind: string; dedupeKey?: string }[] } })
+      .notifications.toasts;
+    expect(toasts.some((t) => t.dedupeKey === 'bulk-reassign-persist-failed')).toBe(false);
+    expect(toasts.some((t) => t.dedupeKey === 'book-persist-failed:b1')).toBe(true);
   });
 });
 /* #2230 — a refused rename (409) from the Listen-view book-meta editor must

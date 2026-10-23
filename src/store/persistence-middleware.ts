@@ -289,14 +289,33 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
 /* #3395 pass 4, S3 — dispatched by Layout's per-book hydrate before it
    re-reads a book's disk state. The middleware sends that book's queued
    writes now and the dispatch returns a promise that settles once every
-   write for the book still in flight has settled (success or failure), or
-   `null` when nothing is queued or in flight — so the re-read never sees
-   disk from before a write that LANDED. A write that FAILED settles the
-   same way, so the re-read still runs and reads disk from before it. Plan
-   286 — revisions no longer persists from the client, so the
-   write-then-re-read hazard this describes now applies only to the other
-   slices. Re-send vs. surface is owed in #3421.
+   write for the book has landed or been given up on after the retries
+   (#3421), or `null` when nothing is queued or in flight — so the re-read
+   never sees disk from before a write that LANDED. It resolves with the
+   slices that still failed; a write that was given up on has already raised
+   a toast, and the re-read then reads disk without it. Plan 286 — revisions
+   no longer persists from the client, so the write-then-re-read hazard this
+   describes now applies only to the other slices.
    Not a reducer action: no slice handles it. */
+/* #3421 — what `flushBookPersistence` resolves with: the slices whose write was
+   given up on. Empty when every write landed. */
+export interface BookFlushOutcome {
+  failedSlices: StateSlice[];
+}
+/* #3421 — gaps before each resend of a failed book-state PUT: 3 resends after
+   the first attempt, sent at about 0 s, 1 s, 3 s and 7 s. Precedent: the
+   per-book hydrate's doubling backoff from 1 s (layout.tsx
+   REVISIONS_HYDRATE_RETRY_BASE_MS) and the bounded reconnect loop (api.ts
+   RECONNECT_MAX_ATTEMPTS / RECONNECT_BACKOFF_MS). Bounded, unlike the
+   hydrate's, because a flush has a waiter (the re-read) that must eventually
+   run. */
+const FLUSH_RETRY_DELAYS_MS = [1000, 2000, 4000];
+/* A 4xx is a deliberate refusal (analysis running, path collision, consent);
+   it will not change in seven seconds, so it is never re-sent. */
+const PUT_REFUSED_RE = /^Book state PUT failed \(4\d\d\)/;
+const FLUSH_FAILED_MESSAGE =
+  "Some changes to this book couldn't be saved. Check your connection and try again.";
+
 const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
 
@@ -319,9 +338,10 @@ export const persistenceMiddleware: Middleware = (store) => {
      that a NEWER in-flight PUT (started while the first was still pending) still
      needs — closing the overlapping-in-flight-PUT data-loss race. */
   const generation = new Map<FlushKey, number>();
-  /* #3395 pass 4, S3 — each key's PUTs still in flight, as settle-never-
-     reject promises, so `flushBookPersistence` can await them. */
-  const inFlight = new Map<FlushKey, Set<Promise<void>>>();
+  /* #3395 pass 4, S3 — each key's writes still in flight, as settle-never-
+     reject promises, so `flushBookPersistence` can await them. Each entry
+     covers a whole send-and-retry sequence (#3421), not one PUT. */
+  const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -345,48 +365,67 @@ export const persistenceMiddleware: Middleware = (store) => {
     toastPending.delete(key);
     const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
-    const put = api.putBookState(bookId, { slice, patch });
-    const settled = put.then(
-      () => {},
-      () => {},
-    );
-    const set = inFlight.get(key) ?? new Set<Promise<void>>();
+    const attemptSend = async (): Promise<{ slice: StateSlice; ok: boolean }> => {
+      /* #3421 — a failed PUT is re-sent with the patch captured above, never
+         one rebuilt from the store: by the time it fails the stage may name
+         another book (or none). */
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await api.putBookState(bookId, { slice, patch });
+          /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
+             newer write has since been scheduled (gen advanced), a fresh snapshot
+             belongs to it and must not be cleared by this older, superseded
+             flush. */
+          if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
+            store.dispatch(handler.onSuccess(bookId));
+          }
+          return { slice, ok: true };
+        } catch (err) {
+          console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+          const refused = PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err));
+          const superseded = gen !== (generation.get(key) ?? 0);
+          /* A newer full-slice write for this key owns the outcome (and the
+             user's current draft); don't re-send the stale patch over it. */
+          if (superseded) return { slice, ok: true };
+          if (!refused && attempt < FLUSH_RETRY_DELAYS_MS.length) {
+            await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[attempt]));
+            if (gen !== (generation.get(key) ?? 0)) return { slice, ok: true };
+            continue;
+          }
+          /* Final failure of the LATEST write (#2230). */
+          if (handler) {
+            store.dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: handler.message(err),
+                dedupeKey: handler.dedupeKey,
+              }),
+            );
+            /* #2230 — a refused rename must not leave the persisted value claiming
+               a title the server rejected; roll the optimistic saved update back
+               (and restore the draft so the user's text is preserved for retry). */
+            if (handler.rollback) store.dispatch(handler.rollback(bookId));
+          } else {
+            store.dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: FLUSH_FAILED_MESSAGE,
+                dedupeKey: `book-persist-failed:${bookId}`,
+              }),
+            );
+          }
+          return { slice, ok: false };
+        }
+      }
+    };
+    const settled = attemptSend();
+    const set = inFlight.get(key) ?? new Set<Promise<{ slice: StateSlice; ok: boolean }>>();
     set.add(settled);
     inFlight.set(key, set);
     void settled.then(() => {
       set.delete(settled);
       if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
     });
-    put
-      .then(() => {
-        /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
-           newer write has since been scheduled (gen advanced), a fresh snapshot
-           belongs to it and must not be cleared by this older, superseded
-           flush. */
-        if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
-          store.dispatch(handler.onSuccess(bookId));
-        }
-      })
-      .catch((err) => {
-        console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-        /* #2230 — only act on a failure of the LATEST write. An older flush's
-           failure is superseded by a newer in-flight write (which owns the
-           snapshot and the user's current draft), so don't toast/roll back for
-           it — that would wrongly revert the newer edit. */
-        if (handler && gen === (generation.get(key) ?? 0)) {
-          store.dispatch(
-            notificationsActions.pushToast({
-              kind: 'error',
-              message: handler.message(err),
-              dedupeKey: handler.dedupeKey,
-            }),
-          );
-          /* #2230 — a refused rename must not leave the persisted value claiming
-             a title the server rejected; roll the optimistic saved update back
-             (and restore the draft so the user's text is preserved for retry). */
-          if (handler.rollback) store.dispatch(handler.rollback(bookId));
-        }
-      });
   };
 
   return (next) => (action) => {
@@ -408,11 +447,17 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
       flushBookNow(target);
-      const waits: Promise<void>[] = [];
+      const waits: Promise<{ slice: StateSlice; ok: boolean }>[] = [];
       for (const [key, set] of inFlight) {
         if (key.startsWith(`${target}:`)) waits.push(...set);
       }
-      return waits.length > 0 ? Promise.all(waits).then(() => undefined) : null;
+      return waits.length > 0
+        ? Promise.all(waits).then(
+            (rs): BookFlushOutcome => ({
+              failedSlices: rs.filter((r) => !r.ok).map((r) => r.slice),
+            }),
+          )
+        : null;
     }
 
     const rule = PERSIST_RULES[type];
