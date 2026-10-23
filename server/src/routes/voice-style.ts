@@ -205,7 +205,7 @@ voiceStyleRouter.post(
            but say contention rather than letting the user read it as "this
            character's persona could not be generated". */
         failures[c.id] = itemFailureReason(e, (e as Error).message || 'Voice-style generation failed.');
-        console.error('[voice-style] book=%s character=%s failed', bookId, c.id, e);
+        console.error(`[voice-style] book=${bookId} character=${c.id} failed`, e);
       }
     }
 

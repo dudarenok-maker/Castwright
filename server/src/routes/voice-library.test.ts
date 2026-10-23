@@ -1388,15 +1388,11 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(res.body.artifactPurgeFailedPaths).toContain(ptPath);
     expect(existsSync(ptPath)).toBe(true); // the artifact really did survive
 
-    // CodeQL #210/#224: console.warn fix — voiceUuid and failed.length are now
-    // %s/%d placeholder arguments, not interpolated into the format string.
-    // The format string must NOT contain the voiceUuid, and the voiceUuid must
-    // be passed as a SEPARATE argument. Pre-fix (interpolated into format string),
-    // reverting this assertion would require breaking the format string.
+    // The uuid and the failed count are interpolated into the message (the
+    // server's timestamp patch never format-interprets it); the failed list
+    // follows as its own argument.
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.not.stringContaining(voiceUuid),
-      voiceUuid,
-      1, // purgeResult.failed.length
+      expect.stringContaining(`delete for "${voiceUuid}" left 1 artifact(s)`),
       expect.any(Array),
     );
 
@@ -5129,13 +5125,10 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
         `sidecar:xtts:xtts-${voiceUuid}`,
       ]);
 
-      // CodeQL #210/#224: console.warn fix — voiceUuid and failed.length are now
-      // %s/%d placeholder arguments, not interpolated into the format string.
-      // The format string must NOT contain the voiceUuid.
+      // The uuid and the failed count (3 sidecar evict failures) are
+      // interpolated into the message; the failed list is its own argument.
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.not.stringContaining(voiceUuid),
-        voiceUuid,
-        3, // purgeResult.failed.length (3 sidecar evict failures)
+        expect.stringContaining(`"${voiceUuid}" left 3 artifact(s)`),
         expect.any(Array),
       );
     } finally {

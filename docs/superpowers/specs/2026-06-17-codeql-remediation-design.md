@@ -93,7 +93,7 @@ auto-clear** — those are explicit dismissals (Scope D).
 | `js/xss-through-dom` | 4 | **Dismiss all 4** (provenance-safe + wrapper not CodeQL-recognized). Wrap the unflagged remote `:453` for real. |
 | `js/polynomial-redos` | 4 | **Linearize the regex**; dismiss-fallback for `FILENAME_RE` if no parse-preserving rewrite. |
 | `js/loop-bound-injection` | 3 | Clamp the 2 short-hash loops; **dismiss** the manuscript-scan loop (clamping truncates content). |
-| `js/tainted-format-string` | 2 | `%s` placeholders. |
+| `js/tainted-format-string` | 2 | `%s` placeholders. *(Superseded 2026-10-23, #3721: reverted to template literals — the boot-time timestamp patch in `logger.ts` makes `%s` in a caller's first argument print literally. See `docs/security/codeql-dismissal-residue.md`.)* |
 | `js/incomplete-url-substring-sanitization` | 2 | **Dismiss** (test file; `paths-ignore` is not retroactive — see Scope D). |
 | `js/incomplete-multi-character-sanitization` | 2 | **Replace-until-stable** (not just `/g`). |
 | `js/insecure-randomness` | 1 | `crypto.getRandomValues`; fallback must not use `Math.random`. |
@@ -205,7 +205,9 @@ closed vulns.
 **A3. Per-site server fixes.**
 1. `js/tainted-format-string` (`routes/queue.ts:125`, `routes/voice-style.ts:119`)
    → tainted value as a `%s` arg. **Test:** unit assert the log call receives the
-   value as an arg, not interpolated.
+   value as an arg, not interpolated. *(Superseded 2026-10-23, #3721: `%s` printed
+   literally under the `logger.ts` timestamp patch; both sites are template literals
+   again.)*
 2. `js/loop-bound-injection` — clamp **only** `tts/voice-mapping.ts:459` and
    `tts/voice-sample-cache.ts:84` (djb2 over short ids; the clamp must reach the loop
    condition). **Dismiss** `parsers/audio-tags.ts:58` — that `while (i < text.length)`
