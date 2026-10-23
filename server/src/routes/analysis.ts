@@ -2952,9 +2952,11 @@ export interface AnalysisJob {
       Gemini, derived from each phase's current engine (`phaseEngines`, by setPhaseEngine). Persisted into
       `analysis-state.json` so the cold-boot rehydrated AnalysisPill
       carries the right engine for the reverse-direction local-analyzer
-      guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`) — the
-      guard checks `engine === 'local'` to decide whether to prompt
-      before a TTS-start. */
+      guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`), which
+      prompts before a TTS-start when the engine is `local` or when an
+      endpoint run shares the TTS card (`analyzerSharesTtsDevice`). Once a
+      fallback switch has happened it also rides the phase events
+      (`withRunEngine`) into the live frontend snapshot. */
   engine: AnalysisEngine;
   replay: AnalysisJobReplayState;
   /** ms-since-epoch of the last `analysis-state.json` write. Used to
