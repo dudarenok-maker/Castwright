@@ -62,9 +62,11 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
   `analyzer-timeout` naming `analyzer.gemini.thinkingIdleTimeoutMs`. 290 000 is
   the knob's maximum, a deliberate local ceiling (the owner kept it in #3724;
   it is not a limit the SDK imposes, so a larger value is not ruled out by
-  mechanism). If a request still fails at 290 000, record that and the
-  chapter's measured `firstAnswerMs`, and leave raising the ceiling to the
-  owner rather than recommending a larger value.
+  mechanism). If a request still fails at 290 000, record that attempt's
+  `stream-timing` line values `firstChunkMs` and `thoughtPartsBeforeAnswer`, and
+  that it ran to 290 000 with no answer (its `firstAnswerMs` prints `none`, so
+  there is no value to record), and leave raising the ceiling to the owner
+  rather than recommending a larger value.
 - Otherwise record **keep**.
 
 ### Result
