@@ -28,12 +28,14 @@ vi.mock('../workspace/user-settings.js', () => ({
 const CHARACTER: CastCharacter = { id: 'maerin', name: 'Maerin', role: 'protagonist', gender: 'female' };
 
 let server: http.Server;
+let requests = 0;
 const sockets = new Set<import('node:net').Socket>();
 const prevBase = process.env.GOOGLE_GEMINI_BASE_URL;
 
 beforeAll(async () => {
   // Accepts the request and never responds.
   server = http.createServer((req) => {
+    requests += 1;
     req.resume();
   });
   server.on('connection', (s) => {
@@ -53,9 +55,12 @@ afterAll(async () => {
 
 describe('generateVoiceStylePersona gemini branch local timeout (#3724)', () => {
   it('rejects at the persona ceiling instead of waiting on a never-answering endpoint', async () => {
+    requests = 0;
     const t0 = Date.now();
-    await expect(generateVoiceStylePersona(CHARACTER)).rejects.toBeDefined();
+    await expect(generateVoiceStylePersona(CHARACTER)).rejects.toMatchObject({ name: 'AbortError' });
     const elapsed = Date.now() - t0;
+    // The request really reached the fake endpoint (the redirect applied) and was not retried.
+    expect(requests).toBe(1);
     expect(elapsed).toBeGreaterThanOrEqual(CEILING_MS - 50);
     expect(elapsed).toBeLessThan(CEILING_MS + 2_000);
   }, 5_000);
