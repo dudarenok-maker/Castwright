@@ -454,3 +454,58 @@ describe('selectMainAnalysisLive (#3435 decision A)', () => {
     expect(selectMainAnalysisLive(state, 'm1')).toBe(expected);
   });
 });
+
+/* #3084 wave 3d review pass 4 (J) — a fallback switch moves the card the run holds; the live snapshot
+   follows it (the reverse guard and the generation hold read engine/gpu from it). */
+describe('applyAnalysisSnapshotTick — the run engine/card after a fallback switch (#3084 wave 3d review pass 4, J)', () => {
+  const start = (extra: Partial<AnalysisStreamSnapshot>) =>
+    analysisSlice.reducer(undefined, analysisActions.setActiveStream({ ...baseSnapshot, ...extra }));
+
+  it('adopts the server run engine; a run that now holds Ollama carries no endpoint card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'local', lastTickAt: 5000 }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'local', gpu: undefined });
+  });
+
+  it('a switch from an off-card endpoint to an endpoint on a card takes that card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'cuda:0' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
+  it('two different cards held by the run read as any (the rule the start snapshot uses)', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'cuda:1' }),
+    );
+    expect(s.activeStream?.gpu).toBe('any');
+  });
+
+  it('a run that holds only Gemini carries no card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'gemini' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'gemini', gpu: undefined });
+  });
+
+  it('a tick that names no engine leaves engine and gpu alone', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, lastTickAt: 5000 }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
+  it('another manuscript\'s tick is ignored', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'other', engine: 'local' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'none' });
+  });
+});

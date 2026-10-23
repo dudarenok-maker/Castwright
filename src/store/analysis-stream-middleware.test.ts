@@ -90,7 +90,7 @@ interface CapturedAnalysisCall {
   kind: 'main' | 'subset';
   chapterIds?: number[];
   signal: AbortSignal;
-  onPhase?: (e: { phaseId: number; progress: number }) => void;
+  onPhase?: (e: { phaseId: number; progress: number; analysisEngine?: 'local' | 'openai' | 'gemini'; analysisGpu?: string }) => void;
   onEta?: (e: { remainingMs: number }) => void;
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
   onHeartbeat?: (e: unknown) => void;
@@ -140,7 +140,7 @@ beforeEach(() => {
       chapterIdsOrOpts: number[] | { signal: AbortSignal },
       maybeOpts?: {
         signal: AbortSignal;
-        onPhase?: (e: { phaseId: number; progress: number }) => void;
+        onPhase?: (e: { phaseId: number; progress: number; analysisEngine?: 'local' | 'openai' | 'gemini'; analysisGpu?: string }) => void;
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
@@ -149,7 +149,7 @@ beforeEach(() => {
     ) => {
       const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
         signal: AbortSignal;
-        onPhase?: (e: { phaseId: number; progress: number }) => void;
+        onPhase?: (e: { phaseId: number; progress: number; analysisEngine?: 'local' | 'openai' | 'gemini'; analysisGpu?: string }) => void;
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
@@ -375,6 +375,15 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(snap?.phaseProgress).toBeCloseTo(0.42);
     /* phaseLabel comes from ANALYSIS_PHASES (id 1 = "Parsing and attribution"). */
     expect(snap?.phaseLabel).toBe('Parsing and attribution');
+  });
+
+  it('#3084 wave 3d review pass 4 (J) — a phase event naming the run engine after a fallback switch updates the snapshot engine/gpu', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, engine: 'openai', gpu: 'none' }));
+    /* The view's first tick lets the middleware attach its own subscription. */
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    lastCall().onPhase?.({ phaseId: 0, progress: 0.3, analysisEngine: 'local' });
+    expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'local', gpu: undefined });
   });
 
   it('dispatches ETA ticks from the SSE onEta callback', () => {

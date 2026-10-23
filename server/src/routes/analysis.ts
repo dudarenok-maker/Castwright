@@ -3026,6 +3026,11 @@ export interface AnalysisJob {
       phase's entry). `engine` is derived from both by setPhaseEngine, so the cold-boot snapshot names
       whoever holds a card across the whole run. */
   phaseEngines?: { 0?: AnalysisEngine; 1?: AnalysisEngine };
+  /** #3084 wave 3d review pass 4 (J) — every fallback target this run has switched to (set by
+      markFallbackActive on each switch). Non-empty = a switch has happened: from then on the phase
+      events carry `analysisEngine`/`analysisGpu` (withRunEngine), the live frontend snapshot's only
+      way to learn the card the run now holds. */
+  fallbackModels?: Set<string>;
 }
 
 /* #3084 wave 3d review pass 3 — Ollama beats an endpoint beats Gemini, so a mixed run is never
@@ -3454,6 +3459,25 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
+/* #3084 wave 3d review pass 4 (J) — once the run has switched to a fallback target, its phase events
+   name the run's combined engine (the value job.engine holds, which the cold-boot snapshot reads) and the
+   card the endpoint target(s) hold, so the frontend's live snapshot — read by the reverse guard and the
+   generation hold — follows the switch instead of keeping the engine it captured at start. Ollama and
+   Gemini targets hold no endpoint card. Before any switch the events are untouched. */
+function withRunEngine(job: AnalysisJob, payload: unknown): unknown {
+  if (!job.fallbackModels?.size || !payload || typeof payload !== 'object') return payload;
+  if ((payload as { kind?: unknown }).kind !== 'phase') return payload;
+  const endpoints = getCachedUserSettings().analyzerEndpoints;
+  const cards = [...job.fallbackModels].flatMap((modelId) => {
+    const parsed = parseEndpointModelId(modelId);
+    return parsed ? [endpoints.find((e) => e.id === parsed.endpointId)?.gpu ?? 'any'] : [];
+  });
+  /* The rule the frontend's start snapshot uses (snapshotGpuFor): off-card endpoints hold none. */
+  const sharing = [...new Set(cards.filter((g) => g !== 'none'))];
+  const gpu = cards.length === 0 ? undefined : sharing.length === 0 ? 'none' : sharing.length === 1 ? sharing[0] : 'any';
+  return { ...payload, analysisEngine: job.engine, ...(gpu !== undefined ? { analysisGpu: gpu } : {}) };
+}
+
 /* Exported for unit testing (the chapter-failed replay contract). */
 export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
@@ -3592,7 +3616,9 @@ export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): 
    lands after that release (a P20 in-flight chapter finishing) takes no mark: nothing would ever
    release it. */
 function markFallbackActive(job: AnalysisJob, modelId: string | null): void {
-  if (!modelId || job.endpointRunReleased || job.fallbackMarked?.has(modelId)) return;
+  if (!modelId) return;
+  (job.fallbackModels ??= new Set()).add(modelId);
+  if (job.endpointRunReleased || job.fallbackMarked?.has(modelId)) return;
   (job.fallbackMarked ??= new Set()).add(modelId);
   const release = markEndpointRunActive(endpointIdsForModelIds([modelId]));
   const previous = job.releaseEndpointRun;
@@ -4441,8 +4467,9 @@ export async function runMainAnalyzerJob(
     }
 
     const send = (payload: unknown) => {
-      broadcastToJob(job, payload);
-      trackForReplay(job, payload);
+      const stamped = withRunEngine(job, payload);
+      broadcastToJob(job, stamped);
+      trackForReplay(job, stamped);
     };
     /* #2015 §4 — a genuine stale merge base stops being silent. The write still
        proceeds with the same base it uses today, so NO data is lost that is not
@@ -8026,8 +8053,9 @@ export async function runSubsetAnalyzerJob(
       configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
 
     const send = (payload: unknown) => {
-      broadcastToJob(job, payload);
-      trackForReplay(job, payload);
+      const stamped = withRunEngine(job, payload);
+      broadcastToJob(job, stamped);
+      trackForReplay(job, stamped);
     };
     /* #2015 §4 — a genuine stale merge base stops being silent. The write still
        proceeds with the same base it uses today, so NO data is lost that is not

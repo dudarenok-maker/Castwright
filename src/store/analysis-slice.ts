@@ -19,6 +19,7 @@ import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
    alias for it). Type-only: the slice stays free of api.ts at runtime. */
 import type { AnalysisFailureFix } from '../lib/api';
 import type { AnalysisEngine } from '../lib/model-id';
+import { combineSnapshotGpus } from '../lib/analyzer-endpoints';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -155,6 +156,11 @@ export const analysisSlice = createSlice({
         remainingMs?: number;
         lastTickAt?: number;
         model?: string;
+        /** #3084 wave 3d review pass 4 (J) — the run's engine and endpoint card after a fallback switch
+            (the server's `analysisEngine`/`analysisGpu`). Moves the snapshot's start-time capture, which
+            the reverse guard and the generation hold read, to what the run now holds. */
+        engine?: AnalysisEngine;
+        gpu?: string;
       }>,
     ) {
       const snap = state.activeStream;
@@ -166,6 +172,13 @@ export const analysisSlice = createSlice({
         snap.haltReason = undefined;
       }
       if (typeof action.payload.model === 'string') snap.model = action.payload.model;
+      if (action.payload.engine !== undefined) {
+        /* Only an endpoint run carries a card; its earlier card stays held until the run ends, so the
+           new one is combined with it (the start snapshot's rule). */
+        const held = snap.engine === 'openai' ? snap.gpu : undefined;
+        snap.engine = action.payload.engine;
+        snap.gpu = action.payload.engine === 'openai' ? combineSnapshotGpus([held, action.payload.gpu]) : undefined;
+      }
       const phaseChanged =
         typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;
       if (typeof action.payload.phaseId === 'number') snap.phaseId = action.payload.phaseId;

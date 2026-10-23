@@ -223,6 +223,22 @@ describe('useReverseLocalAnalyzerGuard', () => {
     expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
   });
 
+  it('#3084 wave 3d review pass 4 (J) — a run that started on an off-card endpoint and switched to Ollama prompts without a reload', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('none') });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    /* Before the switch: gpu none never prompts. */
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+    /* The server's next phase event names the run engine after the switch to Ollama. */
+    act(() => {
+      store.dispatch(analysisSlice.actions.applyAnalysisSnapshotTick({ manuscriptId: 'm_marlow', engine: 'local' }));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
   /* #3710 F4 — generation uses the SESSION picker (ui.ttsModelKey), not the account default. */
   const seedDevices = (store: ReturnType<typeof makeStore>) => {
     const knob = (key: string, effective: string) => ({ key, effective, source: 'override', locked: false, overridden: true });

@@ -119,16 +119,22 @@ export function analyzerSharesGenerationDevice(input: {
   );
 }
 
+/** The one card tag for several endpoint cards: `none` only when none of them holds a card, the
+    card itself when they all hold the same one, else `any`. Undefined entries (no endpoint) are skipped. */
+export function combineSnapshotGpus(gpus: ReadonlyArray<string | undefined>): string | undefined {
+  const held = gpus.filter((g): g is string => g !== undefined);
+  if (held.length === 0) return undefined;
+  const sharing = [...new Set(held.filter((g) => g !== 'none'))];
+  if (sharing.length === 0) return 'none';
+  return sharing.length === 1 ? sharing[0] : 'any';
+}
+
 /** The gpu tag an analysis snapshot carries for the run's model ids. */
 export function snapshotGpuFor(
   modelIds: readonly string[],
   settings: Pick<UserSettings, 'analyzerEndpoints'>,
 ): string | undefined {
-  const gpus = modelIds
-    .filter((id) => engineForModelId(id) === 'openai')
-    .map((id) => endpointForModelId(settings, id)?.gpu ?? 'any');
-  if (gpus.length === 0) return undefined;
-  const sharing = [...new Set(gpus.filter((g) => g !== 'none'))];
-  if (sharing.length === 0) return 'none';
-  return sharing.length === 1 ? sharing[0] : 'any';
+  return combineSnapshotGpus(
+    modelIds.filter((id) => engineForModelId(id) === 'openai').map((id) => endpointForModelId(settings, id)?.gpu ?? 'any'),
+  );
 }

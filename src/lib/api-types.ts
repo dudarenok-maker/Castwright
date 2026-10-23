@@ -4574,6 +4574,18 @@ export interface components {
             phaseId: number;
             progress: number;
             label?: string;
+            /**
+             * @description Present only once the run has switched to a fallback target. The run's combined engine:
+             *     whoever holds a card across both phases (Ollama over an endpoint over Gemini) — the same
+             *     value the cold-boot snapshot reports. Lets a live client follow the switch.
+             * @enum {string}
+             */
+            analysisEngine?: "local" | "openai" | "gemini";
+            /**
+             * @description Present only with `analysisEngine`, and only when an endpoint target took over: the card
+             *     tag that target holds (`none` | `any` | `cuda:N`).
+             */
+            analysisGpu?: string;
         };
         /**
          * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;

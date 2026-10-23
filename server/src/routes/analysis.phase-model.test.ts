@@ -1491,3 +1491,59 @@ describe('a tagless Ollama fallback target is Ollama (#3084 wave 3d review pass 
     }
   }, 60_000);
 });
+
+/* #3084 wave 3d review pass 4 (J) — the frontend's live snapshot learns of a fallback switch from the
+   phase events: once a switch has happened they carry the run's combined engine (`analysisEngine`, the
+   same value job.engine holds) and the card an endpoint target holds (`analysisGpu`). */
+describe('phase events name the run engine and card after a fallback switch (#3084 wave 3d review pass 4, J)', () => {
+  const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://192.168.1.50:8080/v1', gpu: 'none', contextTokens: 32768 });
+  const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  type RunPhaseEvent = CapturedEvent & { analysisEngine?: string; analysisGpu?: string };
+
+  async function runWithEndpointDown(target: Pick<AnalyzerSelection, 'fallbackModel' | 'fallbackEngine'>): Promise<RunPhaseEvent[]> {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] });
+    const manuscriptId = `test-run-engine-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()), engine: 'openai', model: 'openai:lab::m', ...target };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    job.engine = 'openai';
+    const events = attachEventCapture(job);
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      return events.filter((e) => e.kind === 'phase') as RunPhaseEvent[];
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }
+
+  it('a switch to a tagless Ollama target stamps analysisEngine local on the events that follow it', async () => {
+    const phases = await runWithEndpointDown({ fallbackModel: 'llama3', fallbackEngine: 'local' });
+    const switched = phases.filter((e) => e.model === 'llama3');
+    expect(switched.length).toBeGreaterThan(0);
+    expect(switched.every((e) => e.analysisEngine === 'local')).toBe(true);
+    /* An Ollama target holds no endpoint card. */
+    expect(phases.some((e) => e.analysisGpu !== undefined)).toBe(false);
+    /* Nothing before the switch claims a run engine. */
+    expect(phases[0].analysisEngine).toBeUndefined();
+  }, 60_000);
+
+  it('a switch to an endpoint on a card stamps that card, with analysisEngine openai', async () => {
+    const phases = await runWithEndpointDown({ fallbackModel: 'openai:spare::m', fallbackEngine: 'openai' });
+    const switched = phases.filter((e) => e.model === 'openai:spare::m');
+    expect(switched.length).toBeGreaterThan(0);
+    expect(switched.every((e) => e.analysisEngine === 'openai' && e.analysisGpu === 'cuda:0')).toBe(true);
+  }, 60_000);
+});

@@ -231,6 +231,10 @@ export interface AnalyseOpts {
     progress: number;
     live?: AnalysisLiveInfo;
     model?: string;
+    /** #3084 wave 3d review pass 4 (J) — set only once the run has switched to a fallback target: the
+        run's combined engine and the card an endpoint target holds. The live snapshot follows them. */
+    analysisEngine?: AnalysisEngine;
+    analysisGpu?: string;
   }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
@@ -2889,6 +2893,9 @@ interface AnalysisStreamEvent {
   phaseId?: number;
   progress?: number;
   label?: string;
+  /** `phase` — the run's combined engine and endpoint card after a fallback switch (J). */
+  analysisEngine?: string;
+  analysisGpu?: string;
   response?: AnalyseResponse;
   message?: string;
   code?: string;
@@ -2996,6 +3003,15 @@ function analysisRefusalFromBody(status: number, body: string, codes: readonly s
   return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
 }
 
+/* #3084 wave 3d review pass 4 (J) — the run engine/card a phase event carries after a fallback switch.
+   An engine this client does not know is dropped rather than trusted. Always both keys, so a plain event
+   reads as "no change". */
+function runEngineOf(payload: AnalysisStreamEvent): { analysisEngine: AnalysisEngine | undefined; analysisGpu: string | undefined } {
+  const e = payload.analysisEngine;
+  const known = e === 'local' || e === 'openai' || e === 'gemini' ? e : undefined;
+  return { analysisEngine: known, analysisGpu: known && typeof payload.analysisGpu === 'string' ? payload.analysisGpu : undefined };
+}
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -3077,6 +3093,7 @@ async function realAnalyseManuscript(
           progress: payload.progress,
           live: payload.live,
           model: typeof payload.model === 'string' ? payload.model : undefined,
+          ...runEngineOf(payload),
         });
       }
     } else if (payload.kind === 'log') {
@@ -5802,6 +5819,7 @@ async function realRunAnalysisForChapters(
           progress: payload.progress,
           live: payload.live,
           model: typeof payload.model === 'string' ? payload.model : undefined,
+          ...runEngineOf(payload),
         });
       }
     } else if (payload.kind === 'log') {

@@ -651,7 +651,7 @@ export function AnalysingView({
               : phase1Pick ?? phase1Model ?? defaultAnalysisModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
-          onPhase: ({ phaseId, progress, live, model: serverModel }) => {
+          onPhase: ({ phaseId, progress, live, model: serverModel, analysisEngine, analysisGpu }) => {
             if (cancelled) return;
             setConn('streaming');
             markEvent();
@@ -676,6 +676,8 @@ export function AnalysingView({
                label/progress (so the top-bar pill doesn't flip-flop between the
                two pipelined phases); lagging-phase ticks just refresh the
                liveness timestamp. */
+            /* The run engine/card after a fallback switch rides any phase's tick, lagging or not. */
+            const runEngine = { engine: analysisEngine, gpu: analysisGpu };
             dispatch(
               analysisActions.applyAnalysisSnapshotTick(
                 phaseId === newMax
@@ -685,8 +687,9 @@ export function AnalysingView({
                       phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
                       phaseProgress: progress,
                       lastTickAt: Date.now(),
+                      ...runEngine,
                     }
-                  : { manuscriptId, lastTickAt: Date.now() },
+                  : { manuscriptId, lastTickAt: Date.now(), ...runEngine },
               ),
             );
           },
@@ -1107,7 +1110,7 @@ export function AnalysingView({
         model: requestModel,
         /* #3435 — set only by the subset shrink banner's Accept. */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
-        onPhase: ({ phaseId, progress, live }) => {
+        onPhase: ({ phaseId, progress, live, analysisEngine, analysisGpu }) => {
           markEvent();
           setConn('streaming');
           setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
@@ -1124,6 +1127,8 @@ export function AnalysingView({
               phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
               phaseProgress: progress,
               lastTickAt: Date.now(),
+              engine: analysisEngine,
+              gpu: analysisGpu,
             }),
           );
         },

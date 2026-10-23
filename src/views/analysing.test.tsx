@@ -284,6 +284,20 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     expect(overBudget).toHaveLength(1);
   });
 
+  it('#3084 wave 3d review pass 4 (J) — a phase event naming the run engine after a fallback switch updates the snapshot engine/gpu, from either phase', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    act(() => {
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'none' }));
+    });
+    expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'openai', gpu: 'none' });
+    /* Phase 1 is the frontier; a lagging phase-0 tick carries the switch. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.1 });
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.9, analysisEngine: 'local' });
+    });
+    expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'local', gpu: undefined });
+  });
+
   it('keeps BOTH pipelined phases live at once (Phase 0 + Phase 1 tickers do not clobber each other)', async () => {
     await renderViewWaitingForAnalysis();
 
