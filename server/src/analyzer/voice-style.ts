@@ -35,7 +35,7 @@ import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
-import { generatePersonaViaOllama } from './ollama.js';
+import { generatePersonaViaOllama, PERSONA_ABSOLUTE_MAX_MS } from './ollama.js';
 import { inferEngineFromModelId } from './model-id.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
@@ -226,6 +226,11 @@ async function generateViaGemini(character: CastCharacter): Promise<string> {
     response = await client.models.generateContent({
       model,
       contents: prompt,
+      /* #3724 — bound the call locally: from @google/genai 2.29 the SDK no
+         longer inherits Node's 300 s undici timeout, so without this only
+         Google's server-side limit applies. Same ceiling as the local persona
+         path (generatePersonaViaOllama). */
+      config: { httpOptions: { timeout: PERSONA_ABSOLUTE_MAX_MS } },
     });
   } catch (err) {
     /* #3084 P22 — a saved secret an upstream error echoes never reaches the
