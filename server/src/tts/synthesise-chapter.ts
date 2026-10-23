@@ -157,17 +157,10 @@ export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 3600;
 const QWEN_BATCH_SIZE_17B = configValue<number>('tts.batch.size17b');
 const QWEN_BATCH_TOKEN_BUDGET_17B = configValue<number>('tts.batch.tokenBudget17b');
 
-/* Defensive per-call ceiling (plan 148). A single provider call that never
-   returns — e.g. Qwen's open-ended decode running away on degenerate, non-prose
-   input (a table-of-contents page, a copyright block) — would otherwise hang the
-   chapter, and with it the whole generation queue, indefinitely (the 2026-05-31
-   the Hollow Tide stall). Bounding each call turns that infinite hang into a single
-   chapter failure the queue rides past. Generous default (10 min) — far above
-   any legitimate single batch (~250 s for 32 sentences). `0` disables. */
-export const SYNTH_CALL_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SIDECAR_CALL_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 600_000;
-})();
+/* Defensive per-call ceiling (plan 148) — defined in ./synth-call-timeout.ts
+   (a leaf, so tts/gemini.ts can import it without an import cycle, #3724). */
+import { SYNTH_CALL_TIMEOUT_MS } from './synth-call-timeout.js';
+export { SYNTH_CALL_TIMEOUT_MS };
 
 /** Thrown when a single synth call exceeds {@link SYNTH_CALL_TIMEOUT_MS}.
     Non-transient by construction (it is thrown OUTSIDE `withTtsRetry`, so it is

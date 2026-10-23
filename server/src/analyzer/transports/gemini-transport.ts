@@ -76,8 +76,9 @@ export function resolveStreamIdleTimeoutMs(): number {
 /* #3084 P5 — how long a THINKING Gemini model may stay silent before its answer
    text starts. A long think can stream nothing, or only sparse thought
    summaries, before the answer, so the 45 s idle window would kill it. The
-   knob's maximum is 290 000 ms: the SDK streams over the global fetch, whose
-   undici headers/body timeouts are fixed at 300 s. The wave 2 on-box row (run
+   knob's maximum is 290 000 ms, a deliberate local ceiling (#3724: it was
+   first set below undici's 300 s timeouts, which the SDK no longer inherits
+   from 2.29, so the cap now stands on its own). The wave 2 on-box row (run
    sheet §1) measures real chapters to tune this default. */
 export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 120_000;
 

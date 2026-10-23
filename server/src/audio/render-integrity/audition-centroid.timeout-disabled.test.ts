@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 
-/* Read once at module load by synthesise-chapter.ts, so it must be set before any import. */
+/* Read once at module load by tts/synth-call-timeout.ts, so it must be set before any import. */
 vi.hoisted(() => {
   process.env.SIDECAR_CALL_TIMEOUT_MS = '0';
 });
