@@ -38,6 +38,11 @@ import { WhisperInstall } from '../components/whisper-install';
 
 const INVENTORY_POLL_MS = 30_000;
 
+/* Stable fallback for the keep-alive selector: the field is absent from account
+   initial state until fetchAccountSettings sets it, and a fresh `{}` per call
+   re-renders on every dispatch (#3722). */
+const EMPTY_KEEP_ALIVE: Record<string, number> = {};
+
 /* Inventory ids that map to a sidecar TTS engine the Load/Unload pill drives. */
 const TTS_ENGINE_BY_ID: Partial<Record<string, 'coqui' | 'kokoro' | 'qwen'>> = {
   kokoro: 'kokoro',
@@ -110,7 +115,7 @@ function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstal
 
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
-  const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? {});
+  const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? EMPTY_KEEP_ALIVE);
   const settingsUnreadable = useAppSelector((s) => !!s.account.settingsFileUnreadable);
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
