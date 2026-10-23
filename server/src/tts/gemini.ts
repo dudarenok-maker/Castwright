@@ -12,6 +12,7 @@
 import { GoogleGenAI } from '@google/genai';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import { resolveGeminiModelId } from './model-keys.js';
+import { SYNTH_CALL_TIMEOUT_MS } from './synth-call-timeout.js';
 import { GEMINI_VOICE_DESCRIPTIONS } from './voice-mapping.js';
 
 interface GeminiTtsOptions {
@@ -32,7 +33,7 @@ export class GeminiTtsProvider implements TtsProvider {
     this.client = new GoogleGenAI({ apiKey: opts.apiKey });
   }
 
-  async synthesize({ text, voiceName, modelKey }: SynthesizeInput): Promise<SynthesizeOutput> {
+  async synthesize({ text, voiceName, modelKey, signal }: SynthesizeInput): Promise<SynthesizeOutput> {
     const model = resolveGeminiModelId(modelKey);
 
     /* Guard against cross-engine bleed. If `voiceName` isn't a documented
@@ -59,6 +60,13 @@ export class GeminiTtsProvider implements TtsProvider {
       model,
       contents: [{ role: 'user', parts: [{ text }] }],
       config: {
+        /* #3724 — bound the call locally: from SDK 2.29 nothing else ends a
+           stalled request before Google's server-side limit, and the
+           voice-sample route has no withCallTimeout around this call. The
+           caller's signal also stops the request a timed-out chapter
+           synthesis would otherwise leave running. */
+        ...(signal ? { abortSignal: signal } : {}),
+        ...(SYNTH_CALL_TIMEOUT_MS > 0 ? { httpOptions: { timeout: SYNTH_CALL_TIMEOUT_MS } } : {}),
         responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
