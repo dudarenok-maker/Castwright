@@ -75,6 +75,17 @@ describe('mock analyzer endpoint API', () => {
     expect(s.analyzerEndpoints?.some((e) => e.id === 'm-ref')).toBe(false);
   });
 
+  it('refuses to delete an endpoint the saved fallback target names, as the server does (MODEL_ID_CONFIG_KNOBS has four knobs)', async () => {
+    await api.createAnalyzerEndpoint(input('m-fallback'));
+    _setMockUserSettingsForTest({ configOverrides: { 'analyzer.fallback.target': 'openai:m-fallback::m' } });
+    const r = await refusal(api.deleteAnalyzerEndpoint('m-fallback'));
+    expect(r.code).toBe('referenced');
+    expect(r.issues).toEqual([{ path: [], message: 'Advanced setting "analyzer.fallback.target"' }]);
+    _setMockUserSettingsForTest({ configOverrides: {} });
+    const s = await api.deleteAnalyzerEndpoint('m-fallback');
+    expect(s.analyzerEndpoints?.some((e) => e.id === 'm-fallback')).toBe(false);
+  });
+
   it('allows deleting an endpoint named only by the read-only effective analyzerPhase0Model/analyzerPhase1Model fields, as the server does (A5; #3525 review)', async () => {
     await api.createAnalyzerEndpoint(input('m-effective'));
     _setMockUserSettingsForTest({
