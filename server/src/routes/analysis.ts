@@ -2946,7 +2946,8 @@ export interface AnalysisJob {
       workspace book — those skip every disk write site, same as
       cast.json / state.json. */
   bookDir: string | null;
-  /** Engine the active analyzer is using. Persisted into
+  /** Engine holding a card across BOTH phases, not any one analyzer's: Ollama over an endpoint over
+      Gemini, derived from each phase's current engine (`phaseEngines`, by setPhaseEngine). Persisted into
       `analysis-state.json` so the cold-boot rehydrated AnalysisPill
       carries the right engine for the reverse-direction local-analyzer
       guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`) — the
@@ -3014,8 +3015,9 @@ export interface AnalysisJob {
   /** #3084 P30 — set by releaseBusyAndPin once releaseEndpointRun has run; a later switch takes no mark. */
   endpointRunReleased?: boolean;
   /** #3084 wave 3d — an Ollama-served selection (a primary) belongs to this run. The switch is sticky and
-      job.engine follows it, so it can read the target by the end while Ollama still holds the run pin
-      (keep_alive: -1); releaseBusyAndPin evicts on either. */
+      job.engine is derived from both phases' current engines, so once every phase has moved off Ollama it
+      can read the target by the end while Ollama still holds the run pin (keep_alive: -1);
+      releaseBusyAndPin evicts on either. */
   ollamaServed?: boolean;
   /** #3084 wave 3d review pass 2 — this run's fallback switch, shared by every analyzer selection the run
       makes (phase 0, phase 1): a switch one makes sends the others' calls straight to the target too
@@ -3614,7 +3616,8 @@ export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): 
 /* #3084 P30 — a fallback target is marked busy at its first switch, never at job start, and the
    mark is released with the job's own (releaseBusyAndPin calls releaseEndpointRun). A switch that
    lands after that release (a P20 in-flight chapter finishing) takes no mark: nothing would ever
-   release it. */
+   release it. Every switch is recorded in `fallbackModels`, mark or not: that is what makes the phase
+   events carry the run engine (withRunEngine). */
 function markFallbackActive(job: AnalysisJob, modelId: string | null): void {
   if (!modelId) return;
   (job.fallbackModels ??= new Set()).add(modelId);
@@ -4338,8 +4341,9 @@ export async function runMainAnalyzerJob(
      they always were. */
   let activeModelId = selection.model;
   /* #3084 P30 — the engine the active model resolves to; reassigned together with
-     activeModelId on a fallback switch, so every later chunk budget and job.engine
-     reflect the target, not the primary. */
+     activeModelId on a fallback switch, so every later chunk budget reflects the target, not the
+     primary. job.engine does not follow it alone: setPhaseEngine records this phase's engine and
+     re-derives job.engine from both phases (whoever holds a card wins). */
   let activeEngine: AnalysisEngine = selection.engine;
   setPhaseEngine(job, 0, selection.engine);
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
@@ -8029,7 +8033,9 @@ export async function runSubsetAnalyzerJob(
     const abortController = job.controller;
     const analyzer = selection.analyzer;
     /* #3084 P30 — mutable, reassigned together on a fallback switch (stage1Call.onFallback
-       below), so job.engine and every later chunk budget reflect the target. */
+       below), so every later chunk budget reflects the target. job.engine does not follow it alone:
+       setPhaseEngine records this phase's engine and re-derives job.engine from both phases
+       (whoever holds a card wins). */
     let subsetModelId = selection.model;
     let subsetEngine: AnalysisEngine = selection.engine;
     setPhaseEngine(job, 0, selection.engine);
