@@ -17,6 +17,7 @@
    import this one; a back-import would be a cycle). */
 
 import { createHash } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import { manuscriptHintsJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 
@@ -75,6 +76,12 @@ export async function writeManuscriptHints(
   value: PersistedManuscriptHints,
 ): Promise<void> {
   await writeJsonAtomic(manuscriptHintsJsonPath(bookDir), value);
+}
+
+/** Delete the persisted file (reparse / replace-manuscript discard the
+    restructure it recorded). Absent is fine; any other error throws. */
+export async function removeManuscriptHints(bookDir: string): Promise<void> {
+  await rm(manuscriptHintsJsonPath(bookDir), { force: true });
 }
 
 /** The persisted file, or `null` when there is none. Corrupt JSON throws a

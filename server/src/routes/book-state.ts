@@ -79,6 +79,7 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
+import { removeManuscriptHints } from '../workspace/manuscript-hints.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -1323,7 +1324,8 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
    parsed manuscript, regenerates the chapter list, snapshots the srv-13
    reuse/voice carryover, wipes the now-stale analysis cache / cast / audio,
    reconciles manuscript-edits (via the GET-side merge — the file is left in
-   place here), appends a change-log entry, refreshes the in-memory
+   place here), deletes manuscript-hints.json (#3703: the restructure it
+   recorded is discarded with the old chapter list), appends a change-log entry, refreshes the in-memory
    ManuscriptRecord, and returns the response payload both routes send.
 
    The caller is responsible for everything BEFORE this point: locating the
@@ -1518,6 +1520,17 @@ async function applyReparse(
        cast / audio / analysis cache / revisions of the book are already gone
        by this point. */
     if (fresh.bookDir !== bookDir) return null;
+    /* #3703 -- drop the persisted restructure (manuscript-hints.json) here:
+       under the `book` lock, the same hold as the chapter-list write and the
+       record swap, so no restructure (which holds `book` across its hints +
+       state writes) can interleave; lock order `book-op` -> `book`, the rm
+       takes no lock. BEFORE the state write, so a failing rm (EPERM/EBUSY)
+       aborts the reparse with state.json untouched instead of leaving new
+       chapters beside an old file; the route's catch curates the error. A
+       reparse that fails after the rm only loses the file, which falls back
+       to a fresh parse -- never a wrong body. Not in the destructive arms
+       above: they run before the moved-book check. */
+    await removeManuscriptHints(fresh.bookDir);
     let undoInstall: (() => Promise<void>) | undefined;
     let newChapters: BookStateJson['chapters'] = [];
     let nextState: BookStateJson | null;
