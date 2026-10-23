@@ -56,7 +56,7 @@ recognised containment barrier.
 | `export.ts` `resolveArtifactPath` / `outPath` / `buildPath` | `job.filename` (slug(title) + validated suffix; also manifest-rehydrated) | `sanitizeIdSegment(filename)` at each join — clears the `unlink`/`rm`/`sendFile` sinks + the `outPath`-derived sinks inside `build-m4b` / `build-codec-zip` (no edits needed there) |
 | `build-mp3-zip.ts` / `build-mp3-folder.ts` staging filename join | `sanitiseForZip(chapter.title)` | `sanitizeIdSegment(entryName)` on the **filesystem** join; the pretty name stays the zip label |
 | `sync-folder.ts` file + folder writes | `filename`, `bookSubfolder` under the user sync root | `sanitizeIdSegment(segment)` + `assertContained(destDir, …)` |
-| `export.ts` `console.error` on `sendFile` failure | `path`, `err.message` | static `%s` format string (`js/tainted-format-string`) |
+| `export.ts` `console.error` on `sendFile` failure | `path`, `err.message` | static `%s` format string (`js/tainted-format-string`) — **superseded 2026-10-23 (#3721):** reverted to a template literal, because `logger.ts`'s timestamp patch makes `%s` in a caller's first argument print literally; see `docs/security/codeql-dismissal-residue.md` |
 | `script-review-ledger.ts` `patchSelection` merge | request-body `selected` keys | `safeSelection()` drops `__proto__`/`constructor`/`prototype`; `ownEntry()` guards the dynamic-key lookup in `resolveOps` + `patchSelection` (`js/prototype-polluting-assignment`) |
 
 **Dismissed (false positive, not a code change):** `script-review.ts` reflected

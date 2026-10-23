@@ -154,16 +154,22 @@ rather than re-fixed, and the gate does not apply.
 ## Alerts #227–#236 — the #3721 security sweep (for dismissal)
 
 Dismissed on **2026-10-23** (#227–#232, #234, #235); #233 and #236 are to be
-dismissed after this change merges. The GitHub dismissal comments point back to
-this file.
+dismissed after this change merges, together with the eleven `fixed`
+`js/tainted-format-string` alerts this change re-raises (see below). The GitHub
+dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
+#232, #234 and #235 cite nothing. This file is the record.
 
 - **`py/stack-trace-exposure` (#227–#231, `false positive`)** — five more
   `{"detail": str(exc)}` echoes in `server/tts-sidecar/main.py` (`:12201`,
   `:12652`, `:12679`, `:13015`, `:11973`), the same shape as the four recorded
   above. Each exception class (`DesignContentionTimeoutError`,
-  `VoiceLanguageUnsupportedError`) builds its message from a fixed template plus
-  curated values — never a traceback, path, or third-party text — and the
-  sites carry the audited `# exc-text-safe:` marker.
+  `Base17ContentionTimeoutError` (#231, `:11973`), `VoiceLanguageUnsupportedError`)
+  builds its message from curated values — never a traceback, path, or
+  third-party text — and the sites carry the audited `# exc-text-safe:` marker.
+  The contention errors are a fixed template plus a number; #228's
+  `VoiceLanguageUnsupportedError` message is a template echoing the requested
+  voice and language and the model's supported-language list (the dismissal
+  comment's "fixed template + number" does not describe it).
 - **`js/incomplete-multi-character-sanitization` (#232, `used in tests`)** —
   `scripts/tests/stamp-publish-token.test.mjs:36`: a test asserting that
   stripping HTML comments hides a token; not sanitization of untrusted HTML.
@@ -183,7 +189,18 @@ this file.
   `server/src/logger.test.ts` ("renders a template-literal first argument…")
   pins this against the real patch. A consequence recorded in the same change:
   `%s` placeholders do not work in server code, and the sites that used them were
-  rewritten as template literals.
+  rewritten as template literals. `server/src/console-format-placeholder.guard.test.ts`
+  fails the build on any `console` call whose first argument has a placeholder.
+- **Re-raised `js/tainted-format-string` alerts (dismiss after merge)** — commit
+  `ebac5b35` (Aug 18) had fixed these by turning template literals into `%s`
+  placeholders; #3721 reverts that at 10 sites, so the first weekly scan on
+  `main` re-opens them: #76 (`routes/queue.ts`), #77 (`routes/voice-style.ts`),
+  #172 (`routes/export.ts`), #210, #213, #224 (`routes/voice-library.ts`, revoke
+  and delete) and #211, #214, #215, #216, #217
+  (`workspace/purge-clone-artifacts.ts`). Same reason as #233/#236: the boot-time
+  timestamp patch makes the timestamp Node's format argument, so the template
+  literal is never format-interpreted, while a `%s` there printed literally
+  (pinned by `logger.test.ts` and the new guard).
 
 | alert | rule | justification |
 |---|---|---|
@@ -192,3 +209,4 @@ this file.
 | #234, `scripts/tests/npm-check-onbox-register-routing.test.mjs:53` | js/incomplete-sanitization | test-only `quoteArg` over hardcoded arguments; used in tests |
 | #235, `server/src/analyzer/catalog/gemini-catalog.ts:100` | js/insufficient-password-hash | SHA-256 of an API key as an in-memory cache key, not password storage; false positive |
 | #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismiss after merge |
+| #76, #77, #172, #210, #211, #213, #214, #215, #216, #217, #224 (re-raised after merge: `queue.ts`, `voice-style.ts`, `export.ts`, `voice-library.ts`, `purge-clone-artifacts.ts`) | js/tainted-format-string | same patch argument as #233/#236; `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts`; dismiss after merge |

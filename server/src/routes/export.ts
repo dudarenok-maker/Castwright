@@ -665,8 +665,9 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
       if (!err) return;
       const status = (err as { status?: number }).status ?? 500;
       /* Template literal, not `%s` placeholders: logger.ts's timestamp patch
-         makes the first argument Node's format string, so a `%s` here would
-         print literally (logger.test.ts pins this). */
+         inserts the timestamp as the first argument, so this string is never
+         treated as a format string and a `%s` here would print literally
+         (logger.test.ts pins this). */
       console.error(
         `[export] sendFile failed for ${path}${res.headersSent ? ' (after headers sent)' : ''}: ${err.message}`,
         { status },
