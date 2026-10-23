@@ -35,7 +35,7 @@ owner: null
 ## Invariants to preserve
 
 1. `Chapter` ids in `BookStateJson.chapters[]` are exactly `[1..N]` in narrative order after any structural op. Enforced by `buildNewStateChapters` in `server/src/workspace/restructure.ts`.
-2. `ChapterHint[]` in the in-memory `ManuscriptRecord` always agrees with `state.json` chapters by id + title after a restructure handler returns. Enforced by `record.chapterHints = result.hints` in `server/src/routes/chapters-restructure.ts`.
+2. `ChapterHint[]` in the in-memory `ManuscriptRecord` always agrees with `state.json` chapters by id + title after a restructure handler returns. Enforced by `record.chapterHints = result.hints` in `server/src/routes/chapters-restructure.ts`. The restructured hint bodies are also persisted to `.audiobook/manuscript-hints.json` and are what a restart hydrates (#3703); the file is used only if its schema, `manuscriptId`, `manuscriptFile`, the sha256 of the manuscript bytes and every chapter's id + uuid sequence match `state.json`, else the hydrate falls back to a fresh parse.
 3. `manuscript-edits.json` sentences carry `chapterId` matching one of the surviving chapter ids in `state.json`. Crash-safe via the reconciliation filter at `server/src/routes/book-state.ts:166-185`.
 4. For renumbered-only chapters, `audioModelKey` + `audioRenderedAt` survive the operation; their slug-named files on disk are renamed (not deleted). For content-changed chapters those fields are cleared and the files are deleted.
 5. `.segments.json` files' embedded `chapterId` + `chapterTitle` fields always match the on-disk slug's owner chapter after a rename. Enforced by `rewriteChapterSlugs`.
