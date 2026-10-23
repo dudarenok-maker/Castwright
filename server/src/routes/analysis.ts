@@ -3152,6 +3152,29 @@ function refusalFrame(r: { error: string; message: string; draining?: boolean })
   return { kind: 'error', code: r.error, message: r.message, ...(r.draining !== undefined ? { draining: r.draining } : {}) };
 }
 
+/* PR #3714 review pass 6 -- the record a registered start runs on. The start
+   read its record before it queued on book-op for `runBookJob`, and an op
+   queued ahead of it (a bundle overwrite) may have replaced the book since.
+   Re-read the record for the manuscript the LEASE names (resolved under
+   book-op; the job token now refuses a further overwrite). A lease naming a
+   different manuscriptId means the book was replaced by another manuscript:
+   the request's id no longer belongs to it, so the start is refused as
+   `unknown_manuscript`, the same answer a start sent after the overwrite gets.
+   No lease (an upload not yet on disk): the captured record stands. */
+const MANUSCRIPT_REPLACED_MESSAGE =
+  "This book's manuscript was replaced while the analysis was starting. Reopen the book and start the analysis again.";
+type StartRecord = NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>;
+async function recordForLease(
+  manuscriptId: string,
+  captured: StartRecord,
+  lease: BookJobLease | null,
+): Promise<StartRecord | { refusal: Record<string, unknown> }> {
+  if (!lease) return captured;
+  const refusal = { refusal: { kind: 'error', code: 'unknown_manuscript', message: MANUSCRIPT_REPLACED_MESSAGE } };
+  if (lease.state.manuscriptId !== manuscriptId) return refusal;
+  return (await getOrHydrateManuscript(manuscriptId)) ?? refusal;
+}
+
 /* Exported for tests + the B2 frontend's cheap "is a job running?" probe
    before opening an SSE. Returns false when the map entry is present but
    its controller has been aborted — that entry will be cleared at the
@@ -4015,6 +4038,15 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      token. A record with no `bookId` (an upload not yet on disk) has no folder to
      protect and runs unregistered. */
   const startMain = async (lease: BookJobLease | null): Promise<unknown> => {
+  /* PR #3714 review pass 6 — run on the record the lease names, read BEFORE the
+     re-check below so #3004's window stays `await`-free. */
+  const leased = await recordForLease(manuscriptId, record, lease);
+  if ('refusal' in leased) {
+    console.log(`[analysis] refused manuscript_replaced manuscript=${JSON.stringify(manuscriptId)}`);
+    send(leased.refusal);
+    clearInterval(keepAlive);
+    return res.end();
+  }
   /* 3. #3004 — those awaits reopened the check-then-register window: a concurrent POST may have
      registered a job while this one waited. Re-check with the same condition and join that
      job rather than start a second one. Reassigning `existing` also makes the displacement
@@ -4100,7 +4132,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     subscribers: new Set(),
     manuscriptId,
     kind: 'main',
-    bookDir: lease?.bookDir ?? record.bookDir ?? null,
+    bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
     replay: {
       logs: [],
@@ -4158,7 +4190,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      response until res.end() is called explicitly (by endJob() inside
      runMainAnalyzerJob), so the response stays open and continues to
      receive broadcast events for the lifetime of the job. */
-  await runMainAnalyzerJob(job, record, selection, {
+  await runMainAnalyzerJob(job, leased, selection, {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
@@ -7656,35 +7688,44 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
 
   /* Validate against the manuscript record so a stale frontend id doesn't
-     produce a confusing "chapter not found mid-stream" log line. */
+     produce a confusing "chapter not found mid-stream" log line. Returns null
+     when it refused (the response is ended). Runs again on the leased record
+     when the start re-read it (review pass 6). */
   const hintsById = new Map(record.chapterHints.map((h) => [h.id, h]));
-  const targets = requestedIds
-    .map((id) => hintsById.get(id))
-    .filter((h): h is NonNullable<typeof h> => !!h);
-  if (targets.length === 0) {
-    send({
-      kind: 'error',
-      code: 'bad_request',
-      message: 'None of the requested chapter ids match this manuscript.',
-    });
-    clearInterval(keepAlive);
-    return res.end();
-  }
-  const skippedExcluded = targets.filter((h) => h.excluded);
-  if (skippedExcluded.length > 0) {
-    /* Hard-stop rather than silently re-analyzing — the typical reason a
-       caller hits this with excluded=true is a frontend bug where the
-       toggle endpoint wasn't awaited before subset analysis kicked off.
-       Better to fail fast than to leave half-state on disk. */
-    send({
-      kind: 'error',
-      code: 'chapter_excluded',
-      message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map((c) => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
-    });
-    clearInterval(keepAlive);
-    return res.end();
-  }
-  const toRun = targets.filter((h) => !h.excluded);
+  const chaptersToRun = (rec: StartRecord): StartRecord['chapterHints'] | null => {
+    const byId = new Map(rec.chapterHints.map((h) => [h.id, h]));
+    const targets = requestedIds
+      .map((id) => byId.get(id))
+      .filter((h): h is NonNullable<typeof h> => !!h);
+    if (targets.length === 0) {
+      send({
+        kind: 'error',
+        code: 'bad_request',
+        message: 'None of the requested chapter ids match this manuscript.',
+      });
+      clearInterval(keepAlive);
+      res.end();
+      return null;
+    }
+    const skippedExcluded = targets.filter((h) => h.excluded);
+    if (skippedExcluded.length > 0) {
+      /* Hard-stop rather than silently re-analyzing — the typical reason a
+         caller hits this with excluded=true is a frontend bug where the
+         toggle endpoint wasn't awaited before subset analysis kicked off.
+         Better to fail fast than to leave half-state on disk. */
+      send({
+        kind: 'error',
+        code: 'chapter_excluded',
+        message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map((c) => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
+      });
+      clearInterval(keepAlive);
+      res.end();
+      return null;
+    }
+    return targets.filter((h) => !h.excluded);
+  };
+  const toRun = chaptersToRun(record);
+  if (!toRun) return;
 
   /* ── Plan 32 D1 subscribe-vs-start dispatch.
      Mirrors the main /:id/analysis route's pattern. If a non-aborted
@@ -7787,6 +7828,17 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      `await` sits after the awaits above and before the synchronous re-check window in
      `startSubset`; the lease is released when the (sequential) subset run ends. */
   const startSubset = async (lease: BookJobLease | null): Promise<unknown> => {
+  /* PR #3714 review pass 6 — same as `startMain`: run on the record the lease
+     names, and re-derive the chapters from it, before the `await`-free re-check. */
+  const leased = await recordForLease(manuscriptId, record, lease);
+  if ('refusal' in leased) {
+    console.log(`[analysis-subset] refused manuscript_replaced manuscript=${JSON.stringify(manuscriptId)}`);
+    send(leased.refusal);
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  const leasedToRun = leased === record ? toRun : chaptersToRun(leased);
+  if (!leasedToRun) return;
   /* 3. #3004 — both awaits above reopen the check-then-register window. Re-check with the same
      condition: a job a concurrent POST registered meanwhile goes through joinLive, so the same
      chapters join it and a different subset is refused (#3202), never duplicated. The #3435
@@ -7840,8 +7892,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     subscribers: new Set(),
     manuscriptId,
     kind: 'subset',
-    subsetChapterIds: toRun.map((t) => t.id),
-    bookDir: lease?.bookDir ?? record.bookDir ?? null,
+    subsetChapterIds: leasedToRun.map((t) => t.id),
+    bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
     replay: {
       logs: [],
@@ -7892,10 +7944,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      fires res.end() on every subscriber. */
   await runSubsetAnalyzerJob(
     job,
-    record,
+    leased,
     selection,
     phase1Selection,
-    toRun,
+    leasedToRun,
     allowStage1ShrinkSubset,
   ).catch((e) => console.error('[analysis-subset] subset job rejected', e));
   if (job.ended) await job.settled;

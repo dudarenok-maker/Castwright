@@ -50,8 +50,20 @@ export interface ManuscriptRecord {
 
 const store = new Map<string, ManuscriptRecord>();
 
+/* PR #3714 review pass 6 -- a per-id count of every put and remove. A hydrate
+   reads and parses with no lock held, so a put or remove can land between its
+   read and its cache write; the hydrate compares the count it started with
+   before it stores, and never reinstates a record that was superseded while it
+   was reading. */
+const versions = new Map<string, number>();
+
+function bumpVersion(id: string): void {
+  versions.set(id, (versions.get(id) ?? 0) + 1);
+}
+
 export function putManuscript(record: ManuscriptRecord): void {
   store.set(record.manuscriptId, record);
+  bumpVersion(record.manuscriptId);
 }
 
 export function getManuscript(id: string): ManuscriptRecord | undefined {
@@ -69,17 +81,34 @@ export function listManuscripts(): ManuscriptRecord[] {
     analysis run. */
 export function removeManuscript(id: string): void {
   store.delete(id);
+  bumpVersion(id);
 }
 
 /* In-memory lookup, with a workspace fallback that re-parses the manuscript
    file on disk if the in-memory record is missing (server restart, etc.).
-   Returns undefined if the manuscript can't be located by either route. */
+   Returns undefined if the manuscript can't be located by either route.
+
+   The hydrate caches its record only when no put or remove landed on the id
+   while it was reading (PR #3714 review pass 6). If one did, what it read may
+   be the superseded manuscript: it takes the record the writer stored, or
+   reads again once. A second invalidation in a row answers whatever the store
+   holds, never the record read before it. */
 export async function getOrHydrateManuscript(
   manuscriptId: string,
 ): Promise<ManuscriptRecord | undefined> {
-  const cached = store.get(manuscriptId);
-  if (cached) return cached;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const cached = store.get(manuscriptId);
+    if (cached) return cached;
+    const version = versions.get(manuscriptId) ?? 0;
+    const record = await hydrateFromDisk(manuscriptId);
+    if ((versions.get(manuscriptId) ?? 0) !== version) continue;
+    if (record) store.set(manuscriptId, record);
+    return record;
+  }
+  return store.get(manuscriptId);
+}
 
+async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord | undefined> {
   const book = await findBookByManuscriptId(manuscriptId);
   if (!book) return undefined;
 
@@ -136,6 +165,5 @@ export async function getOrHydrateManuscript(
     bookId: book.state.bookId,
     bookDir: book.bookDir,
   };
-  store.set(manuscriptId, record);
   return record;
 }

@@ -490,4 +490,12 @@ describe('requestFailureMessageFs (#3711)', () => {
       expect(body).not.toMatch(/[A-Z]:\\|\/|E[A-Z]{3,}|\bopen\b|\bwrite\b/);
     }
   });
+
+  /* PR #3714 review pass 6 -- the voice library, the voices catalog and
+     POST /import answer these bodies too, and none of them has a book. */
+  it('the curated body names no book', () => {
+    for (const body of [FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR]) {
+      expect(body).not.toMatch(/\bbook/i);
+    }
+  });
 });

@@ -486,6 +486,20 @@ recite:
     cannot matter (an unrelated sibling sorting first) and assert the
     operation still succeeds, alongside the case where it can matter and must
     still fail.
+42. **A cache fill whose read precedes an invalidation and whose write follows
+    it reinstates the invalidated value** — PR #3714 pass 6 (#3711,
+    `store/manuscripts.ts` `getOrHydrateManuscript`): the hydrate read and
+    parsed the manuscript with no lock held, then stored the record
+    unconditionally. A bundle overwrite's eviction (or replace-manuscript's
+    `putManuscript`) that landed during the parse was undone by that store, so
+    the replaced manuscript went back into memory until a restart, and a
+    chapter restructure rebuilt `state.chapters` from it. The invalidation was
+    correct and locked; the fill raced it from outside the lock. Checkable: for
+    every cache write, does it verify nothing invalidated the key since its
+    read began (a per-key version or generation captured before the read and
+    compared before the write, or the fill held under the writer's lock)?
+    Then test by gating the fill between its read and its write, landing the
+    invalidation, releasing, and asserting the cache holds the new value.
 
 ### Keeping the catalogue current
 

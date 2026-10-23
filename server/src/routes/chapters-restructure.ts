@@ -146,8 +146,11 @@ async function prepareRestructure(
   }
 
   /* Hydrate the manuscript record (the slow parse) before the lock, so the
-     commit's lookup is usually warm. The commit never uses THIS record: it
-     re-reads the one the locked state names (review pass 5). */
+     commit's lookup is usually warm. The commit re-reads the record for the id
+     the locked state names (review pass 5); when the ids agree that is usually
+     the record cached here. It is safe because a hydrate never caches a record
+     a `putManuscript` / `removeManuscript` superseded while it was reading
+     (review pass 6, `store/manuscripts.ts`). */
   const record = await getOrHydrateManuscript(peeked.state.manuscriptId);
   if (!record) {
     return {

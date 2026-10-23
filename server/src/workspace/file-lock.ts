@@ -229,13 +229,12 @@ export function requestFailureMessage(err: unknown, fallback: string): string {
 /* #3711 PR #3714 -- the body for a node fs error (EBUSY / ENOSPC / EPERM on a
    read or write). Its own message embeds the absolute path it failed on, the
    same LAN leak as a lock key. */
-export const FS_FAILURE_REQUEST_ERROR =
-  "The book's files could not be read or written right now. Try again.";
+export const FS_FAILURE_REQUEST_ERROR = 'Files could not be read or written right now. Try again.';
 
 /* PR #3714 review pass 5 -- the body for an fs error a retry cannot fix (a full
    disk, a permission or read-only refusal): it never promises "Try again". */
 export const FS_PERMANENT_FAILURE_REQUEST_ERROR =
-  "The book's files could not be read or written. Check free disk space and folder permissions.";
+  'Files could not be read or written. Check free disk space and folder permissions.';
 const PERMANENT_FS_CODES = new Set(['ENOSPC', 'EACCES', 'EROFS']);
 
 /** A node fs error: a string `code` plus the `syscall` or `path` node sets on
