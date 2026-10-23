@@ -287,7 +287,8 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
   it('#3084 wave 3d review pass 4 (J) — a phase event naming the run engine after a fallback switch updates the snapshot engine/gpu, from either phase', async () => {
     const { store } = await renderViewWaitingForAnalysis();
     act(() => {
-      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'none' }));
+      /* Start the snapshot as an off-card endpoint run (ticks only widen, so seed it directly). */
+      store.dispatch(analysisActions.setActiveStream({ ...store.getState().analysis.activeStream!, engine: 'openai', gpu: 'none' }));
     });
     expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'openai', gpu: 'none' });
     /* Phase 1 is the frontier; a lagging phase-0 tick carries the switch. */
@@ -296,6 +297,18 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.9, analysisEngine: 'local' });
     });
     expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'local', gpu: undefined });
+  });
+
+  it('#3084 wave 3d review pass 5 (O) — the frontier phase own tick carries the run engine/gpu into the snapshot too', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    act(() => {
+      store.dispatch(analysisActions.setActiveStream({ ...store.getState().analysis.activeStream!, engine: 'openai', gpu: 'none' }));
+    });
+    /* Phase 0 is the first and so the frontier phase: this tick takes the frontier branch. */
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.1, analysisEngine: 'local' });
+    });
+    expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'local', phaseId: 0 });
   });
 
   it('keeps BOTH pipelined phases live at once (Phase 0 + Phase 1 tickers do not clobber each other)', async () => {
@@ -1573,6 +1586,45 @@ describe('AnalysingView — failed-chapter retry', () => {
   /* #3435 — rewritten from "#3215 C2 — a subset_in_progress rejection does not
      re-arm the paused main run" for a Retry with main NOT running: the
      rejection restores the prior snapshot and never POSTs the main run. */
+  it('#3084 wave 3d review pass 5 (O) — a subset Retry phase event carries the run engine/gpu into the snapshot', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0.5,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'paused' as const,
+        engine: 'openai',
+        gpu: 'none',
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <AnalysingView manuscriptId="m1" bookId="b1" title="the Coalfall Commission" wordCount={2440} onComplete={() => {}} />
+      </Provider>,
+    );
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(capturedSubsetCall).toBeDefined();
+    /* Retry installs its own snapshot; seed a card-less Gemini one so the tick has something to widen. */
+    act(() => {
+      store.dispatch(analysisActions.setActiveStream({ ...store.getState().analysis.activeStream!, engine: 'gemini', gpu: undefined }));
+    });
+    await act(async () => {
+      capturedSubsetCall!.opts!.onPhase!({ phaseId: 0, progress: 0.3, analysisEngine: 'openai', analysisGpu: 'cuda:0' });
+    });
+    expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
   it('#3215 C2 — a subset_in_progress rejection restores the prior snapshot and does not POST the main run', async () => {
     const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
