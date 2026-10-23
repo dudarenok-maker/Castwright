@@ -4140,3 +4140,17 @@ describe('ChapterSegmentStrip — issue waveform', () => {
     expect(screen.queryByTestId('segment-band-title')).toBeNull();
   });
 });
+
+describe('GenerationView — instruct selector is stable before hydrate (#3722)', () => {
+  it('does not trip react-redux\'s "returned a different result" check when renderedInstructByChapter is absent', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = renderView();
+      expect(store.getState().chapters.renderedInstructByChapter).toBeUndefined();
+      const unstable = warn.mock.calls.filter((c) => String(c[0]).includes('returned a different result'));
+      expect(unstable).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
