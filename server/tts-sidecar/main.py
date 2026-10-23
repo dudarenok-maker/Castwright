@@ -12649,7 +12649,7 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "voice_language_unsupported"},  # exc-text-safe: voice_language_unsupported echoes the curated VoiceLanguageUnsupportedError literal (audit at main.py:10569-10573), built from voice/config strings, never a traceback or third-party string
+            {"detail": str(exc), "code": "voice_language_unsupported"},  # exc-text-safe: voice_language_unsupported echoes the curated VoiceLanguageUnsupportedError literal (audit at main.py:2808-2811, the raise; class at main.py:6255-6263), built from voice/config strings, never a traceback or third-party string
             status_code=409,
         )
     except VoiceNotDesignedError as exc:
