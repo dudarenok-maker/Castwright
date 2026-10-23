@@ -278,17 +278,25 @@ export async function importPortableBundle(
     }
     await stageFile(state.manuscriptFile, manuscriptBuf);
 
-    /* Optional top-level entries: cover.{jpg,png,…} and change-log.json. */
+    /* Optional top-level entries: cover.{jpg,png,…}, change-log.json and
+       manuscript-hints.json. */
     const coverEntries: [string, Buffer][] = [];
     for (const [name, buf] of entries.entries()) {
       if (name === 'MANIFEST.json' || name === 'state.json') continue;
       if (name === state.manuscriptFile) continue;
       if (name.startsWith('audio/')) continue;
-      /* Cover and change-log land in .audiobook/, everything else top-level
-         is unexpected — log + skip rather than fail, so a forward-compat
-         writer adding fields doesn't break older importers. */
+      /* Cover, change-log and manuscript-hints land in .audiobook/, everything
+         else top-level is unexpected — log + skip rather than fail, so a
+         forward-compat writer adding fields doesn't break older importers. */
       if (name === 'change-log.json') {
         await stageFile(relative(stage, join(dotAudiobook(stage), 'change-log.json')), buf);
+        continue;
+      }
+      if (name === 'manuscript-hints.json') {
+        await stageFile(
+          relative(stage, join(dotAudiobook(stage), 'manuscript-hints.json')),
+          buf,
+        );
         continue;
       }
       if (name.startsWith('cover.')) {

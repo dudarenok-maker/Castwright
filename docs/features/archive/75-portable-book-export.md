@@ -40,13 +40,14 @@ portable-book/
   manuscript.<ext>
   cover.<ext>           (optional — .jpg, .png, ...)
   change-log.json       (optional)
+  manuscript-hints.json (optional, #3703)
   audio/
     <chapter-slug>.mp3         (or .m4a / .ogg / .opus, mirroring disk)
     <chapter-slug>.segments.json
     <chapter-slug>.peaks.json  (when present)
 ```
 
-Deterministic entry order: MANIFEST first → state.json → manuscript → cover (if any) → change-log (if any) → audio entries in chapter-id order. Every entry is "stored" (no deflate) — MP3 / M4A are already compressed, and stored entries make round-trip checksum tests stable.
+Deterministic entry order: MANIFEST first → state.json → manuscript → cover (if any) → change-log (if any) → manuscript-hints (if any) → audio entries in chapter-id order. Every entry is "stored" (no deflate) — MP3 / M4A are already compressed, and stored entries make round-trip checksum tests stable.
 
 ## MANIFEST schema (v1)
 
@@ -101,6 +102,7 @@ For any fixture book exported via `buildPortableBundle` and re-imported via `imp
 - manuscript.<ext>
 - every `audio/<slug>.<ext>`
 - change-log.json, when present
+- manuscript-hints.json, when present (#3703)
 
  The cover is the one exception: it is re-encoded to a clean JPEG (quality 85) on import and stored as `cover.jpg`, so it is visually the same image but not byte-identical (#3535).
 

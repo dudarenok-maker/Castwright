@@ -8,6 +8,7 @@
        manuscript.<ext>   (original ext preserved — txt/md/epub/pdf/mobi)
        cover.<ext>        (optional — .jpg today, format-detected for forward-compat)
        change-log.json    (optional — empty array if no events have been logged)
+       manuscript-hints.json (optional — restructured chapter bodies, #3703)
        audio/
          <chapter-slug>.mp3              (per-chapter audio; ext mirrors what's on disk)
          <chapter-slug>.segments.json    (timing metadata + speaker manifest)
@@ -32,7 +33,7 @@
 
    Entries are emitted in deterministic order: MANIFEST first (for early
    schema-version sniffs), then state.json, manuscript, cover (if any),
-   change-log (if any), then audio/ in chapter-id order. Deterministic
+   change-log (if any), manuscript-hints (if any), then audio/ in chapter-id order. Deterministic
    ordering keeps round-trip checksum tests stable across runs. */
 
 import { createReadStream, existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -40,7 +41,12 @@ import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
-import { audioDir, changeLogJsonPath, coverImagePath } from '../workspace/paths.js';
+import {
+  audioDir,
+  changeLogJsonPath,
+  coverImagePath,
+  manuscriptHintsJsonPath,
+} from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByBookId } from '../workspace/scan.js';
 
@@ -200,6 +206,19 @@ export async function buildPortableBundle(
     changeLogEntry = { name: 'change-log.json', buf: readFileSync(changeLogPath) };
   }
 
+  /* Restructured chapter bodies (#3703) — optional. Without it the imported
+     book hydrates from a fresh parse, misaligned with the restructured
+     state.json. Still valid after import: the key is the manuscript's sha256
+     plus state.json's chapter uuid sequence, and both travel verbatim. */
+  let manuscriptHintsEntry: { name: string; buf: Buffer } | null = null;
+  const manuscriptHintsPath = manuscriptHintsJsonPath(bookDir);
+  if (existsSync(manuscriptHintsPath)) {
+    manuscriptHintsEntry = {
+      name: 'manuscript-hints.json',
+      buf: readFileSync(manuscriptHintsPath),
+    };
+  }
+
   /* Audio assets — enumerated in chapter-id order. Excluded chapters are
      skipped (no audio on disk) but we DO ship excluded-but-rendered audio
      in case the operator later un-excludes the chapter and wants the bytes
@@ -229,7 +248,8 @@ export async function buildPortableBundle(
     stateBuf.length +
     manuscriptBuf.length +
     (coverEntry?.buf.length ?? 0) +
-    (changeLogEntry?.buf.length ?? 0);
+    (changeLogEntry?.buf.length ?? 0) +
+    (manuscriptHintsEntry?.buf.length ?? 0);
   for (const a of audioFilesByEntry) totalSizeBytes += a.size;
 
   const manifest: PortableBundleManifest = {
@@ -331,6 +351,7 @@ export async function buildPortableBundle(
   addBuffer(state.manuscriptFile, manuscriptBuf);
   if (coverEntry) addBuffer(coverEntry.name, coverEntry.buf);
   if (changeLogEntry) addBuffer(changeLogEntry.name, changeLogEntry.buf);
+  if (manuscriptHintsEntry) addBuffer(manuscriptHintsEntry.name, manuscriptHintsEntry.buf);
 
   for (const a of audioFilesByEntry) {
     const readStream = createReadStream(a.diskPath);
