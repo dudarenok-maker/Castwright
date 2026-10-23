@@ -202,6 +202,42 @@ describe('POST /api/import/portable', () => {
     expect(stateRead.title).toContain('(imported)');
   });
 
+  /* #3714 review pass 1 — the 409 used to carry the target's absolute path (in
+     `existingPath` and in `message`), and this app is served over LAN HTTPS.
+     The body is a fixed sentence now; the path goes to the server log only. */
+  it("answers 'fail' on an existing title with a 409 that names no path", async () => {
+    const exportRes = await request(app)
+      .get(`/api/books/${encodeURIComponent(bookId)}/export/portable`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (c: Buffer) => chunks.push(c));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(exportRes.status).toBe(200);
+    const failZip = join(workspaceRoot, 'conflict-upload.zip');
+    writeFileSync(failZip, exportRes.body as Buffer);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .post('/api/import/portable')
+        .field('onConflict', 'fail')
+        .attach('file', failZip);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('bundle_conflict');
+      expect(res.body).not.toHaveProperty('existingPath');
+      expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+      /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+      expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
+      expect(JSON.stringify(res.body)).not.toContain(AUTHOR);
+      expect(res.body.message).toMatch(/already exists/i);
+      /* The raw conflict (with its path) is logged for the operator. */
+      expect(warnSpy.mock.calls.flat().join(' ')).toContain(bookDir);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('returns 400 with `invalid_bundle` when the upload is not a valid bundle', async () => {
     const badPath = join(workspaceRoot, 'bad.zip');
     writeFileSync(badPath, Buffer.from('not a zip'));

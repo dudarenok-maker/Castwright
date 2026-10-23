@@ -39,12 +39,13 @@ import {
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
-import { withStateJsonLock } from '../workspace/file-lock.js';
+import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout, withStateJsonLock } from '../workspace/file-lock.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
   requireBookStateLanguage,
-  findBookByBookId,
   type BookStateJson,
 } from '../workspace/scan.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
@@ -160,8 +161,14 @@ export async function triggerScoring(ctx: {
      contract, instead of just mismatchCount. */
   let finalCharactersChecked = 0;
   let finalCharactersOnRoster = 0;
-  const run = (async () => {
-    const result = await scoreBook(ctx.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
+  /* #3711 — the whole score pass is a registered `scoring` job (a folder move is
+     refused while it runs) and scores `lease.bookDir`, not `ctx.bookDir`: the lease is
+     resolved under book-op, so it is the book's CURRENT folder. Registration starts
+     synchronously (before the single-flight entry is set) and this function resolves
+     only once it has settled, so a render's token is never released before scoring's
+     is held. The score pass itself is still NOT awaited (#1029). */
+  const registration = runBookJob(ctx.bookId, 'scoring', async (lease) => {
+    const result = await scoreBook(lease.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
       runModelKey: ctx.runModelKey,
       onRosterKnown: (total) => {
         finalCharactersOnRoster = total;
@@ -199,11 +206,25 @@ export async function triggerScoring(ctx: {
        keeps both. Best-effort; skipped when the run uses no Qwen tier. */
     const keep = ctx.keep ?? result.usedQwenTiers;
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
-  })()
+  });
+  const run = registration
+    .then(async (reg): Promise<void> => {
+      /* A book that is gone (deleted, or unresolvable by id) is not scored; say
+         so, or a skipped score pass leaves no trace at all. */
+      if (reg === BOOK_GONE) {
+        console.warn(`[generation] render-integrity score pass skipped: book ${ctx.bookId} not found`);
+        return;
+      }
+      await reg.done;
+    })
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));
   scoringInFlight.set(ctx.bookId, run);
+  await registration.then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 /** Test-only — `triggerScoring` is deliberately fire-and-forget (same
@@ -442,6 +463,22 @@ interface RunningJob {
   /** Chapter ids currently between first synthesise tick and
       chapter_complete / chapter_failed. */
   runInProgress: Set<number>;
+  /** #3711 — un-awaited promises this job started that write the book
+      (`afterChapterFinalized`). The registered `render` job awaits them with
+      `Promise.allSettled` before it resolves, so the render token is released only
+      after scoring's own token is held (no move can slip between the two). */
+  children: Promise<unknown>[];
+}
+
+/** #3711 — await every child the job started, INCLUDING ones pushed while earlier ones
+    were being awaited (a plain `Promise.allSettled(job.children)` snapshots the array). */
+export async function drainChildren(job: RunningJob): Promise<void> {
+  let seen = 0;
+  while (seen < job.children.length) {
+    const batch = job.children.slice(seen);
+    seen += batch.length;
+    await Promise.allSettled(batch);
+  }
 }
 
 /* Primary registry — one entry per in-flight chapter, keyed
@@ -603,6 +640,7 @@ export function __registerFakeJobForTest(
     completedThisRun: new Set(),
     runInProgress: new Set(),
     hadSibling: false,
+    children: [],
   };
   registerJob(key, job);
   return () => deregisterJob(key, job);
@@ -795,13 +833,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
-  const located = await findBookByBookId(bookId);
-  if (!located) {
-    send({ type: 'chapter_failed', errorReason: `No book found for id "${bookId}".` });
-    send({ type: 'idle' });
-    return res.end();
-  }
-  const { bookDir, state } = located;
+  /* #3711 — the whole run is a registered `render` job: a folder move/delete is refused
+     (409 book_busy) while it runs, and it holds no book-op. The book is resolved by the
+     registration (under book-op), so `lease.bookDir` is its CURRENT folder; a delete
+     that landed first is BOOK_GONE. Headers are already flushed, so a registration
+     failure is the route's own terminal frame carrying the curated sentence. */
+  let registered;
+  try {
+    registered = await runBookJob(bookId, 'render', async (lease) => {
+  const { bookDir, state } = lease;
 
   /* Cast must be confirmed for synthesis to know which voice each character
      speaks in. The frontend should gate the generate button on this, but
@@ -1335,8 +1375,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     completedThisRun: new Set(),
     runInProgress: new Set(),
     hadSibling: false,
+    children: [],
   };
   registerJob(key, job);
+  /* #3711 — from here on the job can own children, so the wait for them lives in the
+     `finally` that closes this `try` (an early return above has no job to drain). */
+  try {
 
   /* SSE close on the starter connection is just an unsubscribe — the job
      keeps running for any other observers. If the starter was the only
@@ -1874,6 +1918,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          finalize capture below wrongly folded encode into synthMs.) */
       const synthOnlyMs = Date.now() - synthStartMs;
 
+      /* #3711 — the no-progress watchdog abandoned this chapter: the failure is already
+         recorded and the render token may be released, so an abort-ignoring synth that
+         resolves late must not write the book (it could recreate a moved folder). */
+      if (watchdogFired) return;
+
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
@@ -1957,6 +2006,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         // Plan 286 — null when absent; a reviewed job renders exactly one chapter.
         review: job.review,
       });
+      /* #3711 — abandoned DURING the finalize write (which cannot be cancelled): that write
+         has landed, but nothing after it may run (no scoring child, no queue-done mark). */
+      if (watchdogFired) return;
       if (audioQa.status === 'suspect') {
         console.warn(
           `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +
@@ -1975,14 +2027,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          only one afterChapterFinalized may stamp "attempted" for on this
          call; a concurrently-rendering sibling elsewhere in `chapters` must
          not be marked just because it appears in the full book-wide list. */
-      afterChapterFinalized({
-        bookId,
-        bookDir,
-        chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
-        justFinalized: { id: chapter.id, slug: chapter.slug },
-        keep: usedQwenTiers,
-        runModelKey: modelKey,
-      });
+      job.children.push(
+        afterChapterFinalized({
+          bookId,
+          bookDir,
+          chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
+          justFinalized: { id: chapter.id, slug: chapter.slug },
+          keep: usedQwenTiers,
+          runModelKey: modelKey,
+        }),
+      );
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
          that arrives between this chapter and the next doesn't see a stale
@@ -2391,6 +2445,60 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      point the job is dead; the next /generation POST sees no existing
      entry and starts a fresh run. */
   endAllSubscribers(job, { type: 'idle' });
+
+  } catch (e) {
+    /* A throw out of the chapter loop (outside processOneChapter's own handling)
+       skips the normal-path deregisterJob / endAllSubscribers above. Without this the
+       job stays in `inFlightByChapter` / `inFlightByBook` forever -- every later POST
+       for the chapter would see a phantom in-flight job, `isGenerationActive` would
+       stay true, and EVERY attached subscriber (not just the starter) would never get
+       a terminal frame. Give them the curated failure frame (never the raw message) and
+       `idle`, then rethrow so the caller still logs it. */
+    deregisterJob(key, job);
+    broadcast(job, {
+      type: 'chapter_failed',
+      errorReason: isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the render.',
+    });
+    endAllSubscribers(job, { type: 'idle' });
+    throw e;
+  } finally {
+    /* #3711 — wait for the un-awaited children that write the book. They resolve once
+       scoring's own `runBookJob` registration has (triggerScoring), so by the time this
+       render's token is released scoring's is already held. In a `finally` so a `fn` that
+       throws after pushing a child still waits for it. */
+    await drainChildren(job);
+  }
+    });
+  } catch (e) {
+    console.error('[generation] job registration failed', e);
+    send({
+      type: 'chapter_failed',
+      errorReason: isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the render.',
+    });
+    send({ type: 'idle' });
+    return res.end();
+  }
+  if (registered === BOOK_GONE) {
+    send({ type: 'chapter_failed', errorReason: 'Book not found.' });
+    send({ type: 'idle' });
+    return res.end();
+  }
+  try {
+    await registered.done;
+  } catch (e) {
+    /* The render callback threw (the registration itself succeeded). Log the raw error;
+       the client gets the same curated terminal frame as a registration failure, never
+       the raw message, and only if the stream is not already ended. */
+    console.error('[generation] render job failed', e);
+    if (!res.writableEnded) {
+      send({
+        type: 'chapter_failed',
+        errorReason: isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the render.',
+      });
+      send({ type: 'idle' });
+      res.end();
+    }
+  }
 });
 
 /* POST /api/books/:bookId/generation/pause — explicit pause signal.

@@ -581,7 +581,7 @@ describe('POST /api/books/:bookId/generation', () => {
     const ticks = parseTicks(res.text);
     expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
-    expect(String(ticks[0].errorReason)).toMatch(/No book found/i);
+    expect(String(ticks[0].errorReason)).toMatch(/Book not found/i);
     expect(ticks[1].type).toBe('idle');
   });
 
@@ -2249,11 +2249,28 @@ const triggerScoringVec = (theta: number) =>
  *  character's reference straight from in-book anchors — no __testSynthFn/
  *  __testEmbedFn, no sidecar call needed. Mirrors aggregate.test.ts's
  *  fixture conventions (see e.g. its "writes centroids.json ... incrementally"
- *  case, which pairs a 12-anchor `characterSnapshots` entry the same way). */
+ *  case, which pairs a 12-anchor `characterSnapshots` entry the same way).
+ *
+ *  #3711 — the score pass is a registered `scoring` job, resolved by bookId
+ *  under book-op: the fixture is a real book in the workspace whose state.json
+ *  carries `bookId`, or registration answers BOOK_GONE and scoring is skipped. */
 async function buildTriggerScoringFixture(
+  fixtureBookId: string,
   chars: { id: string; modelKey: 'qwen3-tts-0.6b' | 'qwen3-tts-1.7b' }[],
 ): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'trigger-scoring-'));
+  const dir = join(workspaceRoot, 'books', 'Trigger Author', 'Trigger Series', fixtureBookId);
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: fixtureBookId,
+      title: fixtureBookId,
+      author: 'Trigger Author',
+      series: 'Trigger Series',
+      chapters: [{ id: 1, title: 'Chapter 1', slug: 'ch1' }],
+      language: 'en',
+    }),
+  );
   const root = join(dir, 'audio');
   mkdirSync(root, { recursive: true });
 
@@ -2309,7 +2326,9 @@ describe('triggerScoring (srv-36 hardening)', () => {
   it('when keep is supplied, reconciles against it verbatim (chapter-finalize path behavior, unchanged)', async () => {
     const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
     vi.mocked(reconcileResidentQwenTiers).mockClear();
-    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    const bookDirFixture = await buildTriggerScoringFixture('trig-keep-supplied', [
+      { id: 'hero', modelKey: 'qwen3-tts-1.7b' },
+    ]);
     try {
       await triggerScoring({
         bookId: 'trig-keep-supplied',
@@ -2329,7 +2348,9 @@ describe('triggerScoring (srv-36 hardening)', () => {
     const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
     vi.mocked(reconcileResidentQwenTiers).mockClear();
     // Fixture: a qwen3-tts-1.7b character.
-    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    const bookDirFixture = await buildTriggerScoringFixture('trig-keep-omitted', [
+      { id: 'hero', modelKey: 'qwen3-tts-1.7b' },
+    ]);
     try {
       await triggerScoring({
         bookId: 'trig-keep-omitted',
@@ -2347,11 +2368,11 @@ describe('triggerScoring (srv-36 hardening)', () => {
   it('broadcasts scoring_started/progress/complete to every subscriber of every in-flight job for the book, de-duplicated by res', async () => {
     const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
     // 2-character in-book fixture, no sidecar needed.
-    const bookDirFixture = await buildTriggerScoringFixture([
+    const scoringBookId = 'trig-broadcast';
+    const bookDirFixture = await buildTriggerScoringFixture(scoringBookId, [
       { id: 'alice', modelKey: 'qwen3-tts-0.6b' },
       { id: 'bob', modelKey: 'qwen3-tts-1.7b' },
     ]);
-    const scoringBookId = 'trig-broadcast';
     const receivedA: { type: string }[] = [];
     const receivedB: { type: string }[] = [];
     const resA = {} as unknown as Response;
@@ -2401,9 +2422,34 @@ describe('triggerScoring (srv-36 hardening)', () => {
     }
   });
 
+  it('#3711: a score pass for a book that cannot be resolved is skipped with a warning, not silently', async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    const scoreBookSpy = vi.spyOn(aggregateModule, 'scoreBook');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await triggerScoring({
+        bookId: 'trig-no-such-book',
+        bookDir: join(workspaceRoot, 'nowhere'),
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: [],
+      });
+      await __awaitScoringSettled('trig-no-such-book');
+      expect(scoreBookSpy).not.toHaveBeenCalled();
+      expect(warnSpy.mock.calls.some((c) => /score pass skipped.*trig-no-such-book.*not found/.test(String(c[0])))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+      configSpy.mockRestore();
+      scoreBookSpy.mockRestore();
+    }
+  });
+
   it('resume-shaped call (no in-flight job for the book) completes without throwing even though broadcastToBook has nothing to send to', async () => {
     const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
-    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    const bookDirFixture = await buildTriggerScoringFixture('trig-resume-no-job', [
+      { id: 'hero', modelKey: 'qwen3-tts-1.7b' },
+    ]);
     try {
       await triggerScoring({
         bookId: 'trig-resume-no-job',

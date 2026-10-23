@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { peekBook } from '../workspace/book-op-lock.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
@@ -77,7 +77,8 @@ annotateEmotionRouter.post(
   async (req: Request, res: Response): Promise<void> => {
     const { bookId } = req.params;
 
-    const located = await findBookByBookId(bookId);
+    /* #3711 — read-only: this route writes nothing in the book folder. */
+    const located = await peekBook(bookId);
     if (!located) {
       res.status(404).json({ error: 'Book not found.' });
       return;

@@ -715,6 +715,8 @@ describe('GET /api/revisions — per-book isolation (plan 286, D9)', () => {
     expect(Object.keys(res.body.byBookId)).toEqual([goodId]);
     expect(res.body.errors).toEqual({ [badId]: "Couldn't read this book's review state." });
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
   });
   it('omits errors when every book succeeds', async () => {
     const res = await request(app).get(`/api/revisions?bookIds=${goodId}`);
@@ -735,6 +737,8 @@ describe('GET /api/revisions — per-book isolation (plan 286, D9)', () => {
     expect(res.status).toBe(200);
     expect(res.body.errors).toEqual({ [goodId]: "Couldn't read this book's review state." });
     expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
     expect(res.text).not.toContain('SECRET');
   });
 });

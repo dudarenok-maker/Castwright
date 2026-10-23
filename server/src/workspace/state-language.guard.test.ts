@@ -260,7 +260,7 @@ const G2_RAW_ALLOWED = new Map<string, { writes: number; marker: RegExp; why: st
     {
       writes: 1,
       marker: /\blanguage:\s*state\.language\s*\?\?\s*null/g,
-      why: 'atomic portable-bundle importer: stages state.json via planEntry(stateJsonPath(bookDir), finalStateBuf, ...) then writeFile+rename across the whole bundle; required to restate language (language: state.language ?? null) so a language-less bundle lands as explicit null, not an untyped write.',
+      why: 'atomic portable-bundle importer: stages state.json via writeFile(stateJsonPath(stage), ...) into .staging/<nonce>, then renames the staged tree/files into the book folder; required to restate language (language: state.language ?? null) so a language-less bundle lands as explicit null, not an untyped write.',
     },
   ],
 ]);
@@ -304,16 +304,33 @@ function countRawStateWrites(
    rather than spelling the path themselves; book-state.ts then gained 2 for
    applyReparse's presence gate -- a lock key and an existence read, not a write;
    #3625 then added scan-import-folder.ts +1 (the in-lock claim keys the target's
-   state.json) and book-state.ts +1 (DELETE's stateless-folder lock key)).
-   Asserted BOTH
+   state.json) and book-state.ts +1 (DELETE's stateless-folder lock key);
+   #3711 (PR #3714) then moved the folder rename/delete into
+   workspace/book-op-lock.ts's movers, giving book-op-lock.ts its 10 (the
+   resolver's and the id-minter's state reads, folded into one read helper by
+   review pass 2; withBookOpAtDir's bookId read; the movers' lock keys and
+   presence reads), and re-staged the bundle importer, scan-import-folder.ts
+   2 to 6 (two staging-dir sites, three overwrite reads/lock keys, the fresh
+   placement's target key); the reconciliation of #3711 with #3594 then took
+   book-state.ts from 17 to 13 -- the PUT's folder rename (its two lock keys,
+   its read and its new-path write) moved into moveBookFolder and the DELETE's
+   removal into removeBookFolder, leaving DELETE's stateless-folder lock key --
+   reads, lock keys and one relocated write, not new write sites); review pass 4
+   then routed three in-lock reads through book-op-lock.ts's `readBookStateOrThrow`
+   (which spells the path itself), taking book-state.ts 13 -> 11 (the non-moving
+   PUT's re-read, applyReparse's presence read), chapters-restructure.ts 3 -> 2
+   (its in-lock read) and scan-import-folder.ts 6 -> 4 (the overwrite's two id
+   reads) -- reads only, no write site moved; the fs-error curation pass then
+   routed the listen-progress GET/PUT's uuid reads through it too, taking
+   book-state.ts 11 -> 9 -- reads only. Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
-  'import/scan-import-folder.ts': 2,
+  'import/scan-import-folder.ts': 4,
   'routes/analysis.ts': 1,
-  'routes/book-state.ts': 17,
-  'routes/chapters-restructure.ts': 3,
+  'routes/book-state.ts': 9,
+  'routes/chapters-restructure.ts': 2,
   'routes/generation.ts': 1,
   'routes/import.ts': 2,
   'routes/library-sync-manifest.ts': 1,
@@ -324,6 +341,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/auto-backup.ts': 5,
   'workspace/book-state-update.ts': 1,
   'workspace/book-dir-guard.ts': 1,
+  'workspace/book-op-lock.ts': 10,
   'workspace/library-cast-scan.ts': 1,
   'workspace/revisions-store.ts': 1,
   'workspace/scan.ts': 3,

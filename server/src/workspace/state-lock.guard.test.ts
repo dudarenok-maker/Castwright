@@ -28,7 +28,7 @@
 
    BLIND SPOTS (the guard stays green when it should not):
      - Call-graph blind: a write inside a helper that is only ever CALLED under
-       the lock (`refreshChapterTitles`, `applySlice`, `applyRestructureClaimed`) is
+       the lock (`refreshChapterTitles`, `applyRestructureClaimed`) is
        reported as unlocked and sits on the allowlist with a human-verified
        reason; a NEW unlocked caller of such a helper adds no occurrence text and
        passes.
@@ -77,15 +77,15 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
       'primitive. Its callers are checked above (each call site is itself a tracked write).',
   },
   'routes/book-state.ts': {
-    count: 3,
+    count: 1,
     why:
-      "refreshChapterTitles (1: its updateStateJsonLocked call) is only called from GET /state inside withLocatedBook; " +
-      "applySlice's `state` slice (2: the rename-then-write pair) only runs inside withBookLock " +
-      '(lockedSlice).',
+      "refreshChapterTitles (its updateStateJsonLocked call) is only called from GET /state inside withLocatedBook. " +
+      "(The PUT's non-moving `state` write sits lexically inside withBookLock; a folder move writes through " +
+      "workspace/book-op-lock.ts's moveBookFolder, which takes withBookLock itself -- #3711 reconciliation.)",
   },
   'routes/chapters-restructure.ts': {
     count: 1,
-    why: 'applyRestructureClaimed is only reached through applyRestructure, which every restructure route calls inside withBookLock (all six).',
+    why: 'applyRestructureClaimed is only reached through applyRestructure, which calls it inside withBookLock (after the restructure gate, inside the route-level withBookOp that all six routes take).',
   },
   'routes/import.ts': {
     count: 1,

@@ -39,7 +39,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
   resolveVoiceAssignment,
@@ -542,7 +543,9 @@ voicesRouter.get('/', async (req: Request, res: Response) => {
     res.json({ voices });
   } catch (e) {
     console.error('[voices] aggregate failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library scan failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Voice library scan failed.'),
+    });
   }
 });
 
@@ -559,7 +562,9 @@ voicesRouter.get('/base', async (_req: Request, res: Response) => {
     res.json({ voices });
   } catch (e) {
     console.error('[voices] base catalog failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Base-voice catalog failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Base-voice catalog failed.'),
+    });
   }
 });
 
@@ -583,7 +588,9 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
     res.status(204).end();
   } catch (e) {
     console.error('[voices] pin failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Pin update failed.' });
+    res.status(500).json({
+      error: requestFailureMessageFs(e, (e as Error).message || 'Pin update failed.'),
+    });
   }
 });
 
@@ -808,7 +815,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
        `forEachMatchingCastCharacter` takes one `withCastLock` per matching book,
        so this handler can receive the class. Same curation. */
     res.status(500).json({
-      error: requestFailureMessage(e, (e as Error).message || 'Override update failed.'),
+      error: requestFailureMessageFs(e, (e as Error).message || 'Override update failed.'),
     });
   }
 });
@@ -900,6 +907,16 @@ export async function forEachMatchingCastCharacter(
     });
   }
   let updated = 0;
+  /* #3711 -- books already handled, by their RESOLVED folder: a sibling that
+     moved, between the lock-free scan and its own step, INTO a directory the
+     walk has yet to reach is written once (where it lives now) and skipped when
+     the walk gets there, while the twins of a duplicated bookId resolve to
+     different folders and both get the write (PR #3714 review pass 1 -- a
+     bookId key skipped the second twin). A book that moves into a later
+     directory AFTER its step is reached again and written a second time: every
+     `mutate` is idempotent, so the file ends the same, but `updated` counts that
+     book twice. */
+  const seen = new Set<string>();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -911,27 +928,57 @@ export async function forEachMatchingCastCharacter(
           if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
             continue;
         }
-        updated += await withCastLock(bookDir, async () => {
-          const cast = await readJson<CastJson>(castJsonPath(bookDir));
-          if (!cast?.characters?.length) return 0;
-          let bookUpdated = 0;
-          let dirty = false;
-          for (let i = 0; i < cast.characters.length; i++) {
-            const original = cast.characters[i];
-            const id = original.voiceId ?? original.id;
-            if (id !== voiceId) continue;
-            const next = mutate(original);
-            cast.characters[i] = next;
-            dirty = true;
-            /* See the onlyBookDir branch above — a declined (same-reference)
-               mutate must not count as an update. */
-            if (next !== original) bookUpdated += 1;
-          }
-          if (dirty) {
-            await writeJsonAtomic(castJsonPath(bookDir), cast);
-          }
-          return bookUpdated;
-        });
+        /* The per-book cast.json read-through-write, under that book's cast lock. Its
+           caller holds the book's book-op (a book with an id) or nothing (one without). */
+        const writeBook = (dir: string): Promise<number> =>
+          withCastLock(dir, async () => {
+            const cast = await readJson<CastJson>(castJsonPath(dir));
+            if (!cast?.characters?.length) return 0;
+            let bookUpdated = 0;
+            let dirty = false;
+            for (let i = 0; i < cast.characters.length; i++) {
+              const original = cast.characters[i];
+              const id = original.voiceId ?? original.id;
+              if (id !== voiceId) continue;
+              const next = mutate(original);
+              cast.characters[i] = next;
+              dirty = true;
+              /* See the onlyBookDir branch above — a declined (same-reference)
+                 mutate must not count as an update. */
+              if (next !== original) bookUpdated += 1;
+            }
+            if (dirty) {
+              await writeJsonAtomic(castJsonPath(dir), cast);
+            }
+            return bookUpdated;
+          });
+        if (!state.bookId) {
+          /* A book whose state.json lacks a bookId can never be matched by the
+             resolver, so no route can move it: it still receives the write, under
+             its cast lock alone (#3711, no book-op to take). */
+          updated += await writeBook(bookDir);
+          continue;
+        }
+        /* The book's write runs under ITS OWN book-op (one at a time, never
+           nested), resolved on the fresh state: the scan above was lock-free, so
+           the scope filter is re-applied here and a sibling renamed out of the
+           series (or deleted) since the walk saw it is skipped. */
+        const bookUpdated = await withBookOp(
+          state.bookId,
+          async (b) => {
+            if (seen.has(b.bookDir)) return 0;
+            seen.add(b.bookDir);
+            if (!b.state.castConfirmed) return 0;
+            if (seriesFilter) {
+              if (b.state.isStandalone === true) return 0;
+              if (b.state.author !== seriesFilter.author || b.state.series !== seriesFilter.series)
+                return 0;
+            }
+            return writeBook(b.bookDir);
+          },
+          { hintDir: bookDir },
+        );
+        if (bookUpdated !== BOOK_GONE) updated += bookUpdated;
       }
     }
   }
@@ -1095,14 +1142,22 @@ export async function applyTierToCastFiles(
   voiceId: string,
   ttsModelKey: 'qwen3-tts-1.7b' | null,
   seriesFilter?: { author: string; series: string },
+  /* #3711 -- a standalone book: no filter, write exactly this directory. The
+     caller holds the book's book-op (forEachMatchingCastCharacter's precondition). */
+  onlyBookDir?: string,
 ): Promise<number> {
-  return forEachMatchingCastCharacter(voiceId, seriesFilter, (original) => {
-    // Deliberately NOT calling normaliseCastCharacter() (unlike the sibling
-    // applyOverrideToCastFiles): we touch only ttsModelKey and must not rewrite
-    // the legacy overrideTtsVoice field as a side-effect of a tier pin.
-    const replacement: CastCharacter = { ...original };
-    if (ttsModelKey === null) delete replacement.ttsModelKey;
-    else replacement.ttsModelKey = ttsModelKey;
-    return replacement;
-  });
+  return forEachMatchingCastCharacter(
+    voiceId,
+    seriesFilter,
+    (original) => {
+      // Deliberately NOT calling normaliseCastCharacter() (unlike the sibling
+      // applyOverrideToCastFiles): we touch only ttsModelKey and must not rewrite
+      // the legacy overrideTtsVoice field as a side-effect of a tier pin.
+      const replacement: CastCharacter = { ...original };
+      if (ttsModelKey === null) delete replacement.ttsModelKey;
+      else replacement.ttsModelKey = ttsModelKey;
+      return replacement;
+    },
+    onlyBookDir,
+  );
 }

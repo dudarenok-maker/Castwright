@@ -190,6 +190,9 @@ interface SubsetProgress {
 
 /* Stable empty map for the analysisGapById selector fallback. */
 const EMPTY_GAPS: Record<number, { message: string }> = {};
+/* Stable empty map for the renderedInstructByChapter selector fallback —
+   the field is absent from initial state until hydrate runs (#3722). */
+const EMPTY_INSTRUCT: Record<number, Record<number, string>> = {};
 
 /* #3435 — an entry still streaming (not ended in an error or a notice). */
 function isSubsetRunning(entry: SubsetProgress | null | undefined): boolean {
@@ -304,7 +307,7 @@ export function GenerationView({
      instruct-edit-staleness diff (the instruct sibling of the text-map diff).
      Only populated on the qwen-1.7b liveInstruct path. */
   const renderedInstructByChapter = useAppSelector(
-    (s) => s.chapters.renderedInstructByChapter ?? {},
+    (s) => s.chapters.renderedInstructByChapter ?? EMPTY_INSTRUCT,
   );
   /* Drives the "View queue · N" pill in the header. Reflects real workspace
      queue entries when present, else the live generation run (the primary,

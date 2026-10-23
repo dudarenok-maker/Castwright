@@ -29,6 +29,8 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
   castJsonPath,
@@ -585,8 +587,14 @@ qwenVoiceRouter.post(
       emotion = body.emotion as Exclude<Emotion, 'neutral'>;
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — the design is a registered `design` job (a sidecar design call with no
+       few-second bound): a folder move/delete is refused (409 book_busy) while it
+       runs; it holds no book-op. Request-scoped: `fn` is everything from the resolve
+       to the last write, and the route awaits `done`. The book is resolved by the
+       registration (under book-op), so `located` is its CURRENT folder. */
+    let registered;
+    try {
+      registered = await runBookJob(bookId, 'design', async (located) => {
     const { bookDir } = located;
     /* Mutual exclusion: a bulk "Design full cast" run owns the book's designs
        (serializing via the per-book lock). Refuse a competing single design so
@@ -785,6 +793,20 @@ qwenVoiceRouter.post(
         error: requestFailureMessage(e, (e as Error).message || 'Voice design failed.'),
       });
     }
+      });
+    } catch (e) {
+      console.error('[qwen-voice] design-voice registration failed', e);
+      return res.status(500).json({ error: requestFailureMessage(e, 'Voice design failed.') });
+    }
+    if (registered === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    try {
+      await registered.done;
+    } catch (e) {
+      console.error('[qwen-voice] design-voice failed', e);
+      if (!res.headersSent) {
+        res.status(500).json({ error: requestFailureMessage(e, 'Voice design failed.') });
+      }
+    }
   },
 );
 
@@ -839,8 +861,10 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
     };
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — QUICK (every sidecar call here is bounded by EVICT_FETCH_TIMEOUT_MS),
+       so book-op is held for the whole span: the cast.json write below hits the
+       folder resolved here, even with a rename queued behind. */
+    const outcome = await withBookOp(bookId, async (located) => {
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) {
@@ -871,9 +895,10 @@ qwenVoiceRouter.post(
     try {
       await stat(qwenVoicePtPath(previewVoiceId));
     } catch (e) {
-      return res
-        .status(409)
-        .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
+      /* PR #3714 review -- the stat error names the absolute preview path; it
+         goes to the log, never the body. */
+      console.warn('[qwen-voice] promote: no staged preview', e);
+      return res.status(409).json({ error: 'No staged preview voice to promote.' });
     }
     await rm(qwenVoicePtPath(realVoiceId), { force: true });
     await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
@@ -975,6 +1000,9 @@ qwenVoiceRouter.post(
     return res
       .status(200)
       .json({ voiceId: realVoiceId, url: voiceSamplePublicUrl(realFileName), voiceUuid: character.voiceUuid });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -994,8 +1022,8 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
     };
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    /* #3711 — quick (local rm only); book-op held for the whole span. */
+    const outcome = await withBookOp(bookId, async (located) => {
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) {
@@ -1029,6 +1057,9 @@ qwenVoiceRouter.post(
       await rm(previewMp3, { force: true }).catch(() => {});
     }
     return res.status(200).json({ ok: true });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -1051,9 +1082,9 @@ qwenVoiceRouter.delete(
       });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-
+    /* #3711 — quick (the teardown's evict is bounded by EVICT_FETCH_TIMEOUT_MS);
+       book-op is held for the whole span, outside the cast lock below. */
+    const outcome = await withBookOp(bookId, async (located) => {
     /* C1 fix — mirrors promote-voice above (qwen-voice.ts, the
        "Narrow by design" comment on its own withCastLock call): the read is
        inside the lock, and the 404 + the variant-map mutation are both
@@ -1091,5 +1122,8 @@ qwenVoiceRouter.delete(
     await tearDownEmotionVariant(designedId);
 
     return res.status(200).json({ ok: true, removed: emotion });
+    });
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );

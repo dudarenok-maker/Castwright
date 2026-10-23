@@ -20,7 +20,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -98,15 +98,14 @@ castAliasesRouter.post(
       return res.status(400).json({ error: 'sourceCharacterId and aliasName are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
-
+    /* #3711 — book-op outermost: a rename queued behind this edit lands after
+       it, so every cast.json write below hits the folder it resolved. */
+    const outcome = await withBookOp(bookId, ({ bookDir, state }) =>
     /* #1981 — the read is inside the lock, not just the write: every
        decision below (404s, the new character's minted id, the trimmed
        alias list) is derived from `cast`, so wrapping only the write would
        leave those decisions racing a concurrent writer on the same book. */
-    return withCastLock(bookDir, async () => {
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -196,7 +195,9 @@ castAliasesRouter.post(
       );
 
       return res.json({ newCharacter, impactedChapters });
-    });
+    }));
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -232,12 +233,10 @@ castAliasesRouter.post(
       return res.status(400).json({ error: 'Source and target must differ.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir, state } = located;
-
+    /* #3711 — book-op outermost; see unlink-alias above. */
+    const outcome = await withBookOp(bookId, ({ bookDir, state }) =>
     /* #1981 — read inside the lock; see unlink-alias above for the rule. */
-    return withCastLock(bookDir, async () => {
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -295,7 +294,9 @@ castAliasesRouter.post(
       );
 
       return res.json({ impactedChapters, alreadyPresent });
-    });
+    }));
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 
@@ -323,12 +324,10 @@ castAliasesRouter.post(
       return res.status(400).json({ error: 'characterId and aliasName are required.' });
     }
 
-    const located = await findBookByBookId(bookId);
-    if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { bookDir } = located;
-
+    /* #3711 — book-op outermost; see unlink-alias above. */
+    const outcome = await withBookOp(bookId, ({ bookDir }) =>
     /* #1981 — read inside the lock; see unlink-alias above for the rule. */
-    return withCastLock(bookDir, async () => {
+    withCastLock(bookDir, async () => {
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -368,7 +367,9 @@ castAliasesRouter.post(
       console.log(`[cast-aliases] book=${bookId} added alias "${aliasName}" to ${characterId}`);
 
       return res.json({ characterId, alias: aliasName, alreadyPresent: false });
-    });
+    }));
+    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    return outcome;
   },
 );
 

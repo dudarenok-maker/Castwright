@@ -1036,6 +1036,9 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
       .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(409);
+    /* PR #3714 review -- the stat error's absolute preview path stays out of the body. */
+    expect(res.body.error).toBe('No staged preview voice to promote.');
+    expect(JSON.stringify(res.body)).not.toMatch(/ENOENT|\.pt\b/);
   });
 
   it('promote-voice 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {
@@ -1566,15 +1569,18 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     // enough for the DELETE handler to get there.
     await evictStarted;
 
+    /* #3711 — the route now holds the book's BOOK-OP lock across the (bounded)
+       evict, so a concurrent add-alias HTTP request would queue on book-op by
+       design. The invariant this test pins is about the CAST lock, so acquire
+       that directly: under the pre-fix shape (evict inside the cast lock) the
+       acquisition could not start until the evict resolved. */
+    const { withCastLock } = await import('../workspace/cast-lock.js');
     const start = Date.now();
-    const addAliasRes = await request(app)
-      .post(`/api/books/${bookId}/cast/add-alias`)
-      .send({ characterId: 'nopersona', aliasName: 'Quick' });
+    await withCastLock(join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK), async () => {});
     const elapsed = Date.now() - start;
 
-    expect(addAliasRes.status).toBe(200);
-    /* Under the pre-fix shape the evict ran INSIDE the lock, so add-alias's
-       own withCastLock call couldn't even start until the evict resolved —
+    /* Under the pre-fix shape the evict ran INSIDE the lock, so the cast lock
+       couldn't even be acquired until the evict resolved —
        >= EVICT_DELAY_MS. Generous headroom under that while staying well
        above the few ms a genuinely-unlocked add-alias takes. */
     expect(elapsed).toBeLessThan(EVICT_DELAY_MS - 100);

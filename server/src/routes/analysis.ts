@@ -126,7 +126,7 @@ import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restruc
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
   describeFingerprintForLog,
@@ -164,6 +164,8 @@ import { updateStateAtDir } from '../workspace/book-state-update.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
+import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
@@ -3033,6 +3035,19 @@ export interface AnalysisJob {
       events carry `analysisEngine`/`analysisGpu` (withRunEngine), the live frontend snapshot's only
       way to learn the card the run now holds. */
   fallbackModels?: Set<string>;
+  /** #3711 — settles when the job's tracked units have ACTUALLY finished: a main job
+      once it has ended and `liveWork` is 0 (NOT at the drain deadline); a subset job at
+      its end. The route's `runBookJob` lease is released only then, so a folder move
+      stays refused for as long as anything can still write the book. Absent on a
+      hand-built test job. */
+  settled?: Promise<void>;
+  resolveSettled?: () => void;
+  /** #3711 (PR #3714 review pass 1) — settles when endJob's DETACHED terminal writes
+      (the last-outcome file, the paused/halted snapshot, the snapshot cleanup) have
+      landed. `settled` waits for it too: those writes resolve the book's folder and
+      then write it, so the lease must outlive them or a rename can slip in between
+      and the write recreates the vacated folder. */
+  terminalWrites?: Promise<void>;
 }
 
 /* #3084 wave 3d review pass 3 — Ollama beats an endpoint beats Gemini, so a mixed run is never
@@ -3115,7 +3130,24 @@ export function takeWork(job: AnalysisJob): void {
     the writer registry. Exported for unit testing. */
 export function releaseWork(job: AnalysisJob): void {
   job.liveWork = (job.liveWork ?? 0) - 1;
-  if (job.kind === 'main' && job.ended && job.liveWork <= 0) leaveWriters(job);
+  if (job.kind === 'main' && job.ended && job.liveWork <= 0) {
+    leaveWriters(job);
+    settleJob(job);
+  }
+}
+
+/** #3711 — resolve `settled` (and so release the route's `runBookJob` lease) once
+    endJob's detached terminal writes have landed, never before. */
+function settleJob(job: AnalysisJob): void {
+  void (async () => {
+    /* re-check after each wait: a later endJob call may have extended the collection */
+    let seen: Promise<void> | undefined;
+    do {
+      seen = job.terminalWrites;
+      await seen;
+    } while (job.terminalWrites !== seen);
+    job.resolveSettled?.();
+  })();
 }
 
 /* #3435 decision A — the main writer state for a manuscript: 'live' when a
@@ -3190,6 +3222,29 @@ function refusalFrame(r: { error: string; message: string; draining?: boolean })
   return { kind: 'error', code: r.error, message: r.message, ...(r.draining !== undefined ? { draining: r.draining } : {}) };
 }
 
+/* PR #3714 review pass 6 -- the record a registered start runs on. The start
+   read its record before it queued on book-op for `runBookJob`, and an op
+   queued ahead of it (a bundle overwrite) may have replaced the book since.
+   Re-read the record for the manuscript the LEASE names (resolved under
+   book-op; the job token now refuses a further overwrite). A lease naming a
+   different manuscriptId means the book was replaced by another manuscript:
+   the request's id no longer belongs to it, so the start is refused as
+   `unknown_manuscript`, the same answer a start sent after the overwrite gets.
+   No lease (an upload not yet on disk): the captured record stands. */
+const MANUSCRIPT_REPLACED_MESSAGE =
+  "This book's manuscript was replaced while the analysis was starting. Reopen the book and start the analysis again.";
+type StartRecord = NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>;
+async function recordForLease(
+  manuscriptId: string,
+  captured: StartRecord,
+  lease: BookJobLease | null,
+): Promise<StartRecord | { refusal: Record<string, unknown> }> {
+  if (!lease) return captured;
+  const refusal = { refusal: { kind: 'error', code: 'unknown_manuscript', message: MANUSCRIPT_REPLACED_MESSAGE } };
+  if (lease.state.manuscriptId !== manuscriptId) return refusal;
+  return (await getOrHydrateManuscript(manuscriptId)) ?? refusal;
+}
+
 /* Exported for tests + the B2 frontend's cheap "is a job running?" probe
    before opening an SSE. Returns false when the map entry is present but
    its controller has been aborted — that entry will be cleared at the
@@ -3201,6 +3256,11 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
   if (main && !main.controller.signal.aborted) return true;
   const subset = inFlightSubsetByManuscript.get(manuscriptId);
   return !!subset && !subset.controller.signal.aborted;
+}
+
+/** Test helper: the in-flight job for a manuscript (#3711 route-level lease tests). */
+export function __inFlightJobForTest(manuscriptId: string, kind: 'main' | 'subset'): AnalysisJob | undefined {
+  return jobMapFor(kind).get(manuscriptId);
 }
 
 /** Test helper: register a job into the in-flight map. Used by
@@ -3443,10 +3503,10 @@ async function persistTerminalSnapshot(
   } catch (err) {
     /* #3174 — same slow-path-resolve gap as persistRunningSnapshot above:
        withVerifiedBookDir's re-hydrate can throw before the callback runs.
-       This function is called detached at every call site (`void
-       persistTerminalSnapshot(...)`) except the awaited /pause route,
-       which doesn't rely on a rejection either — it just proceeds either
-       way. Non-fatal — log and continue. */
+       endJob does not await this function (it collects it into
+       `job.terminalWrites`, which only gates the job's `settled`), and the
+       awaited /pause route doesn't rely on a rejection either — it just
+       proceeds either way. Non-fatal — log and continue. */
     console.warn('[analysis-state] terminal snapshot resolve failed', err);
   }
 }
@@ -3670,6 +3730,9 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      book renamed away mid-run must never have this write mkdir the dead
      pre-rename folder back into existence. */
   let outcomeWritePromise: Promise<void> | null = null;
+  /* #3711 — every detached write below is collected here and folded into
+     `job.terminalWrites`, which `settled` waits for (see settleJob). */
+  const terminalWrites: Promise<unknown>[] = [];
   if (job.kind === 'main' && (kind === 'result' || kind === 'error')) {
     const dirForOutcome = liveBookDir(job);
     if (dirForOutcome) {
@@ -3724,7 +3787,7 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
            had no production call site. */
         const dir = liveBookDir(job);
         if (dir) {
-          void (async () => {
+          terminalWrites.push((async () => {
             try {
               const verified = await tryResolveVerifiedBookDir({
                 manuscriptId: job.manuscriptId,
@@ -3741,12 +3804,12 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
                  as resumable (see the comment above) — log and continue. */
               console.warn('[analysis-state] stale snapshot delete failed', err);
             }
-          })();
+          })());
         }
       } else if (kind === 'result') {
         const dir = liveBookDir(job);
         if (dir) {
-          void (async () => {
+          terminalWrites.push((async () => {
             try {
               const verified = await tryResolveVerifiedBookDir({
                 manuscriptId: job.manuscriptId,
@@ -3758,20 +3821,20 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
               /* Non-fatal, as the main delete above. */
               console.warn('[analysis-state] subset snapshot delete failed', err);
             }
-          })();
+          })());
         }
       }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
          endpoint returns paused, and the pill renders the Resume
          affordance. */
-      void persistTerminalSnapshot(job, 'paused', finalEv as { code: string; message?: string });
+      terminalWrites.push(persistTerminalSnapshot(job, 'paused', finalEv as { code: string; message?: string }));
     } else if (kind === 'error') {
       /* Halted on a real failure: attribution_drift, cast_incomplete,
          stage1_shrink_refused, unknown_manuscript, or an upstream
          analyzer error. Persist with haltCode + haltReason so the
          cold-boot pill routes the user to the right banner. */
-      void persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string });
+      terminalWrites.push(persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string }));
     }
   }
   /* #3004 — if an outcome write is in flight, don't end the response
@@ -3782,6 +3845,13 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      async .then() callback cannot run until the current synchronous block
      finishes. If we clear() first, the callback finds an empty set and
      res.end() is never called, hanging the response forever. */
+  if (outcomeWritePromise) terminalWrites.push(outcomeWritePromise);
+  /* A second endJob for the same job APPENDS (it must not replace the first call's
+     collection): settlement waits for every terminal write of every call made
+     BEFORE `settled` resolved. A call AFTER that is not covered -- the lease is
+     already released and cannot be re-taken here, so its writes run unleased. No
+     production path ends a job a second time after it has settled. */
+  job.terminalWrites = Promise.allSettled([job.terminalWrites, ...terminalWrites]).then(() => undefined);
   const subs = Array.from(job.subscribers);
   job.subscribers.clear();
   const endResponsesCallback = () => {
@@ -3809,12 +3879,17 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      running, else when the last one finishes, or at the drain deadline. */
   if (job.kind !== 'main') {
     releaseBusyAndPin(job);
+    settleJob(job);
     return;
   }
   if ((job.liveWork ?? 0) <= 0) {
     leaveWriters(job);
+    settleJob(job);
     return;
   }
+  /* #3711 — the deadline below releases the busy flag and the pin ONLY. It does not
+     settle the job: the route's `runBookJob` lease is held until `releaseWork` drains
+     the last tracked unit, because a unit still running can still write the book. */
   const deadline = setTimeout(() => {
     if (job.left) return;
     console.warn(
@@ -3834,18 +3909,10 @@ function releaseBusyAndPin(job: AnalysisJob): void {
      whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
   /* Pinned deliberately (#2165) — mark/clear must use the same key, or the
      ref count leaks on one side and underflows on the other, releasing a
-     guard a sibling job may still hold.
-
-     KNOWN, ACCEPTED GAP: book-state.ts's rename guard narrows but does NOT
-     close the race that makes this key wrong. An analysis whose
-     markAnalysisBusy lands between that route's last check and its
-     renameWithRetry registers against the pre-rename directory, so
-     isAnalysisBusy(newDir) is false for this run's whole life and
-     cast-design.ts's analysis-vs-bulk-design exclusion silently disappears
-     for that book. The run's own disk writes are unaffected (liveBookDir
-     above). Closing it needs a primitive spanning registration and rename —
-     a per-book lock, or keying busy state on book id instead of path — which
-     is out of scope for #2165. */
+     guard a sibling job may still hold. #3711 closed the race that used to make
+     this key wrong: the job is registered through `runBookJob` (under book-op) and
+     `job.bookDir` comes from its lease, while a rename is refused for as long as the
+     registration is held, so the path cannot change between mark and clear. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
   job.releaseEndpointRun?.(); // #3084 P1 — this run no longer holds its endpoints
   job.endpointRunReleased = true; // #3084 P30 — a switch landing after this point takes no mark
@@ -4071,6 +4138,24 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const preflightDigests = await resolvePreflightDigests(
     preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels),
   );
+  /* #3711 — the run is a registered `analysis` job: a folder move/delete is refused (409
+     book_busy) from registration until the job's tracked units have drained; it holds no
+     book-op. The registration `await` sits AFTER the awaits above and BEFORE the
+     synchronous re-check-and-register window inside `startMain`, so #3004's window stays
+     `await`-free. `startMain` runs against the lease (the book as resolved under
+     book-op); every join / refusal / selection-error return inside it releases the
+     token. A record with no `bookId` (an upload not yet on disk) has no folder to
+     protect and runs unregistered. */
+  const startMain = async (lease: BookJobLease | null): Promise<unknown> => {
+  /* PR #3714 review pass 6 — run on the record the lease names, read BEFORE the
+     re-check below so #3004's window stays `await`-free. */
+  const leased = await recordForLease(manuscriptId, record, lease);
+  if ('refusal' in leased) {
+    console.log(`[analysis] refused manuscript_replaced manuscript=${JSON.stringify(manuscriptId)}`);
+    send(leased.refusal);
+    clearInterval(keepAlive);
+    return res.end();
+  }
   /* 3. #3004 — those awaits reopened the check-then-register window: a concurrent POST may have
      registered a job while this one waited. Re-check with the same condition and join that
      job rather than start a second one. Reassigning `existing` also makes the displacement
@@ -4157,7 +4242,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     subscribers: new Set(),
     manuscriptId,
     kind: 'main',
-    bookDir: record.bookDir ?? null,
+    bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
     fallbackSwitch,
     replay: {
@@ -4175,6 +4260,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     left: false,
     liveWork: 0,
   };
+  job.settled = new Promise<void>((resolve) => {
+    job.resolveSettled = resolve;
+  });
   inFlightAnalysisByManuscript.set(manuscriptId, job);
   /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
   joinWriters(job);
@@ -4217,13 +4305,36 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      response until res.end() is called explicitly (by endJob() inside
      runMainAnalyzerJob), so the response stays open and continues to
      receive broadcast events for the lifetime of the job. */
-  void runMainAnalyzerJob(job, record, selection, {
+  await runMainAnalyzerJob(job, leased, selection, {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
     requestedPhase0Model,
     requestedPhase1Model,
-  });
+  }).catch((e) => console.error('[analysis] main job rejected', e));
+  /* #3711 — hold the lease until the tracked units have actually drained (NOT the
+     drain deadline). A job the runner never ended has nothing left to wait for. */
+  if (job.ended) await job.settled;
+  };
+  if (!record.bookId) {
+    void startMain(null).catch((e) => console.error('[analysis] main job failed', e));
+    return;
+  }
+  let registered;
+  try {
+    registered = await runBookJob(record.bookId, 'analysis', startMain);
+  } catch (e) {
+    console.error('[analysis] job registration failed', e);
+    send({ kind: 'error', code: 'lock-contention', message: requestFailureMessage(e, 'Could not start the analysis.') });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  if (registered === BOOK_GONE) {
+    send({ kind: 'error', code: 'book_not_found', message: 'Book not found.' });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  registered.done.catch((e) => console.error('[analysis] main job failed', e));
 });
 
 export interface MainAnalyzerJobOpts {
@@ -7588,8 +7699,13 @@ analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) =
        fetch right after pause is guaranteed to see paused state.
        The analyzer's catch-block fires endJob({code:'aborted'})
        asynchronously, which also writes paused state — that write
-       is idempotent with this one (same phase + state). */
-    await persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
+       is idempotent with this one (same phase + state).
+       #3711 — folded into `job.terminalWrites` synchronously, so the job's
+       `settled` (and the route's lease) waits for it even if the job ends on
+       its own while this write is still landing. */
+    const pausedWrite = persistTerminalSnapshot(job, 'paused', { code: 'aborted', message: 'Analysis paused.' });
+    job.terminalWrites = Promise.allSettled([job.terminalWrites, pausedWrite]).then(() => undefined);
+    await pausedWrite;
     job.controller.abort();
     paused = true;
   }
@@ -7730,35 +7846,44 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
 
   /* Validate against the manuscript record so a stale frontend id doesn't
-     produce a confusing "chapter not found mid-stream" log line. */
+     produce a confusing "chapter not found mid-stream" log line. Returns null
+     when it refused (the response is ended). Runs again on the leased record
+     when the start re-read it (review pass 6). */
   const hintsById = new Map(record.chapterHints.map((h) => [h.id, h]));
-  const targets = requestedIds
-    .map((id) => hintsById.get(id))
-    .filter((h): h is NonNullable<typeof h> => !!h);
-  if (targets.length === 0) {
-    send({
-      kind: 'error',
-      code: 'bad_request',
-      message: 'None of the requested chapter ids match this manuscript.',
-    });
-    clearInterval(keepAlive);
-    return res.end();
-  }
-  const skippedExcluded = targets.filter((h) => h.excluded);
-  if (skippedExcluded.length > 0) {
-    /* Hard-stop rather than silently re-analyzing — the typical reason a
-       caller hits this with excluded=true is a frontend bug where the
-       toggle endpoint wasn't awaited before subset analysis kicked off.
-       Better to fail fast than to leave half-state on disk. */
-    send({
-      kind: 'error',
-      code: 'chapter_excluded',
-      message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map((c) => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
-    });
-    clearInterval(keepAlive);
-    return res.end();
-  }
-  const toRun = targets.filter((h) => !h.excluded);
+  const chaptersToRun = (rec: StartRecord): StartRecord['chapterHints'] | null => {
+    const byId = new Map(rec.chapterHints.map((h) => [h.id, h]));
+    const targets = requestedIds
+      .map((id) => byId.get(id))
+      .filter((h): h is NonNullable<typeof h> => !!h);
+    if (targets.length === 0) {
+      send({
+        kind: 'error',
+        code: 'bad_request',
+        message: 'None of the requested chapter ids match this manuscript.',
+      });
+      clearInterval(keepAlive);
+      res.end();
+      return null;
+    }
+    const skippedExcluded = targets.filter((h) => h.excluded);
+    if (skippedExcluded.length > 0) {
+      /* Hard-stop rather than silently re-analyzing — the typical reason a
+         caller hits this with excluded=true is a frontend bug where the
+         toggle endpoint wasn't awaited before subset analysis kicked off.
+         Better to fail fast than to leave half-state on disk. */
+      send({
+        kind: 'error',
+        code: 'chapter_excluded',
+        message: `Cannot run analysis on excluded chapter${skippedExcluded.length === 1 ? '' : 's'}: ${skippedExcluded.map((c) => c.title).join(', ')}. Flip the exclude flag first via POST /api/books/.../chapters/:chapterId/exclude.`,
+      });
+      clearInterval(keepAlive);
+      res.end();
+      return null;
+    }
+    return targets.filter((h) => !h.excluded);
+  };
+  const toRun = chaptersToRun(record);
+  if (!toRun) return;
 
   /* ── Plan 32 D1 subscribe-vs-start dispatch.
      Mirrors the main /:id/analysis route's pattern. If a non-aborted
@@ -7857,6 +7982,21 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   const preflightDigests = await resolvePreflightDigests(
     preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels),
   );
+  /* #3711 — same as the main POST: a registered `analysis` job whose registration
+     `await` sits after the awaits above and before the synchronous re-check window in
+     `startSubset`; the lease is released when the (sequential) subset run ends. */
+  const startSubset = async (lease: BookJobLease | null): Promise<unknown> => {
+  /* PR #3714 review pass 6 — same as `startMain`: run on the record the lease
+     names, and re-derive the chapters from it, before the `await`-free re-check. */
+  const leased = await recordForLease(manuscriptId, record, lease);
+  if ('refusal' in leased) {
+    console.log(`[analysis-subset] refused manuscript_replaced manuscript=${JSON.stringify(manuscriptId)}`);
+    send(leased.refusal);
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  const leasedToRun = leased === record ? toRun : chaptersToRun(leased);
+  if (!leasedToRun) return;
   /* 3. #3004 — both awaits above reopen the check-then-register window. Re-check with the same
      condition: a job a concurrent POST registered meanwhile goes through joinLive, so the same
      chapters join it and a different subset is refused (#3202), never duplicated. The #3435
@@ -7913,8 +8053,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     subscribers: new Set(),
     manuscriptId,
     kind: 'subset',
-    subsetChapterIds: toRun.map((t) => t.id),
-    bookDir: record.bookDir ?? null,
+    subsetChapterIds: leasedToRun.map((t) => t.id),
+    bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
     fallbackSwitch,
     replay: {
@@ -7932,6 +8072,9 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     left: false,
     liveWork: 0,
   };
+  job.settled = new Promise<void>((resolve) => {
+    job.resolveSettled = resolve;
+  });
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
   /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
@@ -7965,14 +8108,35 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   /* Run the subset analyzer in the background. The route response is
      held open by the detached promise's broadcast loop until endJob
      fires res.end() on every subscriber. */
-  void runSubsetAnalyzerJob(
+  await runSubsetAnalyzerJob(
     job,
-    record,
+    leased,
     selection,
     phase1Selection,
-    toRun,
+    leasedToRun,
     allowStage1ShrinkSubset,
-  );
+  ).catch((e) => console.error('[analysis-subset] subset job rejected', e));
+  if (job.ended) await job.settled;
+  };
+  if (!record.bookId) {
+    void startSubset(null).catch((e) => console.error('[analysis-subset] subset job failed', e));
+    return;
+  }
+  let registered;
+  try {
+    registered = await runBookJob(record.bookId, 'analysis', startSubset);
+  } catch (e) {
+    console.error('[analysis-subset] job registration failed', e);
+    send({ kind: 'error', code: 'lock-contention', message: requestFailureMessage(e, 'Could not start the analysis.') });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  if (registered === BOOK_GONE) {
+    send({ kind: 'error', code: 'book_not_found', message: 'Book not found.' });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  registered.done.catch((e) => console.error('[analysis-subset] subset job failed', e));
 });
 
 /* Detached subset-retry analyzer body. Extracted from the request

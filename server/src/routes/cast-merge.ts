@@ -18,7 +18,8 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { bookStateLanguage } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -483,12 +484,13 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     return res.status(400).json({ error: 'sourceId and targetId must differ.' });
   }
 
-  const located = await findBookByBookId(bookId);
-  if (!located) return res.status(404).json({ error: 'Book not found.' });
-  const { bookDir, state } = located;
-
   try {
-    const result = await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+    /* #3711 — book-op outermost (inside the try so its own acquisition timeout
+       takes the curated-failure seam below, like every other lock timeout). */
+    const result = await withBookOp(bookId, ({ bookDir, state }) =>
+      performCastMerge({ bookId, bookDir, state, sourceId, targetId }),
+    );
+    if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     return res.json(result);
   } catch (err) {
     const e = err as { status?: number; error?: string };

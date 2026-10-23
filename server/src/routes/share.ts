@@ -26,6 +26,7 @@ import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { customAlphabet } from 'nanoid';
 import { findBookByBookId } from '../workspace/scan.js';
+import { peekBook } from '../workspace/book-op-lock.js';
 import { WORKSPACE_ROOT, dotAudiobook } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 
@@ -113,7 +114,9 @@ async function findLatestM4b(bookDir: string): Promise<string | null> {
 export const shareRouter = Router();
 
 shareRouter.post('/:bookId/share', async (req: Request, res: Response) => {
-  const located = await findBookByBookId(req.params.bookId);
+  /* #3711 — writes only the WORKSPACE-level share-links.json, nothing in the
+     book folder: a read-only `peekBook` is enough to confirm the book exists. */
+  const located = await peekBook(req.params.bookId);
   if (!located) return res.status(404).json({ error: 'book_not_found' });
 
   const table = await readShareLinks();

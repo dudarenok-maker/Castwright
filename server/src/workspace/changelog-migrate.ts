@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { BOOKS_ROOT, changeLogJsonPath, dotAudiobook } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { renameWithRetry } from './atomic-rename.js';
+import { withBookOpAtDir } from './book-op-lock.js';
 
 export interface MigrateResult {
   /** Books whose change-log was rewritten in this run. */
@@ -78,40 +79,54 @@ async function listDirs(path: string): Promise<string[]> {
 
 export async function migrateLegacyChangeLogs(): Promise<MigrateResult> {
   const result: MigrateResult = { migrated: [], clean: [], alreadyMigrated: [] };
-  for (const bookDir of await listBookDirs()) {
-    const logPath = changeLogJsonPath(bookDir);
-    const legacyPath = join(dotAudiobook(bookDir), 'change-log.legacy.json');
-
-    if (!existsSync(logPath)) continue;
-    if (existsSync(legacyPath)) {
-      result.alreadyMigrated.push(bookDir);
-      continue;
+  for (const walkedDir of await listBookDirs()) {
+    /* #3711 — each book's step runs under its book-op lock, on the folder the
+       book lives in NOW, so a rename queued ahead of the sweep cannot leave the
+       migration writing into a vacated path (writeJsonAtomic recreates it).
+       A throw for one book (its state turning unreadable under the lock, a lock
+       timeout behind a slow holder) skips THAT book only; the next startup
+       retries it (PR #3714 review pass 3). */
+    try {
+      await withBookOpAtDir(walkedDir, (bookDir) => migrateBook(bookDir, result));
+    } catch (err) {
+      console.warn('[changelog-migrate] skipping a book this startup', err);
     }
-
-    /* readJson returns the FULL parsed document. .audiobook/change-log.json
-       on disk is a bare events array (see persistence middleware), so we
-       parse as unknown and narrow defensively — older partial writes or
-       hand-edits shouldn't crash the migration. */
-    const doc = await readJson<unknown>(logPath).catch(() => null);
-    const events: unknown[] = Array.isArray(doc)
-      ? doc
-      : Array.isArray((doc as { events?: unknown[] })?.events)
-        ? (doc as { events: unknown[] }).events
-        : [];
-
-    if (!looksLegacy(events)) {
-      result.clean.push(bookDir);
-      continue;
-    }
-
-    /* Atomic rename + empty rewrite. Live shape mirrors what the persistence
-       middleware writes — `{ events: [] }` — so the next PUT round-trip
-       doesn't see a wrong-shape file. If the rename succeeds but the
-       empty rewrite fails, the next boot will see no log file and the
-       .legacy.json sentinel, so we keep the at-most-once guarantee. */
-    await renameWithRetry(logPath, legacyPath);
-    await writeJsonAtomic(logPath, { events: [] });
-    result.migrated.push(bookDir);
   }
   return result;
+}
+
+async function migrateBook(bookDir: string, result: MigrateResult): Promise<void> {
+  const logPath = changeLogJsonPath(bookDir);
+  const legacyPath = join(dotAudiobook(bookDir), 'change-log.legacy.json');
+
+  if (!existsSync(logPath)) return;
+  if (existsSync(legacyPath)) {
+    result.alreadyMigrated.push(bookDir);
+    return;
+  }
+
+  /* readJson returns the FULL parsed document. .audiobook/change-log.json
+     on disk is a bare events array (see persistence middleware), so we
+     parse as unknown and narrow defensively — older partial writes or
+     hand-edits shouldn't crash the migration. */
+  const doc = await readJson<unknown>(logPath).catch(() => null);
+  const events: unknown[] = Array.isArray(doc)
+    ? doc
+    : Array.isArray((doc as { events?: unknown[] })?.events)
+      ? (doc as { events: unknown[] }).events
+      : [];
+
+  if (!looksLegacy(events)) {
+    result.clean.push(bookDir);
+    return;
+  }
+
+  /* Atomic rename + empty rewrite. Live shape mirrors what the persistence
+     middleware writes — `{ events: [] }` — so the next PUT round-trip
+     doesn't see a wrong-shape file. If the rename succeeds but the
+     empty rewrite fails, the next boot will see no log file and the
+     .legacy.json sentinel, so we keep the at-most-once guarantee. */
+  await renameWithRetry(logPath, legacyPath);
+  await writeJsonAtomic(logPath, { events: [] });
+  result.migrated.push(bookDir);
 }

@@ -40,7 +40,7 @@ beforeAll(async () => {
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
   writeFileSync(
     join(bookDir, '.audiobook', 'state.json'),
-    JSON.stringify({ bookId: 'bk1', title: 'T', author: 'A', updatedAt: '2020-01-01' }),
+    JSON.stringify({ bookId: 'bk1', title: 'T', author: 'A', chapters: [], updatedAt: '2020-01-01' }),
   );
 });
 afterAll(() => {

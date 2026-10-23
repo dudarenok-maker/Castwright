@@ -25,6 +25,9 @@ import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import {
   bookExportManifestsDir,
   bookExportsDir,
@@ -259,7 +262,19 @@ function bookFilename(
    its job, by the time the snapshot happens. */
 const pendingPostCreations = new Set<Promise<void>>();
 
-async function createExportJob(req: Request, res: Response): Promise<Response> {
+/** How `createExportJob` registers its `export` job. Injected by the route handler so the
+    registration token sits in the handler itself (the book-op guard reads handlers
+    lexically and cannot follow a helper -- see book-op-lock.guard.test.ts). */
+type RegisterExportJob = <T>(
+  bookId: string,
+  fn: (lease: BookJobLease) => Promise<T>,
+) => Promise<typeof BOOK_GONE | { done: Promise<T> }>;
+
+async function createExportJob(
+  req: Request,
+  res: Response,
+  register: RegisterExportJob,
+): Promise<Response | void> {
   const body = (req.body ?? {}) as {
     format?: string;
     destination?: string;
@@ -329,11 +344,24 @@ async function createExportJob(req: Request, res: Response): Promise<Response> {
       });
   }
 
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ error: 'book_not_found' });
-
+  /* #3711 — the export is a registered `export` job (it archives the whole book): a
+     folder move/delete is refused (409 book_busy) from the start of this pre-flight
+     until the build settles. The book and its CURRENT folder come from the lease,
+     resolved under book-op. Detached: `fn` runs the pre-start checks, sends the
+     response, then awaits the build; this handler waits only for the registration and
+     for `fn` to have responded (so `pendingPostCreations` still means "this POST has
+     either created no job or registered it in `jobPromises`"). */
+  const destination: 'download' | 'sync-folder' = body.destination;
+  let markResponded: () => void = () => {};
+  const responded = new Promise<void>((resolve) => {
+    markResponded = resolve;
+  });
+  let registered;
+  try {
+    registered = await register(req.params.bookId, async (located) => {
+  try {
   const settings = await readUserSettings();
-  if (body.destination === 'sync-folder' && !settings.exportSyncFolder) {
+  if (destination === 'sync-folder' && !settings.exportSyncFolder) {
     return res
       .status(400)
       .json({
@@ -396,7 +424,7 @@ async function createExportJob(req: Request, res: Response): Promise<Response> {
     captionFileFormat: format === 'captions' ? captionFileFormat : undefined,
     captionGranularity: format === 'captions' ? captionGranularity : undefined,
     captionScope: format === 'captions' ? captionScope : undefined,
-    destination: body.destination,
+    destination,
     status: 'in_progress',
     filename,
     sizeBytes: null,
@@ -463,7 +491,25 @@ async function createExportJob(req: Request, res: Response): Promise<Response> {
   /* srv-28 — ride the disk-low advisory back on the 201 body (warn mode). The
      export modal surfaces `warning` next to the queued job; the build still
      proceeds. Omitted entirely when the guard was ok / off. */
-  return res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
+  res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
+  markResponded();
+  await jobPromise;
+  } finally {
+    markResponded();
+  }
+    });
+  } catch (e) {
+    console.error('[export] job registration failed', e);
+    return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the export.') });
+  }
+  if (registered === BOOK_GONE) return res.status(404).json({ error: 'book_not_found' });
+  registered.done.catch((e) => {
+    console.error('[export] export job failed to start', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: requestFailureMessage(e, 'Could not start the export.') });
+    }
+  });
+  await responded;
 }
 
 exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
@@ -473,7 +519,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   });
   pendingPostCreations.add(gate);
   try {
-    return await createExportJob(req, res);
+    return await createExportJob(req, res, (bookId, fn) => runBookJob(bookId, 'export', fn));
   } finally {
     /* Runs on every exit path (early-return error response, or the
        success path after `jobPromises.set(...)`) — by the time this
@@ -495,8 +541,13 @@ exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
 });
 
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ error: 'book_not_found' });
+  /* #3711 -- QUICK book-folder writer (the cancelled manifest + partial-artifact cleanup):
+     holds book-op for its whole span, so a rename queued behind it lands in the new
+     folder and this never recreates the old one. The cancelled job's token is released
+     by its own `runBookJob`, so the cancel itself is not blocked by it. */
+  let outcome;
+  try {
+    outcome = await withBookOp(req.params.bookId, async (located) => {
   await rehydrateBook(located.bookDir, located.state.bookId);
   const job = jobs.get(req.params.exportId);
   if (!job || job.bookId !== located.state.bookId)
@@ -546,6 +597,13 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
   }
 
   return res.status(204).end();
+    });
+  } catch (e) {
+    console.error('[export] cancel failed', e);
+    return res.status(500).json({ error: requestFailureMessage(e, 'Could not cancel the export.') });
+  }
+  if (outcome === BOOK_GONE) return res.status(404).json({ error: 'book_not_found' });
+  return outcome;
 });
 
 exportRouter.get('/:bookId/exports/:exportId', async (req: Request, res: Response) => {

@@ -1446,3 +1446,17 @@ describe('ModelManagerView — settings form accordion shell', () => {
     }
   });
 });
+
+describe('ModelManagerView — keep-alive selector is stable before the account fetch (#3722)', () => {
+  it('does not trip react-redux\'s "returned a different result" check when analyzerKeepAliveByModel is absent', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = renderManager();
+      expect(store.getState().account.analyzerKeepAliveByModel).toBeUndefined();
+      const unstable = warn.mock.calls.filter((c) => String(c[0]).includes('returned a different result'));
+      expect(unstable).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

@@ -8,8 +8,10 @@
         → multipart/form-data with `file` carrying the bundle.
         → 201 { bookId, targetPath, importedFiles } on success.
         → 400 with { error, reason } on a malformed bundle.
-        → 409 with { error: 'bundle_conflict', existingPath } when
-              onConflict='fail' and the target already exists.
+        → 409 with { error: 'bundle_conflict', message } when
+              onConflict='fail' and the target already exists (or an
+              overwrite's target stopped being the book it named). The body
+              names no path; the raw conflict goes to the server log.
 
    The POST honours the same 50 MB multipart limit as /api/import (the
    manuscript-upload route) — see server/src/routes/import.ts:40. Bundles
@@ -28,7 +30,9 @@ import {
   importPortableBundle,
   type ConflictStrategy,
 } from '../import/scan-import-folder.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { BOOK_GONE, BookBusyError, BookStateUnreadableError } from '../workspace/book-op-lock.js';
+import { runBookJob } from '../workspace/book-jobs.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 
@@ -38,44 +42,51 @@ export const portableExportRouter = Router();
 
 /** GET /api/books/:bookId/export/portable — stream the bundle. */
 portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: Response) => {
-  const located = await findBookByBookId(req.params.bookId);
-  if (!located) return res.status(404).json({ error: 'book_not_found' });
-
+  /* #3711 — request-scoped `export` job (it zips the whole book, then stages a copy
+     under <bookDir>/exports): a folder move/delete is refused (409 book_busy) while it
+     runs. The book is resolved by the registration (under book-op), so `located` is
+     its CURRENT folder. */
+  let registered;
   try {
-    const result = await buildPortableBundleByBookId(located.state.bookId);
-    const downloadName = `${slugify(located.state.title)}.portable.zip`;
+    registered = await runBookJob(req.params.bookId, 'export', async (located) => {
+      try {
+        const result = await buildPortableBundleByBookId(located.state.bookId);
+        const downloadName = `${slugify(located.state.title)}.portable.zip`;
 
-    /* Plan 79 — also write the bundle into <bookDir>/exports/ so the
-       user can pick it up directly from File Explorer alongside the
-       other artifacts. Best-effort: a local-save failure logs a warning
-       but never blocks the HTTP response (the user still gets the
-       streamed download). Atomic via tmp+rename so a partially-written
-       portable.zip can't be picked up mid-write. */
-    await stagePortableLocally(located.bookDir, downloadName, result.buffer).catch((err) => {
-      console.warn('[portable-export] local copy failed (non-fatal)', err);
+        /* Plan 79 — also write the bundle into <bookDir>/exports/ so the
+           user can pick it up directly from File Explorer alongside the
+           other artifacts. Best-effort: a local-save failure logs a warning
+           but never blocks the HTTP response (the user still gets the
+           streamed download). Atomic via tmp+rename so a partially-written
+           portable.zip can't be picked up mid-write. */
+        await stagePortableLocally(located.bookDir, downloadName, result.buffer).catch((err) => {
+          console.warn('[portable-export] local copy failed (non-fatal)', err);
+        });
+
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        res.setHeader('Content-Length', result.buffer.length.toString());
+        res.setHeader('Cache-Control', 'no-cache');
+        res.status(200).send(result.buffer);
+      } catch (e) {
+        console.error('[portable-export] build failed', e);
+        res.status(500).json({
+          error: 'portable_export_failed',
+          /* Fixed sentence: a raw error can name the absolute manuscript path, and
+             this app is served over LAN HTTPS. The raw error is logged above. */
+          message: 'Exporting the bundle failed. See the server log for details.',
+        });
+      }
     });
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-    res.setHeader('Content-Length', result.buffer.length.toString());
-    res.setHeader('Cache-Control', 'no-cache');
-    res.status(200).send(result.buffer);
   } catch (e) {
-    console.error('[portable-export] build failed', e);
-    res.status(500).json({
-      error: 'portable_export_failed',
-      /* Fixed sentence: a raw error can name the absolute manuscript path, and
-         this app is served over LAN HTTPS. The raw error is logged above. */
-      message: 'Exporting the bundle failed. See the server log for details.',
-    });
+    console.error('[portable-export] registration failed', e);
+    return res.status(500).json({ error: requestFailureMessage(e, 'Could not start the export.') });
   }
+  if (registered === BOOK_GONE) return res.status(404).json({ error: 'book_not_found' });
+  await registered.done;
 });
 
-async function stagePortableLocally(
-  bookDir: string,
-  filename: string,
-  buf: Buffer,
-): Promise<void> {
+async function stagePortableLocally(bookDir: string, filename: string, buf: Buffer): Promise<void> {
   const exportsRoot = bookExportsDir(bookDir);
   await mkdir(exportsRoot, { recursive: true });
   const finalPath = join(exportsRoot, filename);
@@ -106,8 +117,7 @@ portableImportRouter.post(
        multipart body; default to 'rename' so a double-click on Import
        never silently overwrites. */
     const raw =
-      (req.body?.onConflict as string | undefined) ??
-      (req.query?.onConflict as string | undefined);
+      (req.body?.onConflict as string | undefined) ?? (req.query?.onConflict as string | undefined);
     const onConflict: ConflictStrategy | undefined =
       raw === 'rename' || raw === 'overwrite' || raw === 'fail' ? raw : undefined;
 
@@ -116,9 +126,21 @@ portableImportRouter.post(
       return res.status(201).json(result);
     } catch (e) {
       if (e instanceof BundleConflictError) {
-        return res
-          .status(409)
-          .json({ error: 'bundle_conflict', existingPath: e.existingPath, message: e.message });
+        /* Fixed sentence: the error's own message and `existingPath` name the
+           absolute workspace path, and this app is served over LAN HTTPS
+           (#3714 review pass 1). The raw conflict is logged. */
+        console.warn('[portable-import] conflict', e.message);
+        return res.status(409).json({
+          error: 'bundle_conflict',
+          message: 'A book with this title already exists in the library.',
+        });
+      }
+      if (e instanceof BookBusyError) {
+        /* #3711 -- an overwrite of a book a long job is registered for. */
+        return res.status(409).json({
+          error: `This book is busy (${[...new Set(e.kinds)].join(', ')}). Wait for it to finish, then import again.`,
+          code: 'book_busy',
+        });
       }
       if (e instanceof InvalidBundleError) {
         return res
@@ -129,8 +151,13 @@ portableImportRouter.post(
       return res.status(500).json({
         error: 'portable_import_failed',
         /* Fixed sentence: a raw fs error names the absolute workspace path,
-           and this app is served over LAN HTTPS. The raw error is logged above. */
-        message: 'Importing the bundle failed. See the server log for details.',
+           and this app is served over LAN HTTPS. The raw error is logged above.
+           An overwrite target whose state.json could not be read (#3714 review
+           pass 4) answers that error's own sentence, which is path-free. */
+        message:
+          e instanceof BookStateUnreadableError
+            ? e.message
+            : 'Importing the bundle failed. See the server log for details.',
       });
     }
   },

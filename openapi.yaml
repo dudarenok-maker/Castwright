@@ -3687,14 +3687,16 @@ paths:
                   reason: { type: string }
                   message: { type: string }
         '409':
-          description: Target directory already exists and onConflict='fail'
+          description: |
+            Target directory already exists and onConflict='fail' (or an
+            overwrite's target stopped being the book it named). The body
+            names no path.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error: { type: string, enum: [bundle_conflict] }
-                  existingPath: { type: string }
                   message: { type: string }
 
   /api/books/{bookId}/share:
@@ -4103,7 +4105,7 @@ paths:
             or (plan 286) `revisions_server_owned` — the `revisions` slice is
             server-owned and this route never writes it.
         '404':
-          description: Book not found
+          description: Book not found (including a book deleted while this write was queued)
         '409':
           description: |
             Refused (nothing was written). Either the write would have replaced
@@ -4112,9 +4114,183 @@ paths:
             Author/Series/Title path is already taken, or an analysis is
             currently running for this book and the patch would move its folder
             (renaming mid-analysis would split the book's state across two
-            directories — retry once the run finishes), or a reparse /
-            replace-manuscript is currently running for this book and the patch
-            would move its folder (#3400 — retry once it finishes).
+            directories — retry once the run finishes). A folder move queued
+            behind a reparse / replace-manuscript waits for it and then moves the
+            finished book (#3711); it is not refused.
+
+            A refusal of a folder move (#3711) carries `{ error, code }` with
+            `code` one of: `book_busy` (a long job — render, analysis, voice
+            design, review or export — holds the book; stop it or wait),
+            `book_path_taken` (the new Author/Series/Title path already holds a
+            book), or `book_folder_in_use` (the folder is open in another
+            program; close it and retry). No body ever carries a path.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [book_busy, book_path_taken, book_folder_in_use]
+
+  /api/books/{bookId}:
+    delete:
+      summary: Delete a book and its folder
+      operationId: deleteBook
+      description: |
+        Removes the book's folder and prunes its queue entries. Holds the
+        book's operation lock, so a writer queued behind it finds the book gone
+        (404) instead of recreating the folder. Idempotent: a book that is
+        already gone answers `204`. Refused with `409` (nothing deleted, except
+        `book_partly_deleted`) while a long job holds the book.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: Book deleted (or already gone)
+        '409':
+          description: |
+            `code` is one of: `book_busy` (a long job holds the book; stop it or
+            wait), `book_folder_in_use` (the folder is open in another program;
+            close it and retry), `book_partly_deleted` (the book left the
+            library but some files were left behind; delete the leftover folder
+            by hand), or `book_changed` (a book with no readable state gained one
+            while the delete waited; reload and retry).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [book_busy, book_folder_in_use, book_partly_deleted, book_changed]
+        '500':
+          description: Delete failed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
+  /api/books/{bookId}/reparse:
+    post:
+      summary: Re-run the parser on the book's on-disk manuscript
+      operationId: reparseBook
+      description: |
+        Re-detects chapters from the stored manuscript file, so parser-rule
+        updates apply without a re-upload. Destructive: the analysis cache,
+        cast and audio are discarded (chapter slugs can change). The manuscript
+        file is untouched and manuscript edits are carried forward by sentence
+        id. The slow parse runs without a lock; the commit runs under the
+        book's operation lock and re-checks the manuscript's fingerprint, so a
+        manuscript that changed meanwhile is refused (`manuscript_changed`).
+        Returns the fresh state so the client can re-hydrate without a second
+        round-trip.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Re-parsed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReparseBookResponse' }
+        '404': { description: Book not found (including a book deleted while this request was queued) }
+        '409':
+          description: |
+            Refused (nothing was written). `code` is `manuscript_changed` (the
+            manuscript changed while it was being prepared; retry), `book_moved`
+            (the book was moved outside the app while it was being re-parsed;
+            an in-app rename waits for the re-parse instead; reload and retry),
+            or absent (the manuscript file is missing on disk).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [manuscript_changed, book_moved]
+        '500':
+          description: |
+            Re-parse failed (including the book's state file being unreadable
+            right now, or lock contention). The message never carries a path.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
+  /api/books/{bookId}/replace-manuscript:
+    post:
+      summary: Replace the book's manuscript with an uploaded revision
+      operationId: replaceManuscript
+      description: |
+        Uploads a revised manuscript onto an EXISTING book (identity, folder,
+        title/author/series and cover are untouched; this is not a re-import).
+        The file is parsed from memory, then installed under the book's
+        operation lock immediately before the state write that records it, and
+        the same re-detect / reset as `reparseBook` runs: analysis cache, cast
+        and audio are cleared and designed voices are carried over for
+        characters that still match. A different format swaps the stored
+        extension. Upload limit 50 MB.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReparseBookResponse' }
+        '400': { description: No manuscript file uploaded }
+        '404': { description: Book not found (including a book deleted while this request was queued) }
+        '409':
+          description: |
+            Refused (nothing was written). `code` is `book_moved` (the book was
+            moved outside the app while it was being re-parsed; an in-app
+            rename waits for the replace instead; reload and retry).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [book_moved]
+        '500':
+          description: |
+            Parsing or replacing failed (including the book's state file being
+            unreadable right now, or lock contention). The message never
+            carries a path.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/cast/{characterId}/not-linked-to:
     post:
@@ -8874,6 +9050,31 @@ components:
         checks:
           type: array
           items: { $ref: '#/components/schemas/DiagnosticsCheck' }
+
+    ReparseBookResponse:
+      type: object
+      required: [state, chapterCount, chapterTitles]
+      properties:
+        state:
+          type: object
+          description: The fresh book state (`BookStateJson`); `chapters` is the re-detected list.
+          additionalProperties: true
+        chapterCount: { type: integer }
+        chapterTitles:
+          type: array
+          items: { type: string }
+        chapters:
+          type: array
+          description: Rich chapter records for the re-parse confirmation dialog.
+          items:
+            type: object
+            required: [id, title, slug, wordCount, excluded]
+            properties:
+              id: { type: integer }
+              title: { type: string }
+              slug: { type: string }
+              wordCount: { type: integer }
+              excluded: { type: boolean }
 
     # --- Cross-book duplicate "not linked to" (plan 101 + fs-11) -----
     NotLinkedToRequest:

@@ -20,6 +20,7 @@ import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import type { BookStateJson } from './scan.js';
+import { BookStateUnreadableError } from './book-op-lock.js';
 import { bookStateLanguageOrNull } from './scan.js';
 
 export interface ScanSeriesOptions {
@@ -39,13 +40,22 @@ export interface ScanSeriesOptions {
    Returns null when the bookId isn't in the library (e.g. a brand-new
    book whose state.json was just written but state.castConfirmed is
    still false — already excluded by scanLibraryCharacters but caller
-   may still pass us its bookId). */
+   may still pass us its bookId).
+
+   #3711 (PR #3714 review pass 3) -- a sibling whose state cannot be READ
+   (EBUSY / EPERM / EISDIR ...) is skipped, the same as book-op-lock's walk: it
+   must not fail the lookup of a DIFFERENT, readable book (that 500'd every GET
+   /state of a book sorting after it). With no match, the failure is thrown:
+   the unreadable folder may be the target, so "not in the library"
+   (and the conservative defaults callers derive from null) is unproved. It is
+   thrown as the curated, path-free `BookStateUnreadableError`. */
 async function findBookStateForBookId(targetBookId: string): Promise<BookStateJson | null> {
   const { existsSync, readdirSync } = await import('node:fs');
   if (!existsSync(BOOKS_ROOT)) return null;
   const authors = readdirSync(BOOKS_ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
+  let unreadable: unknown = null;
   for (const authorName of authors) {
     const seriesNames = readdirSync(join(BOOKS_ROOT, authorName), { withFileTypes: true })
       .filter((d) => d.isDirectory())
@@ -55,12 +65,26 @@ async function findBookStateForBookId(targetBookId: string): Promise<BookStateJs
         .filter((d) => d.isDirectory())
         .map((d) => d.name);
       for (const titleName of titles) {
-        const state = await readStateJsonWithRecovery(
-          stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
-        );
+        let state: BookStateJson | null;
+        try {
+          state = await readStateJsonWithRecovery(
+            stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
+          );
+        } catch (err) {
+          /* A state that does not parse carries no bookId (book-op-lock reads
+             it the same way); any other failure is not absence. */
+          if (!(err instanceof SyntaxError)) unreadable ??= err;
+          continue;
+        }
         if (state?.bookId === targetBookId) return state;
       }
     }
+  }
+  if (unreadable) {
+    /* The raw fs error's message embeds the absolute path, and callers put an
+       error's message in a 500 body: log it in full, throw the curated one. */
+    console.warn('[series-cast-scan] state.json read failed', unreadable);
+    throw new BookStateUnreadableError();
   }
   return null;
 }
