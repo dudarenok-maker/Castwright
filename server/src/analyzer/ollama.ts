@@ -13,7 +13,7 @@ import { resolveNumPredict, resolveOllamaTemperature } from './ollama-settings.j
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
 import { StageRunner } from './runner/stage-runner.js';
 import { adaptSchemaForOllama } from './runner/schema-adapters.js';
-import type { StructuredOutputMode } from './runner/transport.js';
+import { PERSONA_ABSOLUTE_MAX_MS, type StructuredOutputMode } from './runner/transport.js';
 import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
 import { configValue } from '../config/resolver.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
@@ -41,13 +41,9 @@ interface OllamaOptions {
   dispatcher?: Agent;
 }
 
-/* Absolute ceiling for a one-shot persona generation. Needed because
-   ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
-   has no caller-supplied signal to fall back on; see the note in
-   generatePersonaViaOllama. Deliberately generous: the whole point of the
-   dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
-   DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. */
-export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
+/* The persona ceiling lives in runner/transport.ts (#3084 W4, owner decision 4.3-B1); re-exported
+   so existing importers keep working. */
+export { PERSONA_ABSOLUTE_MAX_MS };
 
 export class OllamaAnalyzer extends TransportAnalyzer {
   constructor(opts: OllamaOptions) {
