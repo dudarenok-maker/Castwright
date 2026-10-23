@@ -297,6 +297,10 @@ export class GeminiTransport implements ChatTransport {
       if (combined.aborted) onAbort();
       else combined.addEventListener('abort', onAbort, { once: true });
     });
+    /* The race below only starts after generateContentStream resolves; when that call itself rejects first (the
+       ceiling firing on a never-answering endpoint), nothing awaits this promise, and its rejection would surface
+       as an unhandled rejection. Marking it handled does not change what the race observes. */
+    abortPromise.catch(() => {});
     const releaseAbortListener = () => {
       if (onAbort) combined.removeEventListener('abort', onAbort);
     };

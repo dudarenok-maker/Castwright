@@ -12,6 +12,8 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { generateVoiceStylePersona } from './voice-style.js';
+import { _seedGeminiCatalogForTest } from './catalog/gemini-catalog.js';
+import { AnalyzerTimeoutError } from './errors.js';
 
 const CEILING_MS = 400;
 
@@ -28,14 +30,14 @@ vi.mock('../workspace/user-settings.js', () => ({
 const CHARACTER: CastCharacter = { id: 'maerin', name: 'Maerin', role: 'protagonist', gender: 'female' };
 
 let server: http.Server;
-let requests = 0;
+let posts = 0;
 const sockets = new Set<import('node:net').Socket>();
 const prevBase = process.env.GOOGLE_GEMINI_BASE_URL;
 
 beforeAll(async () => {
   // Accepts the request and never responds.
   server = http.createServer((req) => {
-    requests += 1;
+    if (req.method === 'POST') posts += 1; // a catalog listing would be a GET
     req.resume();
   });
   server.on('connection', (s) => {
@@ -43,6 +45,8 @@ beforeAll(async () => {
     s.on('close', () => sockets.delete(s));
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  // Seed the catalog so prepare() makes no listing request ('test-key' is the mocked getResolvedGeminiApiKey).
+  _seedGeminiCatalogForTest('test-key', []);
   process.env.GOOGLE_GEMINI_BASE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
@@ -55,12 +59,15 @@ afterAll(async () => {
 
 describe('generateVoiceStylePersona gemini branch local timeout (#3724)', () => {
   it('rejects at the persona ceiling instead of waiting on a never-answering endpoint', async () => {
-    requests = 0;
+    posts = 0;
     const t0 = Date.now();
-    await expect(generateVoiceStylePersona(CHARACTER)).rejects.toMatchObject({ name: 'AbortError' });
+    const err = await generateVoiceStylePersona(CHARACTER).catch((e: unknown) => e);
     const elapsed = Date.now() - t0;
-    // The request really reached the fake endpoint (the redirect applied) and was not retried.
-    expect(requests).toBe(1);
+    /* #3084 W4 — the ceiling is the transport's and it is terminal: GEMINI_RETRY_CLASSIFIER never retries an
+       AnalyzerTimeoutError, so exactly ONE generate POST reaches the fake endpoint. */
+    expect(err).toBeInstanceOf(AnalyzerTimeoutError);
+    expect((err as AnalyzerTimeoutError).reason).toBe('ceiling');
+    expect(posts).toBe(1);
     expect(elapsed).toBeGreaterThanOrEqual(CEILING_MS - 50);
     expect(elapsed).toBeLessThan(CEILING_MS + 2_000);
   }, 5_000);
