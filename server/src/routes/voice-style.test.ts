@@ -426,12 +426,14 @@ describe('#1981 — /generate-all no longer holds the book lock across the whole
         firstGeneratorCall = false;
         enteredGenerator();
         await gate;
+        aliasLandedWhenGeneratorResumed = aliasLanded;
       }
       return `persona-for-${c.id}`;
     });
-    /* Set to true ONLY on the line right before releaseGenerator(), so the
-       expect(...).toBe(false) below is the ordering proof itself. */
-    let generatorReleased = false;
+    /* Witness for the ordering: set once the add-alias response has resolved,
+       and read by the generator the moment it resumes from the gate. */
+    let aliasLanded = false;
+    let aliasLandedWhenGeneratorResumed: boolean | undefined;
 
     const genAllPromise = request(app).post(
       `/api/books/${raceBookId}/cast/voice-style/generate-all`,
@@ -457,9 +459,9 @@ describe('#1981 — /generate-all no longer holds the book lock across the whole
         clearTimeout(enteredTimer);
       }
 
-      /* The ordering proof: a concurrent add-alias on the same book lands
-         WHILE the generator is still pending on the gate. The 8 s race is a
-         hang detector only — it sits under the 15 s testTimeout and is NOT
+      /* A concurrent add-alias on the same book must land WHILE the generator
+         is still pending on the gate; the witness assertion after the
+         generator is released proves it. The 8 s race is a hang detector only — it sits under the 15 s testTimeout and is NOT
          an assertion about speed; under the pre-fix design the add-alias
          would block behind the gated generator and turn this red here
          instead of hanging. */
@@ -481,18 +483,20 @@ describe('#1981 — /generate-all no longer holds the book lock across the whole
         clearTimeout(aliasTimer);
       }
 
-      expect(generatorReleased).toBe(false);
+      aliasLanded = true;
       expect(addAliasRes.status).toBe(200);
     } finally {
       /* Release the generator even on a failed run (e.g. under the
          pre-fix-design mutation), so the supertest generate-all request is
          never left dangling on the gate. */
-      generatorReleased = true;
       releaseGenerator();
     }
 
     const genAllRes = await genAllPromise;
     expect(genAllRes.status).toBe(200);
+    /* The ordering witness: add-alias had already resolved when the parked
+       generator resumed, i.e. it completed while the generator was pending. */
+    expect(aliasLandedWhenGeneratorResumed).toBe(true);
 
     const cast = JSON.parse(
       readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
@@ -573,11 +577,13 @@ describe('#1981 — /generate no longer holds the book lock across the LLM call'
     generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => {
       enteredGenerator();
       await gate;
+      aliasLandedWhenGeneratorResumed = aliasLanded;
       return `persona-for-${c.id}`;
     });
-    /* Set to true ONLY on the line right before releaseGenerator(), so the
-       expect(...).toBe(false) below is the ordering proof itself. */
-    let generatorReleased = false;
+    /* Witness for the ordering: set once the add-alias response has resolved,
+       and read by the generator the moment it resumes from the gate. */
+    let aliasLanded = false;
+    let aliasLandedWhenGeneratorResumed: boolean | undefined;
 
     const generatePromise = request(app).post(
       `/api/books/${raceBookId}/cast/india/voice-style/generate`,
@@ -603,9 +609,9 @@ describe('#1981 — /generate no longer holds the book lock across the LLM call'
         clearTimeout(enteredTimer);
       }
 
-      /* The ordering proof: a concurrent add-alias on the same book lands
-         WHILE the generator is still pending on the gate. The 8 s race is a
-         hang detector only — it sits under the 15 s testTimeout and is NOT
+      /* A concurrent add-alias on the same book must land WHILE the generator
+         is still pending on the gate; the witness assertion after the
+         generator is released proves it. The 8 s race is a hang detector only — it sits under the 15 s testTimeout and is NOT
          an assertion about speed; under the pre-fix design the add-alias
          would block behind the gated generator and turn this red here
          instead of hanging. */
@@ -627,18 +633,20 @@ describe('#1981 — /generate no longer holds the book lock across the LLM call'
         clearTimeout(aliasTimer);
       }
 
-      expect(generatorReleased).toBe(false);
+      aliasLanded = true;
       expect(addAliasRes.status).toBe(200);
     } finally {
       /* Release the generator even on a failed run (e.g. under the
          pre-fix-design mutation), so the supertest generate request is
          never left dangling on the gate. */
-      generatorReleased = true;
       releaseGenerator();
     }
 
     const generateRes = await generatePromise;
     expect(generateRes.status).toBe(200);
+    /* The ordering witness: add-alias had already resolved when the parked
+       generator resumed, i.e. it completed while the generator was pending. */
+    expect(aliasLandedWhenGeneratorResumed).toBe(true);
 
     const cast = JSON.parse(
       readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
