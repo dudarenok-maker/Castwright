@@ -27,6 +27,7 @@ import type {
   TransportResult,
   TransportUsage,
 } from '../runner/transport.js';
+import { PERSONA_ABSOLUTE_MAX_MS } from '../runner/transport.js';
 import { withTransportRetry, type RetryClassifier } from '../runner/transport-retry.js';
 import {
   AnalysisAbortedError,
@@ -295,11 +296,15 @@ export function buildOpenAIRequestBody(
       : Math.min(req.maxOutputTokens ?? perRequestBound, perRequestBound);
   return {
     model,
-    messages: [{ role: 'system', content: req.system }, ...req.messages],
+    /* #3084 W4 — free text sends no empty system turn and leaves temperature / max_tokens to the server. */
+    messages: [
+      ...(req.freeText && req.system === '' ? [] : [{ role: 'system', content: req.system }]),
+      ...req.messages,
+    ],
     stream: true,
     stream_options: { include_usage: true },
-    temperature: req.temperature,
-    max_tokens: maxTokens,
+    ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
+    ...(req.freeText && req.maxOutputTokens === undefined ? {} : { max_tokens: maxTokens }),
     ...openAIResponseFormat(req.structuredOutput),
   };
 }
@@ -404,7 +409,10 @@ export class OpenAITransport implements ChatTransport {
     }
 
     const startedAt = this.now();
-    const ceiling = AbortSignal.timeout(this.endpoint.requestCeilingMs);
+    const ceilingMs = req.freeText
+      ? Math.min(this.endpoint.requestCeilingMs, req.freeText.absoluteMaxMs ?? PERSONA_ABSOLUTE_MAX_MS)
+      : this.endpoint.requestCeilingMs;
+    const ceiling = AbortSignal.timeout(ceilingMs);
     const idle = new AbortController();
     const combined = AbortSignal.any([ceiling, idle.signal, ...(caller ? [caller] : [])]);
     const idleMs = resolveStreamIdleTimeoutMs();
