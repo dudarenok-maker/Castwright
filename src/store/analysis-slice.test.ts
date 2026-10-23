@@ -494,7 +494,7 @@ describe('applyAnalysisSnapshotTick — the run engine/card after a fallback swi
     expect(s.activeStream).toMatchObject({ engine: 'gemini', gpu: undefined });
   });
 
-  it('a Gemini tick never narrows an endpoint snapshot (the other phase may still hold the card)', () => {
+  it('a Gemini tick never narrows an endpoint snapshot (the snapshot only widens until the run ends; fails closed)', () => {
     const s = analysisSlice.reducer(
       start({ engine: 'openai', gpu: 'cuda:0' }),
       analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'gemini' }),

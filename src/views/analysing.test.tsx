@@ -1583,9 +1583,6 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.getAllByText('Pause the analysis first').length).toBeGreaterThan(0);
   });
 
-  /* #3435 — rewritten from "#3215 C2 — a subset_in_progress rejection does not
-     re-arm the paused main run" for a Retry with main NOT running: the
-     rejection restores the prior snapshot and never POSTs the main run. */
   it('#3084 wave 3d review pass 5 (O) — a subset Retry phase event carries the run engine/gpu into the snapshot', async () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
     const store = configureStore({
@@ -1625,6 +1622,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(store.getState().analysis.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
   });
 
+  /* #3435 — rewritten from "#3215 C2 — a subset_in_progress rejection does not
+     re-arm the paused main run" for a Retry with main NOT running: the
+     rejection restores the prior snapshot and never POSTs the main run. */
   it('#3215 C2 — a subset_in_progress rejection restores the prior snapshot and does not POST the main run', async () => {
     const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
