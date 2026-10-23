@@ -674,3 +674,36 @@ describe('GET /api/config — CUDA env-shadow surfacing (Plan 2 §2.5)', () => {
     expect(res.body.cudaEnvShadow).toBe(false);
   });
 });
+
+/* #3084 W4 — the persona engine knob accepts a saved endpoint's model id, and refuses a malformed id or an
+   unsaved endpoint at save (owner decision 4.4-B1; mirrors analyzer.fallback.target's save check). */
+describe('PUT /api/config — analyzer.personaGeneration.engine', () => {
+  it('stores an openai:<endpointId>::<model> value whose endpoint is saved', async () => {
+    /* beforeEach wipes settings, so seed the endpoint here. The route reads it from disk. */
+    const { mutateUserSettings } = await import('../workspace/user-settings.js');
+    const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 });
+    await mutateUserSettings(() => ({ analyzerEndpoints: [lab] }));
+    const res = await request(app)
+      .put('/api/config')
+      .send({ 'analyzer.personaGeneration.engine': 'openai:lab::qwen3' });
+    expect(res.status).toBe(200);
+    expect(res.body.values['analyzer.personaGeneration.engine'].effective).toBe('openai:lab::qwen3');
+  });
+
+  it('refuses an endpoint model whose endpoint is not saved, naming the endpoint', async () => {
+    const res = await request(app)
+      .put('/api/config')
+      .send({ 'analyzer.personaGeneration.engine': 'openai:ghost::m' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/^analyzer\.personaGeneration\.engine: no analyzer endpoint "ghost" is saved/);
+  });
+
+  it('refuses a malformed id with the shape error', async () => {
+    const res = await request(app)
+      .put('/api/config')
+      .send({ 'analyzer.personaGeneration.engine': 'openai:lab:qwen3' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/^analyzer\.personaGeneration\.engine: does not match the required shape/);
+  });
+});

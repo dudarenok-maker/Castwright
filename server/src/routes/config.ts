@@ -31,7 +31,8 @@ import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../confi
 import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
 import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-sidecar-devices.js';
 import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
-import { fallbackTargetSaveError, fallbackTargetValueState } from '../analyzer/fallback-target.js';
+import { fallbackTargetSaveError, fallbackTargetValueState, personaEngineSaveError } from '../analyzer/fallback-target.js';
+import { parseEndpointModelId } from '../analyzer/model-id.js';
 import type { KnobValueState } from '../config/types.js';
 
 export const configRouter = Router();
@@ -156,6 +157,18 @@ configRouter.put('/', async (req, res) => {
       endpointIds: saved.analyzerEndpoints.map((e) => e.id),
       geminiKey: Boolean(getResolvedGeminiApiKey()),
     });
+    if (error) {
+      res.status(400).json({ error });
+      return;
+    }
+  }
+
+  /* #3084 W4 (owner decision 4.4-B1) — a persona engine naming an endpoint model must name a saved
+     endpoint. A missing Gemini key stays a run-time error, so local and gemini always save. */
+  const personaEngine = coerced['analyzer.personaGeneration.engine'];
+  if (typeof personaEngine === 'string' && parseEndpointModelId(personaEngine)) {
+    const saved = await readUserSettings();
+    const error = personaEngineSaveError(personaEngine, { endpointIds: saved.analyzerEndpoints.map((e) => e.id) });
     if (error) {
       res.status(400).json({ error });
       return;
