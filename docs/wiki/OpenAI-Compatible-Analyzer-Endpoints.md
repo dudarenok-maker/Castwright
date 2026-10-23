@@ -165,8 +165,10 @@ Start it with `litellm --config /path/to/config.yaml`.
   within the connect timeout), Castwright hands that call, one hop, to **Advanced Settings →
   Analyzer fallback**: `off`, `local` (the Ollama model a local run uses, shown in the setting), `gemini` (the default; needs a
   Gemini API key) or another endpoint model.
-- Once a run has fallen back, **every later call that would have gone to that server stays on the fallback**,
-  in either phase, even if the server comes back (a phase running on a different model or server keeps its own). The next analysis you start tries your server again.
+- Once a run has fallen back, **every later call that would have gone to that endpoint model stays on the fallback**,
+  in either phase, even if the server comes back. A second model on the same server (llama-swap, for example) is its own
+  model, so it tries the server itself; a phase on another endpoint model, or on Gemini, keeps its own. When the failed
+  primary is a local Ollama model, every later Ollama call switches, whatever its model. The next analysis you start tries your server again.
 - A reply that breaks off mid-stream, a reset or a proxy's 502 is **retried**, never a fallback.
 - The fallback is never itself wrapped. If it is unreachable too, the run fails naming both.
 - The switch is always announced, for example
