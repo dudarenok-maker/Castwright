@@ -23,6 +23,7 @@
 - [Mobile, Tablet & Companion App](Mobile-Tablet-and-Companion-App)
 - [Admin](Admin)
 - [Model Manager](Model-Manager)
+- [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints)
 - [Advanced Settings](Advanced-Settings)
 - [Account & Settings](Account-and-Settings)
 - [Multi-language Support](Multi-language-Support)

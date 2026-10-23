@@ -12,12 +12,20 @@ describe('help content (fe-29)', () => {
     }
     expect(HELP_FAILURE_ENTRIES.length).toBe(28);
   });
-  it('the endpoint-missing entry is titled and worded as "cannot be used", never "not configured" (#3084 PR 3b review pass 2)', () => {
+  it('the endpoint-missing entry is titled "cannot be used" and no longer says "yet" now that endpoints are selectable (#3084 PR 3b review pass 2, #3710 F2)', () => {
     const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'analyzer-endpoint-missing')!;
     for (const text of [e.title, e.userMessage, e.remediation]) {
-      expect(text).not.toMatch(/not configured/i);
+      expect(text).not.toMatch(/ yet/);
     }
     expect(e.title).toMatch(/cannot be used/i);
+  });
+  it('the endpoint-missing entry covers every cause the code fires for (#3710 review pass 2 F)', () => {
+    const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'analyzer-endpoint-missing')!;
+    expect(e.userMessage).toMatch(/not configured/); // not saved / deleted
+    expect(e.userMessage).toMatch(/engine is not set to OpenAI-compatible/); // saved endpoint, wrong engine
+    expect(e.userMessage).toMatch(/not an endpoint model/); // OpenAI-compatible engine, a non-endpoint model
+    expect(e.remediation).toMatch(/OpenAI-compatible/);
+    expect(e.remediation).toMatch(/default analysis model/);
   });
   it('the auth entry is source-neutral: it is no longer a Gemini-TTS-only entry (#3084 PR 3b review pass 2)', () => {
     const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'auth')!;

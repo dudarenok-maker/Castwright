@@ -25,6 +25,7 @@ export type WikiPage =
   | 'Model-Manager'
   | 'Mobile-Tablet-and-Companion-App'
   | 'LAN-HTTPS-Troubleshooting'
+  | 'OpenAI-Compatible-Analyzer-Endpoints'
   | 'Admin';
 
 /* #3084 F7 — the runtime membership set behind `isWikiPage`. Spelled out as a
@@ -50,6 +51,7 @@ const WIKI_PAGES = {
   'Model-Manager': true,
   'Mobile-Tablet-and-Companion-App': true,
   'LAN-HTTPS-Troubleshooting': true,
+  'OpenAI-Compatible-Analyzer-Endpoints': true,
   Admin: true,
 } satisfies Record<WikiPage, true>;
 
@@ -94,6 +96,7 @@ export const ADMIN_WIKI = {
   advanced: 'Advanced-Settings',
   lanAccess: 'Mobile-Tablet-and-Companion-App',
   lanTroubleshooting: 'LAN-HTTPS-Troubleshooting',
+  analyzerEndpoints: 'OpenAI-Compatible-Analyzer-Endpoints',
   admin: 'Admin',
 } satisfies Record<string, WikiPage>;
 

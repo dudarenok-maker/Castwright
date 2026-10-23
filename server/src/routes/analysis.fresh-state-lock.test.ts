@@ -84,7 +84,7 @@ afterAll(() => {
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 function clearPhase1Selection(): void {
   delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;

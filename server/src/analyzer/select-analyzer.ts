@@ -28,8 +28,11 @@
 
    Fall-through invariant: when NEITHER env nor a saved override is
    set, the selector returns today's single-model `selectAnalyzer`
-   result for both phases — same instance — so legacy
-   `ANALYZER=local|gemini` behaviour is preserved verbatim. */
+   result for each phase — the same analyzer settings, though a separate
+   instance per call (two `selectAnalyzer` calls), so legacy
+   `ANALYZER=local|gemini` behaviour is preserved verbatim. The two
+   instances share a fallback switch only when the caller passes one
+   `opts.fallbackSwitch` to both (#3084 wave 3d: the job does). */
 
 import {
   selectAnalyzer,
@@ -110,8 +113,8 @@ export function selectAnalyzerForPhase(opts: PerPhaseAnalyzerOptions): AnalyzerS
      ANALYZER_PHASE{0,1}_MODEL report `source: 'env'` rather than `run-pick`
      (3a Task 3a.2, `each phase source is named: env, run pick, saved phase model`). */
   return resolved.modelId === null
-    ? selectAnalyzer({})
-    : selectAnalyzer({ model: resolved.modelId, modelSource: resolved.source });
+    ? selectAnalyzer({ fallbackSwitch: opts.fallbackSwitch })
+    : selectAnalyzer({ model: resolved.modelId, modelSource: resolved.source, fallbackSwitch: opts.fallbackSwitch });
 }
 
 /* Plan 88 phase-2 — Phase 1 minimum-lag resolver, rewired onto the

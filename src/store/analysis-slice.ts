@@ -19,6 +19,7 @@ import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
    alias for it). Type-only: the slice stays free of api.ts at runtime. */
 import type { AnalysisFailureFix } from '../lib/api';
 import type { AnalysisEngine } from '../lib/model-id';
+import { combineSnapshotGpus } from '../lib/analyzer-endpoints';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -37,6 +38,10 @@ export interface AnalysisStreamSnapshot {
       `ui.selectedModel`) so a user model-switch mid-stream cannot
       misclassify the running analysis. */
   engine?: AnalysisEngine;
+  /** #3084 — card tag of the endpoint(s) the run uses ('none' | 'any' | 'cuda:N'),
+      captured with `engine`. Absent for Ollama/Gemini runs and for cold-boot snapshots,
+      where the reverse guard treats an openai run as 'any'. */
+  gpu?: string;
   /** Server-resolved analyzer model id, carried from the `model` field on SSE
       phase events (the same source the analysing view's PhaseModelChip reads).
       Captured so the global Status popover can show WHICH model the run is on —
@@ -151,6 +156,11 @@ export const analysisSlice = createSlice({
         remainingMs?: number;
         lastTickAt?: number;
         model?: string;
+        /** #3084 wave 3d review pass 4 (J) — the run's engine and endpoint card after a fallback switch
+            (the server's `analysisEngine`/`analysisGpu`). Moves the snapshot's start-time capture, which
+            the reverse guard and the generation hold read, to what the run now holds. */
+        engine?: AnalysisEngine;
+        gpu?: string;
       }>,
     ) {
       const snap = state.activeStream;
@@ -162,6 +172,25 @@ export const analysisSlice = createSlice({
         snap.haltReason = undefined;
       }
       if (typeof action.payload.model === 'string') snap.model = action.payload.model;
+      if (action.payload.engine !== undefined) {
+        /* A switch may only WIDEN what a running analysis holds, never narrow it (fail closed): a mixed-split
+           run stamps only the switched-to targets, while the other phase still holds its own card. So the
+           incoming engine is combined with the snapshot's by the server's precedence (Ollama > endpoint >
+           Gemini), and an endpoint card is combined with the one already held. A cold-boot `openai` seed
+           carries no card, which reads as `any` (unknown holds everything). */
+        const prior = snap.engine;
+        const incoming = action.payload.engine;
+        const engine: AnalysisEngine =
+          prior === 'local' || incoming === 'local' ? 'local' : prior === 'openai' || incoming === 'openai' ? 'openai' : 'gemini';
+        if (engine === 'local') snap.gpu = prior === 'local' ? snap.gpu : undefined;
+        else if (engine === 'gemini') snap.gpu = undefined;
+        else
+          snap.gpu = combineSnapshotGpus([
+            prior === 'openai' ? (snap.gpu ?? 'any') : undefined,
+            incoming === 'openai' ? action.payload.gpu : undefined,
+          ]);
+        snap.engine = engine;
+      }
       const phaseChanged =
         typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;
       if (typeof action.payload.phaseId === 'number') snap.phaseId = action.payload.phaseId;

@@ -151,6 +151,7 @@ const selectionFor = (analyzer: Analyzer): AnalyzerSelection => ({
   engine: 'gemini',
   model: 'gemini-3.6-flash',
   fallbackModel: null,
+  fallbackEngine: null,
 });
 
 function gate(): { promise: Promise<void>; open: () => void } {

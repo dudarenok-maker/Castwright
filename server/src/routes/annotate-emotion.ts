@@ -15,6 +15,7 @@ import type { Request, Response } from '../http.js';
 import { peekBook } from '../workspace/book-op-lock.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
+import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
@@ -183,7 +184,18 @@ annotateEmotionRouter.post(
     let actualMsTotal = 0;
     let actualCharsTotal = 0;
     const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
+    /* #3084 P1 — this pass calls the analyzer once per chapter, minutes apart, so the gaps
+       between those calls must not read as idle to TTS eviction. Assigned as the first
+       statement INSIDE the try below, whose finally every path reaches (A4). */
+    let releaseEndpointRun: () => void = () => {};
+    /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
+    let releaseFallbackRun: (() => void) | undefined;
+    /* #3084 wave 3d — the switch is sticky (FallbackAnalyzer), so after it every later chapter is sized for,
+       and labelled with, the target: reassigned together on the switch (spec §4). */
+    let activeEngine = selection.engine;
+    let activeModel = selection.model;
     try {
+      releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
         const chapterId = chapterIds[i];
@@ -208,7 +220,7 @@ annotateEmotionRouter.post(
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
           charBudget: chapterChunkBudget(
-            resolveCapacity({ engine: selection.engine, model: selection.model }),
+            resolveCapacity({ engine: activeEngine, model: activeModel }),
             0,
             sentences.map((s) => s.text).join(' '),
             OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve system-prompt overhead so the whole request clears the Gemma TPM guard (#1682)
@@ -235,10 +247,21 @@ annotateEmotionRouter.post(
                 kind: 'throttle',
                 phaseId: 0,
                 chapterIndex: chapterId,
-                model: selection.model,
+                model: activeModel,
                 waitMs,
                 reason,
               }),
+            /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
+            onFallback: ({ reason }) => {
+              console.log(`[annotate-emotion] ${reason}`);
+              if (selection.fallbackModel && selection.fallbackEngine) {
+                activeModel = selection.fallbackModel;
+                activeEngine = selection.fallbackEngine;
+              }
+              if (selection.fallbackModel && !releaseFallbackRun) {
+                releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds([selection.fallbackModel]));
+              }
+            },
           };
           await withPassEval(
             emotionCall,
@@ -260,7 +283,10 @@ annotateEmotionRouter.post(
                   manuscriptId,
                   chapterId,
                   prompt,
-                  emotionCall,
+                  {
+                    ...emotionCall,
+                    inputBody: chunk.core.map((s) => JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text })).join(''),
+                  },
                 );
                 const owned = result.annotations.filter((a) => chunk.coreIds.has(a.sentenceId));
                 if (owned.length) {
@@ -317,6 +343,8 @@ annotateEmotionRouter.post(
         }
       }
     } finally {
+      releaseEndpointRun();
+      releaseFallbackRun?.();
       clearInterval(keepAlive);
     }
 

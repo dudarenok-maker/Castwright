@@ -1,4 +1,4 @@
-import { modelLabel } from '../../lib/model-label';
+import { catalogEntryFor, modelLabel, runLabelSuffixes } from '../../lib/model-label';
 import { useAppSelector } from '../../store';
 import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
 import { selectPhaseModelPick } from '../../store/ui-slice';
@@ -104,6 +104,9 @@ export function PhaseModelChip({
         : modelId != null
           ? modelLabel(modelId, analyzerCatalog)
           : 'Server default';
+  const suffixModel = serverModel ?? (serverDefault ? undefined : modelId ?? undefined);
+  const suffixes = suffixModel ? runLabelSuffixes(catalogEntryFor(suffixModel, analyzerCatalog)) : [];
+  const displayLabel = suffixes.length > 0 ? `${label} · ${suffixes.join(' · ')}` : label;
 
   const meta = (() => {
     if (state === 'streaming') {
@@ -145,7 +148,7 @@ export function PhaseModelChip({
       <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
       <span className="tabular-nums">
         {prefix ? `${prefix} · ` : ''}
-        {label}
+        {displayLabel}
       </span>
       {state === 'streaming' && <span className="text-ink/40">· streaming</span>}
       {state === 'paused' && <span className="text-ink/40">· paused</span>}

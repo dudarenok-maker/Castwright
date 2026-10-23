@@ -25,7 +25,7 @@
 
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { EngineReport } from './dialogue-structure/types.js';
-import { AnalyzerTruncatedError } from './errors.js';
+import { AnalyzerTruncatedError, targetInputTooLargeOr } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { cloudBodyCharBudget, cloudBodyCharBudgetForCap } from './token-budget.js';
 import type { EngineCapacity } from './capacity.js';
@@ -432,7 +432,7 @@ export async function runStage2ChapterChunked(
         const split = await splitAndRetry();
         if (split) return split;
       }
-      throw err;
+      throw targetInputTooLargeOr(err);
     }
     /* A coverage failure that reproduces EXACTLY is degeneration, the same
        family as the truncation handled above — and it had the same remedy
@@ -555,7 +555,7 @@ export async function runStage2ChapterChunked(
     } catch (err) {
       if (!(err instanceof AnalyzerTruncatedError)) throw err;
       const forced = splitSpanForRetry(opts.body);
-      if (forced.length <= 1) throw err; // single un-splittable sentence: surface it
+      if (forced.length <= 1) throw targetInputTooLargeOr(err); // single un-splittable sentence: surface it
       return runChunks(forced);
     }
   }

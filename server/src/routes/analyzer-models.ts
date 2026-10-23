@@ -13,6 +13,7 @@ import { readUserSettings, writeAnalyzerCapabilityRecord, type UserSettings } fr
 /* Known secrets come through 3b's leaf gate, never from user-settings.ts (A9). */
 import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 import { redactKnownSecrets } from '../analyzer/redact.js';
+import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 
 export const analyzerModelsRouter = Router();
 
@@ -53,22 +54,29 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
     }
     throw err;
   }
-  /* Spec §2 "Cancelling": leaving the page cancels a queued or running test. */
-  const controller = new AbortController();
-  res.on('close', () => {
-    if (!res.writableEnded) controller.abort();
-  });
+  /* #3084 P1 — the P7 ladder sends several requests with gaps between them; the endpoint
+     stays busy for the whole Test, so TTS eviction cannot unload the model between steps. */
+  const releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([modelId]));
   try {
-    const record = await runModelTest({ modelId, scope }, { ...deps, signal: controller.signal });
-    await writeAnalyzerCapabilityRecord(modelId, record);
-    return res.json(record);
-  } catch (err) {
-    if (controller.signal.aborted) return; // the client left: nothing to answer, nothing written
-    /* P7: a failed control or an inconclusive step writes nothing, so a previous record stays. */
-    const outcome = err instanceof ModelTestControlFailedError ? 'failed' : 'inconclusive';
-    console.warn(`[analyzer-models] test of ${modelId} ${outcome}: ${(err as Error).name}`);
-    const message = redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings));
-    return res.status(502).json({ error: message.slice(0, 800), outcome });
+    /* Spec §2 "Cancelling": leaving the page cancels a queued or running test. */
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    try {
+      const record = await runModelTest({ modelId, scope }, { ...deps, signal: controller.signal });
+      await writeAnalyzerCapabilityRecord(modelId, record);
+      return res.json(record);
+    } catch (err) {
+      if (controller.signal.aborted) return; // the client left: nothing to answer, nothing written
+      /* P7: a failed control or an inconclusive step writes nothing, so a previous record stays. */
+      const outcome = err instanceof ModelTestControlFailedError ? 'failed' : 'inconclusive';
+      console.warn(`[analyzer-models] test of ${modelId} ${outcome}: ${(err as Error).name}`);
+      const message = redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings));
+      return res.status(502).json({ error: message.slice(0, 800), outcome });
+    }
+  } finally {
+    releaseEndpointRun();
   }
 });
 

@@ -73,6 +73,13 @@ export const saveGeminiApiKey = createAsyncThunk<UserSettings, string | null>(
   },
 );
 
+/* #3084 P31 — acknowledge dropped endpoint entries by archive id. The response is the settings
+   GET body, so the listed entries shrink to the ones still unacknowledged. */
+export const acknowledgeDroppedEndpointEntries = createAsyncThunk<UserSettings, string[]>(
+  'account/acknowledgeDroppedEndpointEntries',
+  async (archiveIds) => api.acknowledgeDroppedEndpointEntries(archiveIds),
+);
+
 /* #3084 PR 3b — analyzer endpoint writes. Each response is the full settings
    body, swapped in like saveGeminiApiKey. PR 3d's Settings form dispatches these.
 
@@ -268,6 +275,9 @@ export const accountSlice = createSlice({
       .addCase(saveGeminiApiKey.rejected, (s, a) => {
         s.status = 'error';
         s.error = a.error.message ?? 'Failed to save Gemini API key.';
+      })
+      .addCase(acknowledgeDroppedEndpointEntries.fulfilled, (s, a) => {
+        Object.assign(s, a.payload);
       })
       .addCase(fetchAnalyzerModels.fulfilled, (state, action) => {
         state.localAnalyzerModels = action.payload.localTags;

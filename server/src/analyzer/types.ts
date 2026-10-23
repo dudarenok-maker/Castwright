@@ -48,6 +48,10 @@ export interface StageCall {
       Counts CALLS, not sections: a coverage retry gets its own number, so the
       failing attempt survives alongside the one that replaced it. */
   stage2CallSeq?: number;
+  /** #3084 P30 — the chunk this call's prompt carries, as its chunker measured it (the sub-body, or the
+      core sentences through the chunker's own `serialize`). Set by the chunked call sites with a spread at
+      call time; read only by FallbackAnalyzer's pre-send guard. Absent → the guard measures the whole prompt. */
+  inputBody?: string;
   /** Fired when the limiter has to delay this request — RPM/TPM cap hit
       locally, or `retry-delay` honored after a 429. Only emitted when
       the wait exceeds ~1s so sub-second jitter doesn't spam the UI.

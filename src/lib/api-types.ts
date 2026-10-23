@@ -3738,22 +3738,18 @@ export interface components {
              */
             sidecarUrl: string;
             /**
-             * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (with
-             *     Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
-             *     allowCloudFallback is on, AND the local daemon is unreachable).
-             *     `gemini` always goes direct. The ANALYZER env no longer selects
+             * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (falling
+             *     back, one hop, to the analyzer.fallback.target config knob when the
+             *     daemon is unreachable). `gemini` always goes direct. `openai` routes through the
+             *     OpenAI-compatible endpoint named by `defaultAnalysisModel` (an `openai:<endpoint>::<model>` id;
+             *     saving such a model also saves this value). The ANALYZER env no longer selects
              *     the engine. See server/src/analyzer/index.ts selectAnalyzer.
              * @enum {string}
              */
-            analysisEngine: "local" | "gemini";
+            analysisEngine: "local" | "gemini" | "openai";
             /**
-             * @description Opt-out cloud-fallback gate. When engine=local and a Gemini key is
-             *     set, the analyzer falls back to Gemini iff the local daemon is
-             *     unreachable — but only when this is true. Default true (non-
-             *     breaking: existing installs keep today's behaviour). Turn OFF to
-             *     keep analysis strictly local: no cloud fall-through even on a local
-             *     outage. Resolved as the saved value (default true), with
-             *     ANALYZER_ALLOW_CLOUD_FALLBACK=0 as a pre-cache under-ride only.
+             * @description Legacy (#3084). No UI writes it. While the analyzer.fallback.target
+             *     config knob is unset, false reads as "off"; otherwise it is ignored.
              */
             allowCloudFallback: boolean;
             /**
@@ -4087,7 +4083,7 @@ export interface components {
             defaultTtsModelKeyExplicit?: boolean;
             sidecarUrl?: string;
             /** @enum {string} */
-            analysisEngine?: "local" | "gemini";
+            analysisEngine?: "local" | "gemini" | "openai";
             allowCloudFallback?: boolean;
             workspaceDirOverride?: string | null;
             exportSyncFolder?: string | null;
@@ -4657,6 +4653,18 @@ export interface components {
             phaseId: number;
             progress: number;
             label?: string;
+            /**
+             * @description Present only once the run has switched to a fallback target. The run's combined engine:
+             *     whoever holds a card across both phases (Ollama over an endpoint over Gemini) — the same
+             *     value the cold-boot snapshot reports. Lets a live client follow the switch.
+             * @enum {string}
+             */
+            analysisEngine?: "local" | "openai" | "gemini";
+            /**
+             * @description Present only with `analysisEngine`, and only when an endpoint target took over: the card
+             *     tag that target holds (`none` | `any` | `cuda:N`).
+             */
+            analysisGpu?: string;
         };
         /**
          * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;
@@ -7057,7 +7065,7 @@ export interface components {
          *     server/src/routes/setup-readiness.ts — keep them in lockstep.
          * @enum {string}
          */
-        BlockerCause: "python-missing" | "venv-missing" | "venv-broken" | "supervisor-exhausted" | "supervisor-tripped" | "unreachable-transient" | "unreachable-no-supervisor" | "sidecar-blocked" | "no-engine-installed" | "weights-missing" | "cannot-confirm-engine" | "package-broken" | "ffmpeg-missing" | "ffprobe-missing" | "both-missing" | "ffmpeg-too-old" | "ollama-unreachable" | "model-not-pulled" | "no-gemini-key" | "pass";
+        BlockerCause: "python-missing" | "venv-missing" | "venv-broken" | "supervisor-exhausted" | "supervisor-tripped" | "unreachable-transient" | "unreachable-no-supervisor" | "sidecar-blocked" | "no-engine-installed" | "weights-missing" | "cannot-confirm-engine" | "package-broken" | "ffmpeg-missing" | "ffprobe-missing" | "both-missing" | "ffmpeg-too-old" | "ollama-unreachable" | "model-not-pulled" | "no-gemini-key" | "endpoint-missing" | "pass";
         /** @enum {string} */
         BlockerActionKind: "venv-bootstrap" | "qwen-install" | "kokoro-install" | "coqui-install" | "sidecar-restart" | "ollama-install" | "ollama-pull" | "navigate";
         /** @description A safe automated fix offered alongside a diagnosis. */

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { TTS_ENGINES, type TtsEngineId } from '../../lib/tts-models';
-import { buildLocalModelOptions, buildModelOptionGroups, engineForModelId } from '../../lib/models';
+import { buildAnalyzerPickerGroups, engineForModelId } from '../../lib/models';
 import type { TtsModelKey } from '../../lib/types';
 import type { ThemePreference } from '../../lib/use-theme';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -41,9 +41,11 @@ export function StepDefaults({ readiness: _readiness }: Props) {
   /* Dynamic curated ∪ live-Ollama-tag union for the analysis-model picker, so a
      pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels on
      mount; empty (offline) falls back to the curated catalog. */
-  const analysisModelGroups = buildModelOptionGroups(
-    buildLocalModelOptions(account.localAnalyzerModels),
-  );
+  const analysisModelGroups = buildAnalyzerPickerGroups({
+    localTags: account.localAnalyzerModels,
+    catalog: account.analyzerCatalog ?? null,
+    endpoints: account.analyzerEndpoints ?? [],
+  });
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
   }, [dispatch]);
@@ -93,14 +95,8 @@ export function StepDefaults({ readiness: _readiness }: Props) {
   const handleAnalysisModelChange = (next: string) => {
     // Auto-derive the engine from the shared id grammar — matches
     // engineForModelId in model-id.ts (the server's inferEngineFromModelId).
-    // This is what routes generation. #3084 PR 3a — nothing can select an
-    // endpoint id yet (this picker only offers curated + local Ollama tags),
-    // and the server refuses an endpoint id in defaultAnalysisModel (400), so
-    // one (unreachable here today) is not saved at all: return before the
-    // local state update and the dispatch. Past the guard the engine is
-    // 'local' | 'gemini'.
+    // This is what routes generation.
     const engine = engineForModelId(next);
-    if (engine === 'openai') return;
     setAnalysisModel(next);
     void dispatch(
       saveAccountSettings({
@@ -177,7 +173,7 @@ export function StepDefaults({ readiness: _readiness }: Props) {
             className={SELECT_CLS}
           >
             {analysisModelGroups.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
+              <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
                     {m.label}

@@ -137,6 +137,7 @@ vi.mock('../lib/api', () => {
         }),
       getAnalyzerDevice: () => Promise.resolve({ device: 'idle' as const }),
       getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,
+      getAnalyzerModels: () => Promise.resolve({ groups: [] }),
     },
   };
 });

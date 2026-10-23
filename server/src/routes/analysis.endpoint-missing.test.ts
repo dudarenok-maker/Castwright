@@ -1,7 +1,7 @@
 /* #3084 P23 — every analysis selection call site reports AnalyzerEndpointMissingError
    as analyzer-endpoint-missing. Phase 0 and the subset retry run the REAL selection
-   through the REAL routes: a request model `openai:gone::m` makes PR 3a's selection
-   throw. Phase 1 runs runMainAnalyzerJob with the phase-1 selection throwing, the
+   through the REAL routes: a request model `openai:gone::m` makes selection
+   throw, because no endpoint `gone` is saved. Phase 1 runs runMainAnalyzerJob with the phase-1 selection throwing, the
    way analysis.phase-model.test.ts injects a phase-1 selection. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
@@ -88,7 +88,7 @@ describe('analysis selection call sites report analyzer-endpoint-missing (#3084 
       expect(res.status).toBe(200);
       const error = parseSse(res.text).find((e) => e.kind === 'error');
       expect(error).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
-      expect(String(error?.message)).toContain('Analyzer endpoint "gone" (from this run\'s model pick) cannot be used for analysis yet.');
+      expect(String(error?.message)).toContain('Analyzer endpoint "gone" (from this run\'s model pick) is not configured (it may have been deleted).');
     } finally {
       removeManuscript(id);
     }
@@ -137,7 +137,7 @@ describe('analysis selection call sites report analyzer-endpoint-missing (#3084 
       res: { end: () => {} } as unknown as import('express').Response,
       keepAlive,
     });
-    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-endpoint-missing-test', fallbackModel: null };
+    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-endpoint-missing-test', fallbackModel: null, fallbackEngine: null };
     try {
       await runMainAnalyzerJob(job, getManuscript(id) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
       expect(events.find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });

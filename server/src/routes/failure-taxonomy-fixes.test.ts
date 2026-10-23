@@ -15,8 +15,8 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
-import { reasoningOverflowFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
-import { allKnobs } from '../config/registry.js';
+import { reasoningOverflowFixes, targetInputTooLargeFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
+import { allKnobs, getKnob } from '../config/registry.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
 import { analyzerEndpointSchema, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
@@ -104,7 +104,7 @@ describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
     contextTokens: 32_768,
   };
 
-  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and no wikiPage yet', () => {
+  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and only the trailing Read: entry links a page', () => {
     /* Structural, not an exact-count toEqual on the whole array: a later wave may
        append a `Read:` entry to any reasoningOverflowFixes result. This asserts the
        ACTIONABLE rows this branch contributes, exactly, and that every `Read:` entry
@@ -125,7 +125,7 @@ describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
     const lastActionableIndex = fixes.length - 1 - [...fixes].reverse().findIndex((f) => !isRead(f));
     const firstReadIndex = fixes.findIndex(isRead);
     if (reads.length > 0) expect(firstReadIndex).toBeGreaterThan(lastActionableIndex);
-    expect(fixes.every((f) => f.wikiPage === undefined)).toBe(true);
+    expect(actionable.every((f) => f.wikiPage === undefined)).toBe(true);
     expect(fixes.some((f) => f.settingKey?.includes('reasoning') || ('endpointField' in f && f.endpointField?.field === 'reasoning'))).toBe(false);
   });
 
@@ -214,6 +214,45 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
       // entry, never a field bolted onto a setting-changing fix.
       for (const f of fixes) if (isRead(f)) expect(f.settingKey, JSON.stringify(f)).toBeUndefined();
       expect(fixes.some((f) => f.label === 'Switch to a different analyzer model' && !f.settingKey && !isRead(f))).toBe(true);
+    }
+  });
+
+  it('targetInputTooLargeFixes names only registry keys (#3084 P30)', () => {
+    for (const [family, transport] of [['context', 'ollama'], ['context', 'openai'], ['requestCap', 'gemini']] as const) {
+      const fixes = targetInputTooLargeFixes(family, transport);
+      expect(fixes.length).toBeGreaterThan(0);
+      for (const fix of fixes) {
+        expect(fix.settingKey, fix.label).toBeDefined();
+        expect(getKnob(fix.settingKey!), fix.settingKey).toBeDefined();
+      }
+    }
+  });
+
+  it('targetInputTooLargeFixes offers no input-fraction fix for a context target (#3710 M3)', () => {
+    for (const transport of ['ollama', 'openai', 'gemini'] as const) {
+      expect(targetInputTooLargeFixes('context', transport).map((f) => f.settingKey)).not.toContain('analyzer.stage1.localInputFraction');
+      expect(targetInputTooLargeFixes('context', transport).map((f) => f.settingKey)).not.toContain('analyzer.stage2.localInputFraction');
+    }
+  });
+
+  it('every fix wikiPage names a wiki page that exists, with no anchor (#3084 P33)', () => {
+    const fixes = [
+      ...reasoningOverflowFixes({ transport: 'openai', model: 'qwen3-30b', endpointId: 'lab' }),
+      ...reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.5-flash' }),
+      ...reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:4b' }),
+    ];
+    const openai = reasoningOverflowFixes({ transport: 'openai', model: 'qwen3-30b', endpointId: 'lab' });
+    /* The settled fixes/reads rule, asserted by structure rather than position: actionable fixes first, then
+       every `Read:` entry, and only a `Read:` entry links a page. A later wave can add a fix or a read and
+       this stays green. */
+    const firstRead = openai.findIndex((f) => f.label.startsWith('Read:'));
+    expect(firstRead).toBeGreaterThan(0);
+    expect(openai.slice(0, firstRead).every((f) => !f.label.startsWith('Read:') && f.wikiPage === undefined)).toBe(true);
+    expect(openai.slice(firstRead).every((f) => f.label.startsWith('Read:') && typeof f.wikiPage === 'string')).toBe(true);
+    expect(openai).toContainEqual({ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' });
+    for (const fix of fixes.filter((f) => f.wikiPage)) {
+      expect(fix.wikiPage, fix.label).toMatch(/^[A-Za-z0-9-]+$/);
+      expect(existsSync(fileURLToPath(new URL(`../../../docs/wiki/${fix.wikiPage}.md`, import.meta.url))), fix.wikiPage).toBe(true);
     }
   });
 });

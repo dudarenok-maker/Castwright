@@ -722,7 +722,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 36 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -732,11 +732,19 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**68 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-17 (plan 286, #3400/#3397), 64 → 65.** Added **A114** —
+> **Last change: 2026-10-17 (#3084 W3d, task 3d.10), 65 → 68.** Rows **A115**
+> (long silent prefill completes on an endpoint), **A116** (same-card eviction of
+> an endpoint for a Qwen load) and **A117** (fallback to a smaller context leaves
+> room to answer) added, and row **A113** extended with the real-chapter
+> structured-output checks, from #3084 PR 3d's run sheet
+> (`3084-openai-analyzer-onbox-acceptance.md` §6–§9). Group A 36 → 39. `next-id`
+> bumped A115 → A118 in the same change. Rows are owed; not run here.
+>
+> **Prior change: 2026-10-17 (plan 286, #3400/#3397), 64 → 65.** Added **A114** —
 > the revisions server-ownership cutover: accept/reject/dismiss move to
 > per-op server routes, pending comes only from the server, and every render
 > records or drops a chapter's A/B state itself, closing the #3397 gap A9's
@@ -1834,7 +1842,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A115 -->
+<!-- next-id: A118 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6150,7 +6158,116 @@ outcome matches what the model does.
 - **Re-pulled Ollama model:** with a saved record for `qwen3.5:4b` (note its `digest`), pull a
   different build of that tag so `ollama list` shows a new digest: the catalog entry loses the
   record, and an analysis on that model starts instead of refusing on the old verdict.
-- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` §6 "Live structured output".
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` §6 "Live structured output"
+(items 8–10 added in W3d).
+
+**Extended by PR #3710 (#3084 W3d — endpoints selectable).** Also run a real chapter in
+`schema` mode on the llama-swap endpoint (thinking on, then off), on a `gemma-*` and on a
+`gemini-*` model, and record:
+- conformance of each response against the Test record: `enforced` runs must never need the
+  validation retry for missing required keys;
+- Gemini `schema` attribution quality against `json` on the same chapter;
+- for the thinking-on llama-swap model and `gemini-3.6-flash`, that the record the Test saved
+  predicted the run: no `analyzer-reasoning-overflow` in `json`/`schema` where the Test
+  recorded `enforced`/`accepted`.
+
+This row gates Gemini's `schema` default.
+
+### A115 · Long silent prefill completes on an endpoint ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **slower card of a 2-card box, llama-swap with a ≥64k-context model**
+
+The OpenAI transport starts its idle watchdog only after the first delta and bounds the
+call with the endpoint's request ceiling (default 30 min). Automated tests use a fake
+server; only a real prefill of a very long prompt shows that no timeout, retry or
+fallback fires before the first token.
+
+- Add the llama-swap endpoint with `gpu` = the slower card, context ≥ 64k, and analyse a
+  chapter whose stage-1 prompt exceeds 64k tokens.
+- Observe the server log: no `analyzer-timeout`, no idle retry, no fallback announcement;
+  the chapter completes. Record time to first token and total time.
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Long silent prefill".
+
+### A116 · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
+
+`withCapacityRetry` POSTs the unload URL of every idle endpoint on the denied card (or
+`any`): once per model whose request was sent to the endpoint and not unloaded since, with
+the endpoint's busy state (a run using it, or a call in flight) re-checked before every POST.
+The endpoint lever has no latch: Ollama keeps its own once-per-call latch and gate, and the
+endpoint lever is bounded instead by one POST per (endpoint, model) per admission, 10 s each
+— a worst case of Σ (served models on matching endpoints) × 10 s. An admission is one
+synthesize call, not one chapter. A 2xx or 404 removes the model from the served set. Unit
+tests use fake servers; only real VRAM and a real run show that the card frees when idle and
+is never unloaded under a live run.
+
+- **Idle, one served model.** Endpoint `gpu` = `cuda:N` (the card Qwen targets), unload URL
+  `http://127.0.0.1:<port>/api/models/unload/{model}`. One analysis call must have completed
+  first, so the endpoint has a served model. With no analysis running, load Qwen on that
+  card: the log shows one unload POST, capacity is re-probed, and Qwen loads without
+  running out of memory.
+- **Other card.** Pin Qwen to the other card: no unload POST.
+- **Mid-run, between chunk calls.** Start an analysis on the endpoint. Watch the server log
+  for a completed chunk call, then trigger a Qwen load on the endpoint's card **before the
+  next chunk call starts** (no request in flight, run still active). Expect no unload POST:
+  the Qwen load waits or fails with the capacity message. The next chunk call succeeds
+  without a model reload (no llama-swap load line). Resume/Regenerate also prompts.
+- **Two served models.** Run phase 0 and phase 1 on two different models of the same
+  llama-swap endpoint, let the run finish, then load Qwen on the card: two unload POSTs,
+  one per model, both models gone from `GET /running` (llama-swap). Unload Qwen and load it
+  again without analysing: no unload POST this time (both models left the served set).
+- **Two endpoints on one card, one busy.** Two llama-swap endpoints (two ports) on the same
+  card, both with served models. Start an analysis on endpoint B only, then trigger a Qwen
+  load: endpoint A is unloaded at once and B logs one "busy; not unloading" line. Let B's run
+  finish while the admission is still polling: B is then unloaded within the same admission
+  (its POST appears after A's, before the give-up). If the admission gives up first, the
+  failure names B as "busy for the whole wait".
+- **All-models URL.** Edit the unload URL to drop `{model}` (e.g. `/api/models/unload`):
+  Settings shows the "unloads every model on that server" warning, and the save succeeds.
+- **No URL.** Remove the unload URL and repeat the idle case: the failure message names
+  "Unload URL".
+- **A run that starts while the unload POST is out.** As the mid-run case, but time the Qwen
+  load so the analyzer's next chunk call starts **while** the unload POST is still blocked on
+  llama-swap stopping the model. Expect what an Ollama eviction does today: the chapter
+  continues, the endpoint reloads the model on that call (one llama-swap load line), and TTS
+  admission retries. Record both timestamps and whether the chapter failed. Also confirm the
+  log holds ONE "busy; not unloading" line for that admission, not one per poll.
+- **After a restart, with nothing run yet.** Restart Castwright while the endpoint still holds a
+  model, and load Qwen on its card without analysing first: no unload POST is sent (Castwright
+  has no model name for `{model}`), and the capacity failure names that endpoint and says no
+  model has run on it since Castwright started.
+- **A slow or unresponsive unload endpoint (found in review).** Point the unload URL at a
+  server that never answers (or answers past 10 s), with two served models, then load Qwen on
+  its card and let the admission poll several times before giving up. Expect exactly ONE
+  unload POST per model for the whole admission — two, not one per poll — and the lever's
+  share of the wait bounded near 2 × 10 s (Σ served models × 10 s), not `maxAttempts` × 10 s.
+  The failure names the endpoint and says every unload request failed. Then queue a chapter
+  render against the same card: each denied synthesize call repeats that cost (the models stay
+  in the served set while the server is down) — record how many synth ops were denied and
+  the total time lost, because this is the per-synth-op multiplication the unit bound hides.
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
+
+### A117 · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
+
+After a fallback switch, chunks sized for the primary's larger context reach a smaller one. The
+pre-send guard (Task 3d.4b) measures each body against the target pass's budget, so every prompt
+it lets through should leave the target room for the instructions and the answer. The automated
+tests use fake analyzers. Only real servers show what happens when prompt plus output approach
+the context: a context shift, an early stop, or an error.
+
+- **Endpoint → Ollama.** Primary: the llama.cpp endpoint (context ≥ 64k), `analyzer.fallback.target`
+  = `local`, Ollama `num_ctx` ≤ 16k. Analyse a long chapter and stop `llama-server` during
+  phase 0. After the switch announcement, record for every chunk the target receives the
+  `prompt_eval_count` and `eval_count` Ollama reports against `num_ctx`, and its `done_reason`.
+  Expect `prompt_eval_count + eval_count` under `num_ctx` on every chunk, no `done_reason: length`,
+  and no truncated JSON.
+- **Ollama → llama.cpp.** Swap the roles: Ollama as the primary with a large `num_ctx`, and the
+  llama.cpp endpoint started with a small context (`-c 16384`) as the target. Stop Ollama mid-run.
+  For each request record `timings.prompt_n` and `timings.predicted_n` from the response, and any
+  context-shift line or "exceeds the available context size" error in the `llama-server` log.
+  Expect none, and the attribution to complete.
+- **Refused, not sent.** Lower the target's context until a chunk cannot be split further, and run
+  annotate-emotion over a chapter sized for the primary: the chapter fails with the input-too-large
+  copy (or, for an escalation window, the skip warning is logged), and the target's own log shows
+  no request for it.
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Fallback to a smaller context".
 
 ### A114 · Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**
 

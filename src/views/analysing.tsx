@@ -18,13 +18,13 @@ import { computeOverallProgress } from '../lib/analysis-progress';
 import { derivePhaseState, isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 import {
   MODEL_OPTIONS,
-  buildLocalModelOptions,
-  buildModelOptionGroups,
+  buildAnalyzerPickerGroups,
   engineForModelId,
   localRunModelIds,
   runModelsAllResident,
 } from '../lib/models';
 import type { AnalysisEngine } from '../lib/model-id';
+import { snapshotGpuFor } from '../lib/analyzer-endpoints';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
@@ -442,7 +442,9 @@ export function AnalysingView({
      failure (gated on `error` below) — a healthy cloud run never probes Ollama,
      preserving the cloud-no-probe invariant. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
-  const analyzerModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
+  const analyzerEndpointList = useAppSelector((s) => s.account.analyzerEndpoints);
+  const analyzerModelGroups = buildAnalyzerPickerGroups({ localTags: localAnalyzerModels, catalog: analyzerCatalog, endpoints: analyzerEndpointList ?? [] });
   /* fs-65 Task 12 — per-book prosody annotation toggle. Eager default: absent
      (undefined) or true → checked; only an explicit false → unchecked. */
   const prosodyStored = useAppSelector(selectProsodyEnabled(bookId ?? null));
@@ -484,14 +486,16 @@ export function AnalysingView({
     model,
   ]);
   const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
-  /* Engine tag captured into the cross-navigation snapshot (read by the
-     reverse-local-analyzer guard). Mirror the effective-local derivation so a
-     cloud run is never mis-tagged 'local' and made to nag the TTS-start path.
-     Uses the shared id grammar so an endpoint run is tagged 'openai', not
-     the stale 'gemini' default. */
+  /* #3084 — engine + card captured into the cross-navigation snapshot (read by the
+     reverse guard). Ollama beats endpoints beats Gemini, so a mixed run is never
+     under-reported; isLocalAnalyzer above still gates only Ollama probing. */
+  const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   const effectiveEngine: AnalysisEngine = isLocalAnalyzer
     ? 'local'
-    : engineForModelId(effectiveModelIds[0] ?? '');
+    : effectiveModelIds.some((id) => engineForModelId(id) === 'openai')
+      ? 'openai'
+      : 'gemini';
+  const effectiveGpu = snapshotGpuFor(effectiveModelIds, { analyzerEndpoints: analyzerEndpoints ?? [] });
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
@@ -616,6 +620,7 @@ export function AnalysingView({
          running analysis from the reverse-direction guard's
          perspective (see use-reverse-local-analyzer-guard.tsx). */
         engine: effectiveEngine,
+        gpu: effectiveGpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -646,7 +651,7 @@ export function AnalysingView({
               : phase1Pick ?? phase1Model ?? defaultAnalysisModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
-          onPhase: ({ phaseId, progress, live, model: serverModel }) => {
+          onPhase: ({ phaseId, progress, live, model: serverModel, analysisEngine, analysisGpu }) => {
             if (cancelled) return;
             setConn('streaming');
             markEvent();
@@ -671,6 +676,8 @@ export function AnalysingView({
                label/progress (so the top-bar pill doesn't flip-flop between the
                two pipelined phases); lagging-phase ticks just refresh the
                liveness timestamp. */
+            /* The run engine/card after a fallback switch rides any phase's tick, lagging or not. */
+            const runEngine = { engine: analysisEngine, gpu: analysisGpu };
             dispatch(
               analysisActions.applyAnalysisSnapshotTick(
                 phaseId === newMax
@@ -680,8 +687,9 @@ export function AnalysingView({
                       phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
                       phaseProgress: progress,
                       lastTickAt: Date.now(),
+                      ...runEngine,
                     }
-                  : { manuscriptId, lastTickAt: Date.now() },
+                  : { manuscriptId, lastTickAt: Date.now(), ...runEngine },
               ),
             );
           },
@@ -1054,6 +1062,7 @@ export function AnalysingView({
         manuscriptId,
         bookTitle: title ?? undefined,
         engine: effectiveEngine,
+        gpu: effectiveGpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -1101,7 +1110,7 @@ export function AnalysingView({
         model: requestModel,
         /* #3435 — set only by the subset shrink banner's Accept. */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
-        onPhase: ({ phaseId, progress, live }) => {
+        onPhase: ({ phaseId, progress, live, analysisEngine, analysisGpu }) => {
           markEvent();
           setConn('streaming');
           setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
@@ -1118,6 +1127,8 @@ export function AnalysingView({
               phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
               phaseProgress: progress,
               lastTickAt: Date.now(),
+              engine: analysisEngine,
+              gpu: analysisGpu,
             }),
           );
         },
@@ -1801,7 +1812,7 @@ export function AnalysingView({
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-red-400/40"
                   >
                     {analyzerModelGroups.map((g) => (
-                      <optgroup key={g.engine} label={g.label}>
+                      <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
                         {g.models.map((m) => (
                           <option key={m.id} value={m.id} title={m.hint}>
                             {m.label}

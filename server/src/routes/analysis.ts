@@ -12,10 +12,15 @@ import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
-import { resetAnalyzerConcurrencyPeak, getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
+import {
+  resetAnalyzerConcurrencyPeak,
+  getAnalyzerConcurrencyStats,
+  endpointIdsForModelIds,
+  markEndpointRunActive,
+} from '../analyzer/analyzer-concurrency.js';
 import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
-import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
+import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
   isPerPhaseModelSelectionActive,
@@ -27,7 +32,7 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -81,7 +86,7 @@ import {
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
-import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { readUserSettings, getCachedUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight, type PreflightTarget } from '../analyzer/preflight.js';
 import {
   clearAnalysisCache,
@@ -565,15 +570,16 @@ function humanModel(modelId: string | undefined): string {
   return MODEL_LABELS[modelId] ?? modelId;
 }
 
-/** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the
-    local analyzer, "Gemma 4 31B" for Gemini, and "Endpoint lab (qwen3:30b)"
-    for an OpenAI-compatible endpoint (#3084; PR 3d swaps the endpoint id for
-    its saved name). The MODEL_LABELS lookup only covers Gemini ids, so the
-    local branch surfaces the raw tag — Ollama tags are already readable. */
+/** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the local analyzer,
+    "Gemma 4 31B" for Gemini, and "<endpoint name> (qwen3:30b)" for an OpenAI-compatible
+    endpoint (#3084). The MODEL_LABELS lookup only covers Gemini ids, so the local
+    branch surfaces the raw tag — Ollama tags are already readable. */
 export function engineLabel(engine: AnalysisEngine, modelId: string): string {
   if (engine === 'openai') {
     const parsed = parseEndpointModelId(modelId);
-    return parsed ? `Endpoint ${parsed.endpointId} (${parsed.model})` : `Endpoint (${modelId})`;
+    if (!parsed) return `Endpoint (${modelId})`;
+    const name = getCachedUserSettings().analyzerEndpoints.find((e) => e.id === parsed.endpointId)?.name;
+    return name ? `${name} (${parsed.model})` : `Endpoint ${parsed.endpointId} (${parsed.model})`;
   }
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
 }
@@ -1230,8 +1236,17 @@ export function localFallbackMsPerChar(device: 'cuda' | 'cpu' | 'unknown'): numb
 export function engineFallbackMsPerChar(
   engine: AnalysisEngine,
   device: 'cuda' | 'cpu' | 'unknown',
+  endpointGpu?: string,
 ): number {
-  return engine === 'local' ? localFallbackMsPerChar(device) : GEMINI_FALLBACK_MS_PER_CHAR;
+  if (engine === 'local') return localFallbackMsPerChar(device);
+  if (engine === 'openai' && endpointGpu !== undefined && endpointGpu !== 'none') return localFallbackMsPerChar(device);
+  return GEMINI_FALLBACK_MS_PER_CHAR;
+}
+
+/** The saved endpoint's gpu for an endpoint model id (#3084); undefined otherwise. */
+function endpointGpuFor(modelId: string): string | undefined {
+  const parsed = parseEndpointModelId(modelId);
+  return parsed ? getCachedUserSettings().analyzerEndpoints.find((e) => e.id === parsed.endpointId)?.gpu : undefined;
 }
 
 /* Mid-chapter ETA refinement (issue 3, 2026-06-14). Project a chapter's total
@@ -2494,8 +2509,8 @@ export async function attributeChapterStage2(opts: {
          forensics per call. Spread rather than mutate: `stageCall` is created
          once per chapter and shared across every section, so assigning to it
          would race the concurrent chapter running in the other analyzer slot.
-         Undefined on the single-call path leaves the object shape unchanged. */
-      callSeq === undefined ? opts.stageCall : { ...opts.stageCall, stage2CallSeq: callSeq },
+         An undefined callSeq still adds no stage2CallSeq key. */
+      { ...opts.stageCall, inputBody: subBody, ...(callSeq === undefined ? {} : { stage2CallSeq: callSeq }) },
     );
   };
   const result = await runStage2ChapterChunked({
@@ -2669,11 +2684,21 @@ function throwIfReasoningOverflowed(job: AnalysisJob): void {
   if (job.reasoningOverflowed) throw job.reasoningOverflowError;
 }
 
+/** #3084 P30 — Signal-2 fails open: any error treats the chapter as a story. A prompt refused before
+    a fallback target could take it keeps that outcome but is logged, so the skip is never silent. */
+export function nonStoryClassificationFailed(err: unknown, manuscriptId: string, chapterId: number): false {
+  if (err instanceof AnalysisAbortedError) throw err;
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    console.warn(`[analysis] ${manuscriptId}: chapter ${chapterId} non-story check skipped: ${err.message}`);
+  }
+  return false;
+}
+
 /** #3084 P20 — Signal-2 non-story classification for the third-party
     front-matter guard, shared by the main and subset jobs. It replaces their
     two inline copies (:5814-5836, :7540-7566) and keeps their behaviour. Once
     the job has seen a reasoning overflow it makes no further call. A call that
-    overflows marks the job and reads as story, like any other Signal-2 hiccup. */
+    overflows marks the job and reads as story, like any other Signal-2 stumble. */
 export function buildNonStoryClassifier(opts: {
   job: AnalysisJob;
   structureBudget: { remainingWindows: number };
@@ -2681,8 +2706,10 @@ export function buildNonStoryClassifier(opts: {
   manuscriptId: string;
   bookTitle: string | null;
   bookLanguage: string;
+  /** #3084 wave 3d — the caller's switch handler (log, relabel, mark the target): this call can be the one that switches. */
+  onFallback?: StageCall['onFallback'];
 }): ((ch: ThirdPartyGuardChapter) => Promise<boolean>) | undefined {
-  const { job, structureBudget, analyzer, manuscriptId, bookTitle, bookLanguage } = opts;
+  const { job, structureBudget, analyzer, manuscriptId, bookTitle, bookLanguage, onFallback } = opts;
   if (!analyzer.runNonStoryClassification) return undefined;
   return async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
     if (job.reasoningOverflowed) return false;
@@ -2690,7 +2717,7 @@ export function buildNonStoryClassifier(opts: {
     /* srv-61 — the SAME StageCall goes to the runner and withPassEval, so its
        fresh-per-call accumulator attaches to this call. */
     /* #3435 decision E — the job's signal, so ending the run aborts this call too. */
-    const nonStoryCall: StageCall = { language: bookLanguage, signal: job.controller.signal };
+    const nonStoryCall: StageCall = { language: bookLanguage, signal: job.controller.signal, onFallback };
     try {
       const out = await withPassEval(
         nonStoryCall,
@@ -2703,7 +2730,7 @@ export function buildNonStoryClassifier(opts: {
       if (err instanceof AnalysisAbortedError) throw err;
       /* #3084 F7 — this classifier already has the chapter (`ch`). */
       noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 0);
-      return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
+      return nonStoryClassificationFailed(err, manuscriptId, ch.id);
     }
   };
 }
@@ -2921,12 +2948,15 @@ export interface AnalysisJob {
       workspace book — those skip every disk write site, same as
       cast.json / state.json. */
   bookDir: string | null;
-  /** Engine the active analyzer is using. Persisted into
+  /** Engine holding a card across BOTH phases, not any one analyzer's: Ollama over an endpoint over
+      Gemini, derived from each phase's current engine (`phaseEngines`, by setPhaseEngine). Persisted into
       `analysis-state.json` so the cold-boot rehydrated AnalysisPill
       carries the right engine for the reverse-direction local-analyzer
-      guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`) — the
-      guard checks `engine === 'local'` to decide whether to prompt
-      before a TTS-start. */
+      guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`), which
+      prompts before a TTS-start when the engine is `local` or when an
+      endpoint run shares the TTS card (`analyzerSharesTtsDevice`). Once a
+      fallback switch has happened it also rides the phase events
+      (`withRunEngine`) into the live frontend snapshot. */
   engine: AnalysisEngine;
   replay: AnalysisJobReplayState;
   /** ms-since-epoch of the last `analysis-state.json` write. Used to
@@ -2980,6 +3010,33 @@ export interface AnalysisJob {
       parked Phase-1 worker. Absent until the run creates it (endJob can run
       before that: the `language_unset` terminal). */
   watermark?: PhaseWatermark;
+  /** #3084 P1 — releases the run-level busy mark on the OpenAI-compatible endpoints this
+      job uses (analyzer-concurrency.ts markEndpointRunActive). Set at job creation, called by
+      releaseBusyAndPin beside clearAnalysisBusy. Idempotent. */
+  releaseEndpointRun?: () => void;
+  /** #3084 P30 — fallback targets already marked busy (each once, at its first switch). */
+  fallbackMarked?: Set<string>;
+  /** #3084 P30 — set by releaseBusyAndPin once releaseEndpointRun has run; a later switch takes no mark. */
+  endpointRunReleased?: boolean;
+  /** #3084 wave 3d — an Ollama-served selection (a primary) belongs to this run. The switch is sticky and
+      job.engine is derived from both phases' current engines, so once every phase has moved off Ollama it
+      can read the target by the end while Ollama still holds the run pin (keep_alive: -1);
+      releaseBusyAndPin evicts on either. */
+  ollamaServed?: boolean;
+  /** #3084 wave 3d review pass 2 — this run's fallback switch, shared by every analyzer selection the run
+      makes (phase 0, phase 1): a switch one makes sends the others' calls straight to the target too
+      (sticky for the run). Per job, so one job's switch never reaches another. Absent: the selection
+      has a switch of its own. */
+  fallbackSwitch?: RunFallbackSwitch;
+  /** #3084 wave 3d review pass 3 — the engine each phase is CURRENTLY on (a fallback switch moves its own
+      phase's entry). `engine` is derived from both by setPhaseEngine, so the cold-boot snapshot names
+      whoever holds a card across the whole run. */
+  phaseEngines?: { 0?: AnalysisEngine; 1?: AnalysisEngine };
+  /** #3084 wave 3d review pass 4 (J) — every fallback target this run has switched to (set by
+      markFallbackActive on each switch). Non-empty = a switch has happened: from then on the phase
+      events carry `analysisEngine`/`analysisGpu` (withRunEngine), the live frontend snapshot's only
+      way to learn the card the run now holds. */
+  fallbackModels?: Set<string>;
   /** #3711 — settles when the job's tracked units have ACTUALLY finished: a main job
       once it has ended and `liveWork` is 0 (NOT at the drain deadline); a subset job at
       its end. The route's `runBookJob` lease is released only then, so a folder move
@@ -2993,6 +3050,21 @@ export interface AnalysisJob {
       then write it, so the lease must outlive them or a rename can slip in between
       and the write recreates the vacated folder. */
   terminalWrites?: Promise<void>;
+}
+
+/* #3084 wave 3d review pass 3 — Ollama beats an endpoint beats Gemini, so a mixed run is never
+   under-reported (the rule src/views/analysing.tsx applies to the same snapshot). */
+export function combineAnalysisEngines(engines: Array<AnalysisEngine | undefined>): AnalysisEngine {
+  if (engines.includes('local')) return 'local';
+  if (engines.includes('openai')) return 'openai';
+  return 'gemini';
+}
+
+/* Record one phase's current engine and re-derive job.engine from both. */
+function setPhaseEngine(job: AnalysisJob, phase: 0 | 1, engine: AnalysisEngine): void {
+  const engines = { ...job.phaseEngines, [phase]: engine };
+  job.phaseEngines = engines;
+  job.engine = combineAnalysisEngines([engines[0], engines[1]]);
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -3451,6 +3523,25 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
+/* #3084 wave 3d review pass 4 (J) — once the run has switched to a fallback target, its phase events
+   name the run's combined engine (the value job.engine holds, which the cold-boot snapshot reads) and the
+   card the endpoint target(s) hold, so the frontend's live snapshot — read by the reverse guard and the
+   generation hold — follows the switch instead of keeping the engine it captured at start. Ollama and
+   Gemini targets hold no endpoint card. Before any switch the events are untouched. */
+function withRunEngine(job: AnalysisJob, payload: unknown): unknown {
+  if (!job.fallbackModels?.size || !payload || typeof payload !== 'object') return payload;
+  if ((payload as { kind?: unknown }).kind !== 'phase') return payload;
+  const endpoints = getCachedUserSettings().analyzerEndpoints;
+  const cards = [...job.fallbackModels].flatMap((modelId) => {
+    const parsed = parseEndpointModelId(modelId);
+    return parsed ? [endpoints.find((e) => e.id === parsed.endpointId)?.gpu ?? 'any'] : [];
+  });
+  /* The rule the frontend's start snapshot uses (snapshotGpuFor): off-card endpoints hold none. */
+  const sharing = [...new Set(cards.filter((g) => g !== 'none'))];
+  const gpu = cards.length === 0 ? undefined : sharing.length === 0 ? 'none' : sharing.length === 1 ? sharing[0] : 'any';
+  return { ...payload, analysisEngine: job.engine, ...(gpu !== undefined ? { analysisGpu: gpu } : {}) };
+}
+
 /* Exported for unit testing (the chapter-failed replay contract). */
 export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
@@ -3581,6 +3672,24 @@ export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): 
           },
         }
       : {}),
+  };
+}
+
+/* #3084 P30 — a fallback target is marked busy at its first switch, never at job start, and the
+   mark is released with the job's own (releaseBusyAndPin calls releaseEndpointRun). A switch that
+   lands after that release (a P20 in-flight chapter finishing) takes no mark: nothing would ever
+   release it. Every switch is recorded in `fallbackModels`, mark or not: that is what makes the phase
+   events carry the run engine (withRunEngine). */
+function markFallbackActive(job: AnalysisJob, modelId: string | null): void {
+  if (!modelId) return;
+  (job.fallbackModels ??= new Set()).add(modelId);
+  if (job.endpointRunReleased || job.fallbackMarked?.has(modelId)) return;
+  (job.fallbackMarked ??= new Set()).add(modelId);
+  const release = markEndpointRunActive(endpointIdsForModelIds([modelId]));
+  const previous = job.releaseEndpointRun;
+  job.releaseEndpointRun = () => {
+    previous?.();
+    release();
   };
 }
 
@@ -3807,6 +3916,8 @@ function releaseBusyAndPin(job: AnalysisJob): void {
      `job.bookDir` comes from its lease, while a rename is refused for as long as the
      registration is held, so the path cannot change between mark and clear. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
+  job.releaseEndpointRun?.(); // #3084 P1 — this run no longer holds its endpoints
+  job.endpointRunReleased = true; // #3084 P30 — a switch landing after this point takes no mark
   /* Release the run-scoped analyzer PIN. keepAliveFor() returned -1 for every
      Ollama call while a run was in flight (see analyzer/ollama.ts) so the model
      couldn't idle out between the minutes-apart attribution calls. Now that this
@@ -3816,7 +3927,7 @@ function releaseBusyAndPin(job: AnalysisJob): void {
      isAnyAnalysisBusy) is still running — otherwise we'd evict a model that
      run still needs. Best-effort and fire-and-forget: a failed evict just means
      the model idles per its own keep_alive, and the next run re-warms it. */
-  if (job.engine === 'local' && !isAnyAnalyzerRunBusy()) {
+  if ((job.engine === 'local' || job.ollamaServed) && !isAnyAnalyzerRunBusy()) {
     void unloadResidentOllama().catch(() => {
       /* Ollama unreachable / already evicted — nothing to release. */
     });
@@ -4075,10 +4186,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      function scope: Task 3d.1 reads it. */
   let preflight: PreflightTarget[];
   let selection: AnalyzerSelection;
+  const fallbackSwitch = new RunFallbackSwitch(); // #3084 wave 3d — this run's, handed to the job below
   try {
     preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
     runAnalyzerPreflight(preflight, userSettings, preflightDigests);
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model, fallbackSwitch });
   } catch (e) {
     /* #3084 P23/P14 — one coded event for every check or selection failure: 3b Task 3b.1a's
        helper classifies each class, never returns null, and carries its detail. This `catch`
@@ -4134,6 +4246,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     kind: 'main',
     bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
+    fallbackSwitch,
     replay: {
       logs: [],
       lastPhase: null,
@@ -4156,6 +4269,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
   joinWriters(job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
+  /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
+     exactly as selection resolves them, per-run phase picks included) stay busy for the whole
+     run, gaps between chunk calls included, so TTS eviction does not unload them mid-run. */
+  job.releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds(preflight.map((t) => t.modelId)));
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {
@@ -4336,6 +4453,12 @@ export async function runMainAnalyzerJob(
      declaration up — both are still first set from the same expressions
      they always were. */
   let activeModelId = selection.model;
+  /* #3084 P30 — the engine the active model resolves to; reassigned together with
+     activeModelId on a fallback switch, so every later chunk budget reflects the target, not the
+     primary. job.engine does not follow it alone: setPhaseEngine records this phase's engine and
+     re-derives job.engine from both phases (whoever holds a card wins). */
+  let activeEngine: AnalysisEngine = selection.engine;
+  setPhaseEngine(job, 0, selection.engine);
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
   /* #3435 — the Phase-1 label, hoisted so the terminal catch can name the
      Phase-1 model for a failure that happened there. Set where Phase 1's
@@ -4404,11 +4527,15 @@ export async function runMainAnalyzerJob(
       phase: 'phase1',
       model: opts.requestedModel,
       phaseModel: opts.requestedPhase1Model,
+      fallbackSwitch: job.fallbackSwitch,
     });
     const phase1Analyzer = phase1Selection.analyzer;
     /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
        reassigns it to the effective Gemini model on a local→Gemini switch. */
     let phase1ModelId = phase1Selection.model;
+    /* #3084 P30 — reassigned together with phase1ModelId on a fallback switch. */
+    let phase1Engine: AnalysisEngine = phase1Selection.engine;
+    setPhaseEngine(job, 1, phase1Selection.engine);
     const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
     phase1TerminalLabel = phase1AnalyzerLabel;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
@@ -4442,6 +4569,7 @@ export async function runMainAnalyzerJob(
        Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
        target box), and the estimate self-corrects from observed pace anyway. */
     const usesLocalAnalyzer = selection.engine === 'local' || phase1Selection.engine === 'local';
+    if (usesLocalAnalyzer) job.ollamaServed = true;
     const analyzerDevice: 'cuda' | 'cpu' | 'unknown' = usesLocalAnalyzer
       ? await detectOllamaDevice()
       : 'unknown';
@@ -4456,8 +4584,9 @@ export async function runMainAnalyzerJob(
     }
 
     const send = (payload: unknown) => {
-      broadcastToJob(job, payload);
-      trackForReplay(job, payload);
+      const stamped = withRunEngine(job, payload);
+      broadcastToJob(job, stamped);
+      trackForReplay(job, stamped);
     };
     /* #2015 §4 — a genuine stale merge base stops being silent. The write still
        proceeds with the same base it uses today, so NO data is lost that is not
@@ -4882,7 +5011,7 @@ export async function runMainAnalyzerJob(
        any chapter completes. Uses cached durations when present (typical
        resume case); otherwise falls back to the per-engine ms/char rate. */
     {
-      const fallbackMsPerChar = engineFallbackMsPerChar(selection.engine, analyzerDevice);
+      const fallbackMsPerChar = engineFallbackMsPerChar(selection.engine, analyzerDevice, endpointGpuFor(selection.model));
       const phase0CharsRemainingInitial = Math.max(0, totalCastCharsAll - castActualCharsTotal);
       const initialRemainingMs = projectRemainingMs({
         phase0WallClockMs: 0,
@@ -5151,7 +5280,7 @@ export async function runMainAnalyzerJob(
            ~0:40 even when prior chapters averaged 4-5ms/char. Falls
            back to the TTFT-dominated baseline only on the first
            chapter of the phase, when no samples exist yet. */
-        const msPerCharFallback = engineFallbackMsPerChar(selection.engine, analyzerDevice);
+        const msPerCharFallback = engineFallbackMsPerChar(selection.engine, analyzerDevice, endpointGpuFor(selection.model));
         const fallback = PHASE0_PER_CHAPTER_BASELINE_MS + msPerCharFallback * ch.body.length;
         const chapterEstMs = chapterEstFromObserved(
           ch.body.length,
@@ -5238,18 +5367,26 @@ export async function runMainAnalyzerJob(
               reason,
             });
           },
-          /* Local analyzer went unreachable → the FallbackAnalyzer switched to
-             Gemini. Re-label so the pill names the model actually running (all
-             later phase-0 events read the reassigned `activeModelId`). */
-          onFallback: () => {
-            activeModelId = selection.fallbackModel ?? activeModelId;
+          /* The primary analyzer went unreachable → the FallbackAnalyzer switched to the
+             configured target. Re-label so the pill names the model/engine actually running
+             (all later phase-0 events read the reassigned `activeModelId`/`activeEngine`),
+             persist `job.engine` for the reverse local-analyzer guard, mark the target busy
+             only now (#3084 P30 — never at job start), and announce the switch. */
+          onFallback: ({ reason }) => {
+            if (selection.fallbackModel && selection.fallbackEngine) {
+              activeModelId = selection.fallbackModel;
+              activeEngine = selection.fallbackEngine;
+              setPhaseEngine(job, 0, activeEngine);
+              markFallbackActive(job, selection.fallbackModel);
+            }
+            console.log(`[analysis] ${manuscriptId}: ${reason}`); // #3084 P30 — never silent
             send({
               kind: 'phase',
               phaseId: 0,
               progress: phase0Progress(),
               label: PHASES[0].label,
               model: activeModelId,
-              engine: 'gemini',
+              engine: activeEngine,
             });
           },
         };
@@ -5273,7 +5410,9 @@ export async function runMainAnalyzerJob(
                   runStage1ChapterChunked({
                     body: ch.body,
                     charBudget: resolveStage1ChunkCharBudget(
-                      resolveCapacity({ engine: selection.engine, model: selection.model }),
+                      // #3084 P30 — read inside the per-chapter closure, from the active
+                      // selection: a chapter dispatched after a switch is sized for the target.
+                      resolveCapacity({ engine: activeEngine, model: activeModelId }),
                       ch.body,
                       // #1691 — roster-aware reservation: the running roster
                       // grows with the whole book's cast, so the body budget must
@@ -5311,7 +5450,7 @@ export async function runMainAnalyzerJob(
                           seriesPrior,
                           bookAuthor,
                         ),
-                        castCall,
+                        { ...castCall, inputBody: subBody },
                       ),
                   }).then((r) => ({ characters: r.characters })),
               }),
@@ -6037,6 +6176,7 @@ export async function runMainAnalyzerJob(
         progress: p,
         label: PHASES[1].label,
         model: phase1ModelId,
+        engine: phase1Engine, // #3084 P30 — the target engine after a switch, not always gemini
         live:
           running.length > 0
             ? {
@@ -6230,11 +6370,19 @@ export async function runMainAnalyzerJob(
            other fields). */
         onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1),
         onWaiting: () => tickOverall(),
-        /* Local analyzer unreachable → switched to Gemini. Re-label so the pill
-           names the effective model (later phase-1 events read the reassigned
-           `phase1ModelId`; tickOverall re-emits now for immediate feedback). */
-        onFallback: () => {
-          phase1ModelId = phase1Selection.fallbackModel ?? phase1ModelId;
+        /* The primary analyzer went unreachable → switched to the configured target.
+           Re-label so the pill names the effective model/engine (later phase-1 events
+           read the reassigned `phase1ModelId`/`phase1Engine`; tickOverall re-emits now
+           for immediate feedback), persist `job.engine`, and mark the target busy only
+           now (#3084 P30 — never at job start). */
+        onFallback: ({ reason }) => {
+          if (phase1Selection.fallbackModel && phase1Selection.fallbackEngine) {
+            phase1ModelId = phase1Selection.fallbackModel;
+            phase1Engine = phase1Selection.fallbackEngine;
+            setPhaseEngine(job, 1, phase1Engine);
+            markFallbackActive(job, phase1Selection.fallbackModel);
+          }
+          console.log(`[analysis] ${manuscriptId}: ${reason}`);
           tickOverall();
         },
         /* Per-chunk heartbeat so the user sees evidence of model output
@@ -6330,7 +6478,8 @@ export async function runMainAnalyzerJob(
         stage1: phase1Stage1,
         chapter: ch,
         stageCall: stage2Call,
-        capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),
+        // #3084 P30 — the active selection, so a chapter dispatched after a switch is sized for the target.
+        capacity: resolveCapacity({ engine: phase1Engine, model: phase1ModelId }),
         structureBudget,
         escalationAnalyzer,
         // Section START: record this section's char count and total. Do NOT add
@@ -6752,7 +6901,7 @@ export async function runMainAnalyzerJob(
         .slice(0, 4);
       for (const t of top) log(1, `${t.name}: ${t.lines.toLocaleString()} lines`);
     }
-    send({ kind: 'phase', phaseId: 1, progress: 1, label: PHASES[1].label, model: phase1ModelId });
+    send({ kind: 'phase', phaseId: 1, progress: 1, label: PHASES[1].label, model: phase1ModelId, engine: phase1Engine });
 
     /* ── Phase 2: matching library — empty for first slice. */
     markPhase(2);
@@ -6825,6 +6974,17 @@ export async function runMainAnalyzerJob(
       manuscriptId,
       bookTitle: recordRef.title ?? null,
       bookLanguage,
+      /* #3084 wave 3d — same relabel as the stage-1 call's switch handler (the shared phase-0 analyzer
+         is sticky, so whichever call switches first relabels the job). */
+      onFallback: ({ reason }) => {
+        if (selection.fallbackModel && selection.fallbackEngine) {
+          activeModelId = selection.fallbackModel;
+          activeEngine = selection.fallbackEngine;
+          setPhaseEngine(job, 0, activeEngine);
+          markFallbackActive(job, selection.fallbackModel);
+        }
+        console.log(`[analysis] ${manuscriptId}: ${reason}`);
+      },
     });
     const guarded = await stripThirdPartyFrontMatter(
       stage1.characters,
@@ -7860,6 +8020,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   let preflight: PreflightTarget[];
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
+  const fallbackSwitch = new RunFallbackSwitch(); // #3084 wave 3d — one switch for both of this run's selections
   try {
     preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
     runAnalyzerPreflight(preflight, userSettings, preflightDigests);
@@ -7867,11 +8028,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       phase: 'phase0',
       model: requestedModel,
       phaseModel: requestedPhase0Model,
+      fallbackSwitch,
     });
     phase1Selection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: requestedModel,
       phaseModel: requestedPhase1Model,
+      fallbackSwitch,
     });
   } catch (e) {
     send(analyzerSelectionErrorEvent(e)); // P23/P14 — the shared coded event, checks included
@@ -7895,6 +8058,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     subsetChapterIds: leasedToRun.map((t) => t.id),
     bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
+    fallbackSwitch,
     replay: {
       logs: [],
       lastPhase: null,
@@ -7915,6 +8079,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   });
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
+  /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
+     exactly as selection resolves them, per-run phase picks included) stay busy for the whole
+     run, gaps between chunk calls included, so TTS eviction does not unload them mid-run. */
+  job.releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds(preflight.map((t) => t.modelId)));
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {
@@ -8030,13 +8198,23 @@ export async function runSubsetAnalyzerJob(
     }
     const abortController = job.controller;
     const analyzer = selection.analyzer;
-    const subsetModelId = selection.model;
+    /* #3084 P30 — mutable, reassigned together on a fallback switch (stage1Call.onFallback
+       below), so every later chunk budget reflects the target. job.engine does not follow it alone:
+       setPhaseEngine records this phase's engine and re-derives job.engine from both phases
+       (whoever holds a card wins). */
+    let subsetModelId = selection.model;
+    let subsetEngine: AnalysisEngine = selection.engine;
+    setPhaseEngine(job, 0, selection.engine);
     /* Plan 118 — Phase 1 (attribution) analyzer for the subset retry; equals
        `selection` when no split is configured. */
     const phase1Analyzer = phase1Selection.analyzer;
     const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
     phase1TerminalLabel = phase1AnalyzerLabel;
-    const phase1ModelId = phase1Selection.model;
+    let phase1ModelId = phase1Selection.model;
+    /* #3084 P30 — reassigned together with phase1ModelId on a fallback switch. */
+    let phase1Engine: AnalysisEngine = phase1Selection.engine;
+    setPhaseEngine(job, 1, phase1Selection.engine);
+    if (selection.engine === 'local' || phase1Selection.engine === 'local') job.ollamaServed = true;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
        chapter's attributeChapterStage2 call in this subset/retry job, mirroring
        the main route's per-book budget above. */
@@ -8047,8 +8225,9 @@ export async function runSubsetAnalyzerJob(
       configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
 
     const send = (payload: unknown) => {
-      broadcastToJob(job, payload);
-      trackForReplay(job, payload);
+      const stamped = withRunEngine(job, payload);
+      broadcastToJob(job, stamped);
+      trackForReplay(job, stamped);
     };
     /* #2015 §4 — a genuine stale merge base stops being silent. The write still
        proceeds with the same base it uses today, so NO data is lost that is not
@@ -8295,6 +8474,18 @@ export async function runSubsetAnalyzerJob(
             reason,
           });
         },
+        /* #3084 P30 — the primary went unreachable → switched to the configured target.
+           Re-label so later events read the reassigned subsetModelId/subsetEngine, persist
+           job.engine, and mark the target busy only now (never at job start). */
+        onFallback: ({ reason }) => {
+          if (selection.fallbackModel && selection.fallbackEngine) {
+            subsetModelId = selection.fallbackModel;
+            subsetEngine = selection.fallbackEngine;
+            setPhaseEngine(job, 0, subsetEngine);
+            markFallbackActive(job, selection.fallbackModel);
+          }
+          console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
+        },
       };
       try {
         const result = await withPassEval(
@@ -8316,7 +8507,8 @@ export async function runSubsetAnalyzerJob(
                 runStage1ChapterChunked({
                   body: ch.body,
                   charBudget: resolveStage1ChunkCharBudget(
-                    resolveCapacity({ engine: selection.engine, model: selection.model }),
+                    // #3084 P30 — the active selection: a chapter dispatched after a switch is sized for the target.
+                    resolveCapacity({ engine: subsetEngine, model: subsetModelId }),
                     ch.body,
                     // #1691 — roster-aware reservation, mirroring the full route.
                     Array.from(rebuildRoster().values()),
@@ -8341,7 +8533,7 @@ export async function runSubsetAnalyzerJob(
                         subsetSeriesPrior,
                         bookAuthor,
                       ),
-                      stage1Call,
+                      { ...stage1Call, inputBody: subBody },
                     ),
                 }).then((r) => ({ characters: r.characters })),
             }),
@@ -8665,7 +8857,8 @@ export async function runSubsetAnalyzerJob(
           title: record.title,
           stage1,
           chapter: ch,
-          capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),
+          // #3084 P30 — the active selection, so a chapter dispatched after a switch is sized for the target.
+          capacity: resolveCapacity({ engine: phase1Engine, model: phase1ModelId }),
           structureBudget,
           escalationAnalyzer,
           stageCall: {
@@ -8678,6 +8871,16 @@ export async function runSubsetAnalyzerJob(
             onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1),
             onWaiting: () => emitHeartbeat(1, ch.id),
             onChunk: (info) => emitHeartbeat(1, ch.id, info),
+            /* #3084 P30 — the primary went unreachable → switched to the configured target. */
+            onFallback: ({ reason }) => {
+              if (phase1Selection.fallbackModel && phase1Selection.fallbackEngine) {
+                phase1ModelId = phase1Selection.fallbackModel;
+                phase1Engine = phase1Selection.fallbackEngine;
+                setPhaseEngine(job, 1, phase1Engine);
+                markFallbackActive(job, phase1Selection.fallbackModel);
+              }
+              console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
+            },
             onThrottle: (waitMs, reason) => {
               send({
                 kind: 'throttle',
@@ -8952,6 +9155,16 @@ export async function runSubsetAnalyzerJob(
       manuscriptId,
       bookTitle: record.title ?? null,
       bookLanguage,
+      /* #3084 wave 3d — same relabel as the stage-1 call's switch handler. */
+      onFallback: ({ reason }) => {
+        if (selection.fallbackModel && selection.fallbackEngine) {
+          subsetModelId = selection.fallbackModel;
+          subsetEngine = selection.fallbackEngine;
+          setPhaseEngine(job, 0, subsetEngine);
+          markFallbackActive(job, selection.fallbackModel);
+        }
+        console.log(`[analysis-subset] ${manuscriptId}: ${reason}`);
+      },
     });
     const guarded = await stripThirdPartyFrontMatter(
       stage1.characters,

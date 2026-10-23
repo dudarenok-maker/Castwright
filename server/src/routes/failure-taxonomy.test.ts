@@ -25,6 +25,7 @@ import {
   AnalyzerStreamIncompleteError,
   AnalyzerTransportError,
   AnalyzerUnreachableError,
+  AnalyzerTargetInputTooLargeError,
   causeCodeSuffix,
   sanitizeCauseCode,
 } from '../analyzer/errors.js';
@@ -893,6 +894,27 @@ describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () =
     expect(r.userMessage).toContain('ANALYZER_PHASE0_MODEL');
   });
 
+  it('an engine-mismatch refusal says the endpoint is saved but the engine is not OpenAI-compatible, and points at the engine setting (never "not configured")', () => {
+    const r = classifyAnalysisFailure(new AnalyzerEndpointMissingError('lab', 'settings', 'engine-mismatch'), 'Analyzer');
+    expect(r.code).toBe('analyzer-endpoint-missing');
+    expect(r.userMessage).toContain('"lab"');
+    expect(r.userMessage).toContain('analyzer engine');
+    expect(r.userMessage).not.toMatch(/not configured|deleted|Pick another model/);
+    expect(r.remediation).toMatch(/analyzer engine/i);
+    expect(r.remediation).toMatch(/OpenAI-compatible/);
+  });
+
+  it('a not-an-endpoint refusal says the saved model is not an endpoint while the engine is OpenAI-compatible, and does not tell the user to set the engine they already set', () => {
+    const r = classifyAnalysisFailure(new AnalyzerEndpointMissingError('qwen3.5:4b', 'settings', 'not-an-endpoint'), 'Analyzer');
+    expect(r.code).toBe('analyzer-endpoint-missing');
+    expect(r.userMessage).toContain('"qwen3.5:4b"');
+    expect(r.userMessage).toContain('not an endpoint model');
+    expect(r.userMessage).not.toMatch(/not configured|deleted|Pick another model/);
+    expect(r.remediation).toMatch(/endpoint model/);
+    expect(r.remediation).toMatch(/change the analyzer engine/i);
+    expect(r.remediation).not.toMatch(/set the analyzer engine to OpenAI-compatible/i);
+  });
+
   it.each([
     ['schema', 'may not enforce'],
     ['json', 'constrains the structure'],
@@ -1024,7 +1046,7 @@ describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
       'AnalyzerEndpointMissingError',
       new AnalyzerEndpointMissingError('gone', 'env'),
       'analyzer-endpoint-missing',
-      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) cannot be used for analysis yet. Pick another model.',
+      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) is not configured (it may have been deleted). Pick another model.',
     ],
     [
       'AnalyzerKeyOriginError',
@@ -1230,15 +1252,24 @@ describe('analyzer-invalid-output remediation (#3084 PR 3b review 🟡1)', () =>
   });
 });
 
-describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2)', () => {
-  it('does not promise a Settings UI or claim a possibly-saved endpoint is unconfigured', () => {
+describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2, #3710 F2)', () => {
+  it('does not promise a Settings UI, and no longer says "yet" now that endpoints are selectable', () => {
     const live = classifyAnalysisFailure(new AnalyzerEndpointMissingError('gone', 'settings'), 'Analyzer');
     const help = FAILURE_REMEDIATIONS['analyzer-endpoint-missing'];
     for (const text of [live.userMessage, live.remediation, help.userMessage, help.remediation]) {
       expect(text).not.toMatch(/Settings/);
-      expect(text).not.toMatch(/not configured/);
+      expect(text).not.toMatch(/ yet\b/);
     }
     expect(live.userMessage).toContain('"gone"');
+  });
+
+  it('the generic Help copy covers every cause the code fires for: not saved, saved endpoint on the wrong engine, and a non-endpoint model on the OpenAI-compatible engine', () => {
+    const help = FAILURE_REMEDIATIONS['analyzer-endpoint-missing'];
+    expect(help.userMessage).toMatch(/not configured/);
+    expect(help.userMessage).toMatch(/engine is not set to OpenAI-compatible/);
+    expect(help.userMessage).toMatch(/not an endpoint model/);
+    expect(help.remediation).toMatch(/OpenAI-compatible/);
+    expect(help.remediation).toMatch(/default analysis model/);
   });
 });
 
@@ -1337,6 +1368,34 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.userMessage).toContain('high');
     expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
+  });
+});
+
+describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
+  it('→ analyzer-request-rejected with its own copy: the message, no HTTP status, a larger-window remediation, and fixes that can help a context target (#3710 M3)', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context'), 'Endpoint Lab (qwen3-30b)');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toBe('prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context 8192 tokens)');
+    expect(r.userMessage).not.toMatch(/\(400\)|rejected the request/);
+    expect(r.remediation).toMatch(/fallback target with a larger window/);
+    expect(r.remediation).toMatch(/turn the fallback off/i);
+    expect(r.remediation).not.toMatch(/stage input fractions|Lower the chunk size/);
+    expect(r.remediation).not.toMatch(/\(400\)/);
+    /* Both the primary's chunk and the target's budget are min(ceiling, f x ctx x 2), so a smaller
+       fraction can never bring a context target's budget above the chunk: no fraction fixes. */
+    expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.ollama.numCtx']);
+  });
+
+  it('keeps the chunk-size fixes for a per-request-cap target', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap'), 'Endpoint Lab (m)');
+    expect(r.remediation).toMatch(/Lower the chunk size/);
+    expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.stage1.localInputFraction', 'analyzer.stage2.localInputFraction']);
+  });
+
+  it('names a request-cap target by its per-request cap', () => {
+    expect(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap').message).toBe(
+      'prompt is larger than the fallback target Gemini (gemini-3.5-flash-lite) can take (per-request cap 12000 tokens)',
+    );
   });
 });
 

@@ -36,6 +36,12 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(preflightTargets(['phase0'], 'qwen3.5:4b', s)).toEqual([{ modelId: 'qwen3.5:4b', source: 'run-pick', engine: 'local' }]);
   });
 
+  it('an Ollama tag checked while the engine is OpenAI-compatible → reason not-an-endpoint (the model is not an endpoint id)', () => {
+    const err = thrown(() => runAnalyzerPreflight([{ modelId: 'qwen3.5:4b', source: 'settings', engine: 'openai' }], settings()));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ source: 'settings', reason: 'not-an-endpoint' });
+  });
+
   it('a deleted endpoint from the per-run pick → AnalyzerEndpointMissingError source run-pick', () => {
     const s = settings({ analyzerEndpoints: [] });
     const err = thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::qwen3-30b', s), s));
@@ -111,6 +117,18 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(() => runAnalyzerPreflight(targets, s, new Map([['qwen3.5:4b', 'sha256:new']]))).not.toThrow();
     expect(thrown(() => runAnalyzerPreflight(targets, s, new Map([['qwen3.5:4b', 'sha256:old']])))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
     expect(thrown(() => runAnalyzerPreflight(targets, s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+  });
+});
+
+describe('P14 — the engine default is checked as selection builds it (#3084 PR 3d)', () => {
+  it('the engine default is checked as the saved engine builds it: a saved openai engine with a non-endpoint default fails as endpoint-missing', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const s = settings({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const targets = preflightTargets(['phase1'], undefined, s);
+    expect(targets).toEqual([{ modelId: 'qwen3.5:4b', source: 'settings', engine: 'openai' }]);
+    const err = thrown(() => runAnalyzerPreflight(targets, s));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ endpointId: 'qwen3.5:4b', source: 'settings' });
   });
 });
 

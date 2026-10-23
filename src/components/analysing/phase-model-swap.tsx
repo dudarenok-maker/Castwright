@@ -1,4 +1,4 @@
-import { buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
+import { buildAnalyzerPickerGroups } from '../../lib/models';
 import { modelLabel } from '../../lib/model-label';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
@@ -57,8 +57,9 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
      holds while a just-pulled model still becomes selectable without a reload.
      Empty (not yet fetched / offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
-  const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
   const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog);
+  const analyzerEndpoints = useAppSelector((s) => s.account.analyzerEndpoints);
+  const modelGroups = buildAnalyzerPickerGroups({ localTags: localAnalyzerModels, catalog: analyzerCatalog ?? null, endpoints: analyzerEndpoints ?? [] });
 
   const disabled = isRunLive || !manuscriptId;
 
@@ -112,7 +113,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
       >
         <option value="">(use saved default)</option>
         {modelGroups.map((g) => (
-          <optgroup key={g.engine} label={g.label}>
+          <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
             {g.models.map((m) => (
               <option key={m.id} value={m.id} title={m.hint}>
                 {m.label}

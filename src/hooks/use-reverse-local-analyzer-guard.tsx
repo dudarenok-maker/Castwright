@@ -41,6 +41,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { analysisActions } from '../store/analysis-slice';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { IconWarning } from '../lib/icons';
+import { analyzerSharesGenerationDevice } from '../lib/analyzer-endpoints';
 
 interface GuardOptions {
   /** Optional title for the book whose analysis is in flight. Falls
@@ -70,13 +71,32 @@ export function useReverseLocalAnalyzerGuard({
      has both slices wired via `src/store/index.ts`. */
   const activeStream = useAppSelector((s) => s.analysis?.activeStream ?? null);
   const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
+  /* #3710 F4 — generation uses the session picker (`ui.ttsModelKey`, which the dispatcher reads as
+     `e.modelKey ?? ui.ttsModelKey`); the account default is only the fallback when that slice is absent. */
+  const ttsModelKey = useAppSelector(
+    (s) => s.ui?.ttsModelKey ?? s.account?.resolvedTtsModelKey ?? s.account?.defaultTtsModelKey,
+  );
+  const characters = useAppSelector((s) => s.cast?.characters);
+  const configValues = useAppSelector((s) => s.config?.values);
+  const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null); // N5
 
   const [pending, setPending] = useState<(() => void) | null>(null);
 
-  const isLocal = activeStream?.engine === 'local';
+  /* #3084 — shares the card: Ollama always; an endpoint on 'any' or the TTS card (an
+     unknown card or a snapshot without gpu fails closed); Gemini and gpu 'none' never. */
+  const sharesGpu =
+    activeStream?.engine !== undefined &&
+    analyzerSharesGenerationDevice({
+      engine: activeStream.engine,
+      endpointGpu: activeStream.gpu,
+      sessionModelKey: ttsModelKey,
+      characters,
+      values: configValues,
+      reported: reportedTtsDevices,
+    });
 
   const guard: GuardResult['guard'] = (proceed) => {
-    if (!activeStream || !isLocal) {
+    if (!activeStream || !sharesGpu) {
       proceed();
       return;
     }

@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
+import { analyzerSharesGenerationDevice } from '../lib/analyzer-endpoints';
 
 const baseSnapshot: AnalysisStreamSnapshot = {
   bookId: 'b1',
@@ -452,5 +453,109 @@ describe('selectMainAnalysisLive (#3435 decision A)', () => {
     const { selectMainAnalysisLive } = await import('./analysis-slice');
     const state = { analysis: { ...analysisSlice.getInitialState(), activeStream } };
     expect(selectMainAnalysisLive(state, 'm1')).toBe(expected);
+  });
+});
+
+/* #3084 wave 3d review pass 4 (J) — a fallback switch moves the card the run holds; the live snapshot
+   follows it (the reverse guard and the generation hold read engine/gpu from it). */
+describe('applyAnalysisSnapshotTick — the run engine/card after a fallback switch (#3084 wave 3d review pass 4, J)', () => {
+  const start = (extra: Partial<AnalysisStreamSnapshot>) =>
+    analysisSlice.reducer(undefined, analysisActions.setActiveStream({ ...baseSnapshot, ...extra }));
+
+  it('adopts the server run engine; a run that now holds Ollama carries no endpoint card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'local', lastTickAt: 5000 }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'local', gpu: undefined });
+  });
+
+  it('a switch from an off-card endpoint to an endpoint on a card takes that card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'cuda:0' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
+  it('two different cards held by the run read as any (the rule the start snapshot uses)', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'cuda:1' }),
+    );
+    expect(s.activeStream?.gpu).toBe('any');
+  });
+
+  it('a run that holds only Gemini carries no card', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'gemini' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'gemini' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'gemini', gpu: undefined });
+  });
+
+  it('a Gemini tick never narrows an endpoint snapshot (the snapshot only widens until the run ends; fails closed)', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'gemini' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
+  /* Review pass 5 (N) — a mixed-split run stamps only the switched-to targets; the other phase still
+     holds its own card, so a tick may only widen what the snapshot holds. */
+  describe('never narrows (pass 5, N)', () => {
+    const qwenOnCuda1 = { qwenDeviceKey: 'cuda:1', families: { qwen: 'cuda' } };
+    const shares = (snap: AnalysisStreamSnapshot | null | undefined) =>
+      analyzerSharesGenerationDevice({
+        engine: snap!.engine!,
+        endpointGpu: snap!.gpu,
+        sessionModelKey: 'qwen3-tts-0.6b',
+        values: undefined,
+        reported: qwenOnCuda1,
+      });
+
+    it('a local snapshot stays local (and holding) when a stamped tick says openai/none', () => {
+      const s = analysisSlice.reducer(
+        start({ engine: 'local', gpu: 'cuda:1' }),
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'none' }),
+      );
+      expect(s.activeStream).toMatchObject({ engine: 'local', gpu: 'cuda:1' });
+      expect(shares(s.activeStream)).toBe(true);
+    });
+
+    it('a cold-boot openai snapshot with no card reads as any, so an openai/none tick stays fail-closed', () => {
+      const s = analysisSlice.reducer(
+        start({ engine: 'openai', gpu: undefined }),
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'none' }),
+      );
+      expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'any' });
+      expect(shares(s.activeStream)).toBe(true);
+    });
+
+    it('a single-primary openai/none run that switches to openai/none stays off every card', () => {
+      const s = analysisSlice.reducer(
+        start({ engine: 'openai', gpu: 'none' }),
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', engine: 'openai', gpu: 'none' }),
+      );
+      expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'none' });
+      expect(shares(s.activeStream)).toBe(false);
+    });
+  });
+
+  it('a tick that names no engine leaves engine and gpu alone', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'cuda:0' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, lastTickAt: 5000 }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'cuda:0' });
+  });
+
+  it('another manuscript\'s tick is ignored', () => {
+    const s = analysisSlice.reducer(
+      start({ engine: 'openai', gpu: 'none' }),
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'other', engine: 'local' }),
+    );
+    expect(s.activeStream).toMatchObject({ engine: 'openai', gpu: 'none' });
   });
 });

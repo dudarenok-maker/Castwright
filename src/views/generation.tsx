@@ -68,6 +68,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { engineForModelId } from '../lib/models';
+import { snapshotGpuFor } from '../lib/analyzer-endpoints';
 import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 import {
   ttsModelLabel,
@@ -336,6 +337,7 @@ export function GenerationView({
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
   const selectedAnalyzerModelId = useAppSelector((s) => s.ui.selectedModel);
+  const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   /* Plan 276 — disables "Resume generation" while `startGenerationFlow`'s
      fetchVoiceLibrary round-trip (the clone-readiness pre-check) is in
      flight, so a slow fetch can't be double-clicked into two starts. */
@@ -487,6 +489,7 @@ export function GenerationView({
        Captured engine: ui.selectedModel — the analyzer that will
        handle this subset retry. */
     const engine = engineForModelId(selectedAnalyzerModelId);
+    const gpu = snapshotGpuFor([selectedAnalyzerModelId], { analyzerEndpoints: analyzerEndpoints ?? [] });
     /* Capture the prior snapshot in case the request fails with
        subset_in_progress; restoration prevents a stale/clobbered state from
        becoming permanent (B2 regression guard). */
@@ -497,6 +500,7 @@ export function GenerationView({
         manuscriptId,
         bookTitle: title ?? undefined,
         engine,
+        gpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -784,6 +788,7 @@ export function GenerationView({
       },
     }));
     const engine = engineForModelId(selectedAnalyzerModelId);
+    const gpu = snapshotGpuFor([selectedAnalyzerModelId], { analyzerEndpoints: analyzerEndpoints ?? [] });
     /* Capture the prior snapshot in case the request fails with
        subset_in_progress; restoration prevents a stale/clobbered state from
        becoming permanent (B2 regression guard — same as the include flow
@@ -795,6 +800,7 @@ export function GenerationView({
         manuscriptId,
         bookTitle: title ?? undefined,
         engine,
+        gpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,

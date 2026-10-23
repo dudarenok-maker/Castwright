@@ -12,6 +12,7 @@ import { IconCheck, IconChevD } from '../lib/icons';
 import {
   MODEL_OPTION_GROUPS,
   type ModelOption,
+  type ModelOptionGroup,
 } from '../lib/models';
 import { SearchablePicker, type PickerGroup } from './searchable-picker';
 import { modelLabel } from '../lib/model-label';
@@ -24,7 +25,7 @@ interface AnalysisModelPickerProps {
   /** Grouped model catalog to render. Defaults to the curated-only static
       groups for store-less callers; the upload view passes the dynamic
       curated ∪ live-Ollama-tag union so pulled tags are selectable. */
-  groups?: typeof MODEL_OPTION_GROUPS;
+  groups?: ModelOptionGroup[];
   /** The live `GET /api/analyzer/models` catalog, if the caller has one — only
       consulted when `selectedModel` is missing from `groups` (an endpoint model
       not in the curated/Ollama union), so an endpoint id falls back to its

@@ -17,6 +17,9 @@ import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { EmotionAnnotationOutput } from '../handoff/schemas.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { isEndpointBusy, _resetEndpointBusyForTest } from '../analyzer/analyzer-concurrency.js';
+import * as chapterPacing from '../analyzer/chapter-pacing.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -32,8 +35,32 @@ let manuscriptId: string;
    derives a finite, num_ctx-bound budget and a large chapter splits. */
 const { runEmotion, engineState: emotionEngineState } = vi.hoisted(() => ({
   runEmotion: vi.fn(),
-  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null },
+  engineState: {
+    engine: 'gemini' as 'gemini' | 'local',
+    selectError: null as Error | null,
+    model: 'test-model' as string,
+    fallbackModel: null as string | null,
+    fallbackEngine: null as 'gemini' | 'local' | 'openai' | null,
+    activate: false,
+  },
 }));
+
+const { emotionMarks, emotionReleases } = vi.hoisted(() => ({ emotionMarks: [] as string[][], emotionReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      emotionMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        emotionReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -53,8 +80,9 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
       return {
         analyzer: fakeAnalyzer,
         engine: emotionEngineState.engine,
-        model: 'test-model',
-        fallbackModel: null,
+        model: emotionEngineState.model,
+        fallbackModel: emotionEngineState.fallbackModel,
+        fallbackEngine: emotionEngineState.fallbackEngine,
       };
     },
   };
@@ -401,7 +429,7 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     expect(typeof phases[1].estRemainingMs).toBe('number');
   });
 
-  it('an endpoint id this build cannot run ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)', async () => {
+  it('an endpoint that is not configured ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)', async () => {
     writeBook(SENTENCES);
     const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
     emotionEngineState.selectError = new AnalyzerEndpointMissingError('gone', 'run-pick');
@@ -462,6 +490,147 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     } finally {
       rmSync(USER_SETTINGS_PATH, { force: true });
       _resetUserSettingsCache();
+    }
+  });
+
+  it('#3084 P1 — an emotion pass on an endpoint holds it busy for the whole pass, including the gaps between chapter calls, and releases it at the end', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // Task 3c.10's checks must pass
+    emotionEngineState.model = 'openai:lab::m';
+    emotionMarks.length = 0;
+    emotionReleases.count = 0;
+    /* Sampled INSIDE every chapter call: the mark must already be held at the first call and
+       still be held at the second, i.e. across the gap between them. */
+    const busyDuringCalls: boolean[] = [];
+    runEmotion.mockImplementation(async () => {
+      busyDuringCalls.push(isEndpointBusy('lab'));
+      return { annotations: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCalls).toEqual([true, true]);
+      expect(emotionMarks).toEqual([['lab']]);
+      expect(emotionReleases.count).toBe(1);
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 A4 — a throw between selection and the chapter loop does not leak the endpoint mark', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] }); // the saved target: later chapters are sized for it
+    emotionEngineState.model = 'openai:lab::m';
+    /* The window A4 names: buildCharsByChapter runs after selection and before the try. */
+    const spy = vi.spyOn(chapterPacing, 'buildCharsByChapter').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    try {
+      /* The synchronous throw happens after headers are flushed (SSE), so Express 5 forwards
+         it to the default error handler, which destroys the socket — supertest sees that as a
+         connection error, not a response. The server-side throw (and the mark leak it would
+         cause) has already happened by the time that rejection surfaces, so swallow it here;
+         the assertion below is what this case is actually proving. */
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' }).catch(() => {});
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      spy.mockRestore();
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — an emotion pass marks its fallback endpoint only once the fallback activates', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] }); // the saved target: later chapters are sized for it
+    emotionEngineState.model = 'openai:lab::m';
+    emotionEngineState.fallbackModel = 'openai:spare::m';
+    emotionEngineState.fallbackEngine = 'openai';
+    runEmotion.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      if (emotionEngineState.activate) call.onFallback?.({ reason: 'switched' });
+      return { annotations: [] };
+    });
+    try {
+      emotionMarks.length = 0;
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab']]);
+
+      emotionEngineState.activate = true;
+      emotionMarks.length = 0;
+      emotionReleases.count = 0;
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab'], ['spare']]);
+      expect(emotionReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      emotionEngineState.model = 'test-model';
+      emotionEngineState.fallbackModel = null;
+      emotionEngineState.fallbackEngine = null;
+      emotionEngineState.activate = false;
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 wave 3d review — after the pass switches to a smaller fallback target, the next chapter is chunked for the target', async () => {
+    process.env.ANALYZER_NUM_CTX = '400'; // the local target's budget: 2000 chars; the gemini primary never splits
+    emotionEngineState.fallbackModel = 'qwen3.5:4b';
+    emotionEngineState.fallbackEngine = 'local';
+    const chapter = (chapterId: number, base: number) =>
+      Array.from({ length: 12 }, (_, i) => ({ id: base + i, chapterId, characterId: 'narrator', text: 'C'.repeat(800) }));
+    writeBook([...chapter(1, 100), ...chapter(2, 200)]);
+    const callsByChapter = new Map<number, number>();
+    let switched = false;
+    runEmotion.mockImplementation(async (_m: string, chapterId: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      callsByChapter.set(chapterId, (callsByChapter.get(chapterId) ?? 0) + 1);
+      if (!switched) {
+        switched = true;
+        call.onFallback?.({ reason: 'switched' });
+      }
+      return { annotations: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+      expect(callsByChapter.get(1)).toBe(1); // sized for the primary, before the switch
+      expect(callsByChapter.get(2)).toBeGreaterThan(1); // sized for the target, after it
+    } finally {
+      emotionEngineState.fallbackModel = null;
+      emotionEngineState.fallbackEngine = null;
+    }
+  });
+
+  it('#3084 wave 3d review pass 4 (K) — a tagless Ollama target ("llama3") is chunked for Ollama after the switch, not for Gemini', async () => {
+    process.env.ANALYZER_NUM_CTX = '400'; // the local target's budget: 2000 chars; the gemini primary never splits
+    emotionEngineState.fallbackModel = 'llama3'; // no ":" — an id the model-id rule reads as Gemini
+    emotionEngineState.fallbackEngine = 'local';
+    const chapter = (chapterId: number, base: number) =>
+      Array.from({ length: 12 }, (_, i) => ({ id: base + i, chapterId, characterId: 'narrator', text: 'C'.repeat(800) }));
+    writeBook([...chapter(1, 100), ...chapter(2, 200)]);
+    const callsByChapter = new Map<number, number>();
+    let switched = false;
+    runEmotion.mockImplementation(async (_m: string, chapterId: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      callsByChapter.set(chapterId, (callsByChapter.get(chapterId) ?? 0) + 1);
+      if (!switched) {
+        switched = true;
+        call.onFallback?.({ reason: 'switched' });
+      }
+      return { annotations: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+      expect(callsByChapter.get(1)).toBe(1); // sized for the primary, before the switch
+      expect(callsByChapter.get(2)).toBeGreaterThan(1); // sized for the target, after it
+    } finally {
+      emotionEngineState.fallbackModel = null;
+      emotionEngineState.fallbackEngine = null;
     }
   });
 });

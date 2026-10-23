@@ -31,24 +31,32 @@ afterAll(() => {
   settings._resetUserSettingsCache();
 });
 
-describe('PUT /api/config — phase-model and ollama-model overrides (#3084 P23)', () => {
-  it.each(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'])(
-    /* #3084 A3/A4 (re-pin to 80be2f1d) — analyzer.ollama.model is a THIRD
-       refused knob now: A3 makes it Advanced-editable and read at runtime
-       (getResolvedOllamaModel), so a saved endpoint id there would reach an
-       Ollama probe exactly like a phase knob would. */
-    'refuses an endpoint model id for %s and writes nothing',
+describe('PUT /api/config — phase-model overrides (#3084 PR 3d)', () => {
+  it.each(['analyzer.phase0.model', 'analyzer.phase1.model'])(
+    'accepts an endpoint model id for %s and saves it',
     async (key) => {
       const res = await request(app).put('/api/config').send({ [key]: 'openai:lab::qwen3:30b' });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe(`${key}: OpenAI-compatible endpoint models cannot be selected in this build.`);
-      expect((await settings.readUserSettings()).configOverrides[key]).toBeUndefined();
+      expect(res.status).toBe(200);
+      expect(res.body.applied).toEqual([key]);
+      expect((await settings.readUserSettings()).configOverrides[key]).toBe('openai:lab::qwen3:30b');
     },
   );
 
+  /* 3a's row, kept verbatim: analyzer.ollama.model is never lifted. */
+  it('refuses an endpoint model id for analyzer.ollama.model and writes nothing', async () => {
+    const res = await request(app).put('/api/config').send({ 'analyzer.ollama.model': 'openai:lab::qwen3:30b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('analyzer.ollama.model: An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.');
+    expect((await settings.readUserSettings()).configOverrides['analyzer.ollama.model']).toBeUndefined();
+  });
+
+  /* 3d.4a row 7 (#3707): the tag goes through the one PERMANENTLY refused knob —
+     a plain Ollama tag is not an endpoint id, so it still saves; a broadened
+     isEndpointId (v.includes(':')) refuses it here and this case goes red. */
   it('still saves an Ollama tag that starts with openai:', async () => {
-    const res = await request(app).put('/api/config').send({ 'analyzer.phase0.model': 'openai:latest' });
+    const res = await request(app).put('/api/config').send({ 'analyzer.ollama.model': 'openai:latest' });
     expect(res.status).toBe(200);
-    expect(res.body.applied).toEqual(['analyzer.phase0.model']);
+    expect(res.body.applied).toEqual(['analyzer.ollama.model']);
+    expect((await settings.readUserSettings()).configOverrides['analyzer.ollama.model']).toBe('openai:latest');
   });
 });

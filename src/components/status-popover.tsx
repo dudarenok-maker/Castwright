@@ -77,6 +77,7 @@ interface StatusPopoverProps {
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;
+    fallbackReason?: string;
   } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
@@ -175,7 +176,7 @@ function SubstageRow({
       <SubstageTimer state={analysisSubstage.activityState} since={analysisSubstage.activitySince} />
       {analysisSubstage.fallbackActive && (
         <span data-testid="substage-fallback-note" className="text-xs text-magenta">
-          Switched to Gemini — Ollama unreachable
+          {analysisSubstage.fallbackReason ?? 'Switched to the fallback analyzer'}
         </span>
       )}
     </div>

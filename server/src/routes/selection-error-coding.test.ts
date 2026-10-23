@@ -224,7 +224,7 @@ describe('every selection call site codes a missing endpoint after the pre-run c
       res: { end: () => {} } as unknown as import('express').Response,
       keepAlive,
     });
-    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-selection-coding-test', fallbackModel: null };
+    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-selection-coding-test', fallbackModel: null, fallbackEngine: null };
     try {
       await runMainAnalyzerJob(job, getManuscript(id) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
       expect(events.find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });

@@ -332,6 +332,7 @@ const ANALYZER_LOCAL_READY: AnalyzerDiagnosisInput = {
   expectedModel: 'qwen3.5:9b',
   pullable: ['qwen3.5:9b'],
   geminiKeySet: true,
+  defaultEndpointConfigured: false,
 };
 
 describe('diagnoseAnalyzer', () => {
@@ -362,9 +363,18 @@ describe('diagnoseAnalyzer', () => {
     const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'gemini', geminiKeySet: true });
     expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
   });
+  it('#3084 — openai engine passes when the default model names a saved endpoint, without needing Ollama', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'openai', ollamaReachable: false, defaultEndpointConfigured: true });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+  it('#3084 — openai engine fails endpoint-missing with a Model Manager action otherwise', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'openai', defaultEndpointConfigured: false });
+    expect(r).toMatchObject({ status: 'fail', cause: 'endpoint-missing' });
+    expect(r.action).toMatchObject({ kind: 'navigate', href: '#/models' });
+  });
 });
 
-const base = { expectedModel: 'qwen3.5:4b', pullable: ['qwen3.5:4b', 'llama3.1:8b'], ollamaError: null };
+const base = { expectedModel: 'qwen3.5:4b', pullable: ['qwen3.5:4b', 'llama3.1:8b'], ollamaError: null, defaultEndpointConfigured: false };
 
 describe('diagnoseAnalyzer tri-state', () => {
   // engine = gemini

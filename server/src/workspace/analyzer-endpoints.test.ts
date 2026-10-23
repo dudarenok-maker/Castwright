@@ -237,6 +237,12 @@ describe('findEndpointReferences', () => {
     ]);
   });
 
+  it('counts the analyzer fallback target (#3084 P30)', () => {
+    const settings = { ...DEFAULT_USER_SETTINGS, configOverrides: { 'analyzer.fallback.target': 'openai:lab::m' } };
+    expect(findEndpointReferences(settings, 'lab')).toEqual(['Advanced setting "analyzer.fallback.target"']);
+    expect(findEndpointReferences({ ...settings, configOverrides: { 'analyzer.fallback.target': 'gemini' } }, 'lab')).toEqual([]);
+  });
+
   /* Guard: a model-id setting added later (e.g. by the #3141 chain) must be
      classified here, or deleting an endpoint could orphan it silently. */
   it('every user-settings field and analyzer-models knob that can hold a model id is classified', () => {
@@ -261,7 +267,9 @@ describe('findEndpointReferences', () => {
       'analyzer.gemini.voiceStyleModel', // Gemini id
       'analyzer.personaGeneration.localModel', // Ollama tag
     ]);
-    const knobs = KNOBS.filter((k) => k.group === 'analyzer-models' && /(\.model|Model|\.engine)$/.test(k.key));
+    const knobs = KNOBS.filter(
+      (k) => k.group === 'analyzer-models' && (/(\.model|Model|\.engine)$/.test(k.key) || k.type === 'analyzer-engine'),
+    );
     for (const k of knobs) {
       expect(
         (MODEL_ID_CONFIG_KNOBS as readonly string[]).includes(k.key) || KNOB_EXCLUDED.has(k.key),

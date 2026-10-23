@@ -4,7 +4,7 @@
    select dispatches saveAccountSettings with the new defaultThemePreference. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { accountSlice } from '../../store/account-slice';
@@ -174,21 +174,24 @@ describe('StepDefaults', () => {
     });
   });
 
-  /* #3084 PR 3a — the picker can't render an endpoint option yet (3c/3d add
-     that), and the server refuses an endpoint id in defaultAnalysisModel
-     (400), so the handler must not save one at all: it returns before the
-     local state update and before any dispatch. */
-  it('an endpoint id (simulated — unreachable from this picker today) is not saved at all', async () => {
+  /* #3084 PR 3d — endpoint ids are now selectable (3d.4/3d.4a lift the P23
+     refusals), so picking one saves analysisEngine=openai like any other id.
+     The picker still can't render an endpoint option on its own (3c/3d add
+     that elsewhere); this simulates one being present in the local list. */
+  it('picking an endpoint id saves analysisEngine=openai', async () => {
     renderStep({
       defaultAnalysisModel: 'gemma-4-31b-it',
       localAnalyzerModels: [{ name: 'openai:lab::qwen3:30b' }],
     });
     const select = screen.getByLabelText(/analysis model/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'openai:lab::qwen3:30b' } });
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => {
+      expect(putUserSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultAnalysisModel: 'openai:lab::qwen3:30b',
+          analysisEngine: 'openai',
+        }),
+      );
     });
-    expect(putUserSettingsMock).not.toHaveBeenCalled();
-    expect(select.value).toBe('gemma-4-31b-it');
   });
 });

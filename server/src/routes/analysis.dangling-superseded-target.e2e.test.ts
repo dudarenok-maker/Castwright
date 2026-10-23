@@ -180,7 +180,7 @@ function buildPhase1Analyzer(): Analyzer {
 }
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 let workspaceRoot: string;

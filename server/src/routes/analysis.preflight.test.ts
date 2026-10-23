@@ -152,6 +152,14 @@ describe('POST /api/manuscripts/:id/analysis — pre-run checks (#3084)', () => 
       expect.objectContaining({ kind: 'error', code: 'unknown', message: expect.stringContaining('misconfigured engine') }),
     );
   });
+
+  it('a saved openai engine whose default model is not an endpoint id fails with a code before selection (P14)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b', analyzerEndpoints: [] });
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({});
+    expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
 });
 
 /* #3084 P14 + A3 + #3004 — the double-checked dispatch. A reload joins a live job before any
@@ -166,7 +174,7 @@ describe('analysis POSTs — digest read on the new-job path only, live job re-c
     return { promise, resolve };
   }
   /* No case reaches an analyzer call, so selection never has to build a real analyzer. */
-  const stubSelection = () => ({ analyzer: {}, engine: 'local', model: 'qwen3.5:4b', fallbackModel: null });
+  const stubSelection = () => ({ analyzer: {}, engine: 'local', model: 'qwen3.5:4b', fallbackModel: null, fallbackEngine: null });
   /* Each POST selects phase 0 once per job it creates, and nothing else selects phase 0
      (runMainAnalyzerJob selects phase 1 only, and only after its first await). */
   const phase0Selections = () => selectSpy.mock.calls.filter(([opts]) => (opts as { phase: string }).phase === 'phase0').length;

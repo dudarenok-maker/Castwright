@@ -94,6 +94,37 @@ export class AnalyzerTruncatedError extends Error {
   }
 }
 
+/* #3084 P30 — a prompt too large for the fallback target, refused before it was sent, so it is never
+   truncated on input. Thrown only for passes whose caller does not split; those that split get an
+   AnalyzerTruncatedError instead. Not a subclass of either, and never retried: nothing was sent. */
+export class AnalyzerTargetInputTooLargeError extends Error {
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    readonly targetLabel: string,
+    readonly limitTokens: number,
+    readonly family: 'context' | 'requestCap',
+  ) {
+    super(`prompt is larger than the fallback target ${targetLabel} can take (${family === 'context' ? 'context' : 'per-request cap'} ${limitTokens} tokens)`);
+    this.name = 'AnalyzerTargetInputTooLargeError';
+  }
+}
+
+/* #3084 P30 — what the fallback guard throws for a pass whose caller splits: a truncation, so the caller
+   splits and retries each half, carrying the refusal it stands for. */
+export class TargetInputOverBudgetError extends AnalyzerTruncatedError {
+  constructor(readonly refusal: AnalyzerTargetInputTooLargeError) {
+    super(refusal.transport, 'input-over-target-budget', 0);
+    this.name = 'TargetInputOverBudgetError';
+  }
+}
+
+/** A splitting caller's give-up rethrow: a target-budget truncation that cannot split further escapes as
+    the refusal it stands for, so it classifies with that copy and never reads as "response truncated". */
+export function targetInputTooLargeOr(err: unknown): unknown {
+  return err instanceof TargetInputOverBudgetError ? err.refusal : err;
+}
+
 /* Raised by runner/finish.ts when the Gemini transport reports a stream that finished with ZERO text — the
    signature of a content-filter block. On a `gemini-*` model the usual cause is
    RECITATION (Google refuses memorised/copyrighted source) or SAFETY; the model
@@ -202,17 +233,30 @@ const ENDPOINT_SOURCE_LABEL: Record<'settings' | 'env' | 'run-pick' | 'persona',
   persona: 'the persona generation engine',
 };
 
-/** A model id names an OpenAI-compatible endpoint this build cannot run: until
-    PR 3d every endpoint id (P23), from PR 3d an id whose endpoint is not in
-    saved settings. Thrown by selection (PR 3a) and PR 3c's pre-run checks,
-    before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b). */
+/** A model id names an OpenAI-compatible endpoint that is not configured: from
+    PR 3d, an id whose endpoint is not in saved settings (P23; before 3d, every
+    endpoint id). Thrown by selection (PR 3a) and PR 3c's pre-run checks,
+    before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b).
+
+    `reason` says WHY, so the copy is true in each case it fires in: `not-saved` (the endpoint is not in
+    saved settings, e.g. deleted), `engine-mismatch` (selectAnalyzer's deliberate P23 refusal: the
+    endpoint IS saved as the default analysis model but the analyzer engine is Ollama, and the run named
+    no model of its own) or `not-an-endpoint` (the reverse: the analyzer engine is OpenAI-compatible but
+    the model is an Ollama tag or a Gemini id, not an endpoint id; `endpointId` then carries that model). */
 export class AnalyzerEndpointMissingError extends Error {
   readonly code = 'ANALYZER_ENDPOINT_MISSING';
   constructor(
     readonly endpointId: string,
     readonly source: 'settings' | 'env' | 'run-pick' | 'persona',
+    readonly reason: 'not-saved' | 'engine-mismatch' | 'not-an-endpoint' = 'not-saved',
   ) {
-    super(`Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) cannot be used for analysis yet.`);
+    super(
+      reason === 'engine-mismatch'
+        ? `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is saved as the default analysis model, but the analyzer engine is not set to OpenAI-compatible, so a run with no model of its own cannot use it.`
+        : reason === 'not-an-endpoint'
+          ? `The analyzer engine is OpenAI-compatible, but the model "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not an endpoint model, so there is no endpoint to run it on.`
+          : `Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) is not configured (it may have been deleted).`,
+    );
     this.name = 'AnalyzerEndpointMissingError';
   }
 }

@@ -5443,23 +5443,19 @@ components:
             health probe.
         analysisEngine:
           type: string
-          enum: [local, gemini]
+          enum: [local, gemini, openai]
           description: |
-            Analyzer dispatch. `local` routes through OllamaAnalyzer (with
-            Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
-            allowCloudFallback is on, AND the local daemon is unreachable).
-            `gemini` always goes direct. The ANALYZER env no longer selects
+            Analyzer dispatch. `local` routes through OllamaAnalyzer (falling
+            back, one hop, to the analyzer.fallback.target config knob when the
+            daemon is unreachable). `gemini` always goes direct. `openai` routes through the
+            OpenAI-compatible endpoint named by `defaultAnalysisModel` (an `openai:<endpoint>::<model>` id;
+            saving such a model also saves this value). The ANALYZER env no longer selects
             the engine. See server/src/analyzer/index.ts selectAnalyzer.
         allowCloudFallback:
           type: boolean
           description: |
-            Opt-out cloud-fallback gate. When engine=local and a Gemini key is
-            set, the analyzer falls back to Gemini iff the local daemon is
-            unreachable — but only when this is true. Default true (non-
-            breaking: existing installs keep today's behaviour). Turn OFF to
-            keep analysis strictly local: no cloud fall-through even on a local
-            outage. Resolved as the saved value (default true), with
-            ANALYZER_ALLOW_CLOUD_FALLBACK=0 as a pre-cache under-ride only.
+            Legacy (#3084). No UI writes it. While the analyzer.fallback.target
+            config knob is unset, false reads as "off"; otherwise it is ignored.
         ollamaUrl:
           type: string
           readOnly: true
@@ -5846,7 +5842,7 @@ components:
             The server also auto-latches this on any genuine change to
             defaultTtsModelKey.
         sidecarUrl: { type: string }
-        analysisEngine: { type: string, enum: [local, gemini] }
+        analysisEngine: { type: string, enum: [local, gemini, openai] }
         allowCloudFallback: { type: boolean }
         workspaceDirOverride:
           type: string
@@ -6573,6 +6569,18 @@ components:
         phaseId: { type: integer, minimum: 0 }
         progress: { type: number, minimum: 0, maximum: 1 }
         label: { type: string }
+        analysisEngine:
+          type: string
+          enum: [local, openai, gemini]
+          description: |
+            Present only once the run has switched to a fallback target. The run's combined engine:
+            whoever holds a card across both phases (Ollama over an endpoint over Gemini) — the same
+            value the cold-boot snapshot reports. Lets a live client follow the switch.
+        analysisGpu:
+          type: string
+          description: |
+            Present only with `analysisEngine`, and only when an endpoint target took over: the card
+            tag that target holds (`none` | `any` | `cuda:N`).
 
     AnalyseWarningEvent:
       type: object
@@ -9770,7 +9778,7 @@ components:
              sidecar-blocked, no-engine-installed, weights-missing,
              cannot-confirm-engine, package-broken, ffmpeg-missing,
              ffprobe-missing, both-missing, ffmpeg-too-old, ollama-unreachable,
-             model-not-pulled, no-gemini-key, pass]
+             model-not-pulled, no-gemini-key, endpoint-missing, pass]
 
     BlockerActionKind:
       type: string

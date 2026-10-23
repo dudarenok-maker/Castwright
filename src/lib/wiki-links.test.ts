@@ -65,4 +65,21 @@ describe('wiki-links', () => {
     expect(SUPPORT_LINKS.issues).toBe(`${REPO_BASE}/issues`);
     expect(SUPPORT_LINKS.discussions).toBe(`${REPO_BASE}/discussions`);
   });
+
+  it('the endpoints page carries every section the app and the overflow fixes link to, one section per server, and no unverified placeholder (#3084 P33)', () => {
+    const page = readFileSync(resolve(wikiDir, `${ADMIN_WIKI.analyzerEndpoints}.md`), 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout (autocrlf) hands back CRLF
+    for (const heading of ['## The fields', '## Servers', '## Fallback', '## Chunk size', '## When a model thinks past its output limit', '## Troubleshooting']) {
+      expect(page, heading).toContain(`
+${heading}
+`);
+    }
+    for (const server of ['llama.cpp (llama-server)', 'llama-swap', 'LM Studio', 'vLLM', 'LiteLLM', 'OpenRouter']) {
+      expect(page, server).toContain(`
+### ${server}
+`);
+    }
+    expect(page).not.toMatch(/verify at implementation/i);
+    const codeBlocks = (page.match(/^```/gm) ?? []).length / 2;
+    expect((page.match(/^_Checked against .+ on \d{4}-\d{2}-\d{2}\._$/gm) ?? []).length).toBeGreaterThanOrEqual(codeBlocks);
+  });
 });

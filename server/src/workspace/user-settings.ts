@@ -229,7 +229,7 @@ function migrateLegacyAnalyzerModelFields(raw: unknown): unknown {
 }
 
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
-export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
+export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini', 'openai'] as const;
 export const TTS_MODEL_KEY_VALUES = [
   'kokoro-v1',
   'qwen3-tts-0.6b',
@@ -291,20 +291,16 @@ export const userSettingsSchema = z.object({
      explicitly picked an engine. Optional so legacy files load unchanged. */
   defaultTtsModelKeyExplicit: z.boolean().optional(),
   sidecarUrl: z.string().min(1).max(2000),
-  /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
-     as an opt-out fallback iff GEMINI_API_KEY is set, allowCloudFallback is
-     on, and the local daemon is unreachable — see selectAnalyzer). `gemini`
-     always goes direct. Defaults local (defence-in-depth atop the always-
+  /* Analyzer dispatch. `local` routes through OllamaAnalyzer (falling back,
+     one hop, to analyzer.fallback.target when the daemon is unreachable —
+     see selectAnalyzer). `gemini` always goes direct. Defaults local (defence-in-depth atop the always-
      present DEFAULT); a corrupt value fails the parse and the read path
      falls back to all-DEFAULT (also local) — see getResolvedAnalysisEngine.
      The ANALYZER env var no longer selects the engine. */
   analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES).default('local'),
-  /* Part 1 — opt-out cloud fallback gate. When engine=local and a Gemini key
-     is present, the analyzer wraps Ollama in a FallbackAnalyzer that fails over
-     to Gemini iff the local daemon is unreachable. Default true (non-breaking:
-     existing installs keep today's behaviour). Turn OFF to keep analysis
-     strictly local — no silent (or announced) cloud fall-through. See
-     selectAnalyzer + getResolvedAllowCloudFallback. */
+  /* Legacy (#3084 P30). No UI writes this any more; resolveAnalyzerFallbackTarget
+     reads false as "off" while analyzer.fallback.target is unset. Kept so existing
+     files still parse and a strict-local install stays strict-local. */
   allowCloudFallback: z.boolean().default(true),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Optional folder the export pipeline copies finished audiobooks into,
@@ -1547,38 +1543,20 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
   }
   return out;
 }
-/* #3084 P23 — until PR 3d, no saved selection may name an OpenAI-compatible
-   endpoint. `defaultAnalysisModel` is the only settings field left to check
-   here — `analyzerPhase0Model`/`analyzerPhase1Model` no longer exist on the
-   schema at all (A5) and are unconditionally refused for an unrelated
-   reason by this file's own RETIRED_ANALYZER_FIELDS (routes/user-settings.ts)
-   before this check would ever run. `analyzer.ollama.model` joins the two
-   phase knobs (A3 — it is Advanced-editable and read at runtime now, so a
-   saved endpoint id there would reach an Ollama probe exactly like a phase
-   knob would). Checked on CLIENT input only (the general PUT and
-   PUT /api/config): the schema also parses the file on read, and the
-   override upsert below rewrites the whole overrides map. PR 3d deletes
-   ENDPOINT_ID_REFUSED_FIELDS and narrows ENDPOINT_ID_REFUSED_KNOBS to
-   ['analyzer.ollama.model'] rather than deleting it — that knob keeps its
-   save refusal permanently (coordinator ruling): it is the Ollama tag, so
-   an endpoint id there can never be what the user meant, and this is the
-   only guard that stops one being WRITTEN in the first place (3a.4's
-   getResolvedOllamaModel merely keeps a written one off the wire). The
-   general PUT, PUT /api/config, and this helper therefore all survive PR
-   3d, narrowed to that one knob; only the mock PUT's defaultAnalysisModel
-   block is fully deleted there. */
-export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel'] as const;
-export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
-const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
+/* #3084 P23 — a saved selection may now name an OpenAI-compatible endpoint (PR 3d): the
+   `defaultAnalysisModel` field and the two phase-model knobs. `analyzer.ollama.model` is the one
+   exception, permanently: it is the Ollama tag the local engine sends, so an endpoint id there is
+   refused at save rather than accepted and silently ignored at run time.
+   `config/ollama-resolved.ts`'s `getResolvedOllamaModel` also returns the knob default for such a
+   value — defence in depth, not the only guard. */
+export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.ollama.model'] as const;
+const ENDPOINT_ID_REFUSAL = 'An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.';
 
 export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }> {
   if (!patch || typeof patch !== 'object') return [];
   const p = patch as Record<string, unknown>;
   const isEndpointId = (v: unknown): boolean => typeof v === 'string' && inferEngineFromModelId(v.trim()) === 'openai';
   const out: Array<{ path: string[]; message: string }> = [];
-  for (const field of ENDPOINT_ID_REFUSED_FIELDS) {
-    if (isEndpointId(p[field])) out.push({ path: [field], message: ENDPOINT_ID_REFUSAL });
-  }
   const overrides = p.configOverrides;
   if (overrides && typeof overrides === 'object') {
     for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {
@@ -1857,15 +1835,13 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
     leaking to the `ANALYZER` env var. This deliberately RETIRES `ANALYZER` as
     an engine selector (a stray `ANALYZER=gemini` in an old `.env` is now inert
     for engine choice — the engine is UI/user-settings-driven). `GEMINI_API_KEY`
-    is unaffected (still used for TTS + opt-out cloud fallback).
-    #3084 PR 3a: the return type is the full AnalysisEngine, but the stored
-    enum (ANALYSIS_ENGINE_VALUES) still holds only local|gemini, so the body
-    cannot yield 'openai' until PR 3d widens that enum. */
+    is unaffected (still used for TTS and a gemini fallback target). */
 export function getResolvedAnalysisEngine(): AnalysisEngine {
-  return getCachedUserSettings().analysisEngine === 'gemini' ? 'gemini' : 'local';
+  return getCachedUserSettings().analysisEngine;
 }
 
-/** Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
+/** Legacy (#3084 P30): read only by resolveAnalyzerFallbackTarget.
+    Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
     TRUE (opt-out: existing installs keep today's Ollama→Gemini fallback).
     `ANALYZER_ALLOW_CLOUD_FALLBACK=0` is a legacy PRE-CACHE under-ride only —
     it can force the gate OFF when no user setting is cached yet (e.g. a strict-

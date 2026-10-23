@@ -1596,3 +1596,86 @@ describe('OverrideRow — save-error accessibility (#2209 review "also fix")', (
     );
   });
 });
+
+/* ─── analyzer-engine picker (#3084 P10, P30) ───────────────────────────── */
+
+describe('OverrideRow — analyzer-engine picker', () => {
+  const descriptor = makeDescriptor({
+    key: 'analyzer.fallback.target',
+    label: 'Analyzer fallback',
+    type: 'analyzer-engine',
+    options: ['off', 'local', 'gemini'],
+    default: 'gemini',
+    min: undefined,
+    max: undefined,
+    step: undefined,
+  } as unknown as KnobDescriptor);
+  const models = [{ value: 'openai:lab::qwen3-30b', label: 'Lab box · qwen3-30b' }];
+
+  it('offers off, local, gemini and every endpoint model, and saves the picked endpoint model id', () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'gemini' })} onChange={onChange} onRevert={vi.fn()} analyzerEndpointModels={models} />);
+    const select = screen.getByRole('combobox', { name: 'Analyzer fallback' }) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['off', 'local', 'gemini', 'openai:lab::qwen3-30b']);
+    expect(select.value).toBe('gemini');
+    fireEvent.change(select, { target: { value: 'openai:lab::qwen3-30b' } });
+    expect(onChange).toHaveBeenCalledWith('openai:lab::qwen3-30b');
+  });
+
+  it('shows the saved target by its label when the catalog lists it, and flags it when it does not', () => {
+    const { rerender } = render(
+      <OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'openai:lab::qwen3-30b', source: 'override', overridden: true })} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={models} />,
+    );
+    expect(screen.getByRole('option', { name: 'Lab box · qwen3-30b', selected: true })).toBeInTheDocument();
+    rerender(
+      <OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'openai:gone::qwen3', source: 'override', overridden: true })} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} />,
+    );
+    expect((screen.getByRole('combobox', { name: 'Analyzer fallback' }) as HTMLSelectElement).value).toBe('openai:gone::qwen3');
+    expect(screen.getByRole('option', { name: 'openai:gone::qwen3 (not in the current model list)' })).toBeInTheDocument();
+  });
+
+  it('shows a save refusal inline', async () => {
+    const onChange = vi.fn().mockRejectedValue(new Error('analyzer.fallback.target: gemini needs a Gemini API key. Add one in Model Manager → Server configuration, or pick another target.'));
+    render(<OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'off', source: 'override', overridden: true })} onChange={onChange} onRevert={vi.fn()} analyzerEndpointModels={models} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Analyzer fallback' }), { target: { value: 'gemini' } });
+    expect(await screen.findByText(/gemini needs a Gemini API key/)).toBeInTheDocument();
+  });
+
+  it('is disabled when the knob is set in .env', () => {
+    render(<OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'local', source: 'env', locked: true })} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={models} />);
+    expect(screen.getByRole('combobox', { name: 'Analyzer fallback' })).toBeDisabled();
+  });
+
+  const engineState = (over: Record<string, unknown> = {}) => ({
+    localModel: 'qwen3.5:4b',
+    optionLabels: { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — no API key, fallback inactive' },
+    ...over,
+  });
+
+  it('shows the concrete targets the server labels, and the legacy source note', () => {
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ key: descriptor.key, effective: 'off', analyzerEngine: engineState({ sourceNote: 'Off because the old Model Manager "Cloud fallback" switch was turned off. Pick a target here to replace it.' }) })}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        analyzerEndpointModels={[]}
+      />,
+    );
+    expect(screen.getByRole('option', { name: 'Local Ollama — qwen3.5:4b' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Gemini — no API key, fallback inactive' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Off', selected: true })).toBeInTheDocument();
+    expect(screen.getByTestId('analyzer-engine-source-note')).toHaveTextContent('old Model Manager "Cloud fallback" switch');
+  });
+
+  it('warns, without refusing, when local names an Ollama model that is not installed; says nothing when installed or unknown', () => {
+    const value = makeValue({ key: descriptor.key, effective: 'local', source: 'override', overridden: true, analyzerEngine: engineState() });
+    const { rerender } = render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={['llama3.1:8b']} />);
+    expect(screen.getByTestId('analyzer-engine-local-warning')).toHaveTextContent('qwen3.5:4b is not installed in Ollama');
+    rerender(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={['qwen3.5:4b']} />);
+    expect(screen.queryByTestId('analyzer-engine-local-warning')).toBeNull();
+    rerender(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={null} />);
+    expect(screen.queryByTestId('analyzer-engine-local-warning')).toBeNull();
+  });
+});
+

@@ -36,6 +36,7 @@ import {
   AnalyzerStreamIncompleteError,
   AnalyzerTransportError,
   AnalyzerUnreachableError,
+  AnalyzerTargetInputTooLargeError,
   causeCodeSuffix,
   type TransportKind,
 } from '../analyzer/errors.js';
@@ -571,6 +572,16 @@ function statusToFailureCode(
   return 'unknown';
 }
 
+/* The remediation for an `engine-mismatch` analyzer-endpoint-missing: the endpoint is saved, so the fix is the engine, not a new endpoint. */
+const ENDPOINT_ENGINE_MISMATCH_REMEDIATION =
+  'Set the analyzer engine to OpenAI-compatible (Model Manager, Analyzer engine) so the saved default analysis model is used, ' +
+  'or pick this endpoint model for the run directly.';
+
+/* The remediation for a `not-an-endpoint` analyzer-endpoint-missing: the engine is already OpenAI-compatible, so the fix is the model (or going back to the engine the model belongs to). */
+const ENDPOINT_NOT_AN_ENDPOINT_REMEDIATION =
+  'Pick an endpoint model as the default analysis model (Model Manager, Analysis model), ' +
+  'or change the analyzer engine to the one this model belongs to.';
+
 function withCopy(code: FailureCode, userMessage: string, detail?: string, remediation?: string): AnalysisFailure {
   return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
@@ -670,9 +681,8 @@ export function reasoningOverflowFixes(ctx: {
   } else if (ctx.transport === 'openai' && ctx.endpointId) {
     /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
        stage input fractions. Named by saved name, falling back to the id when the
-       endpoint was deleted after the failure. No wikiPage yet: the endpoints page
-       (F3) lands in PR 3d, which adds it with the page file. No reasoning or payload
-       rows: those are 5a and 5b. */
+       endpoint was deleted after the failure. No reasoning or payload rows: those
+       are 5a and 5b. */
     const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;
     fixes.push(
       { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
@@ -680,12 +690,37 @@ export function reasoningOverflowFixes(ctx: {
       { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
       { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
     );
+    /* #3084 P33 — the endpoints wiki page ships with this PR; this entry links it, and its label names the section. */
+    reads.push({
+      label: 'Read: When a model thinks past its output limit',
+      wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints',
+    });
   }
 
   /* The thinking window (analyzer.gemini.thinkingIdleTimeoutMs) never appears
      in either branch: it bounds silence, not output room, so it cannot fix an
      overflow (F7). */
   return [...fixes, ...reads];
+}
+
+/** #3084 P30 — the settings that let a fallback target take the request. For a context-window
+    target the stage input fractions are no help: the primary's chunk and the target's budget are
+    both min(ceiling, fraction x context x 2), so a smaller fraction never lifts the target's budget
+    above the chunk. Only a bigger window (or no fallback) can; a per-request cap can also be met by
+    smaller chunks. */
+export function targetInputTooLargeFixes(family: 'context' | 'requestCap', transport: TransportKind): AnalysisFailureFix[] {
+  const fixes: AnalysisFailureFix[] = [
+    { label: 'Choose a fallback target with a larger window, or turn the fallback off', settingKey: 'analyzer.fallback.target' },
+  ];
+  if (family === 'requestCap') {
+    fixes.push(
+      { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
+      { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+    );
+  } else if (transport === 'ollama') {
+    fixes.push({ label: "Raise the Ollama target's context (num_ctx)", settingKey: 'analyzer.ollama.numCtx' });
+  }
+  return fixes;
 }
 
 /** #3084 pass-3 — the actionable half of `reasoningOverflowFixes` as one
@@ -882,6 +917,20 @@ export function classifyAnalysisFailure(
       }`,
     );
   }
+  /* #3084 P30 — a request never sent because the fallback target could not take it. Its own copy,
+     under the existing request-rejected code, with no HTTP status: nothing reached a server. */
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    return {
+      code: 'analyzer-request-rejected',
+      userMessage: err.message,
+      remediation:
+        err.family === 'context'
+          ? "Choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), raise the target's served context size, or turn the fallback off, then resume — finished chapters are kept. Lowering the chunk size cannot help here."
+          : 'Lower the chunk size (Advanced Settings → Analyzer chunking: the stage input fractions) or choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), then resume — finished chapters are kept.',
+      detail: `transport=${err.transport} model=${err.model} limit=${err.limitTokens} family=${err.family}`,
+      fixes: targetInputTooLargeFixes(err.family, err.transport),
+    };
+  }
   if (err instanceof AnalyzerReasoningOverflowError) {
     const chapter = ctx?.chapter;
     const chapterLabel = chapter ? (chapter.title ? `chapter "${chapter.title}"` : `chapter ${chapter.id}`) : 'a chapter';
@@ -1029,6 +1078,12 @@ export function classifyAnalysisFailure(
     };
   }
   if (err instanceof AnalyzerEndpointMissingError) {
+    if (err.reason === 'engine-mismatch') {
+      return withCopy('analyzer-endpoint-missing', err.message, undefined, ENDPOINT_ENGINE_MISMATCH_REMEDIATION);
+    }
+    if (err.reason === 'not-an-endpoint') {
+      return withCopy('analyzer-endpoint-missing', err.message, undefined, ENDPOINT_NOT_AN_ENDPOINT_REMEDIATION);
+    }
     return withCopy(
       'analyzer-endpoint-missing',
       `${err.message} Pick another model.`,

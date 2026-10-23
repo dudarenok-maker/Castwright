@@ -306,7 +306,26 @@ describe('StatusPopover', () => {
     expect(screen.queryByTestId('substage-timer')).not.toBeInTheDocument();
   });
 
-  it('shows the fallback note when fallbackActive is set', () => {
+  it('shows the fallback note naming both analyzers when fallbackActive is set', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 10,
+            fallbackActive: true,
+            fallbackReason: 'Ollama unreachable (qwen3.5:4b) — switched to endpoint Lab (qwen3-30b)',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-fallback-note').textContent).toBe(
+      'Ollama unreachable (qwen3.5:4b) — switched to endpoint Lab (qwen3-30b)',
+    );
+  });
+
+  it('falls back to a generic note when an entry has no reason', () => {
     render(
       <StatusPopover
         {...makeProps({
@@ -316,7 +335,7 @@ describe('StatusPopover', () => {
       />,
     );
     expect(screen.getByTestId('substage-fallback-note').textContent).toBe(
-      'Switched to Gemini — Ollama unreachable',
+      'Switched to the fallback analyzer',
     );
   });
 

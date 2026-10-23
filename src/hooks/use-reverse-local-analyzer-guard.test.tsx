@@ -15,6 +15,10 @@ import { Provider } from 'react-redux';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { analysisSlice, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { librarySlice } from '../store/library-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
 import { useReverseLocalAnalyzerGuard } from './use-reverse-local-analyzer-guard';
 import type { LibraryBook } from '../lib/types';
 
@@ -23,6 +27,10 @@ function makeStore(opts: { activeStream: AnalysisStreamSnapshot | null; books?: 
     reducer: {
       analysis: analysisSlice.reducer,
       library: librarySlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
     },
   });
   if (opts.activeStream) {
@@ -189,5 +197,93 @@ describe('useReverseLocalAnalyzerGuard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText(/b_marlow/)).toBeInTheDocument();
+  });
+
+  const endpointSnapshot = (gpu?: string): AnalysisStreamSnapshot => ({ ...liveLocalSnapshot, engine: 'openai', ...(gpu ? { gpu } : {}) });
+
+  it('#3084 — an endpoint run on gpu none never prompts', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('none') });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('#3084 — an endpoint run on a GPU prompts (TTS card unknown → fail closed)', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('cuda:1') });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+  });
+
+  it('#3084 — a cold-boot endpoint snapshot without gpu prompts', () => {
+    const store = makeStore({ activeStream: endpointSnapshot() });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+  });
+
+  it('#3084 wave 3d review pass 4 (J) — a run that started on an off-card endpoint and switched to Ollama prompts without a reload', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('none') });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    /* Before the switch: gpu none never prompts. */
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+    /* The server's next phase event names the run engine after the switch to Ollama. */
+    act(() => {
+      store.dispatch(analysisSlice.actions.applyAnalysisSnapshotTick({ manuscriptId: 'm_marlow', engine: 'local' }));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  /* #3710 F4 — generation uses the SESSION picker (ui.ttsModelKey), not the account default. */
+  const seedDevices = (store: ReturnType<typeof makeStore>) => {
+    const knob = (key: string, effective: string) => ({ key, effective, source: 'override', locked: false, overridden: true });
+    store.dispatch({
+      type: 'config/fetch/fulfilled',
+      payload: {
+        groups: [],
+        descriptors: [],
+        values: { 'tts.kokoro.device': knob('tts.kokoro.device', 'cpu'), 'tts.qwen.device': knob('tts.qwen.device', 'cuda:0') },
+        cudaEnvShadow: false,
+        envCleanupCandidates: [],
+      },
+    });
+  };
+
+  it('#3710 F4 — account default kokoro on cpu, session picker on Qwen cuda:0, endpoint on cuda:0 → prompts', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('cuda:0') });
+    seedDevices(store);
+    store.dispatch({ type: 'account/fetch/fulfilled', payload: { defaultTtsModelKey: 'kokoro-v1', resolvedTtsModelKey: 'kokoro-v1' } });
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+    expect(proceed).not.toHaveBeenCalled();
+  });
+
+  it('#3710 F4 — session picker on cpu Kokoro with a Qwen account default does not prompt for a cuda:0 endpoint', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('cuda:0') });
+    seedDevices(store);
+    store.dispatch({ type: 'account/fetch/fulfilled', payload: { defaultTtsModelKey: 'qwen3-tts-0.6b', resolvedTtsModelKey: 'qwen3-tts-0.6b' } });
+    store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('#3710 F4 — a character pinned to Qwen while the session model is cpu Kokoro fails closed (prompts)', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('cuda:0') });
+    seedDevices(store);
+    store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
+    store.dispatch(castSlice.actions.setCharacters([{ id: 'c1', name: 'Ann', ttsEngine: 'qwen' }] as never));
+    render(<Provider store={store}><Harness onProceed={vi.fn()} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
   });
 });

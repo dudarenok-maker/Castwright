@@ -12,12 +12,15 @@ Under the hood it's a phased pipeline, not one giant pass: chapter boundaries ar
 
 ## Choosing an analyzer
 
-The model picker on the upload screen groups two kinds of analyzer:
+The model picker on the upload screen groups three kinds of analyzer:
 
 - **Local Ollama (on-device)** — free, private, runs on your own GPU/CPU.
   Whatever tags you've pulled with Ollama show up here automatically.
 - **Gemini / Gemma (cloud)** — Google's free-tier API. Useful on a
   low-VRAM machine, or when you'd rather not tie up local compute.
+- **OpenAI-compatible endpoints** — your own llama.cpp, llama-swap, LM Studio,
+  vLLM or LiteLLM server, or OpenRouter. Add one in Model Manager → Analyzer
+  endpoints; see [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/analysis-and-the-analyzer/02-analyzer-choice-dark.png">

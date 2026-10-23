@@ -2814,7 +2814,7 @@ describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -3408,7 +3408,7 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
   }
 
   function buildSelection(analyzer: Analyzer, model: string, engine: 'local' | 'gemini'): AnalyzerSelection {
-    return { analyzer, engine, model, fallbackModel: null };
+    return { analyzer, engine, model, fallbackModel: null, fallbackEngine: null };
   }
 
   function buildStubJob(manuscriptId: string): AnalysisJob {
@@ -3849,7 +3849,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -4578,7 +4578,7 @@ describe('runMainAnalyzerJob — narrated-speech check log line (#2325/#2342 C4 
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -4768,7 +4768,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function makeBookDir(): string {
@@ -5048,7 +5048,7 @@ describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 287 T1)
       analyzer: analyzer(over),
       engine: 'gemini',
       model: 'm',
-      fallbackModel: null,
+      fallbackModel: null, fallbackEngine: null,
     };
     (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = selection;
     const job = {
@@ -5219,7 +5219,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -5737,7 +5737,7 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -5989,7 +5989,7 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -6248,7 +6248,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -6742,7 +6742,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -6968,7 +6968,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function makeBookDir(): string {
@@ -7586,7 +7586,7 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function makeBookDir(): string {
@@ -7880,7 +7880,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function makeBookDir(): string {
@@ -8094,7 +8094,7 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function makeBookDir(): string {
@@ -8349,7 +8349,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -8914,7 +8914,7 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
   }
 
   function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+    return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
   }
 
   function setPhase1Selection(sel: AnalyzerSelection): void {
@@ -9173,7 +9173,7 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       await runMainAnalyzerJob(
         job,
         undefined as never,
-        { analyzer: {} as never, engine: 'gemini', model: 'test-lang-unset-model', fallbackModel: null },
+        { analyzer: {} as never, engine: 'gemini', model: 'test-lang-unset-model', fallbackModel: null, fallbackEngine: null },
         {
           requestedFresh: false,
           allowStage1Shrink: true,
@@ -9233,7 +9233,7 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       await runSubsetAnalyzerJob(
         job,
         undefined as never,
-        { analyzer: {} as never, engine: 'gemini', model: 'test-lang-unset-model', fallbackModel: null },
+        { analyzer: {} as never, engine: 'gemini', model: 'test-lang-unset-model', fallbackModel: null, fallbackEngine: null },
         undefined as never,
         undefined as never,
         true,
@@ -9326,7 +9326,7 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
     g3004.__analysis_test_phase0_selection = {
       engine: 'gemini',
       model: 'stub-3004',
-      fallbackModel: null,
+      fallbackModel: null, fallbackEngine: null,
       analyzer: {
         runStage1: () => Promise.reject(new Error('not used')),
         runStage1Chapter: (_id: string, _ch: number, _prompt: string, call: StageCall) => {
@@ -9619,7 +9619,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       analyzer: phase1,
       engine: 'gemini',
       model: 'm1',
-      fallbackModel: null,
+      fallbackModel: null, fallbackEngine: null,
     } satisfies AnalyzerSelection;
     if (opts.saveHook) g.__p286_save_hook = opts.saveHook;
     const events: Array<{ kind: string; [k: string]: unknown }> = [];
@@ -9653,7 +9653,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       await runMainAnalyzerJob(
         job,
         getManuscript(book.manuscriptId)! as never,
-        { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null },
+        { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null, fallbackEngine: null },
         { requestedFresh: opts.fresh ?? false, allowStage1Shrink: true, requestedModel: undefined },
       );
     } finally {
@@ -10088,8 +10088,8 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
         await runSubsetAnalyzerJob(
           job,
           record as never,
-          { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null },
-          { analyzer: phase1, engine: 'gemini', model: 'm1', fallbackModel: null },
+          { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null, fallbackEngine: null },
+          { analyzer: phase1, engine: 'gemini', model: 'm1', fallbackModel: null, fallbackEngine: null },
           record.chapterHints.filter((c) => targets.includes(c.id)),
           false,
         );

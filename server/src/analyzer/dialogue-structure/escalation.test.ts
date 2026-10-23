@@ -13,7 +13,7 @@ import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../fold-minor-cast.js';
 import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AnalyzerReasoningOverflowError } from '../errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTargetInputTooLargeError, AnalyzerUnreachableError } from '../errors.js';
 import { GEMINI_RETRY_POLICY } from '../runner/retry-policy.js';
 import { StageRunner, identitySchemaAdapter } from '../runner/stage-runner.js';
 import { TransportAnalyzer } from '../runner/transport-analyzer.js';
@@ -826,5 +826,31 @@ describe('escalateFlaggedWindows — a reasoning overflow stops further windows 
     expect(second.attempted).toBe(0);
     expect(chapterOne.flags).toHaveLength(4); // the skipped window leaves every flag intact
     expect(chapterTwo.flags).toHaveLength(4);
+  });
+});
+
+describe('escalateFlaggedWindows — a window refused by the fallback target is skipped (#3084 P30)', () => {
+  function run(err: Error) {
+    const { body, paras, sentences, flags } = buildFixture();
+    const analyzer: Analyzer = { ...fakeAnalyzer(() => null), runAttributionEscalation: vi.fn(async () => Promise.reject(err)) };
+    const promise = escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+    return { promise, flags, sentences };
+  }
+
+  it('skips the window with a warning, applies nothing, and keeps the flags', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const refusal = new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context');
+    const { promise, flags } = run(refusal);
+    const outcome = await promise;
+    expect(outcome.applied).toBe(0);
+    expect(outcome.attempted).toBeGreaterThan(0);
+    expect(flags).toHaveLength(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(refusal.message));
+    warn.mockRestore();
+  });
+
+  it('any other error still throws', async () => {
+    const { promise } = run(new AnalyzerUnreachableError('connect ECONNREFUSED', 'ollama'));
+    await expect(promise).rejects.toBeInstanceOf(AnalyzerUnreachableError);
   });
 });

@@ -256,8 +256,8 @@ export const uiSlice = createSlice({
       s.stage = { kind: 'admin' };
     },
     /* fs-23 — In-app Model Manager, reached from the Admin view. */
-    openModelManager: (s) => {
-      s.stage = { kind: 'model-manager' };
+    openModelManager: (s, a: PayloadAction<{ endpointId?: string; endpointField?: string } | undefined>) => {
+      s.stage = { kind: 'model-manager', endpointId: a.payload?.endpointId, endpointField: a.payload?.endpointField };
     },
     /* fs-21 — first-run setup wizard, reached on the boot gate or from Account. */
     openSetup: (s) => {

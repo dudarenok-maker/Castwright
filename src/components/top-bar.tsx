@@ -236,6 +236,7 @@ export interface StatusDetail {
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;
+    fallbackReason?: string;
   } | null;
   /** fs-21 wave 4 — shared setup diagnosis (useSetupDiagnosis()), forwarded
       to the popover so it can render the four blocker diagnosis blocks. */

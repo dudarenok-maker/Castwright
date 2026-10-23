@@ -231,6 +231,10 @@ export interface AnalyseOpts {
     progress: number;
     live?: AnalysisLiveInfo;
     model?: string;
+    /** #3084 wave 3d review pass 4 (J) — set only once the run has switched to a fallback target: the
+        run's combined engine and the card an endpoint target holds. The live snapshot follows them. */
+    analysisEngine?: AnalysisEngine;
+    analysisGpu?: string;
   }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
@@ -2889,6 +2893,9 @@ interface AnalysisStreamEvent {
   phaseId?: number;
   progress?: number;
   label?: string;
+  /** `phase` — the run's combined engine and endpoint card after a fallback switch (J). */
+  analysisEngine?: string;
+  analysisGpu?: string;
   response?: AnalyseResponse;
   message?: string;
   code?: string;
@@ -2996,6 +3003,15 @@ function analysisRefusalFromBody(status: number, body: string, codes: readonly s
   return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
 }
 
+/* #3084 wave 3d review pass 4 (J) — the run engine/card a phase event carries after a fallback switch.
+   An engine this client does not know is dropped rather than trusted. Always both keys, so a plain event
+   reads as "no change". */
+function runEngineOf(payload: AnalysisStreamEvent): { analysisEngine: AnalysisEngine | undefined; analysisGpu: string | undefined } {
+  const e = payload.analysisEngine;
+  const known = e === 'local' || e === 'openai' || e === 'gemini' ? e : undefined;
+  return { analysisEngine: known, analysisGpu: known && typeof payload.analysisGpu === 'string' ? payload.analysisGpu : undefined };
+}
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -3077,6 +3093,7 @@ async function realAnalyseManuscript(
           progress: payload.progress,
           live: payload.live,
           model: typeof payload.model === 'string' ? payload.model : undefined,
+          ...runEngineOf(payload),
         });
       }
     } else if (payload.kind === 'log') {
@@ -5802,6 +5819,7 @@ async function realRunAnalysisForChapters(
           progress: payload.progress,
           live: payload.live,
           model: typeof payload.model === 'string' ? payload.model : undefined,
+          ...runEngineOf(payload),
         });
       }
     } else if (payload.kind === 'log') {
@@ -6928,6 +6946,12 @@ export interface SidecarHealth {
   asrEnabled?: boolean;
   asrLoaded?: boolean;
   asrDevice?: string | null;
+  /* #3084 N5 — both are already on the wire (server/src/routes/sidecar-health.ts:540, :548);
+     the frontend type simply stopped omitting them. `qwenDeviceKey` is the concrete "cuda:N" a
+     resident QwenEngine sits on (null when none is resident, or on an older sidecar);
+     `devices` is the per-engine device FAMILY, never a card index. */
+  qwenDeviceKey?: string | null;
+  devices?: { kokoro: string | null; coqui: string | null; qwen: string | null } | null;
   device?: string | null;
 }
 
@@ -7563,6 +7587,14 @@ async function mockUpgradeState(): Promise<UpgradeStatePayload> {
 
 async function mockGetUserSettings(): Promise<UserSettings> {
   await wait(50);
+  /* #3084 P31 e2e — a one-shot seed of dropped endpoint entries, consumed on the first settings
+     read so mockAcknowledgeDroppedEndpointEntries can remove them afterwards. */
+  const seededDrops = (globalThis as { __SEED_DROPPED_ENDPOINT_ENTRIES__?: UserSettings['droppedEndpointEntries'] })
+    .__SEED_DROPPED_ENDPOINT_ENTRIES__;
+  if (seededDrops) {
+    (MOCK_USER_SETTINGS as { droppedEndpointEntries: UserSettings['droppedEndpointEntries'] }).droppedEndpointEntries = seededDrops;
+    delete (globalThis as { __SEED_DROPPED_ENDPOINT_ENTRIES__?: unknown }).__SEED_DROPPED_ENDPOINT_ENTRIES__;
+  }
   return { ...MOCK_USER_SETTINGS };
 }
 
@@ -7624,23 +7656,11 @@ const RETIRED_ANALYZER_FIELDS = [
 
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
-  /* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved
-     selection (server/src/workspace/user-settings.ts endpointModelIdRefusals),
-     with realPutUserSettings' error text. PR 3d deletes this block. Only
-     defaultAnalysisModel — A5 removed the two phase fields from the schema
-     entirely, so the mock (like the server) never sees them here at all. */
-  if (typeof patch.defaultAnalysisModel === 'string' && engineForModelId(patch.defaultAnalysisModel.trim()) === 'openai') {
-    throw new Error(
-      `User settings save failed (400): ${JSON.stringify({
-        error: 'Invalid user settings.',
-        issues: [{ path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
-      })}`,
-    );
-  }
-  /* #3084 P23 — mirrors the server's refusal of an endpoint id in the three
-     ENDPOINT_ID_REFUSED_KNOBS (server/src/workspace/user-settings.ts
-     endpointModelIdRefusals), which runs BEFORE writeUserSettings. */
-  const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
+  /* #3084 P23 — mirrors the server's refusal of an endpoint id in the one
+     surviving ENDPOINT_ID_REFUSED_KNOBS entry (server/src/workspace/user-settings.ts
+     endpointModelIdRefusals), which runs BEFORE writeUserSettings. PR 3d lifted the
+     refusal of defaultAnalysisModel and the two phase-model knobs. */
+  const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.ollama.model'] as const;
   const incomingOverrides = (patch as Record<string, unknown>).configOverrides as Record<string, unknown> | undefined;
   if (incomingOverrides && typeof incomingOverrides === 'object') {
     for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {
@@ -7649,7 +7669,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         throw new Error(
           `User settings save failed (400): ${JSON.stringify({
             error: 'Invalid user settings.',
-            issues: [{ path: ['configOverrides', knob], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
+            issues: [{ path: ['configOverrides', knob], message: 'An OpenAI-compatible endpoint model cannot be used here: this setting is the Ollama model tag.' }],
           })}`,
         );
       }
@@ -9330,7 +9350,10 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
   return {
     groups: MOCK_CONFIG_GROUPS,
     descriptors: MOCK_CONFIG_DESCRIPTORS,
-    values: { ...MOCK_CONFIG_VALUES },
+    values: {
+      ...MOCK_CONFIG_VALUES,
+      ...((globalThis as unknown as { __SEED_CONFIG_VALUES__?: ConfigValues }).__SEED_CONFIG_VALUES__ ?? {}),
+    },
     restartPending: false,
     cudaEnvShadow: false,
     // Mock mode has no real server/.env, so it never has anything to clean.

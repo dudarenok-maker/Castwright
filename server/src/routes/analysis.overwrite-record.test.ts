@@ -181,6 +181,7 @@ const sel = (a: Analyzer): AnalyzerSelection => ({
   engine: 'gemini',
   model: 'gemini-3.6-flash',
   fallbackModel: null,
+  fallbackEngine: null,
 });
 
 function stubAnalyzers(): string[] {

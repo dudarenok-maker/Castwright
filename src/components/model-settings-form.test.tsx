@@ -7,6 +7,10 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
+import { uiSlice } from '../store/ui-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { librarySlice } from '../store/library-slice';
+import { configSlice } from '../store/config-slice';
 import { ModelSettingsForm } from './model-settings-form';
 import { api, type SetupReadiness, type BlockerDiagnosis } from '../lib/api';
 
@@ -18,6 +22,8 @@ vi.mock('../lib/api', () => ({
     getSetupReadiness: vi.fn(),
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
+    getGpuDevices: vi.fn().mockResolvedValue({ devices: [], cpu: true }),
+    previewAnalyzerEndpointModels: vi.fn(),
   },
 }));
 
@@ -43,7 +49,7 @@ function readinessWith(analyzer: BlockerDiagnosis): SetupReadiness {
 
 function renderForm(account: Partial<ReturnType<typeof accountSlice.getInitialState>> = {}) {
   const store = configureStore({
-    reducer: { account: accountSlice.reducer },
+    reducer: { account: accountSlice.reducer, ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, config: configSlice.reducer },
     preloadedState: { account: { ...accountSlice.getInitialState(), ...account } },
   });
   return render(
@@ -117,34 +123,32 @@ describe('ModelSettingsForm — analyzer readiness badge (fe-49 mirror #1641)', 
   });
 });
 
-describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
+describe('ModelSettingsForm — fallback lives in Advanced Settings (#3084 P30)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
   });
 
-  it('defaults the Cloud fallback toggle to ON (opt-out)', async () => {
+  it('has no Cloud fallback row, and the engine sublabel points to Advanced Settings → Analyzer fallback', async () => {
     renderForm();
-    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
+    expect(await screen.findByText(/Advanced Settings → Analyzer fallback/)).toBeInTheDocument();
+    expect(screen.queryByTestId('account-allow-cloud-fallback')).toBeNull();
+    expect(screen.queryByText('Cloud fallback')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Local Ollama (default — on-device)' })).toBeInTheDocument();
   });
 
-  it('turning it off and saving PATCHes allowCloudFallback:false', async () => {
+  it('saving never writes allowCloudFallback', async () => {
     vi.mocked(api.putUserSettings).mockImplementation(
       async (patch) =>
         ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
     );
     renderForm();
-    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
-    fireEvent.click(toggle);
-    expect(toggle.checked).toBe(false);
-
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
-    await waitFor(() => {
-      expect(vi.mocked(api.putUserSettings)).toHaveBeenCalledWith(
-        expect.objectContaining({ allowCloudFallback: false }),
-      );
+    fireEvent.change(await screen.findByPlaceholderText('http://localhost:9000'), {
+      target: { value: 'http://localhost:9001' },
     });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(vi.mocked(api.putUserSettings)).toHaveBeenCalled());
+    expect(vi.mocked(api.putUserSettings).mock.calls[0][0]).not.toHaveProperty('allowCloudFallback');
   });
 
   it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {
@@ -178,6 +182,62 @@ describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
     unmount();
 
     expect(clearTimeoutSpy).toHaveBeenCalledWith(confirmTimeoutId);
+  });
+});
+
+describe('ModelSettingsForm — analysis model and engine move together (#3710 F2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+    vi.mocked(api.putUserSettings).mockImplementation(
+      async (patch) => ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
+    );
+  });
+
+  const LAB = {
+    id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', concurrency: 1, requestCeilingMs: 1_800_000,
+    structuredOutput: 'schema', reasoningStyle: 'not_controllable', reasoning: 'model-default', maxOutputTokens: 0, contextTokens: 32768,
+  };
+
+  it('picking an endpoint model saves analysisEngine: openai with it', async () => {
+    renderForm({
+      analyzerEndpoints: [LAB],
+      analyzerCatalog: {
+        groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab', status: 'ok', models: [{ id: 'openai:lab::qwen3', label: 'qwen3', engine: 'openai', model: 'qwen3', structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 } }] }],
+      },
+    } as never);
+    const select = await screen.findByTestId('account-default-analysis-model');
+    fireEvent.change(select, { target: { value: 'openai:lab::qwen3' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(vi.mocked(api.putUserSettings)).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.putUserSettings).mock.calls[0][0]).toMatchObject({
+      defaultAnalysisModel: 'openai:lab::qwen3',
+      analysisEngine: 'openai',
+    });
+  });
+});
+
+describe('ModelSettingsForm — analyzer picker group keys (#3710 M4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+  });
+
+  it('an endpoint named "Ollama" does not collide with the built-in Ollama group', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderForm({
+        analyzerEndpoints: [{ id: 'ollama', name: 'Ollama', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', concurrency: 1, requestCeilingMs: 1_800_000, structuredOutput: 'schema', reasoningStyle: 'not_controllable', reasoning: 'model-default', maxOutputTokens: 0, contextTokens: 32768 }],
+        analyzerCatalog: {
+          groups: [{ kind: 'endpoint', id: 'ollama', label: 'Ollama', status: 'ok', models: [{ id: 'openai:ollama::qwen3', label: 'qwen3', engine: 'openai', model: 'qwen3', structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 } }] }],
+        },
+      } as never);
+      await screen.findByTestId('account-default-analysis-model');
+      const duplicateKeyWarnings = errors.mock.calls.filter((c) => String(c[0]).includes('same key'));
+      expect(duplicateKeyWarnings).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 

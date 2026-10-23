@@ -168,7 +168,7 @@ function buildPhase1Analyzer(): Analyzer {
 }
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
-  return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  return { analyzer, engine: 'gemini', model, fallbackModel: null, fallbackEngine: null };
 }
 
 describe('runMainAnalyzerJob — the recording boundary refuses a retirement naming a live cast id (#2040 Wave 2 final review, finding 1(b))', () => {

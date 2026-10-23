@@ -820,6 +820,33 @@ describe('capacity-aware admission retry (vram-aware placement, Task 8b)', () =>
     expect(result.pcm.equals(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
   });
 
+  it('#3084 — passes the injected evictEndpoints through to the capacity loop', async () => {
+    let calls = 0;
+    stubFetch(async () => {
+      calls += 1;
+      return calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
+    });
+    const evictEndpoints = vi.fn(async () => ({ attempted: 0, unloaded: 0 }));
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      /* #3084 deviation from the plan's literal text (isAnalysisInFlight: () => false): with
+         analyzerEvictWouldHelp always true and Ollama not busy, Ollama's own lever (unmodified,
+         capacity-retry.ts:278-282) wins the first denial and evictEndpoints is never reached —
+         the same reason the sibling capacity-retry.test.ts case uses isAnalysisInFlight: () =>
+         true to force the endpoint lever. Flagged in the completion comment; no anchor moved. */
+      isAnalysisInFlight: () => true,
+      evictEndpoints,
+      capacityPollMs: 1,
+      maxCapacityAttempts: 5,
+    });
+    await provider.synthesize(SYNTH_INPUT);
+    expect(evictEndpoints).toHaveBeenCalledWith('cuda:0');
+  });
+
   it('(c) noCapacity 503 while analysis is in flight does NOT evict; it polls and a later 200 succeeds', async () => {
     let calls = 0;
     stubFetch(async () => {

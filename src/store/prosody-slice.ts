@@ -42,6 +42,9 @@ export interface SubstageEntry {
   activitySince?: number;
   /** True once the pass has switched Ollama → Gemini mid-run. Idempotent. */
   fallbackActive?: boolean;
+  /** Why the pass switched analyzers (the server's `fallbackReason`); the
+      status popover's switch note renders it. */
+  fallbackReason?: string;
   /** #3435 — background work (the layout's open-book re-run): shown in the
       pill, but never makes the book busy (analysis-substage-selectors). */
   background?: boolean;

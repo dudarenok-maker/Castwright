@@ -317,9 +317,21 @@ export interface AnalyzerDiagnosisInput {
   expectedModel: string;
   pullable: string[];
   geminiKeySet: boolean;
+  /** #3084 — engine 'openai': the default analysis model names a saved endpoint. */
+  defaultEndpointConfigured: boolean;
 }
 
 export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosis {
+  if (input.engine === 'openai') {
+    return input.defaultEndpointConfigured
+      ? diagnosis('pass', 'pass', 'The analyzer uses an OpenAI-compatible endpoint.', '')
+      : diagnosis(
+          'fail', 'endpoint-missing',
+          'The default analysis model points at an analyzer endpoint that is not configured.',
+          'Add the endpoint in Model Manager → Analyzer endpoints, or pick another default analysis model.',
+          { kind: 'navigate', label: 'Open Model Manager', href: '#/models' },
+        );
+  }
   // ── Gate: byte-identical to today's pass/fail (fallback NOT modeled) ──
   if (input.engine === 'gemini') {
     if (!input.geminiKeySet) {

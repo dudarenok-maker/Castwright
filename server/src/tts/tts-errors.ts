@@ -18,15 +18,16 @@ export class NoCapacityError extends Error {
   readonly deviceKey: string;
   readonly blockers: VramBlocker[];
 
-  constructor(engine: TtsEngine, neededMb: number, deviceKey: string, blockers: VramBlocker[] = []) {
+  constructor(engine: TtsEngine, neededMb: number, deviceKey: string, blockers: VramBlocker[] = [], notes: string[] = []) {
     /* Name what is actually holding the memory (#1839). The generic "free VRAM"
        line is the fallback for when nothing user-controlled is resident — in
-       that case the GPU is genuinely busy and there is no button to press. */
+       that case the GPU is genuinely busy and there is no button to press.
+       #3084: notes name analyzer endpoints Castwright could not unload. */
     const base = `Not enough GPU memory for ${engine} (${neededMb}MB)`;
-    const message = blockers.length
+    const main = blockers.length
       ? `${base}. ${blockers.map((b) => `${b.model} is loaded — ${b.remedy}`).join(' ')}`
       : `${base} — free VRAM or attach a second GPU.`;
-    super(message);
+    super(notes.length ? `${main} ${notes.join(' ')}` : main);
     this.name = 'NoCapacityError';
     this.engine = engine;
     this.neededMb = neededMb;

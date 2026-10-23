@@ -40,4 +40,34 @@ describe('privacy & offline Help topics (local-first mirror, #1793)', () => {
     expect(privacy).toContain('on by default');
     expect(privacy).toMatch(/turns it off|switch it off|switched off/i);
   });
+
+  it('names every path text can leave the machine: Gemini analysis, a remote endpoint, a fallback target when it takes over, cloud escalation, persona generation and Gemini voices (#3084 P30)', () => {
+    const privacy = byId('is-my-data-private')!.body;
+    expect(privacy).toMatch(/Gemini API/);
+    expect(privacy).toMatch(/OpenAI-compatible endpoint/);
+    expect(privacy).toMatch(/OpenRouter/);
+    expect(privacy).toMatch(/fallback target .* when it takes over/);
+    expect(privacy).toMatch(/attribution escalation set to cloud/);
+    expect(privacy).toMatch(/persona generation, whose engine defaults to Gemini/);
+    expect(privacy).toMatch(/Gemini voice/);
+    expect(privacy).toMatch(/Advanced Settings → Analyzer fallback/);
+    expect(privacy).not.toMatch(/The one thing that can leave your machine is/);
+    const offline = byId('does-it-work-offline')!.body;
+    expect(offline).toMatch(/remote OpenAI-compatible endpoint/);
+    expect(offline).toMatch(/attribution escalation set to cloud/);
+    expect(offline).toMatch(/persona generation on Gemini/);
+    expect(offline).toMatch(/Gemini voices/);
+    expect(offline).toContain(
+      'Voice design has its own Persona generation engine in Advanced settings, which defaults to Gemini; set it to Local and a no-key, fully-offline setup can still design a full cast from scratch.',
+    );
+    expect(offline).not.toMatch(/Voice design follows the same analyzer engine/);
+    expect(offline).not.toMatch(/nothing is sent anywhere while Castwright synthesises/);
+    expect(offline).not.toMatch(/is the one part that wants a connection/);
+  });
+
+  it('the Local-ran-on-Gemini topic points at Advanced Settings → Analyzer fallback, not the removed switch (#3084 P30)', () => {
+    const body = byId('picked-local-but-ran-on-gemini')!.body;
+    expect(body).toMatch(/Advanced Settings → Analyzer fallback/);
+    expect(body).not.toMatch(/Cloud fallback/);
+  });
 });

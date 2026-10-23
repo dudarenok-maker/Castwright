@@ -7,6 +7,8 @@ import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState }
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
+import { configSlice, fetchConfig } from '../store/config-slice';
+import { reportedTtsDevicesFrom } from '../lib/analyzer-endpoints';
 import { fetchTourStatus } from '../store/tour-slice';
 import {
   aggregateStreamsByBook,
@@ -584,10 +586,14 @@ export function Layout() {
 
   /* Account hydration — fetch user-level account settings once on mount so
      the avatar can show the persisted display name and book hydration can
-     read defaults from the account slice. Fires once per app boot. */
+     read defaults from the account slice. Fires once per app boot.
+     #3084 P13 — the config slice is hydrated here too, so the GPU guards and the
+     generation hold know the TTS card (tts.<engine>.device) in every session, not only
+     after Advanced Settings was opened. */
   useEffect(() => {
     void dispatch(fetchAccountSettings());
     void dispatch(fetchTourStatus());
+    void dispatch(fetchConfig());
     /* #3570 — endpoint names for every modelLabel() site (status popover, upload picker,
        phase chips) come from the catalog, which is otherwise only loaded by Settings.
        The server caches listings (30 s TTL) and bounds each source with a timeout. */
@@ -1565,6 +1571,15 @@ export function Layout() {
      Generation view's local pill reads the same state via LayoutContext
      (plan 30 G1 consolidation). */
   const ttsLifecycle = useTtsLifecycle();
+  /* #3084 N5 — the one /health poll also tells the GPU guards where an `auto` TTS engine
+     actually runs (a resident Qwen's card, or CPU). Keyed on the serialised value, so a poll
+     that reports the same devices dispatches nothing. */
+  const reportedTtsDevices = reportedTtsDevicesFrom(ttsLifecycle.sidecarHealth ?? null);
+  const reportedTtsDevicesKey = JSON.stringify(reportedTtsDevices);
+  useEffect(() => {
+    dispatch(configSlice.actions.ttsDevicesReported(reportedTtsDevices));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportedTtsDevicesKey]);
   /* Plan 41 — single mount of the theme hook. Writes the resolved
      theme to <html data-theme> on every change (override, account
      hydrate, OS scheme flip). Return value unused at this layer —
@@ -2064,6 +2079,7 @@ export function Layout() {
           activityState: analysisSubstage.activityState,
           activitySince: analysisSubstage.activitySince,
           fallbackActive: analysisSubstage.fallbackActive,
+          fallbackReason: analysisSubstage.fallbackReason,
         }
       : null,
     readiness: setupReadiness,

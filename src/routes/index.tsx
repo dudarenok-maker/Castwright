@@ -32,7 +32,7 @@ import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
-import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
+import { buildAnalyzerPickerGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
 import { Layout, type LayoutContext } from '../components/layout';
 import { PairShell } from '../views/pair';
@@ -446,7 +446,10 @@ function AdminRoute() {
 
 /* fs-23 — In-app Model Manager, reached from the Admin view. */
 function ModelManagerRoute() {
-  useHydrateStage({ kind: 'model-manager' }, []);
+  const [searchParams] = useSearchParams();
+  const endpointId = searchParams.get('endpoint') ?? undefined;
+  const endpointField = searchParams.get('field') ?? undefined;
+  useHydrateStage({ kind: 'model-manager', endpointId, endpointField }, [endpointId, endpointField]);
   return <ModelManagerView />;
 }
 
@@ -1080,7 +1083,9 @@ function ReparseResultBody({
      a pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels
      on mount; empty (offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
-  const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
+  const analyzerEndpoints = useAppSelector((s) => s.account.analyzerEndpoints);
+  const modelGroups = buildAnalyzerPickerGroups({ localTags: localAnalyzerModels, catalog: analyzerCatalog, endpoints: analyzerEndpoints ?? [] });
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
   }, [dispatch]);
@@ -1148,7 +1153,7 @@ function ReparseResultBody({
           className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
           {modelGroups.map((g) => (
-            <optgroup key={g.engine} label={g.label}>
+            <optgroup key={`${g.kind}:${g.id}`} label={g.label}>
               {g.models.map((m) => (
                 <option key={m.id} value={m.id} title={m.hint}>
                   {m.label}

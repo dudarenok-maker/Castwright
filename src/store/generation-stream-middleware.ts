@@ -37,6 +37,8 @@ import { api } from '../lib/api';
 import { buildPreviewStub } from '../lib/build-preview-stub';
 import { enqueueQueueEntries, type EnqueueInput } from './queue-thunks';
 import type { AppDispatch } from './index';
+import { analyzerSharesGenerationDevice, type TtsReportedDevices } from '../lib/analyzer-endpoints';
+import type { ConfigValues, TtsModelKey } from '../lib/types';
 import type { StreamRunner } from './generation-stream-runner';
 import { previewChapterComplete, type ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
@@ -51,10 +53,12 @@ interface StreamableRootState {
   ui: UiState;
   chapters: ChaptersState;
   cast: CastState;
-  /* The enqueue-on-work gate honours the same engine === 'local' rule the
-     reverse-local-analyzer guard enforces: don't auto-start a generation that
-     would compete with a live local analysis for the GPU. */
+  /* The enqueue-on-work gate honours the same card rule the reverse-local-analyzer
+     guard enforces (#3084: Ollama, or an endpoint on the TTS card): don't auto-start a
+     generation that would compete with a live analysis for the GPU. */
   analysis: AnalysisState;
+  account?: { resolvedTtsModelKey?: TtsModelKey; defaultTtsModelKey?: TtsModelKey };
+  config?: { values: ConfigValues; ttsReportedDevices: TtsReportedDevices | null };
   /* queue.paused = true means the user (or the local-analyzer halt) stopped
      the drain, so we must not auto-enqueue more work. */
   queue: QueueState;
@@ -200,7 +204,16 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
       const analysisSnap = after.analysis?.activeStream ?? null;
       if (
         analysisSnap != null &&
-        analysisSnap.engine === 'local' &&
+        analysisSnap.engine !== undefined &&
+        analyzerSharesGenerationDevice({
+          engine: analysisSnap.engine,
+          endpointGpu: analysisSnap.gpu,
+          sessionModelKey:
+            after.ui.ttsModelKey ?? after.account?.resolvedTtsModelKey ?? after.account?.defaultTtsModelKey,
+          characters: after.cast?.characters,
+          values: after.config?.values,
+          reported: after.config?.ttsReportedDevices ?? null,
+        }) &&
         analysisSnap.bookId === stageBookId &&
         analysisSnap.state !== 'paused' &&
         analysisSnap.state !== 'halted'

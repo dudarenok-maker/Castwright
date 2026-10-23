@@ -42,6 +42,7 @@
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
+import type { AnalysisEngine } from '../lib/model-id';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
@@ -185,10 +186,14 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         phaseId,
         progress,
         model,
+        analysisEngine,
+        analysisGpu,
       }: {
         phaseId: number;
         progress: number;
         model?: string;
+        analysisEngine?: AnalysisEngine;
+        analysisGpu?: string;
       }) => {
         dispatch(
           analysisActions.applyAnalysisSnapshotTick({
@@ -198,6 +203,8 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             phaseProgress: progress,
             lastTickAt: Date.now(),
             model,
+            engine: analysisEngine,
+            gpu: analysisGpu,
           }),
         );
       },

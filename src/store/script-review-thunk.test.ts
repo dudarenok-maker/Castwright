@@ -155,6 +155,7 @@ describe('runReviewScript — activity/model fields + streaming heartbeat + Retr
         model: 'qwen3.5:9b',
         engine: 'local',
         fallbackActive: true,
+        fallbackReason: 'ollama unreachable',
         now: expect.any(Number),
       }),
     );
@@ -297,6 +298,7 @@ describe('attachToRunningReview — activity/model fields + streaming heartbeat 
         model: 'qwen3.5:9b',
         engine: 'gemini',
         fallbackActive: true,
+        fallbackReason: 'local unreachable',
       }),
     );
   });

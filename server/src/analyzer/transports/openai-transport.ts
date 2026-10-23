@@ -44,6 +44,7 @@ import { analyzerRateLimiter } from '../rate-limit.js';
 import { appendBounded, BACKOFFS_MS, resolveStreamIdleTimeoutMs } from '../gemini.js';
 import { endpointModelId } from '../model-id.js';
 import { endpointSemaphore, noteEndpointModelUsed } from './endpoint-runtime.js';
+import { registerEndpointCallInFlight } from '../analyzer-concurrency.js';
 import type { AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
@@ -359,22 +360,29 @@ export class OpenAITransport implements ChatTransport {
   }
 
   async send(req: TransportRequest): Promise<TransportResult> {
-    return withTransportRetry(() => this.attempt(req), {
-      model: endpointModelId(this.endpoint.id, this.model),
-      limiter: analyzerRateLimiter,
-      estimatedInputTokens: req.estimatedInputTokens,
-      classifier: OPENAI_RETRY_CLASSIFIER,
-      signal: req.signal,
-      onThrottle: req.call.onThrottle,
-      maxAttempts: 3,
-      maxTotalMs: this.endpoint.requestCeilingMs,
-      backoffsMs: BACKOFFS_MS,
-      /* W1's withTransportRetry requires both: the log prefix and the name in its
-         "retry budget exhausted" error. Neither carries a key. */
-      logTag: `openai:${this.endpoint.id}`,
-      displayName: `Endpoint ${this.endpoint.name}`,
-      recordActualTokens: (r) => r.usage?.inputTokens,
-    });
+    /* P1: a call to an endpoint on a GPU keeps that endpoint busy for the whole call — the
+       semaphore wait, every attempt and the backoff between them — so TTS eviction skips it. */
+    const releaseInFlight = this.endpoint.gpu !== 'none' ? registerEndpointCallInFlight(this.endpoint.id) : () => {};
+    try {
+      return await withTransportRetry(() => this.attempt(req), {
+        model: endpointModelId(this.endpoint.id, this.model),
+        limiter: analyzerRateLimiter,
+        estimatedInputTokens: req.estimatedInputTokens,
+        classifier: OPENAI_RETRY_CLASSIFIER,
+        signal: req.signal,
+        onThrottle: req.call.onThrottle,
+        maxAttempts: 3,
+        maxTotalMs: this.endpoint.requestCeilingMs,
+        backoffsMs: BACKOFFS_MS,
+        /* W1's withTransportRetry requires both: the log prefix and the name in its
+           "retry budget exhausted" error. Neither carries a key. */
+        logTag: `openai:${this.endpoint.id}`,
+        displayName: `Endpoint ${this.endpoint.name}`,
+        recordActualTokens: (r) => r.usage?.inputTokens,
+      });
+    } finally {
+      releaseInFlight();
+    }
   }
 
   /** P15 / P26: warm this endpoint's served limits before the runner reads settings (W2 Task 2.6

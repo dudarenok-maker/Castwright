@@ -1,8 +1,11 @@
 // server/src/config/types.ts
-export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device';
+export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device' | 'analyzer-engine';
 // 'device' is a string knob (validated identically — see resolver's coerceAndValidate
 // default case) whose UI picks from the live GPU list (GET /api/gpu/devices) instead
 // of a free-text box or a fixed enum.
+// 'analyzer-engine' (#3084 P10) is a string knob validated the same way, whose UI picks from
+// its static `options` plus the OpenAI-compatible endpoint models (GET /api/analyzer/models).
+// Each such knob carries its own literal `pattern` for the ids it accepts.
 // 'rebuild' is heavier than a restart: changing the value rebuilds the Python
 // venv (a new accelerator profile = a different torch/ORT install), then restarts
 // the sidecar. Actuated by the Wave-F profile-switch action.
@@ -24,15 +27,14 @@ export interface ConfigKnob {
   min?: number;
   max?: number;
   step?: number;
-  /** For type==='enum'. */
+  /** For type==='enum' (the closed option set), and the static entries of a type==='analyzer-engine' picker. */
   options?: string[];
-  /** For type==='string' (or 'device'). A closed VALUE SHAPE for an
-      otherwise free-text knob — validated case-insensitively against the
-      trimmed input in coerceAndValidate's string/default case. Small,
-      general capability (#2180): a knob with no closed `options` set can
-      still refuse a malformed value ("cuda1") at save time without being
-      forced into an enum with an unbounded option list (e.g. every
-      "cuda:<n>" card index). */
+  /** For type==='string', 'device' or 'analyzer-engine'. A closed VALUE SHAPE for an
+      otherwise free-text knob — tested against the trimmed input in coerceAndValidate's
+      string/default case (resolver.ts) with the pattern's OWN flags: case-sensitive unless
+      the RegExp carries `i`. Small, general capability (#2180): a knob with no closed
+      `options` set can still refuse a malformed value ("cuda1") at save time without being
+      forced into an enum with an unbounded option list (e.g. every "cuda:<n>" card index). */
   pattern?: RegExp;
   apply: ApplyMode;
   risk: Risk;
@@ -69,4 +71,8 @@ export interface KnobValueState {
       `GET /api/config`, rendered as one Advanced Configuration banner rather
       than a duplicated per-row reason. */
   staleReason?: 'cpu_fallback' | 'uuid_unresolved';
+  /** #3084 P30 — only on analyzer.fallback.target (routes/config.ts sets it): display labels for the
+      static options, the Ollama model `local` resolves to, and a note when the value comes from the
+      legacy allowCloudFallback step. */
+  analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string };
 }

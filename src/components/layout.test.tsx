@@ -41,6 +41,8 @@ import { persistenceMiddleware } from '../store/persistence-middleware';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
+import { configSlice } from '../store/config-slice';
+import { ttsDeviceKeyFor } from '../lib/analyzer-endpoints';
 import { spliceSlice } from '../store/splice-slice';
 
 const getBookStateMock = vi.fn();
@@ -137,6 +139,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* Guided-tour boot fetch — resolve to not-completed so the tour slice
          stays inactive (overlay renders null) and the test harness is unaffected. */
       getTourStatus: vi.fn(async () => ({ completedAt: null })),
+      getConfig: vi.fn(async () => ({ groups: [], descriptors: [], values: {}, restartPending: false, cudaEnvShadow: false, envCleanupCandidates: [] })),
       /* MiniPlayer stubs — needed when Layout renders a MiniPlayer (ready stage
          with a current track). Defaults to no-ops so the player mounts cleanly. */
       getChapterAudio: vi.fn(async () => ({
@@ -238,6 +241,7 @@ function makeStore(extraMiddleware: Middleware[] = []) {
       notifications: notificationsSlice.reducer,
       prosody: prosodySlice.reducer,
       scriptReview: scriptReviewSlice.reducer,
+      config: configSlice.reducer,
       splice: spliceSlice.reducer,
     },
   });
@@ -1827,6 +1831,7 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
         engine: 'gemini',
         activityState: 'streaming',
         fallbackActive: true,
+        fallbackReason: 'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.5-flash-lite)',
         now: Date.now(),
       }),
     );
@@ -1853,7 +1858,7 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
     fireEvent.click(pill);
     expect(await findByTestId('substage-engine-model')).toHaveTextContent(/^Gemini ·/);
     expect(await findByTestId('substage-fallback-note')).toHaveTextContent(
-      'Switched to Gemini — Ollama unreachable',
+      'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.5-flash-lite)',
     );
   });
 });
@@ -2654,6 +2659,58 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
     seedBookBInSlices(store);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     await assertMatchWaitsForBookA(store);
+  });
+});
+
+describe('Layout — config hydration on mount (#3084 P13)', () => {
+  it('loads the config slice without Advanced Settings being opened, so the GPU guards know the TTS card', async () => {
+    vi.mocked(api.getConfig).mockResolvedValueOnce({
+      groups: [],
+      descriptors: [],
+      values: { 'tts.kokoro.device': { key: 'tts.kokoro.device', effective: 'cuda:0', source: 'override', locked: false, overridden: true } },
+      restartPending: false,
+      cudaEnvShadow: false,
+      envCleanupCandidates: [],
+    } as never);
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(ttsDeviceKeyFor('kokoro-v1', store.getState().config.values)).toBe('cuda:0'));
+  });
+
+  it('#3084 N5 — the same mount poll feeds the guards the device the sidecar resolved for an auto engine', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      qwenDeviceKey: 'cuda:1',
+      devices: { qwen: 'cuda', kokoro: 'cpu', coqui: null },
+    } as never);
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(store.getState().config.ttsReportedDevices).toEqual({
+        qwenDeviceKey: 'cuda:1',
+        families: { qwen: 'cuda', kokoro: 'cpu', coqui: null },
+      }),
+    );
+    expect(ttsDeviceKeyFor('qwen3-tts-0.6b', store.getState().config.values, store.getState().config.ttsReportedDevices)).toBe('cuda:1');
+    /* getSidecarHealth is sticky in this file (see its own note), so put the default back. */
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({ status: 'unreachable', url: '(test)' });
   });
 });
 

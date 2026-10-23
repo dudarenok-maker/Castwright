@@ -7,12 +7,13 @@
    server's group registry; each section holds OverrideRow cells or, for
    isPrompt knobs, a PromptRow. */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { AnalyzerModelLimits } from '../components/settings/analyzer-model-limits';
+import { DroppedEndpointEntriesBanner } from '../components/settings/dropped-endpoint-entries-banner';
 import { EnvCleanupNotice } from '../components/env-cleanup-notice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -31,6 +32,7 @@ import {
   selectRestartServerPending,
 } from '../store/config-slice';
 import { api } from '../lib/api';
+import { endpointModelOptions } from '../lib/analyzer-engine-options';
 import type {
   GpuDevice,
   KnobDescriptor,
@@ -253,6 +255,17 @@ export function AdvancedView() {
     null,
   );
   const [gpuSplit, setGpuSplit] = useState<AnalyzerGpuSplitResponse | null>(null);
+  // #3084 P10 (D4) — the endpoint-model options and installed Ollama tags that
+  // feed every 'analyzer-engine' picker come from the analyzer catalog Layout
+  // loads into the account slice at boot (fetchAnalyzerCatalog), not from a
+  // per-view fetch. Best-effort: a null catalog (never loaded, or failed) just
+  // leaves the picker with its static entries and the saved value.
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog);
+  const analyzerEndpointModels = useMemo(() => endpointModelOptions(analyzerCatalog), [analyzerCatalog]);
+  const ollamaModels = useMemo(() => {
+    const ollama = analyzerCatalog?.groups.find((g) => g.kind === 'ollama');
+    return ollama?.status === 'ok' ? ollama.models.map((m) => m.id) : null;
+  }, [analyzerCatalog]);
 
   /* #3084 F7 — a run-error's "How to fix" entries deep-link to
      `#/advanced?focus=<knob key>`; AdvancedRoute hydrates that key into
@@ -593,12 +606,15 @@ export function AdvancedView() {
                         // via OverrideRow the same way onChange's does.
                         onRevert={() => dispatch(resetKnob(d.key)).unwrap()}
                         gpuDevices={gpuDevices}
+                        analyzerEndpointModels={analyzerEndpointModels}
+                        ollamaModels={ollamaModels}
                         focused={focusHighlight && d.key === focusKey}
                         rowRef={d.key === focusKey ? focusedRowRef : undefined}
                       />
                     );
                   })}
                   {group.id === 'rate-limits' && <AnalyzerModelLimits />}
+                  {group.id === 'analyzer-models' && <DroppedEndpointEntriesBanner />}
                   {group.id === 'analyzer-models' && account.hydrated && analyzerEngine === 'local' && (
                     <div className="py-3 border-b border-ink/8">
                       <div className="flex items-center gap-2 mb-1">

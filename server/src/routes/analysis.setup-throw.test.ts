@@ -118,7 +118,7 @@ function buildInertAnalyzer(): Analyzer {
 }
 
 function buildSelection(): AnalyzerSelection {
-  return { analyzer: buildInertAnalyzer(), engine: 'gemini', model: 'setup-throw-test-model', fallbackModel: null };
+  return { analyzer: buildInertAnalyzer(), engine: 'gemini', model: 'setup-throw-test-model', fallbackModel: null, fallbackEngine: null };
 }
 
 function buildStubJob(manuscriptId: string, kind: 'main' | 'subset'): AnalysisJob {

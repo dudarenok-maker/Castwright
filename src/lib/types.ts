@@ -138,13 +138,8 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    are available to the slice + Account view even before `openapi:types`
    regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
 export type BackupCadence = 'daily' | 'weekly';
-/* #3084 PR 3a — `analysisEngine` stays on the OpenAPI-generated narrow enum
-   (`'local' | 'gemini'`) here deliberately: it is a persisted/validated field,
-   and nothing can select an endpoint before PR 3d (see the plan's "Which
-   engine-literal sites widen in 3a" table). Widening it to the internal
-   3-value `AnalysisEngine` would let an `'openai'` value flow into a save
-   call with no compile-time check — exactly the gap PR 3d is supposed to
-   close deliberately, not by accident. */
+/* #3084 — `analysisEngine` is the OpenAPI-generated persisted enum (`'local' | 'gemini' | 'openai'`);
+   saving an endpoint model id as the default analysis model saves 'openai' with it. */
 export type UserSettings = components['schemas']['UserSettings'] & {
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
@@ -931,8 +926,10 @@ export interface KnobDescriptor {
   label: string;
   help: string;
   /** 'device' is a string knob whose UI is a dropdown built from GET /api/gpu/devices
-      (plus 'auto'/'cpu') instead of a free-text box. */
-  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device';
+      (plus 'auto'/'cpu') instead of a free-text box. 'analyzer-engine' (#3084 P10) is a string
+      knob whose UI is a dropdown of its static `options` plus the OpenAI-compatible endpoint
+      models from GET /api/analyzer/models. */
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device' | 'analyzer-engine';
   min?: number;
   max?: number;
   step?: number;
@@ -975,6 +972,10 @@ export interface KnobValue {
   overridden: boolean;
   /** Set when `effective` is degraded/unresolved — see StaleReason. */
   staleReason?: StaleReason;
+  /** #3084 P30 — only on analyzer.fallback.target: display labels for the static options, the
+      Ollama model `local` resolves to, and a note when the value comes from the legacy
+      allowCloudFallback step. */
+  analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string };
 }
 
 /** Map of key → KnobValue returned by the config endpoints. */
@@ -1104,7 +1105,9 @@ export type Stage =
   /* fs-23 — In-app Model Manager. Top-level view (like account/admin), reached
      from the Admin view. Consolidates all model install/inventory/residency
      controls that used to live in the Account view. */
-  | { kind: 'model-manager' }
+  /* #3084 P34 — endpointId/endpointField open that endpoint's editor at the field; both are
+     untrusted strings from the URL hash, and the view ignores an unknown one. */
+  | { kind: 'model-manager'; endpointId?: string; endpointField?: string }
   /* fs-21 — first-run setup wizard, reached on the boot gate or from Account. */
   | { kind: 'setup' }
   /* Wave 3 — /about brand page, reached from the Admin view. */
