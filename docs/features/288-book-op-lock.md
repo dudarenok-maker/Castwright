@@ -402,8 +402,10 @@ The frontend already surfaces `error` verbatim.
 - A move is refused for the whole registration.
 - Its `state.json` stamp keeps its absent-refusal (`state-migrate.ts:152-173`) as out-of-process defence.
 
-So it needs no lock against moves. A reparse or replace-manuscript racing a render is no longer possible:
-both are refused with 409 `book_busy` while a long job is registered (#3717).
+So it needs no lock against moves. Reparse and replace-manuscript are closed by #3717: both are refused
+with 409 `book_busy` while a long job is registered. Chapter restructure and chapter exclude remain open:
+restructure is gated only on a running analysis, and exclude deletes chapter audio without checking for a
+running render. Tracked in #3774 (the design decision is owed).
 
 **b. Restructure's unbounded `withBookLock` (`chapters-restructure.ts:72-99`) is deleted.**
 - It is replaced by book-op, with the **10 s budget kept** *(my call)*.
