@@ -70,7 +70,13 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { buildPersistedHints, sha256Hex, writeManuscriptHints } from '../workspace/manuscript-hints.js';
+import {
+  buildHintsEntry,
+  composeHintsFile,
+  readManuscriptHints,
+  sha256Hex,
+  writeManuscriptHints,
+} from '../workspace/manuscript-hints.js';
 import { safeSegment } from '../util/safe-path.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
@@ -322,10 +328,12 @@ async function applyRestructureClaimed(
     /* #3703 -- persist the restructured bodies so a restart does not rebuild
        them from a manuscript that knows nothing about this restructure. Hints
        FIRST, state.json second: if this write fails the restructure answers 500
-       having changed nothing on disk; if it succeeds and the state.json write
-       then fails, the file names chapter uuids state.json lacks, so a reader's
-       staleness check ignores it and the book falls back to a fresh parse --
-       never a body on the wrong chapter. Only ENOENT (no manuscript file, so
+       having changed nothing on disk. The file keeps the entry for the structure
+       state.json holds NOW next to the new one, so if the state.json write then
+       fails, a reader still finds the entry matching the state that landed
+       (staleness is checked per entry, by uuid sequence) -- never a body on the
+       wrong chapter and never a fresh parse against a restructured state.json.
+       Only ENOENT (no manuscript file, so
        the book cannot hydrate after a restart anyway) skips the write. */
     let manuscriptBytes: Buffer | null = null;
     try {
@@ -342,15 +350,23 @@ async function applyRestructureClaimed(
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
     }
     if (manuscriptBytes && aligned) {
+      const sourceSha256 = sha256Hex(manuscriptBytes);
+      /* An unreadable previous file just means no previous entry to keep. */
+      const previousFile = await readManuscriptHints(bookDir).catch(() => null);
       await writeManuscriptHints(
         bookDir,
-        buildPersistedHints({
-          manuscriptId,
-          manuscriptFile: state.manuscriptFile,
-          sourceSha256: sha256Hex(manuscriptBytes),
-          hints: result.hints,
-          stateChapters: result.state.chapters,
-        }),
+        composeHintsFile(
+          buildHintsEntry({
+            manuscriptId,
+            manuscriptFile: state.manuscriptFile,
+            sourceSha256,
+            hints: result.hints,
+            stateChapters: result.state.chapters,
+          }),
+          previousFile,
+          { manuscriptId, manuscriptFile: state.manuscriptFile, chapters: oldChapters },
+          sourceSha256,
+        ),
       );
     }
 

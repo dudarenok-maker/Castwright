@@ -1520,17 +1520,6 @@ async function applyReparse(
        cast / audio / analysis cache / revisions of the book are already gone
        by this point. */
     if (fresh.bookDir !== bookDir) return null;
-    /* #3703 -- drop the persisted restructure (manuscript-hints.json) here:
-       under the `book` lock, the same hold as the chapter-list write and the
-       record swap, so no restructure (which holds `book` across its hints +
-       state writes) can interleave; lock order `book-op` -> `book`, the rm
-       takes no lock. BEFORE the state write, so a failing rm (EPERM/EBUSY)
-       aborts the reparse with state.json untouched instead of leaving new
-       chapters beside an old file; the route's catch curates the error. A
-       reparse that fails after the rm only loses the file, which falls back
-       to a fresh parse -- never a wrong body. Not in the destructive arms
-       above: they run before the moved-book check. */
-    await removeManuscriptHints(fresh.bookDir);
     let undoInstall: (() => Promise<void>) | undefined;
     let newChapters: BookStateJson['chapters'] = [];
     let nextState: BookStateJson | null;
@@ -1576,6 +1565,18 @@ async function applyReparse(
     /* Absent under the lock: the book was deleted after it was located. Nothing
        was installed or written; the caller answers 404. */
     if (!nextState) return null;
+    /* #3703 -- drop the persisted restructure (manuscript-hints.json) now that the
+       new chapter list has landed, still under the `book` lock. AFTER the state
+       write: deleting first would leave a failed state write holding the old
+       (restructured) chapter list with no file to hydrate it from. The delete
+       protects nothing the write does not already cover -- reparsed chapters
+       carry no uuid, so a leftover file can never validate against them -- so it
+       is housekeeping: best-effort, logged and swallowed, never failing a reparse
+       whose cast / audio / cache wipe already happened. Not in the destructive
+       arms above: they run before the moved-book check. */
+    await removeManuscriptHints(fresh.bookDir).catch((err) => {
+      console.warn(`[book-state] ${nextState!.manuscriptId}: could not remove manuscript-hints.json`, err);
+    });
 
     const newExcludedById = new Map<number, boolean>();
     for (const c of newChapters) {

@@ -13,6 +13,17 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 const writeSpy = vi.hoisted(() => ({ fail: false }));
+const stateWriteSpy = vi.hoisted(() => ({ fail: false }));
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  return {
+    ...real,
+    writeStateJsonAtomic: vi.fn(async (...args: Parameters<typeof real.writeStateJsonAtomic>) => {
+      if (stateWriteSpy.fail) throw new Error('state write boom');
+      return real.writeStateJsonAtomic(...args);
+    }),
+  };
+});
 vi.mock('../workspace/manuscript-hints.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/manuscript-hints.js')>();
   return {
@@ -93,7 +104,17 @@ function readHints(): {
   sourceSha256: string;
   chapters: Array<{ id: number; uuid: string; body: string }>;
 } {
-  return JSON.parse(readFileSync(hintsPath(), 'utf8'));
+  /* The newest entry (entries[0]) is the one just written. */
+  const file = JSON.parse(readFileSync(hintsPath(), 'utf8')) as {
+    schema: number;
+    entries: Array<{
+      manuscriptId: string;
+      manuscriptFile: string;
+      sourceSha256: string;
+      chapters: Array<{ id: number; uuid: string; body: string }>;
+    }>;
+  };
+  return { schema: file.schema, ...file.entries[0]! };
 }
 
 function readStateUuids(): string[] {
@@ -129,6 +150,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   writeSpy.fail = false;
+  stateWriteSpy.fail = false;
   seedState();
   seedManuscriptEdits();
   rmSync(hintsPath(), { force: true });
@@ -139,6 +161,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   writeSpy.fail = false;
+  stateWriteSpy.fail = false;
 });
 
 describe('restructure persists manuscript-hints.json (#3703)', () => {
@@ -184,5 +207,32 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
     expect(res.status).toBe(500);
     expect(readFileSync(statePath()).equals(before)).toBe(true);
     expect(existsSync(hintsPath())).toBe(false);
+  });
+
+  it('a failed state.json write after a SECOND restructure still hydrates the structure that landed', async () => {
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(merge.status).toBe(200);
+
+    // The reorder overwrites the hints file, then its state.json write fails.
+    stateWriteSpy.fail = true;
+    const reorder = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(500);
+    stateWriteSpy.fail = false;
+
+    // state.json is still the merged structure (2 chapters, Gamma last).
+    expect(readStateUuids()).toHaveLength(2);
+
+    // A restart: drop the in-memory record and hydrate from disk.
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
+    expect(record?.chapterHints).toHaveLength(2);
+    expect(record!.chapterHints[0]!.body).toContain('Alpha first.');
+    expect(record!.chapterHints[0]!.body).toContain('Beta first.');
+    expect(record!.chapterHints[1]!.body).toContain('Gamma first.');
   });
 });

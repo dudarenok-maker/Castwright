@@ -1,5 +1,5 @@
 /* #3703 part 3 -- reparse / replace-manuscript delete
- * <book>/.audiobook/manuscript-hints.json as part of the chapter-list rebuild,
+ * <book>/.audiobook/manuscript-hints.json after the chapter-list rebuild lands,
  * so a restructure the user discarded cannot come back after a restart.
  * Harness mirrors chapters-restructure.test.ts. */
 
@@ -13,6 +13,30 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 const removeSpy = vi.hoisted(() => ({ fail: false }));
+const stateWriteSpy = vi.hoisted(() => ({ fail: false }));
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  return {
+    ...real,
+    /* Fails the write that rebuilds the chapter list (the mutator changes the
+       chapter count): the mutator runs before any bytes are written, so this is
+       exactly "the state.json write failed". */
+    updateStateJsonLocked: vi.fn(async (...args: Parameters<typeof real.updateStateJsonLocked>) => {
+      const [path, mutate, ...rest] = args;
+      return real.updateStateJsonLocked(
+        path,
+        async (onDisk) => {
+          const next = await mutate(onDisk);
+          if (stateWriteSpy.fail && next && next.chapters.length !== onDisk.chapters.length) {
+            throw new Error('state write boom');
+          }
+          return next;
+        },
+        ...rest,
+      );
+    }),
+  };
+});
 vi.mock('../workspace/manuscript-hints.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/manuscript-hints.js')>();
   return {
@@ -118,6 +142,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   removeSpy.fail = false;
+  stateWriteSpy.fail = false;
   writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
   seedState();
   seedManuscriptEdits();
@@ -129,6 +154,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   removeSpy.fail = false;
+  stateWriteSpy.fail = false;
 });
 
 async function mergeOneAndTwo(): Promise<void> {
@@ -140,19 +166,35 @@ async function mergeOneAndTwo(): Promise<void> {
 }
 
 describe('#3703 part 3 -- reparse / replace-manuscript drop manuscript-hints.json', () => {
-  it('reparse deletes the hints file and a restart hydrates the fresh parse', async () => {
+  it('reparse deletes the hints file once the new chapter list has landed', async () => {
     await mergeOneAndTwo();
 
     const res = await request(app).post(`/api/books/${bookId}/reparse`);
     expect(res.status).toBe(200);
     expect(existsSync(hintsPath())).toBe(false);
-
-    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
-    removeManuscript(MANUSCRIPT_ID); // restart
-    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
-    expect(record?.chapterHints).toHaveLength(3);
     const state = JSON.parse(readFileSync(statePath(), 'utf8')) as { chapters: unknown[] };
     expect(state.chapters).toHaveLength(3);
+  });
+
+  it('a failed state.json write keeps the hints file, so a restart hydrates the restructured book', async () => {
+    await mergeOneAndTwo();
+
+    stateWriteSpy.fail = true;
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    stateWriteSpy.fail = false;
+
+    // state.json still holds the merged structure (2 chapters) ...
+    const state = JSON.parse(readFileSync(statePath(), 'utf8')) as { chapters: unknown[] };
+    expect(state.chapters).toHaveLength(2);
+
+    // ... and a restart hydrates exactly that structure, not a 3-chapter parse.
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
+    expect(record?.chapterHints).toHaveLength(2);
+    expect(record!.chapterHints[0]!.body).toContain('Alpha first.');
+    expect(record!.chapterHints[0]!.body).toContain('Beta first.');
   });
 
   it('replace-manuscript deletes the hints file', async () => {
@@ -168,14 +210,21 @@ describe('#3703 part 3 -- reparse / replace-manuscript drop manuscript-hints.jso
     expect(existsSync(hintsPath())).toBe(false);
   });
 
-  it('a failing remove aborts the reparse before state.json is written', async () => {
+  it('a failing hints remove does not fail the reparse; the leftover file cannot validate', async () => {
     await mergeOneAndTwo();
-    const before = readFileSync(statePath());
-    expect((JSON.parse(before.toString('utf8')) as { chapters: unknown[] }).chapters).toHaveLength(2);
 
     removeSpy.fail = true;
     const res = await request(app).post(`/api/books/${bookId}/reparse`);
-    expect(res.status).toBeGreaterThanOrEqual(500);
-    expect(readFileSync(statePath()).equals(before)).toBe(true);
+    expect(res.status).toBe(200);
+    removeSpy.fail = false;
+
+    const state = JSON.parse(readFileSync(statePath(), 'utf8')) as { chapters: unknown[] };
+    expect(state.chapters).toHaveLength(3);
+    expect(existsSync(hintsPath())).toBe(true);
+
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID); // restart
+    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
+    expect(record?.chapterHints).toHaveLength(3);
   });
 });

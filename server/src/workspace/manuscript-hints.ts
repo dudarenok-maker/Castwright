@@ -6,7 +6,13 @@
    restructure. This file keeps the restructured bodies so a later reader can
    hydrate from them.
 
-   Staleness key: `manuscriptId` + `manuscriptFile` + `sourceSha256` (sha256 of
+   The file holds up to MAX_HINTS_ENTRIES entries, newest first: the structure
+   just written plus the one before it. A restructure writes this file BEFORE
+   state.json, and a failed state.json write leaves the OLD structure on disk;
+   keeping the previous entry means a reader still finds the entry that matches
+   whichever state.json actually landed.
+
+   Staleness key (per entry): `manuscriptId` + `manuscriptFile` + `sourceSha256` (sha256 of
    the manuscript bytes at write time) + each chapter's `uuid`. A reader proves
    the file belongs to the current state.json and manuscript by matching all of
    them. Only the BODY is persisted per chapter; titles, `excluded` and
@@ -23,8 +29,14 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 
 export const MANUSCRIPT_HINTS_SCHEMA = 1;
 
+export const MAX_HINTS_ENTRIES = 2;
+
 export interface PersistedManuscriptHints {
   schema: 1;
+  entries: ManuscriptHintsEntry[];
+}
+
+export interface ManuscriptHintsEntry {
   manuscriptId: string;
   manuscriptFile: string;
   sourceSha256: string;
@@ -39,13 +51,13 @@ export function sha256Hex(buf: Buffer): string {
 /** Pair each hint with the state chapter of the SAME id, in `stateChapters`
     order. A restructure always yields matching counts and a uuid per chapter,
     so any mismatch is an invariant breach and throws. */
-export function buildPersistedHints(args: {
+export function buildHintsEntry(args: {
   manuscriptId: string;
   manuscriptFile: string;
   sourceSha256: string;
   hints: ReadonlyArray<{ id: number; body: string }>;
   stateChapters: ReadonlyArray<{ id: number; uuid?: string }>;
-}): PersistedManuscriptHints {
+}): ManuscriptHintsEntry {
   const { hints, stateChapters } = args;
   if (hints.length !== stateChapters.length) {
     throw new Error(
@@ -61,13 +73,38 @@ export function buildPersistedHints(args: {
     return { id: sc.id, uuid: sc.uuid, body };
   });
   return {
-    schema: MANUSCRIPT_HINTS_SCHEMA,
     manuscriptId: args.manuscriptId,
     manuscriptFile: args.manuscriptFile,
     sourceSha256: args.sourceSha256,
     writtenAt: new Date().toISOString(),
     chapters,
   };
+}
+
+/** The file to write: `entry` first, then the entry already on disk that
+    validates against the PRE-restructure `preState` (the structure state.json
+    holds until its own write lands). Entries that match nothing are dropped, so
+    the file never exceeds MAX_HINTS_ENTRIES and never keeps a dead structure. */
+export function composeHintsFile(
+  entry: ManuscriptHintsEntry,
+  previousFile: unknown,
+  preState: HintsState,
+  sourceSha256: string,
+): PersistedManuscriptHints {
+  const entries = [entry];
+  const prevEntries = entriesOf(previousFile);
+  for (const prev of prevEntries ?? []) {
+    if (entries.length >= MAX_HINTS_ENTRIES) break;
+    if (hintsFromEntry(prev, preState, sourceSha256).ok) entries.push(prev as ManuscriptHintsEntry);
+  }
+  return { schema: MANUSCRIPT_HINTS_SCHEMA, entries };
+}
+
+function entriesOf(file: unknown): unknown[] | null {
+  if (typeof file !== 'object' || file === null || Array.isArray(file)) return null;
+  const f = file as Record<string, unknown>;
+  if (f.schema !== MANUSCRIPT_HINTS_SCHEMA || !Array.isArray(f.entries)) return null;
+  return f.entries;
 }
 
 /** No `rotate`: nothing restores old structures from a backup. */
@@ -99,8 +136,21 @@ export type HydratedHint = {
   titleSynthesized?: true;
 };
 
+type HintsState = {
+  manuscriptId?: string | null;
+  manuscriptFile: string;
+  chapters: ReadonlyArray<{
+    id: number;
+    uuid?: string;
+    title: string;
+    excluded?: boolean;
+    titleSynthesized?: boolean;
+  }>;
+};
+
 /** Validate a persisted hints file against the current state.json and the
-    manuscript bytes' hash, and build the chapter hints from it. Every check
+    manuscript bytes' hash, and build the chapter hints from the first entry
+    that passes (newest first; see MAX_HINTS_ENTRIES). Every check
     must pass (schema; manuscriptId + manuscriptFile; sourceSha256; and per
     position the chapter id, a non-empty uuid equal to state's, and a string
     body). The uuid sequence is the proof the file was written for exactly the
@@ -114,24 +164,35 @@ export type HydratedHint = {
     re-exclude a chapter the user re-included. */
 export function hintsFromPersisted(
   file: unknown,
-  state: {
-    manuscriptId?: string | null;
-    manuscriptFile: string;
-    chapters: ReadonlyArray<{
-      id: number;
-      uuid?: string;
-      title: string;
-      excluded?: boolean;
-      titleSynthesized?: boolean;
-    }>;
-  },
+  state: HintsState,
   sourceSha256: string,
 ): { ok: true; hints: HydratedHint[] } | { ok: false; reason: string } {
   if (typeof file !== 'object' || file === null || Array.isArray(file)) {
     return { ok: false, reason: 'not an object' };
   }
-  const f = file as Record<string, unknown>;
-  if (f.schema !== MANUSCRIPT_HINTS_SCHEMA) return { ok: false, reason: 'schema' };
+  if ((file as Record<string, unknown>).schema !== MANUSCRIPT_HINTS_SCHEMA) {
+    return { ok: false, reason: 'schema' };
+  }
+  const entries = entriesOf(file);
+  if (!entries || entries.length === 0) return { ok: false, reason: 'entries' };
+  let firstFailure = '';
+  for (const entry of entries) {
+    const r = hintsFromEntry(entry, state, sourceSha256);
+    if (r.ok) return r;
+    firstFailure ||= r.reason;
+  }
+  return { ok: false, reason: firstFailure };
+}
+
+function hintsFromEntry(
+  entry: unknown,
+  state: HintsState,
+  sourceSha256: string,
+): { ok: true; hints: HydratedHint[] } | { ok: false; reason: string } {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    return { ok: false, reason: 'entry shape' };
+  }
+  const f = entry as Record<string, unknown>;
   if (f.manuscriptId !== state.manuscriptId) return { ok: false, reason: 'manuscriptId' };
   if (f.manuscriptFile !== state.manuscriptFile) return { ok: false, reason: 'manuscriptFile' };
   if (f.sourceSha256 !== sourceSha256) return { ok: false, reason: 'sourceSha256' };

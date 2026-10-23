@@ -42,7 +42,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import {
-  buildPersistedHints,
+  buildHintsEntry,
+  composeHintsFile,
   hintsFromPersisted,
   sha256Hex,
   writeManuscriptHints,
@@ -540,7 +541,7 @@ describe('importPortableBundle', () => {
       const state = hintsState();
       const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
       const sourceDir = writeSourceBook(state, manuscript);
-      const persisted = buildPersistedHints({
+      const persisted = composeHintsFile(buildHintsEntry({
         manuscriptId: state.manuscriptId!,
         manuscriptFile: state.manuscriptFile,
         sourceSha256: sha256Hex(manuscript),
@@ -549,7 +550,7 @@ describe('importPortableBundle', () => {
           { id: 2, body: 'merged body B' },
         ],
         stateChapters: state.chapters,
-      });
+      }), null, state, sha256Hex(manuscript));
       await writeManuscriptHints(sourceDir, persisted);
 
       const built = await buildPortableBundle(sourceDir, state);
@@ -574,7 +575,7 @@ describe('importPortableBundle', () => {
       const sourceDir = writeSourceBook(state, manuscript);
       await writeManuscriptHints(
         sourceDir,
-        buildPersistedHints({
+        composeHintsFile(buildHintsEntry({
           manuscriptId: state.manuscriptId!,
           manuscriptFile: state.manuscriptFile,
           sourceSha256: sha256Hex(manuscript),
@@ -583,7 +584,7 @@ describe('importPortableBundle', () => {
             { id: 2, body: 'not what a fresh parse gives B' },
           ],
           stateChapters: state.chapters,
-        }),
+        }), null, state, sha256Hex(manuscript)),
       );
 
       const built = await buildPortableBundle(sourceDir, state);

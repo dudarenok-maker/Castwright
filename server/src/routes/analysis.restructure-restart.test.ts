@@ -250,7 +250,7 @@ describe('#3703 — a restructure survives a restart + re-analysis', () => {
     expect(res.status).toBe(200);
     const file = join(bookDir, '.audiobook', 'manuscript-hints.json');
     const hints = JSON.parse(readFileSync(file, 'utf8'));
-    hints.chapters[0].uuid = 'not-the-real-uuid';
+    hints.entries[0].chapters[0].uuid = 'not-the-real-uuid';
     writeFileSync(file, JSON.stringify(hints));
     const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
     removeManuscript(manuscriptId); // a restart
