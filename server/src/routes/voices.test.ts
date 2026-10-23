@@ -1913,8 +1913,14 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released = resolve;
     });
     let intercepted = false;
+    let castReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === castPath) {
+      /* Park the SECOND read of this cast.json: the first is
+         `hasClonedSlotAmongMatches`'s lock-free upfront scan, which runs before
+         any lock is taken — parking there leaves the persona writer unblocked
+         under ANY lock layout (even with the lock removed), so the test could
+         not fail. The second is the in-lock read this test pins. */
+      if (!intercepted && path === castPath && ++castReads === 2) {
         intercepted = true;
         const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
         await gate; // hold the RESOLUTION open until released below
@@ -2004,8 +2010,14 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released = resolve;
     });
     let intercepted = false;
+    let raceCastReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === raceCastPath) {
+      /* Park the SECOND read of this cast.json: the first is
+         `hasClonedSlotAmongMatches`'s lock-free upfront scan, which runs before
+         any lock is taken — parking there leaves the persona writer unblocked
+         under ANY lock layout (even with the lock removed), so the test could
+         not fail. The second is the in-lock read this test pins. */
+      if (!intercepted && path === raceCastPath && ++raceCastReads === 2) {
         intercepted = true;
         const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
         await gate; // hold the RESOLUTION open until released below
