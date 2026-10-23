@@ -78,12 +78,6 @@ export function resolvePersonaSelection(): PersonaSelection {
   return { engine: 'gemini', model: resolveVoiceStyleModel() };
 }
 
-/* TEMPORARY shim (Task 4.5 -> 4.6a): keeps cast-design.ts and persona-gpu-plan.ts compiling until Task 4.6a
-   switches them to personaSharesGpu() and deletes this. Do not add a new reader. */
-export function resolvePersonaEngine(): 'local' | 'gemini' {
-  return resolvePersonaSelection().engine === 'local' ? 'local' : 'gemini';
-}
-
 function findEndpoint(endpointId: string): AnalyzerEndpoint | undefined {
   return getCachedUserSettings().analyzerEndpoints.find((e) => e.id === endpointId);
 }

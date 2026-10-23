@@ -123,7 +123,7 @@ export class OllamaTransport implements ChatTransport {
   }
 
   /** #3084 W4 — the free-text path (spec §10): one NON-streaming /api/chat call with no response
-      `format`, GPU-plan aware. Moved from ollama.ts `generatePersonaViaOllama` (main 80be2f1d).
+      `format`, GPU-plan aware. Moved from the former ollama.ts persona function (main 80be2f1d).
         - onCpu  → num_gpu:0 (system RAM only); the analyzer slot is still taken with onCpu=true.
         - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0 for one-shot / CPU). */
   private async sendFreeText(req: TransportRequest, freeText: FreeTextOptions): Promise<TransportResult> {

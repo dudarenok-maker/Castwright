@@ -1396,7 +1396,7 @@ function mockChatResponse(text: string) {
 
 /* Persona generation's Ollama path (#3084 W4, spec §10): OllamaAnalyzer's runner free-text call,
    which OllamaTransport serves with ONE non-streaming /api/chat call — the body that was
-   generatePersonaViaOllama on main 80be2f1d. It carries ANALYZER_DISPATCHER too (`stream:false`
+   the former Ollama-only persona function (main 80be2f1d). It carries ANALYZER_DISPATCHER too (`stream:false`
    withholds headers for the WHOLE generation), so these drive the same undici fetchMock as chat(). */
 describe('Ollama free-text (persona) call', () => {
   afterEach(() => vi.restoreAllMocks());

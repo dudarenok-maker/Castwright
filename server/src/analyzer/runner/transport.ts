@@ -29,8 +29,8 @@ export interface AdaptedSchema {
 
 /* Absolute ceiling for a one-shot persona generation. Needed because
    ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
-   has no caller-supplied signal to fall back on; see the note in
-   generatePersonaViaOllama. Deliberately generous: the whole point of the
+   has no caller-supplied signal to fall back on; see the note in the former Ollama persona
+   function. Deliberately generous: the whole point of the
    dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
    DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. Every transport bounds a
    free-text request at min(its own request ceiling, this). */

@@ -1,6 +1,6 @@
 import { activeGenerationBooks } from '../routes/generation.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
-import { resolvePersonaEngine } from '../analyzer/voice-style.js';
+import { personaSharesGpu } from '../analyzer/voice-style.js';
 
 /* Voice-design (persona) keep-alive is a fixed window, independent of the
    per-model analyzer map: the persona local model is kept warm across a
@@ -43,9 +43,12 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
     voice-style routes and the bulk pre-pass so the decision lives in exactly
     one place.
 
-    - gemini engine → `{ onCpu: false, keepAlive: 0 }` (off-GPU).
-    - local engine → resolve the plan directly; no more reverse-evict dance
-      (see `resolvePersonaGpuPlan`).
+    - persona does not share the GPU (gemini, or an OpenAI-compatible endpoint on
+      no card or on a card Qwen does not use) → `{ onCpu: false, keepAlive: 0 }`.
+    - persona shares the GPU (local Ollama, or an endpoint on the Qwen card, #3084 W4)
+      → resolve the plan directly. Only the Ollama transport reads `onCpu`/`keepAlive`;
+      for an endpoint the plan is inert, and what "like local" buys it is the design
+      job's ordering (personas before VoiceDesign loads — see routes/cast-design.ts).
 
     `_signal` is kept in the signature for call-site compatibility
     (`routes/cast-design.ts` still passes its job's AbortSignal), but is
@@ -54,6 +57,6 @@ export async function preparePersonaBatch(
   bookDir: string,
   _signal?: AbortSignal,
 ): Promise<{ onCpu: boolean; keepAlive: string | number }> {
-  if (resolvePersonaEngine() !== 'local') return { onCpu: false, keepAlive: 0 };
+  if (!personaSharesGpu()) return { onCpu: false, keepAlive: 0 };
   return resolvePersonaGpuPlan(bookDir);
 }

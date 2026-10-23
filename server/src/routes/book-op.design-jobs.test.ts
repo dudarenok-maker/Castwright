@@ -40,7 +40,7 @@ const fetchMock = vi.fn();
 const { personaMock } = vi.hoisted(() => ({ personaMock: vi.fn() }));
 vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: personaMock,
-  resolvePersonaEngine: vi.fn().mockReturnValue('gemini'),
+  personaSharesGpu: vi.fn().mockReturnValue(false),
 }));
 vi.mock('../tts/persona-gpu-plan.js', () => ({
   preparePersonaBatch: vi.fn().mockResolvedValue({ onCpu: false, keepAlive: 0 }),
