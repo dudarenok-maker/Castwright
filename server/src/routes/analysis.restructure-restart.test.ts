@@ -243,6 +243,23 @@ describe('#3703 — a restructure survives a restart + re-analysis', () => {
     expect(prompts.get(3)).toContain(lineFor('Beta'));
   }, 60_000);
 
+  it('a manuscript edited on disk after hydrate is not masked by the restructure (no stale bodies under the new sha)', async () => {
+    const { manuscriptId, bookId, bookDir } = await seedBook('edited', ['Delta', 'Alpha', 'Beta', 'Gamma']);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    await getOrHydrateManuscript(manuscriptId); // caches the record parsed from the "Gamma" file
+    const file = join(bookDir, 'manuscript.md');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('Gamma', 'Omega'));
+    const app = await restructureApp();
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+    removeManuscript(manuscriptId); // a restart
+    const record = (await getOrHydrateManuscript(manuscriptId))!;
+    const bodies = record.chapterHints.map((h) => h.body).join('\n');
+    expect(bodies).toContain('Omega plan is set.');
+    expect(bodies).not.toContain('Gamma plan is set.');
+  }, 60_000);
+
   it('a stale hints file (uuid changed) is ignored and the fresh parse is used', async () => {
     const { manuscriptId, bookId, bookDir } = await seedBook('stale', ['Delta', 'Alpha', 'Beta', 'Gamma']);
     const app = await restructureApp();

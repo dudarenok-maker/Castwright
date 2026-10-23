@@ -79,7 +79,7 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
-import { removeManuscriptHints } from '../workspace/manuscript-hints.js';
+import { removeManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -1339,6 +1339,9 @@ async function applyReparse(
     changeLogType: string;
     changeLogTitle: string;
     manuscriptFile?: string;
+    /** sha256 of the manuscript file bytes `parsed` came from; stamped onto the
+        refreshed ManuscriptRecord (#3703). */
+    sourceSha256: string;
     /** Called inside the locked step, immediately before state.json is
         written; puts the new manuscript file in place and returns an undo
         that restores the previous one if the state write then fails. */
@@ -1595,6 +1598,7 @@ async function applyReparse(
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),
+      sourceSha256: opts.sourceSha256,
       bookId: nextState.bookId,
       bookDir: fresh.bookDir,
     };
@@ -1656,7 +1660,10 @@ type ParsedManuscript = Awaited<ReturnType<typeof parseManuscript>>;
 
 async function prepareReparse(
   bookId: string,
-): Promise<'gone' | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null }> {
+): Promise<
+  | 'gone'
+  | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null; sourceSha256: string | null }
+> {
   for (let attempt = 0; ; attempt++) {
     const peeked = await peekBook(bookId);
     if (!peeked) return 'gone';
@@ -1685,7 +1692,7 @@ async function prepareReparse(
       : null;
     if (!buffer) {
       if (attempt === 0) continue;
-      return { fingerprint: null, parsed: null };
+      return { fingerprint: null, parsed: null, sourceSha256: null };
     }
     const looksLikeEpub =
       buffer.length >= 4 &&
@@ -1713,7 +1720,7 @@ async function prepareReparse(
         sourcePath: manuscriptPath,
       });
     }
-    return { fingerprint, parsed };
+    return { fingerprint, parsed, sourceSha256: sha256Hex(buffer) };
   }
 }
 
@@ -1755,13 +1762,14 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
           },
         };
       }
-      if (!prep.parsed) {
+      if (!prep.parsed || prep.sourceSha256 === null) {
         return { status: 409, body: { error: `Manuscript file missing on disk: ${state.manuscriptFile}` } };
       }
 
       const payload = await applyReparse(bookDir, state, prep.parsed, {
         changeLogType: 'reparse',
         changeLogTitle: 'Re-parsed manuscript',
+        sourceSha256: prep.sourceSha256,
       });
       if (!payload) return reparseRefusal(book.bookId, bookDir);
       return { status: 200, body: payload };
@@ -1840,6 +1848,7 @@ bookStateRouter.post(
             changeLogType: 'replace-manuscript',
             changeLogTitle: 'Replaced manuscript',
             manuscriptFile: newFile,
+            sourceSha256: sha256Hex(upload),
             installManuscript: async () => {
               /* The upload is written here -- inside the state-json lock, once
                  state.json is confirmed present -- so a book moved or deleted

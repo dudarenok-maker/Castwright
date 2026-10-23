@@ -29,6 +29,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getOrHydrateManuscript, getManuscript, removeManuscript } from './manuscripts.js';
+import { sha256Hex } from '../workspace/manuscript-hints.js';
 
 beforeEach(() => {
   removeManuscript('m_hints_read');
@@ -50,6 +51,21 @@ describe('hydrateFromDisk — hints file read errors', () => {
       // The next call retries and now succeeds (no file => fresh parse).
       readManuscriptHints.mockResolvedValueOnce(null);
       expect((await getOrHydrateManuscript('m_hints_read'))?.chapterHints.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      delete process.env.TEST_BOOK_DIR;
+    }
+  });
+
+  it('stamps the record with the sha256 of the bytes it was parsed from', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hints-read-'));
+    process.env.TEST_BOOK_DIR = dir;
+    try {
+      const bytes = '# Book\n\n# Alpha\n\n"Alpha plan is set." Silence followed.\n';
+      writeFileSync(join(dir, 'manuscript.md'), bytes);
+      readManuscriptHints.mockResolvedValueOnce(null);
+      const record = await getOrHydrateManuscript('m_hints_read');
+      expect(record?.sourceSha256).toBe(sha256Hex(Buffer.from(bytes)));
     } finally {
       rmSync(dir, { recursive: true, force: true });
       delete process.env.TEST_BOOK_DIR;

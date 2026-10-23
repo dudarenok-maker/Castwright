@@ -74,6 +74,7 @@ import {
   buildHintsEntry,
   composeHintsFile,
   readManuscriptHints,
+  removeManuscriptHints,
   sha256Hex,
   writeManuscriptHints,
 } from '../workspace/manuscript-hints.js';
@@ -333,24 +334,37 @@ async function applyRestructureClaimed(
        fails, a reader still finds the entry matching the state that landed
        (staleness is checked per entry, by uuid sequence) -- never a body on the
        wrong chapter and never a fresh parse against a restructured state.json.
-       Only ENOENT (no manuscript file, so
-       the book cannot hydrate after a restart anyway) skips the write. */
-    let manuscriptBytes: Buffer | null = null;
+       The entry is stamped with the sha the record's bodies were PARSED from
+       (`record.sourceSha256`), never the file's sha now: a manuscript edited
+       since the record was cached would otherwise carry the old bodies under
+       the new file's sha, and a restart would trust them. A record with no sha,
+       or one that no longer matches the file (or whose file is gone, so the
+       book cannot hydrate after a restart anyway), has no entry worth writing:
+       the file is removed (best-effort) and the restructure proceeds. */
+    let diskSha256: string | null = null;
     try {
-      manuscriptBytes = await readFile(join(bookDir, safeSegment(state.manuscriptFile)));
+      diskSha256 = sha256Hex(await readFile(join(bookDir, safeSegment(state.manuscriptFile))));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      console.warn(`[chapters-restructure] ${manuscriptId}: manuscript file missing; skipping manuscript-hints.json`);
+    }
+    const sourceSha256 = record.sourceSha256;
+    const bodiesCurrent = sourceSha256 !== undefined && sourceSha256 === diskSha256;
+    if (!bodiesCurrent) {
+      console.warn(
+        `[chapters-restructure] ${manuscriptId}: chapter bodies are not from the manuscript on disk; skipping manuscript-hints.json`,
+      );
+      await removeManuscriptHints(bookDir).catch((err) => {
+        console.warn(`[chapters-restructure] ${manuscriptId}: could not remove manuscript-hints.json`, err);
+      });
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
        the restructure itself is still valid -- skip rather than fail it. */
     const aligned = result.hints.length === result.state.chapters.length;
-    if (manuscriptBytes && !aligned) {
+    if (bodiesCurrent && !aligned) {
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
     }
-    if (manuscriptBytes && aligned) {
-      const sourceSha256 = sha256Hex(manuscriptBytes);
+    if (bodiesCurrent && aligned) {
       /* An unreadable previous file just means no previous entry to keep. */
       const previousFile = await readManuscriptHints(bookDir).catch(() => null);
       await writeManuscriptHints(

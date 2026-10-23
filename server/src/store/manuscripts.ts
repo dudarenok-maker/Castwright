@@ -44,6 +44,11 @@ export interface ManuscriptRecord {
   /** Concatenated body across all chapters; what we hand to the analysis stage. */
   sourceText: string;
   chapterHints: ChapterHint[];
+  /** sha256 of the manuscript file bytes `sourceText` and `chapterHints` were
+      parsed from (#3703). The restructure stamps manuscript-hints.json with
+      THIS, never with whatever the file holds at restructure time. Absent when
+      the record was not built from a book's on-disk file. */
+  sourceSha256?: string;
   /** Set when this manuscript was registered via POST /api/books (workspace
       flow). Lets the analysis route persist cast.json + state.json updates
       back into the on-disk book without scanning the whole workspace. */
@@ -142,9 +147,10 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
       return undefined;
     }
   }
+  const sourceSha256 = sha256Hex(buffer);
   let chapterHints: ChapterHint[] | null = null;
   if (persisted !== null) {
-    const checked = hintsFromPersisted(persisted, book.state, sha256Hex(buffer));
+    const checked = hintsFromPersisted(persisted, book.state, sourceSha256);
     if (checked.ok) chapterHints = checked.hints;
     else {
       console.warn(
@@ -163,6 +169,7 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
     uploadedAt: book.state.createdAt,
     sourceText: parsed.sourceText,
     chapterHints,
+    sourceSha256,
     bookId: book.state.bookId,
     bookDir: book.bookDir,
   };
