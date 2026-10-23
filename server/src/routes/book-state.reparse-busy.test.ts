@@ -49,6 +49,7 @@ let bookId: string;
 let cachePath: string;
 let bookOp: typeof import('../workspace/book-op-lock.js');
 let bookJobs: typeof import('../workspace/book-jobs.js');
+let fileLock: typeof import('../workspace/file-lock.js');
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-reparse-busy-'));
@@ -59,6 +60,7 @@ beforeAll(async () => {
   const { makeBookId } = await import('../workspace/paths.js');
   bookOp = await import('../workspace/book-op-lock.js');
   bookJobs = await import('../workspace/book-jobs.js');
+  fileLock = await import('../workspace/file-lock.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   cachePath = join(CACHE_DIR, `${MANUSCRIPT_ID}.json`);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -134,6 +136,57 @@ async function holdJob(kind: BookJobKind): Promise<{ finish: () => Promise<void>
   };
 }
 
+/** Hang guard, not a synchroniser: polls an order-based condition and fails
+ *  with a NAMED error rather than a bare vitest testTimeout. */
+async function waitUntil(pred: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 4000;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+function bookOpWaiters(): number {
+  return (fileLock as unknown as { __keyWaitersForTest: (k: string) => number }).__keyWaitersForTest(
+    `book-op:${bookId}`,
+  );
+}
+
+/** The #3717 race: hold `book-op`, queue `runBookJob('render')` behind it, fire
+ *  `route` so it queues BEHIND the job, then release. The request's commit span
+ *  therefore runs with the job already registered — only a check made INSIDE
+ *  `withBookOp` sees it. Ordering is by queued-waiter count, never a sleep. */
+async function raceJobAheadOfRoute(
+  route: () => PromiseLike<request.Response>,
+): Promise<{ res: request.Response; finishJob: () => Promise<void> }> {
+  let release!: () => void;
+  const open = new Promise<void>((r) => (release = r));
+  let acquired!: () => void;
+  const held = new Promise<void>((r) => (acquired = r));
+  void bookOp.withBookOp(bookId, async () => {
+    acquired();
+    await open;
+  });
+  await held;
+  let openJob!: () => void;
+  const jobGate = new Promise<void>((r) => (openJob = r));
+  const jobP = bookJobs.runBookJob(bookId, 'render', () => jobGate);
+  await waitUntil(() => bookOpWaiters() >= 1, 'the render job to queue on book-op');
+  const routeP = Promise.resolve(route());
+  await waitUntil(() => bookOpWaiters() >= 2, 'the route to queue on book-op behind the job');
+  release();
+  const res = await routeP;
+  const reg = await jobP;
+  if (reg === bookOp.BOOK_GONE) throw new Error('test setup: book not found');
+  return {
+    res,
+    finishJob: async () => {
+      openJob();
+      await reg.done;
+    },
+  };
+}
+
 describe('#3717 — reparse and replace-manuscript refuse with 409 book_busy while a long job is registered', () => {
   it('(a) reparse, render registered → 409 book_busy, nothing touched, job still registered', async () => {
     const statePath = join(bookDir, '.audiobook', 'state.json');
@@ -179,6 +232,7 @@ describe('#3717 — reparse and replace-manuscript refuse with 409 book_busy whi
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
       expect(res.body.error).toMatch(/rendering audio/);
+      expect(res.body.error).toMatch(/replace its manuscript/);
       expect(res.text).not.toContain(workspaceRoot);
       /* Nothing was written: all three files byte-identical, the audio sentinel survives… */
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
@@ -242,6 +296,62 @@ describe('#3717 — reparse and replace-manuscript refuse with 409 book_busy whi
       await withCastLock(bookDir, async () => undefined);
       rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
       rmSync(revisionsPath, { force: true });
+    }
+  });
+
+  it('(d) replace-manuscript: the busy check runs BEFORE the newer-schema revisions refusal', async () => {
+    const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+    writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
+    const render = await holdJob('render');
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(res.body.error).toMatch(/rendering audio/);
+      expect(res.text).not.toContain('schema=2');
+      expect(res.text).not.toContain(workspaceRoot);
+    } finally {
+      await render.finish();
+      rmSync(revisionsPath, { force: true });
+    }
+  });
+
+  it('(f) race — reparse queued BEHIND a job that registers while it waits → 409, nothing deleted', async () => {
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const audioSentinel = join(bookDir, 'audio', '01-chapter-one.mp3');
+    const { res, finishJob } = await raceJobAheadOfRoute(() => request(app).post(`/api/books/${bookId}/reparse`));
+    try {
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(existsSync(castPath)).toBe(true);
+      expect(existsSync(audioSentinel)).toBe(true);
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['render']);
+    } finally {
+      await finishJob();
+      const { withCastLock } = await import('../workspace/cast-lock.js');
+      await withCastLock(bookDir, async () => undefined);
+    }
+  });
+
+  it('(f) race — replace-manuscript queued BEHIND a job that registers while it waits → 409, nothing deleted', async () => {
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const audioSentinel = join(bookDir, 'audio', '01-chapter-one.mp3');
+    const { res, finishJob } = await raceJobAheadOfRoute(() =>
+      request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md'),
+    );
+    try {
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(existsSync(castPath)).toBe(true);
+      expect(existsSync(audioSentinel)).toBe(true);
+      expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['render']);
+    } finally {
+      await finishJob();
     }
   });
 
