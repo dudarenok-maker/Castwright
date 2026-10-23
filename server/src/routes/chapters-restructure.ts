@@ -3,7 +3,9 @@
    Applies a structural restructure operation to the persistent book layout:
    1. Pure transform via workspace/restructure.ts (state.json shape +
       ChapterHint[] + sentences + audio op plan + sentence remap).
-   2. Atomically write state.json (rotating backup) and manuscript-edits.json.
+   2. Atomically write manuscript-hints.json (the restructured chapter bodies,
+      #3703; first, so its failure changes nothing), state.json (rotating
+      backup) and manuscript-edits.json.
    3. Mutate the in-memory ManuscriptRecord.chapterHints so subsequent
       analysis / generation calls see the new structure.
    4. Apply the audio op plan via rewriteChapterSlugs (delete content-
@@ -16,7 +18,7 @@
       manuscript-edits.json, and halted on the empty file).
 
    The book's `book-op` lock (#3711) serialises concurrent restructure calls
-   so the three persistence writes can't interleave, and holds a folder rename
+   so the persistence writes can't interleave, and holds a folder rename
    off until the whole restructure has landed. Without the lock,
    two parallel reorders could each pick up the same `state.chapters`
    snapshot, both successfully write, and the second clobber the first
@@ -68,6 +70,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { buildPersistedHints, sha256Hex, writeManuscriptHints } from '../workspace/manuscript-hints.js';
+import { safeSegment } from '../util/safe-path.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
@@ -173,8 +177,8 @@ async function prepareRestructure(
 /** Shared "load → transform → write" body. Runs INSIDE the route's `withBookOp`
     (the lock is taken at the handler, one level only), then takes the
     restructure gate and main's per-book `book` lock itself (#3594), in the
-    order book-op -> gate -> book. Writes state.json +
-    manuscript-edits.json, mutates the in-memory ManuscriptRecord.chapterHints,
+    order book-op -> gate -> book. Writes manuscript-hints.json (#3703) +
+    state.json + manuscript-edits.json, mutates the in-memory ManuscriptRecord.chapterHints,
     applies audio ops, clears the analysis cache. `advisoryValid` is false when
     the manuscript changed since `prepareRestructure` parsed it: the advisory
     title flags (and a route's own parse) are then dropped silently -- they only
@@ -315,10 +319,46 @@ async function applyRestructureClaimed(
       };
     }
 
-    // Write order: state.json (rotating backup) -> manuscript-edits.json ->
-    // in-memory hints -> audio ops -> analysis cache. If any step throws past
-    // here, earlier writes are already on disk; partial state is recoverable
-    // via the reconciliation filter in book-state.ts:166-185.
+    /* #3703 -- persist the restructured bodies so a restart does not rebuild
+       them from a manuscript that knows nothing about this restructure. Hints
+       FIRST, state.json second: if this write fails the restructure answers 500
+       having changed nothing on disk; if it succeeds and the state.json write
+       then fails, the file names chapter uuids state.json lacks, so a reader's
+       staleness check ignores it and the book falls back to a fresh parse --
+       never a body on the wrong chapter. Only ENOENT (no manuscript file, so
+       the book cannot hydrate after a restart anyway) skips the write. */
+    let manuscriptBytes: Buffer | null = null;
+    try {
+      manuscriptBytes = await readFile(join(bookDir, safeSegment(state.manuscriptFile)));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      console.warn(`[chapters-restructure] ${manuscriptId}: manuscript file missing; skipping manuscript-hints.json`);
+    }
+    /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
+       against a 3-chapter manuscript) has no coherent id pairing to persist, and
+       the restructure itself is still valid -- skip rather than fail it. */
+    const aligned = result.hints.length === result.state.chapters.length;
+    if (manuscriptBytes && !aligned) {
+      console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
+    }
+    if (manuscriptBytes && aligned) {
+      await writeManuscriptHints(
+        bookDir,
+        buildPersistedHints({
+          manuscriptId,
+          manuscriptFile: state.manuscriptFile,
+          sourceSha256: sha256Hex(manuscriptBytes),
+          hints: result.hints,
+          stateChapters: result.state.chapters,
+        }),
+      );
+    }
+
+    // Write order: manuscript-hints.json -> state.json (rotating backup) ->
+    // manuscript-edits.json -> in-memory hints -> audio ops -> analysis cache.
+    // If any step throws past here, earlier writes are already on disk; partial
+    // state is recoverable via the reconciliation filter in
+    // book-state.ts:166-185.
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
     /* #3400 -- merged-away tombstones ride along (the client's save after the
        remap applies the same rule), so a restructure no longer wipes them. */
