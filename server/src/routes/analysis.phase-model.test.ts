@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
-import { buildNonStoryClassifier, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';
+import { buildNonStoryClassifier, combineAnalysisEngines, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
@@ -1546,4 +1546,113 @@ describe('phase events name the run engine and card after a fallback switch (#30
     expect(switched.length).toBeGreaterThan(0);
     expect(switched.every((e) => e.analysisEngine === 'openai' && e.analysisGpu === 'cuda:0')).toBe(true);
   }, 60_000);
+});
+
+/* #3084 wave 3d review pass 4 (L) — job.engine names who holds a card across BOTH phases, and every
+   place the jobs record or relabel a phase must keep that true. The pass-3 tests tripped only at the
+   non-story check; these drive the other sites, in the main job and the subset job alike: the stage-1
+   switch (phase 0), the stage-2 switch (phase 1), and the two initial records (no switch at all). */
+describe('job.engine at every relabel and record site (#3084 wave 3d review pass 4, L)', () => {
+  const ENDPOINT_MODEL = 'openai:lab::qwen3-30b';
+  const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const down = () => new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+
+  const healthy0 = (engine: 'local' | 'gemini'): AnalyzerSelection =>
+    ({ analyzer: buildSpyPhase0Analyzer(), engine, model: engine === 'local' ? 'qwen3.5:4b' : 'gemini-3.6-flash', fallbackModel: null, fallbackEngine: null });
+  const healthy1 = (engine: 'local' | 'gemini'): AnalyzerSelection =>
+    ({ analyzer: buildSpyPhase1Analyzer(), engine, model: engine === 'local' ? 'qwen3.5:9b' : 'gemini-3.6-flash', fallbackModel: null, fallbackEngine: null });
+  /* An endpoint primary that is down at its first stage-1 call; the Gemini target works. */
+  const endpointDownAtStage1 = (): AnalyzerSelection => {
+    const primary: Analyzer = { ...buildSpyPhase0Analyzer(), async runStage1Chapter(): Promise<Stage1ChapterOutput> { throw down(); } };
+    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
+  };
+  /* An endpoint primary that is down at its first stage-2 call; the Gemini target works. */
+  const endpointDownAtStage2 = (): AnalyzerSelection => {
+    const primary: Analyzer = { ...buildSpyPhase1Analyzer(), async runStage2Chapter(): Promise<Stage2ChapterOutput> { throw down(); } };
+    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase1Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
+  };
+
+  async function seedCachedStage1(manuscriptId: string): Promise<void> {
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      stage1: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          { id: 'ch1-char', name: 'Character_ch1', role: 'character', color: 'unset', evidence: [{ quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }] },
+        ],
+        chapters: [{ id: 1, title: 'Chapter 1' }, { id: 2, title: 'Chapter 2' }],
+      },
+    } as never);
+  }
+
+  /* Runs the job to its end and returns job.engine; the initial value is the one that would be
+     right if nothing recorded or relabelled anything ('gemini' is never the expected answer here). */
+  async function engineAfter(kind: 'main' | 'subset', phase0: AnalyzerSelection, phase1: AnalyzerSelection): Promise<AnalysisJob> {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    const manuscriptId = `test-engine-sites-${kind}-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    if (kind === 'subset') await seedCachedStage1(manuscriptId);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const job = kind === 'main' ? buildStubJob(manuscriptId) : ({ ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob);
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      if (kind === 'main') {
+        setPhase1Selection(phase1);
+        await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      } else {
+        const recordRef = getManuscript(manuscriptId) as never as { chapterHints: ChapterHint[] };
+        await runSubsetAnalyzerJob(job, recordRef as never, phase0, phase1, recordRef.chapterHints as never, true);
+      }
+      return job;
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }
+
+  for (const kind of ['main', 'subset'] as const) {
+    it(`${kind}: phase 0 on a healthy Ollama + phase 1 on an endpoint that is down at stage 2 (switched to Gemini) reads local`, async () => {
+      const job = await engineAfter(kind, healthy0('local'), endpointDownAtStage2());
+      expect(job.fallbackMarked?.has('gemini-3.6-flash'), 'precondition: phase 1 switched').toBe(true);
+      expect(job.engine).toBe('local');
+    }, 60_000);
+
+    it(`${kind}: phase 0 on an endpoint that is down at stage 1 (switched to Gemini) + phase 1 on a healthy Ollama reads local`, async () => {
+      const job = await engineAfter(kind, endpointDownAtStage1(), healthy1('local'));
+      expect(job.fallbackMarked?.has('gemini-3.6-flash'), 'precondition: phase 0 switched').toBe(true);
+      expect(job.engine).toBe('local');
+    }, 60_000);
+
+    it(`${kind}: Ollama in phase 0 and Gemini in phase 1, no switch at all, reads local`, async () => {
+      const job = await engineAfter(kind, healthy0('local'), healthy1('gemini'));
+      expect(job.fallbackMarked?.size ?? 0, 'precondition: nothing switched').toBe(0);
+      expect(job.engine).toBe('local');
+    }, 60_000);
+
+    it(`${kind}: Gemini in phase 0 and Ollama in phase 1, no switch at all, reads local`, async () => {
+      const job = await engineAfter(kind, healthy0('gemini'), healthy1('local'));
+      expect(job.fallbackMarked?.size ?? 0, 'precondition: nothing switched').toBe(0);
+      expect(job.engine).toBe('local');
+    }, 60_000);
+  }
+});
+
+describe('combineAnalysisEngines (#3084 wave 3d review pass 4, L)', () => {
+  it.each([
+    [['local', 'openai'], 'local'],
+    [['openai', 'local'], 'local'],
+    [['local', 'gemini'], 'local'],
+    [['openai', 'gemini'], 'openai'],
+    [['gemini', 'openai'], 'openai'],
+    [['gemini', 'gemini'], 'gemini'],
+    [['openai', 'openai'], 'openai'],
+    [['openai', undefined], 'openai'],
+    [[undefined, 'gemini'], 'gemini'],
+    [[undefined, undefined], 'gemini'],
+  ] as const)('%j reads %s (Ollama over an endpoint over Gemini; absent entries skipped)', (engines, expected) => {
+    expect(combineAnalysisEngines([...engines])).toBe(expected);
+  });
 });
