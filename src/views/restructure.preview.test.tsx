@@ -1,6 +1,6 @@
 /* Plan 286 (OD31) — a restructure of the preview's book clears the preview. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore, Tuple } from '@reduxjs/toolkit';
 import { uiSlice, uiActions } from '../store/ui-slice';
@@ -18,7 +18,7 @@ import { restructureGuardMiddleware } from '../store/restructure-guard-middlewar
 
 const { holder, apiMock } = vi.hoisted(() => ({
   holder: { store: null as null | { getState: () => unknown } },
-  apiMock: { refreshChapterTitles: vi.fn(), getBookState: vi.fn(), getLibrary: vi.fn(), putBookState: vi.fn() },
+  apiMock: { refreshChapterTitles: vi.fn(), mergeChapters: vi.fn(), getBookState: vi.fn(), getLibrary: vi.fn(), putBookState: vi.fn() },
 }));
 vi.mock('../lib/api', async (orig) => ({ ...(await orig<typeof import('../lib/api')>()), api: apiMock }));
 vi.mock('../store', async () => {
@@ -44,6 +44,7 @@ const preview = (bookId: string) => ({ bookId, characterId: 'c', previewChapterI
 
 beforeEach(() => {
   apiMock.refreshChapterTitles.mockReset().mockResolvedValue({ sentenceRemap: [], warnings: [] });
+  apiMock.mergeChapters.mockReset().mockResolvedValue({ sentenceRemap: [], warnings: [] });
   apiMock.getBookState.mockReset().mockResolvedValue(null);
   apiMock.getLibrary.mockReset().mockResolvedValue(null);
 });
@@ -523,5 +524,118 @@ describe('RestructureView — analysis running (server refuses a restructure mid
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
     expect(await screen.findByText(/Analysis is running on this book/)).toBeInTheDocument();
     await waitFor(() => expect(store.getState().ui.restructuringBooks['b1']).toBeFalsy());
+  });
+});
+
+/* #3421 — a save that still fails before a restructure aborts it; the kept save is
+   re-sent first on the next attempt. */
+describe('RestructureView — a failed save before a restructure aborts it (#3421)', () => {
+  const ABORT_MESSAGE = "Your last change couldn't be saved, so the chapters weren't changed. Try again.";
+  const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+  let diskSentences: Array<{ chapterId: number; id: number; emotion?: string }>;
+  let events: string[];
+
+  async function setupMerge() {
+    diskSentences = [];
+    events = [];
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
+      preloadedState: { settings: { ...settingsSlice.getInitialState(), autosaveDebounceMs: 40 } },
+      middleware: () => new Tuple(persistenceMiddleware),
+    });
+    holder.store = store;
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(3, 1, 'three'), sentence(4, 1, 'four')] as never,
+      }),
+    );
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [{ id: 1, title: 'One' }, { id: 2, title: 'Two' }] as never,
+        completedSlugs: [],
+        characters: [],
+      } as never),
+    );
+    apiMock.mergeChapters.mockImplementation(async () => {
+      events.push('merge');
+      return { sentenceRemap: [], warnings: [] };
+    });
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-check-1'));
+    fireEvent.click(screen.getByTestId('restructure-check-2'));
+    fireEvent.click(screen.getByTestId('restructure-merge-button'));
+    return store;
+  }
+  const putSucceeds = () =>
+    apiMock.putBookState.mockReset().mockImplementation(async (_id: string, w: { slice: string; patch: { sentences?: typeof diskSentences } }) => {
+      if (w.slice === 'manuscript') {
+        events.push('put');
+        diskSentences = w.patch.sentences!;
+      }
+    });
+  const putFails = (message: string) => apiMock.putBookState.mockReset().mockRejectedValue(new Error(message));
+  const editSad = (store: Awaited<ReturnType<typeof setupMerge>>) =>
+    store.dispatch(manuscriptSlice.actions.setSentenceEmotion({ chapterId: 4, sentenceId: 1, emotion: 'sad' } as never));
+  const sadInMemory = (store: Awaited<ReturnType<typeof setupMerge>>) =>
+    store.getState().manuscript.sentences.find((x) => x.chapterId === 4)?.emotion;
+
+  it('aborts, and does not call the route, when the save is refused', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    putFails('Book state PUT failed (409): refused');
+    const store = await setupMerge();
+    editSad(store);
+    fireEvent.click(screen.getByTestId('restructure-confirm-apply'));
+    expect((await screen.findAllByText(ABORT_MESSAGE)).length).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(apiMock.mergeChapters).not.toHaveBeenCalled();
+    expect(sadInMemory(store)).toBe('sad');
+    expect(store.getState().ui.restructuringBooks['b1']).toBeFalsy();
+    err.mockRestore();
+  });
+
+  it('(ii) clicked twice: the kept save is re-sent first, then the restructure runs', async () => {
+    /* Fake timers (shouldAdvanceTime) so the 7 s of retries run without waiting. */
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      putFails('Book state PUT failed (503): down');
+      const store = await setupMerge();
+      editSad(store);
+      fireEvent.click(screen.getByTestId('restructure-confirm-apply'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8000);
+      });
+      expect((await screen.findAllByText(ABORT_MESSAGE)).length).toBeGreaterThan(0);
+      expect(apiMock.mergeChapters).not.toHaveBeenCalled();
+
+      putSucceeds();
+      let diskAtMerge: typeof diskSentences = [];
+      apiMock.mergeChapters.mockImplementation(async () => {
+        events.push('merge');
+        diskAtMerge = diskSentences;
+        return { sentenceRemap: [], warnings: [] };
+      });
+      fireEvent.click(screen.getByTestId('restructure-confirm-apply'));
+      await waitFor(() => expect(apiMock.mergeChapters).toHaveBeenCalledWith('b1', [1, 2]));
+      expect(events).toEqual(['put', 'merge']);
+      expect(apiMock.putBookState.mock.calls[0][1].patch.sentences.find((x: { chapterId: number }) => x.chapterId === 4).emotion).toBe('sad');
+      expect(diskAtMerge.find((x) => x.chapterId === 4)?.emotion).toBe('sad');
+    } finally {
+      err.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: when the save lands, the route is called after it and no abort message shows', async () => {
+    putSucceeds();
+    const store = await setupMerge();
+    editSad(store);
+    fireEvent.click(screen.getByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.mergeChapters).toHaveBeenCalledWith('b1', [1, 2]));
+    expect(events).toEqual(['put', 'merge']);
+    expect(screen.queryByText(ABORT_MESSAGE)).toBeNull();
   });
 });

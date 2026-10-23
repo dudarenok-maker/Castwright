@@ -293,7 +293,9 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
    (#3421), or `null` when nothing is queued or in flight — so the re-read
    never sees disk from before a write that LANDED. It resolves with the
    slices that still failed; a write that was given up on has already raised
-   a toast, and the re-read then reads disk without it. Plan 286 — revisions
+   a toast. A given-up save is kept and re-sent first by the book's next
+   flush (#3421), so this promise also covers that re-send, and a chapter
+   restructure waits for it. Plan 286 — revisions
    no longer persists from the client, so the write-then-re-read hazard this
    describes now applies only to the other slices.
    Not a reducer action: no slice handles it. */
@@ -342,6 +344,10 @@ export const persistenceMiddleware: Middleware = (store) => {
      reject promises, so `flushBookPersistence` can await them. Each entry
      covers a whole send-and-retry sequence (#3421), not one PUT. */
   const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
+  /* #3421 — saves given up on after their retries, kept (not dropped) until the
+     next flush of their book re-sends them first. A newer edit for the same
+     key merges over the kept patch when it is queued. */
+  const retained = new Map<FlushKey, Record<string, unknown>>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -349,6 +355,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce. */
   const flushBookNow = (bookId: string) => {
+    resendRetained(bookId);
     for (const [key, timer] of Array.from(timers)) {
       if (!key.startsWith(`${bookId}:`)) continue;
       clearTimeout(timer);
@@ -356,8 +363,23 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
   };
 
+  /* #3421 — re-send, now, every save of `bookId` that was given up on, ahead
+     of whatever the caller is about to send. Deleting from `retained` first
+     keeps `flush` from re-entering for the same key. */
+  const resendRetained = (bookId: string, exceptKey?: FlushKey) => {
+    for (const [key, patch] of Array.from(retained)) {
+      if (!key.startsWith(`${bookId}:`) || key === exceptKey) continue;
+      retained.delete(key);
+      if (!pending.has(key)) pending.set(key, patch);
+      const timer = timers.get(key);
+      if (timer) clearTimeout(timer);
+      flush(bookId, key.slice(bookId.length + 1) as StateSlice);
+    }
+  };
+
   const flush = (bookId: string, slice: StateSlice) => {
     const key = flushKey(bookId, slice);
+    resendRetained(bookId, key);
     const patch = pending.get(key);
     pending.delete(key);
     timers.delete(key);
@@ -392,7 +414,11 @@ export const persistenceMiddleware: Middleware = (store) => {
             if (gen !== (generation.get(key) ?? 0)) return { slice, ok: true };
             continue;
           }
-          /* Final failure of the LATEST write (#2230). */
+          /* Final failure of the LATEST write (#2230). Keep the patch for the
+             book's next flush (#3421) — except a 4xx (the server's answer, so
+             re-sending repeats a refused write) and a rollback handler (the
+             user's draft is already restored for them to save again). */
+          if (!refused && !handler?.rollback) retained.set(key, patch as Record<string, unknown>);
           if (handler) {
             store.dispatch(
               notificationsActions.pushToast({
@@ -465,7 +491,11 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (!bookId) return result;
 
     const key = flushKey(bookId, rule.slice);
-    pending.set(key, rule.build(after, bookId));
+    const built = rule.build(after, bookId);
+    /* #3421 — a save given up on is re-sent with this one: the newer fields win. */
+    const kept = retained.get(key);
+    if (kept) retained.delete(key);
+    pending.set(key, kept ? { ...kept, ...(built as Record<string, unknown>) } : built);
     /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
        write; in-flight older flushes keep their captured (lower) generation
        and are therefore gated out of prune/rollback in flush. */

@@ -2756,6 +2756,9 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
       expect(hasFailToast(store)).toBe(true);
 
       openAt(store as never, 'A');
+      /* #3421 retention: the given-up save is kept, so the return re-sends it
+         first (4 more failing PUTs, ~7 s of backoff) before the re-read. */
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
       await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
       await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
       expect(m.calls.indexOf('toast')).toBeGreaterThanOrEqual(0);

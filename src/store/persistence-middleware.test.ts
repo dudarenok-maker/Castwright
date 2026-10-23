@@ -814,3 +814,115 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(after.bookMeta.draft?.title).toBe('Edit B');
   });
 });
+
+describe('a given-up save is kept and re-sent on the next flush (#3421)', () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+
+  it('(i) re-sends the kept save with no new edit, then has nothing left', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(putBookState).toHaveBeenCalledTimes(4);
+
+    putBookState.mockResolvedValue(undefined);
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    expect(putBookState).toHaveBeenCalledTimes(5);
+    expect(putBookState.mock.calls[4]).toEqual(putBookState.mock.calls[0]);
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    err.mockRestore();
+  });
+
+  it('(i-b) a debounced save of the book sends the kept save before its own', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(500);
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['cast', 'manuscript']);
+    err.mockRestore();
+  });
+
+  it('(iii-a) a newer edit to the same fields supersedes the kept ones', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'old' }] } });
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    state.cast = { characters: [{ id: 'new' }] };
+    mw({ type: 'cast/setCharacters' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1].patch).toEqual({ characters: [{ id: 'new' }] });
+    err.mockRestore();
+  });
+
+  it('(iii-b) a newer edit to other fields of the shared state slice rides with the kept ones', async () => {
+    putBookState.mockRejectedValue(down());
+    const meta = {
+      title: 'Renamed',
+      author: 'Marin Vale',
+      series: 'NCT · Book 2',
+      narratorCredit: 'Anders Vale',
+      genre: 'Literary fiction',
+      publicationDate: '2026-05-09',
+    };
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'ui/confirmCast' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['state'] });
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    state.bookMeta = { draft: null, saved: { 'book-1': meta } };
+    mw({ type: 'bookMeta/commitDraft' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1].patch).toEqual(
+      expect.objectContaining({ castConfirmed: true, ...meta }),
+    );
+    err.mockRestore();
+  });
+
+  it('(iv) a 4xx refusal is not kept', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+});

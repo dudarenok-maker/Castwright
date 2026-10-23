@@ -22,7 +22,7 @@ import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
-import { flushBookPersistence } from '../store/persistence-middleware';
+import { flushBookPersistence, type BookFlushOutcome } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
@@ -31,6 +31,9 @@ import type { Chapter } from '../lib/types';
 interface Props {
   bookId: string;
 }
+
+const SAVE_FAILED_BEFORE_RESTRUCTURE =
+  "Your last change couldn't be saved, so the chapters weren't changed. Try again.";
 
 export function RestructureView({ bookId }: Props) {
   const dispatch = useAppDispatch();
@@ -47,10 +50,16 @@ export function RestructureView({ bookId }: Props) {
   /* #3400 — send this book's queued saves and wait for them before a restructure
      request: one still waiting out its debounce would land after the route's own
      rewrite of manuscript-edits.json, carrying the old chapter ids. `null` (or the
-     bare action, without the persistence middleware) means nothing to wait for. */
+     bare action, without the persistence middleware) means nothing to wait for.
+     A save that still fails aborts the restructure, because the route would
+     rewrite manuscript-edits.json without it; the kept save is re-sent first on
+     the next attempt (#3421). */
   const flushQueuedSaves = useCallback(async () => {
     const writes = dispatch(flushBookPersistence(bookId)) as unknown;
-    if (writes instanceof Promise) await writes;
+    if (writes instanceof Promise) {
+      const outcome = (await writes) as BookFlushOutcome;
+      if (outcome.failedSlices.length > 0) throw new Error(SAVE_FAILED_BEFORE_RESTRUCTURE);
+    }
   }, [bookId, dispatch]);
 
   /* #3400 — raise the book's restructure flag and return the matching release. A
