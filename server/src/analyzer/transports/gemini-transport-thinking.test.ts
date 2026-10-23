@@ -354,7 +354,8 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
     expect(coerceAndValidate(thinking, '290000').ok).toBe(true);
     expect(coerceAndValidate(thinking, '290001').ok).toBe(false);
     expect(thinking.help).toContain('Maximum 290000');
-    expect(thinking.help).toContain('300 s');
+    expect(thinking.help).toContain('a deliberate local ceiling');
+    expect(thinking.help).not.toContain('300 s');
     expect(allKnobs().find((k) => k.key === 'analyzer.gemini.requestCeilingMs')).toMatchObject({
       env: 'ANALYZER_GEMINI_REQUEST_CEILING_MS',
       type: 'integer',

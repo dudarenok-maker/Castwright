@@ -416,7 +416,7 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
     - **Default:** automatic, which is 2 min (120 000 ms) for thinking models and today's 45 s for other models.
     - **Adjustable:** the default is adjustable in Advanced Settings. Help text: "Automatic = 2 minutes for thinking models. Raise it if long thinks time out; maximum 290 seconds."
     - **Measurement never moves it:** the wave-2 on-box measurement informs a later default change; it never changes the default by itself.
-    - **Maximum:** 290 s. The Gemini SDK streams over the global `fetch`, whose undici header and body timeouts are fixed at 300 s unless changed process-wide.
+    - **Maximum:** 290 s, a deliberate local ceiling (the owner kept it in #3724). It was first set below the 300 s undici timeouts the SDK's global `fetch` carried; from `@google/genai` 2.29 the SDK no longer inherits them.
     - **After answer text starts:** today's 45 s idle watchdog applies unchanged.
     - **On timeout:** a request that times out before answer text fails as `analyzer-timeout`, naming this setting. It is not retried, because it already exceeds the 90 s retry budget, and no retry is announced.
     - **Trade-off:** a stalled request on a thinking model fails once, after up to 2 min, instead of two 45 s attempts. In return a think is not killed while it stays silent, or streams summaries, for up to 2 min at a time.

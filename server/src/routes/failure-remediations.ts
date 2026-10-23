@@ -123,7 +123,7 @@ export const FAILURE_REMEDIATIONS = {
     remediation:
       "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
       "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
-      "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
+      "290000 ms, a deliberate local ceiling); when a request ran too long overall, raise 'Gemini request " +
       "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings, or the endpoint's request time limit " +
       'for an OpenAI-compatible endpoint. Or switch to a faster analyzer model.',
   },
