@@ -1599,15 +1599,18 @@ describe('job.engine at every relabel and record site (#3084 wave 3d review pass
   const healthy1 = (engine: 'local' | 'gemini'): AnalyzerSelection =>
     ({ analyzer: buildSpyPhase1Analyzer(), engine, model: engine === 'local' ? 'qwen3.5:9b' : 'gemini-3.6-flash', fallbackModel: null, fallbackEngine: null });
   /* An endpoint primary that is down at its first stage-1 call; the Gemini target works. */
-  const endpointDownAtStage1 = (): AnalyzerSelection => {
+  const endpointDownAtStage1 = (target: { model: string; engine: 'local' | 'gemini' } = { model: 'gemini-3.6-flash', engine: 'gemini' }): AnalyzerSelection => {
     const primary: Analyzer = { ...buildSpyPhase0Analyzer(), async runStage1Chapter(): Promise<Stage1ChapterOutput> { throw down(); } };
-    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
+    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: target.model, fallbackEngine: target.engine };
   };
   /* An endpoint primary that is down at its first stage-2 call; the Gemini target works. */
-  const endpointDownAtStage2 = (): AnalyzerSelection => {
+  const endpointDownAtStage2 = (target: { model: string; engine: 'local' | 'gemini' } = { model: 'gemini-3.6-flash', engine: 'gemini' }): AnalyzerSelection => {
     const primary: Analyzer = { ...buildSpyPhase1Analyzer(), async runStage2Chapter(): Promise<Stage2ChapterOutput> { throw down(); } };
-    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase1Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: 'gemini-3.6-flash', fallbackEngine: 'gemini' };
+    return { analyzer: new FallbackAnalyzer(primary, buildSpyPhase1Analyzer()), engine: 'openai', model: ENDPOINT_MODEL, fallbackModel: target.model, fallbackEngine: target.engine };
   };
+  /* Review pass 5 (P) — a TAGLESS Ollama target: its model id reads as Gemini, so a site that infers
+     the engine from the id (instead of taking the target analyzer's own) mislabels the run. */
+  const TAGLESS_LOCAL = { model: 'llama3', engine: 'local' } as const;
 
   async function seedCachedStage1(manuscriptId: string): Promise<void> {
     await saveAnalysisCache(manuscriptId, {
@@ -1660,6 +1663,20 @@ describe('job.engine at every relabel and record site (#3084 wave 3d review pass
     it(`${kind}: phase 0 on an endpoint that is down at stage 1 (switched to Gemini) + phase 1 on a healthy Ollama reads local`, async () => {
       const job = await engineAfter(kind, endpointDownAtStage1(), healthy1('local'));
       expect(job.fallbackMarked?.has('gemini-3.6-flash'), 'precondition: phase 0 switched').toBe(true);
+      expect(job.engine).toBe('local');
+    }, 60_000);
+
+    it(`${kind}: a tagless Ollama target at stage 1 (phase 0) labels the run local, not Gemini`, async () => {
+      const job = await engineAfter(kind, endpointDownAtStage1(TAGLESS_LOCAL), healthy1('gemini'));
+      expect(job.fallbackMarked?.has('llama3'), 'precondition: phase 0 switched to the target').toBe(true);
+      expect(job.phaseEngines?.[0]).toBe('local');
+      expect(job.engine).toBe('local');
+    }, 60_000);
+
+    it(`${kind}: a tagless Ollama target at stage 2 (phase 1) labels the run local, not Gemini`, async () => {
+      const job = await engineAfter(kind, healthy0('gemini'), endpointDownAtStage2(TAGLESS_LOCAL));
+      expect(job.fallbackMarked?.has('llama3'), 'precondition: phase 1 switched to the target').toBe(true);
+      expect(job.phaseEngines?.[1]).toBe('local');
       expect(job.engine).toBe('local');
     }, 60_000);
 
