@@ -169,6 +169,26 @@ describe('reconcileChapterUuids', () => {
     expect(new Set(out.map((c) => c.uuid)).size).toBe(2);
   });
 
+  it('two unmatched chapters sharing a free client uuid: the first keeps it, the second is minted (#3683)', () => {
+    const existing = [ch({ id: 1, uuid: 'u-1' })];
+    const incoming = [ch({ id: 5, uuid: 'same' }), ch({ id: 6, uuid: 'same' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('same');
+    expect(out[1].uuid).toMatch(UUID_RE);
+    expect(out[1].uuid).not.toBe('same');
+  });
+
+  it('a matched stored chapter with no uuid keeps the client uuid when nothing else holds it (#3683)', () => {
+    const existing = [ch({ id: 1, slug: '01-x' })];
+    const incoming = [ch({ id: 1, slug: '01-x', uuid: 'forged' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('forged');
+  });
+
   it('does not mutate the incoming array', () => {
     const existing = [ch({ id: 1, uuid: 'u1' })];
     const incoming = [ch({ id: 1 })];
