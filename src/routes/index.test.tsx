@@ -26,7 +26,12 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
-import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  persistenceMiddleware,
+  flushBookPersistence,
+  supersedeBookSaves,
+  restoreSupersededSaves,
+} from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
@@ -1082,6 +1087,33 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
           .map((c) => (c[1] as { patch: { characters: { name: string }[] } }).patch.characters[0].name)
           .pop();
         expect(lastCast).toBe('Eliza Q');
+      });
+
+      it('S5: after a wipe succeeded, a later failed wipe gives back only what was kept since, never the pre-wipe save', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        const rpcMock = rpc();
+        rpcMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+
+        /* The wiped book is reopened, edited, and that save is given up on. */
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+        store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Q' } as Character]));
+        void store.dispatch(flushBookPersistence('b1') as never);
+        await vi.advanceTimersByTimeAsync(0);
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(10000);
+
+        /* A second wipe of the same book fails. */
+        store.dispatch(supersedeBookSaves('b1'));
+        store.dispatch(restoreSupersededSaves('b1'));
+        putBookStateMock.mockClear();
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(0);
+        expect(JSON.stringify(putBookStateMock.mock.calls)).toContain('Eliza Q');
       });
     });
 

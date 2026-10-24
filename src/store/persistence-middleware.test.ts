@@ -1312,6 +1312,106 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([true, undefined]);
   });
 
+  /* #3421 S5 — what a park keeps and what a restore gives back. */
+  const metaOf = (title: string) => ({ draft: null, saved: { 'book-1': { title } } });
+  const leaveBook = (mw: (a: unknown) => unknown, state: Record<string, unknown>) => {
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+  };
+  const reopenBook = (mw: (a: unknown) => unknown, state: Record<string, unknown>) => {
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+  };
+  const statePuts = () => putBookState.mock.calls.filter((c) => c[1].slice === 'state');
+
+  it('(ix) a kept edit newer than the parked one wins its fields on restore, and the parked fields it did not carry survive (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* castConfirmed and the T1 rename are both given up on, then parked. */
+    mw({ type: 'ui/confirmCast' });
+    leaveBook(mw, state);
+    await advance(20000);
+    reopenBook(mw, state);
+    mw({ type: 'bookMeta/commitDraft' });
+    leaveBook(mw, state);
+    await advance(20000);
+    mw(supersedeBookSaves('book-1'));
+    /* The wipe is still running: the book is renamed again and that save is
+       given up on too. */
+    reopenBook(mw, state);
+    state.bookMeta = metaOf('T2');
+    mw({ type: 'bookMeta/commitDraft' });
+    leaveBook(mw, state);
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+
+    mw(restoreSupersededSaves('book-1'));
+    reopenBook(mw, state);
+    await mw(flushBookPersistence('book-1'));
+    expect(statePuts()).toHaveLength(1);
+    expect(statePuts()[0][1].patch).toEqual(expect.objectContaining({ castConfirmed: true, title: 'T2' }));
+  });
+
+  it('(x) the park merges its layers newest-on-top: a queued write beats the one still being sent, which beats the kept one (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* kept: castConfirmed. */
+    mw({ type: 'ui/confirmCast' });
+    leaveBook(mw, state);
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    /* sending: the T1 rename (with the kept field riding along) never answers. */
+    putBookState.mockImplementationOnce(() => new Promise(() => {}));
+    putBookState.mockResolvedValue(undefined);
+    reopenBook(mw, state);
+    mw({ type: 'bookMeta/commitDraft' });
+    void mw(flushBookPersistence('book-1'));
+    await advance(0);
+    expect(statePuts()).toHaveLength(1);
+    /* queued: the T2 rename. */
+    state.bookMeta = metaOf('T2');
+    mw({ type: 'bookMeta/commitDraft' });
+
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    void mw(flushBookPersistence('book-1'));
+    await advance(500);
+    expect(statePuts()).toHaveLength(2);
+    expect(statePuts()[1][1].patch).toEqual(expect.objectContaining({ castConfirmed: true, title: 'T2' }));
+  });
+
+  it('(xi) a second supersede merges into what the first parked instead of overwriting it (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state); // wipe 1 parks the T1 rename
+    mw({ type: 'ui/confirmCast' });
+    mw(supersedeBookSaves('book-1')); // wipe 2 parks a different save for the same key
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+  });
+
+  it('(xii) a save that settled is not parked again, nor restored, by a later supersede (S5)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    mw({ type: 'cast/setCharacters' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    await advance(1000);
+    expect(castPuts()).toHaveLength(1);
+  });
+
   it('(iv) a 4xx refusal is not kept', async () => {
     putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): refused'));
     const state: Record<string, unknown> = baseState();
