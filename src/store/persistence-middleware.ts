@@ -376,10 +376,14 @@ export const persistenceMiddleware: Middleware = (store) => {
 
   /* #3421 — re-send, now, every save of `bookId` that was given up on, ahead
      of whatever the caller is about to send. Deleting from `retained` first
-     keeps `flush` from re-entering for the same key. */
+     keeps `flush` from re-entering for the same key; an entry the nested
+     `flush` already sent is skipped, so each is sent once. */
   const resendRetained = (bookId: string, exceptKey?: FlushKey) => {
     for (const [key, patch] of Array.from(retained)) {
       if (!key.startsWith(`${bookId}:`) || key === exceptKey) continue;
+      /* The loop walks a snapshot, and the nested `flush` below has already
+         re-sent (and deleted) the later entries of this book. */
+      if (!retained.has(key)) continue;
       retained.delete(key);
       if (!pending.has(key)) pending.set(key, patch);
       const timer = timers.get(key);

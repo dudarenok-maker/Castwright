@@ -899,6 +899,26 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     err.mockRestore();
   });
 
+  it('(i-c) two kept slices of one book are each re-sent exactly once', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['cast', 'manuscript']);
+    err.mockRestore();
+  });
+
   it('(iii-a) a newer edit to the same fields supersedes the kept ones', async () => {
     putBookState.mockRejectedValue(down());
     const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'old' }] } });
