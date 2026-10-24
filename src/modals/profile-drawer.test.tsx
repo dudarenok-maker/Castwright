@@ -10,6 +10,11 @@ import { castSlice, castActions } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
+import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -21,6 +26,12 @@ import type { PromoteQwenVoiceResponse } from '../lib/api';
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
   playBaseVoiceSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
+}));
+
+/* The design guard's Confirm dispatches haltActiveGeneration; stub it to a plain action so the tests assert the call. */
+vi.mock('../store/queue-thunks', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../store/queue-thunks')>()),
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
 }));
 
 vi.mock('../lib/use-sample-playback', () => ({
@@ -2820,5 +2831,166 @@ describe('ProfileDrawer roster entry point (bulk reassign)', () => {
     renderDrawer(baseChar, { onReassignLines });
     fireEvent.click(screen.getByRole('button', { name: /reassign lines/i }));
     expect(onReassignLines).toHaveBeenCalledWith(baseChar.id);
+  });
+});
+
+describe('ProfileDrawer design guard (#3084 W4)', () => {
+  const DESIGN_TITLE = 'Pause audio generation to design voices?';
+
+  /* The guard reads chapters/account/config, which the shared makeStore omits. */
+  function renderGuarded(
+    character: Character,
+    seed: { streaming?: boolean; personaEngine?: string } = {},
+  ) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        voices: voicesSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        library: librarySlice.reducer,
+        voiceLibrary: voiceLibrarySlice.reducer,
+        chapters: chaptersSlice.reducer,
+        account: accountSlice.reducer,
+        config: configSlice.reducer,
+      },
+    });
+    seedSameCardPersona(store, seed);
+    render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={character}
+          voice={undefined}
+          bookId="book-1"
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+
+  function selectQwen() {
+    fireEvent.change(screen.getByLabelText('Voice engine for this character'), { target: { value: 'qwen' } });
+  }
+
+  beforeEach(() => {
+    generateVoiceStyle.mockClear();
+    vi.mocked(haltActiveGeneration).mockClear();
+  });
+
+  it('the voice-style button on a same-card endpoint persona engine asks first; Pause and design halts then generates', async () => {
+    renderGuarded({ ...baseChar, voiceStyle: 'old persona' });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-regenerate-persona'));
+
+    expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+    expect(generateVoiceStyle).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'halloran'));
+    expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+  });
+
+  it('Wait on the voice-style prompt makes no API call and closes the dialog', async () => {
+    renderGuarded({ ...baseChar, voiceStyle: 'old persona' });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-regenerate-persona'));
+
+    expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+    await Promise.resolve();
+    expect(generateVoiceStyle).not.toHaveBeenCalled();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  it('the auto-generate on first switch to Qwen is guarded too: Pause and design halts then generates', async () => {
+    renderGuarded(baseChar); // no persona -> switching to Qwen auto-generates
+    selectQwen();
+
+    expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+    expect(generateVoiceStyle).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'halloran'));
+  });
+
+  it('the auto-generate on first switch to Qwen: Wait makes no API call', async () => {
+    renderGuarded(baseChar);
+    selectQwen();
+
+    expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+    await Promise.resolve();
+    expect(generateVoiceStyle).not.toHaveBeenCalled();
+  });
+
+  it('a Gemini persona engine generates directly with no dialog', async () => {
+    renderGuarded({ ...baseChar, voiceStyle: 'old persona' }, { personaEngine: 'gemini' });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-regenerate-persona'));
+
+    await waitFor(() => expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'halloran'));
+    expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  describe('Regenerate inside the compare modal opened from the drawer', () => {
+    async function openCompare() {
+      const store = renderGuarded({
+        ...baseChar,
+        ttsEngine: 'qwen',
+        voiceId: 'v_hal',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+        voiceStyle: 'a steady adult voice',
+      });
+      act(() => {
+        store.dispatch(
+          castDesignActions.beginSingle({
+            bookId: 'book-1', characterId: 'halloran', name: 'Captain Halloran', mode: 'redesign', lastTickAt: 1,
+          }),
+        );
+        store.dispatch(
+          castDesignActions.previewReady({
+            bookId: 'book-1', characterId: 'halloran', previewVoiceId: 'qwen-halloran-preview',
+            previewUrl: '/audio/voices/char-halloran-preview.mp3', persona: 'a steady adult voice', lastTickAt: 2,
+          }),
+        );
+      });
+      await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+    }
+
+    it('shows the design dialog stacked above the compare modal; Pause and design halts then generates', async () => {
+      await openCompare();
+      fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+
+      const title = screen.getByText(DESIGN_TITLE);
+      expect(document.body).toContainElement(title);
+      expect(screen.getByRole('button', { name: 'Pause and design' })).toBeInTheDocument();
+      /* Same z-50 layer as the compare panel, so it only stacks above by following it in the DOM. */
+      expect(
+        screen.getByTestId('voice-compare-approve').compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(generateVoiceStyle).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+      expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'halloran'));
+    });
+
+    it('Wait leaves the compare modal open and makes no API call', async () => {
+      await openCompare();
+      fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+
+      expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+      expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+      expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy();
+      await Promise.resolve();
+      expect(generateVoiceStyle).not.toHaveBeenCalled();
+    });
   });
 });
