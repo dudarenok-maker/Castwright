@@ -1208,8 +1208,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              wholesale replace would strip them. reconcileChapterUuids
              carries each uuid across from the stored chapter matching on
              id + slug (and mints for a genuinely-new chapter);
-             carryTitleSynthesized does the same for the app-made-title flag,
-             ignoring whatever the client sent.
+             carryTitleSynthesized carries the app-made-title flag by id alone
+             (kept only while the title is unchanged), ignoring whatever the
+             client sent.
              #3683 — carryServerOwnedChapterFields then takes the render and
              failure stamps (duration, audio*, generation*) from the locked
              fresh read for a chapter matched on id + slug: a client value is

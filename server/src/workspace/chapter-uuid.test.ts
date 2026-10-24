@@ -226,17 +226,17 @@ describe('carryTitleSynthesized', () => {
 
     expect('titleSynthesized' in incoming[0]).toBe(false);
   });
-  it('carries the flag across a uuid mismatch but not a slug mismatch (#3683)', () => {
+  it('matches by id alone: carries across a slug mismatch while the title is unchanged, not when it differs (#3683)', () => {
     const existing = [ch({ id: 1, slug: '01-two', title: 'T', uuid: 'a', titleSynthesized: true })];
 
     expect(
-      carryTitleSynthesized([ch({ id: 1, slug: '01-one', title: 'T', uuid: 'a' })], existing)[0]
-        .titleSynthesized,
-    ).toBeUndefined();
-    expect(
-      carryTitleSynthesized([ch({ id: 1, slug: '01-two', title: 'T', uuid: 'b' })], existing)[0]
+      carryTitleSynthesized([ch({ id: 1, slug: '01-one', title: 'T', uuid: 'b' })], existing)[0]
         .titleSynthesized,
     ).toBe(true);
+    expect(
+      carryTitleSynthesized([ch({ id: 1, slug: '01-one', title: 'U', uuid: 'a' })], existing)[0]
+        .titleSynthesized,
+    ).toBeUndefined();
   });
 });
 
