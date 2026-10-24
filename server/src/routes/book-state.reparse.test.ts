@@ -1096,13 +1096,19 @@ describe("reparse handler — #2099 gap A: concurrent cast-aliases write during 
    reparse delete is inline in `applyReparse` (no extractable helper to drive
    below book-op), so the real REPARSE is the parked side — fired first and
    held at its in-lock `existingCast` read — and the second writer is
-   `persistEmotionVariant` (cast lock, NO book-op), a real production writer
-   whose in-lock re-read refuses with 'notFound' on an absent cast.
+   `persistEmotionVariant` (cast lock, NO book-op) called directly.
+
+   This is defense-in-depth, not a reproducible production race:
+   `persistEmotionVariant` only runs inside a `runBookJob`, and reparse answers
+   409 `book_busy` while a job is registered, so book-op plus book-jobs already
+   exclude the interleaving. Nor is the writer's 'notFound' a refusal — both
+   production callers (`qwen-voice.ts`, `cast-design.ts`) report it as success.
 
    Invariant proved: reparse's read+snapshot+delete is ONE cast-lock hold, so a
-   concurrent cast writer either completes before it (and lands in the
-   carryover snapshot) or runs after the delete and refuses — it is never
-   told 'applied' and then silently erased by the stale-snapshot delete. */
+   concurrent cast-lock writer either completes before it (and lands in the
+   carryover snapshot) or queues behind it, re-reads inside its own lock, sees
+   the deleted cast and answers 'notFound' — it is never told 'applied' and
+   then silently erased by the stale-snapshot delete. */
 describe('reparse handler — #3773: cast lock alone serialises the cast.json read+delete', () => {
   const LOCK_AUTHOR = 'Reparse Lock Author';
   const LOCK_SERIES = 'Standalones';
@@ -1116,7 +1122,7 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
     lockBookDir = join(workspaceRoot, 'books', LOCK_AUTHOR, LOCK_SERIES, LOCK_TITLE);
   });
 
-  it('#3773 — cast lock alone: a cast-lock-only writer is refused, not silently erased, by a parked reparse delete', async () => {
+  it('#3773 — cast lock alone: a cast-lock-only writer lands in the snapshot or sees the deleted cast, never applied-then-erased, around a parked reparse delete', async () => {
     mkdirSync(join(lockBookDir, '.audiobook'), { recursive: true });
     writeFileSync(join(lockBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
     writeFileSync(
@@ -1240,7 +1246,7 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
     expect(second === 'applied' && !survived).toBe(false);
 
     // Mechanism: the writer queued behind reparse's lock, re-read inside its
-    // own acquisition, found the cast reparse just deleted, and refused.
+    // own acquisition, and found the cast reparse just deleted ('notFound').
     expect(second).toBe('notFound');
     expect(existsSync(castPath)).toBe(false);
   });
