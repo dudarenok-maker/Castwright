@@ -26,7 +26,7 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { dropRetainedSaves } from '../store/persistence-middleware';
+import { dropRetainedSaves, supersedeBookSaves } from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -147,6 +147,10 @@ export function BooksRoute() {
         )
       }
       onDeleteBook={async (b) => {
+        /* #3421 — stop the book's unsent / retrying saves before the RPC, not
+           after it: a retry that comes due while it runs would PUT into the
+           book being removed. The drop below still lets go of anything kept. */
+        dispatch(supersedeBookSaves(b.bookId));
         try {
           await api.deleteBook(b.bookId);
         } catch (err) {
@@ -181,6 +185,9 @@ export function BooksRoute() {
         if (res) dispatch(libraryActions.hydrate(res));
       }}
       onReplaceManuscript={async (b, file) => {
+        /* #3421 — before the RPC, so no retry puts the old roster into the
+           replaced book while it runs (see onDeleteBook). */
+        dispatch(supersedeBookSaves(b.bookId));
         let result;
         try {
           result = await api.replaceManuscript(b.bookId, file);
@@ -233,6 +240,9 @@ export function BooksRoute() {
         });
       }}
       onReparseBook={async (b) => {
+        /* #3421 — before the RPC, so no retry puts the pre-reparse roster into
+           the re-parsed book while it runs (see onDeleteBook). */
+        dispatch(supersedeBookSaves(b.bookId));
         let result;
         try {
           result = await api.reparseBook(b.bookId);

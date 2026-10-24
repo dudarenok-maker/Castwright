@@ -333,6 +333,17 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
 const DROP_RETAINED = 'persistence/dropRetained';
 export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
 
+/* #3421 — cancel everything of `bookId` that has not landed yet, ahead of a
+   destructive server call (re-parse, manuscript replace, delete): its kept
+   saves, its debounced writes, and any send-and-retry sequence already running
+   (which would otherwise PUT the pre-wipe roster into the wiped book seconds
+   later). Unlike `dropRetainedSaves` it bumps the generation, so a running
+   sequence reads as superseded: it ends quietly, with no toast, exactly as when
+   a newer write overtakes it. Layout's re-read must NOT use this — it would
+   cancel a newer edit. Not a reducer action. */
+const SUPERSEDE_BOOK = 'persistence/supersedeBook';
+export const supersedeBookSaves = (bookId: string) => ({ type: SUPERSEDE_BOOK, payload: bookId });
+
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
   const pending = new Map<FlushKey, unknown>();
@@ -514,6 +525,27 @@ export const persistenceMiddleware: Middleware = (store) => {
           retained.delete(key);
           retainedOnSuccess.delete(key);
         }
+      }
+      return result;
+    }
+
+    if (type === SUPERSEDE_BOOK && typeof a.payload === 'string') {
+      const prefix = `${a.payload}:`;
+      for (const key of new Set([
+        ...generation.keys(),
+        ...inFlight.keys(),
+        ...pending.keys(),
+        ...retained.keys(),
+      ])) {
+        if (!key.startsWith(prefix)) continue;
+        generation.set(key, (generation.get(key) ?? 0) + 1);
+        const timer = timers.get(key);
+        if (timer) clearTimeout(timer);
+        timers.delete(key);
+        pending.delete(key);
+        toastPending.delete(key);
+        retained.delete(key);
+        retainedOnSuccess.delete(key);
       }
       return result;
     }

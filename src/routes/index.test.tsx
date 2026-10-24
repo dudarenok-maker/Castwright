@@ -8,7 +8,7 @@
 // library entry.
 
 import { Suspense } from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -907,6 +907,82 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     /* Send b2's queued write now rather than sleeping out the debounce. */
     await store.dispatch(flushBookPersistence('b2') as never);
     expect(putBookStateMock).not.toHaveBeenCalled();
+  });
+
+  /* #3421 N1/N3 — a save of the wiped book that is still retrying must be
+     stopped BEFORE the destructive RPC, not after it resolves: the retry would
+     otherwise PUT the pre-wipe roster into the freshly wiped book. */
+  describe('stops a book’s in-flight save retries before the wipe RPC (#3421)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      getLibraryMock.mockResolvedValue({ authors: [] });
+      getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+      putBookStateMock.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const cases: Array<{
+      name: string;
+      rpc: () => ReturnType<typeof vi.fn>;
+      trigger: () => void;
+    }> = [
+      {
+        name: 're-parse',
+        rpc: () => reparseBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+          const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+      {
+        name: 'manuscript replace',
+        rpc: () => replaceManuscriptMock,
+        trigger: () => {
+          fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+            target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+          });
+          const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+      {
+        name: 'delete',
+        rpc: () => deleteBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+          const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+    ];
+
+    it.each(cases)('$name', async ({ rpc, trigger }) => {
+      const store = makePopulatedStore({ persist: true });
+      /* A rename's cast PUT fails once while the user is still in the book,
+         then they go home: its retry sequence is now waiting out its 1 s gap. */
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Vane' } as Character]));
+      void store.dispatch(flushBookPersistence('b1') as never);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+      store.dispatch(uiActions.goHome());
+
+      const rpcMock = rpc();
+      let release!: (v?: unknown) => void;
+      rpcMock.mockReturnValue(new Promise((r) => (release = r)));
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      trigger();
+      await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+
+      /* Every retry gap has elapsed while the RPC is still pending. */
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+      release({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+    });
   });
 
   /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must

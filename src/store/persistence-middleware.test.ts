@@ -12,6 +12,7 @@ import {
   persistenceMiddleware,
   flushBookPersistence,
   dropRetainedSaves,
+  supersedeBookSaves,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
@@ -1133,6 +1134,53 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
     await expect(again).resolves.toEqual({ failedSlices: [] });
     expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it("(vi) superseding a book's saves stops a retry already in flight, with no toast and no failed slice (N1)", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'pre-reparse' }] } });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(1500);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+
+    /* The wipe (re-parse / replace / delete) lands while the third send waits. */
+    mw(supersedeBookSaves('book-1'));
+    await advance(10000);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    await expect(first).resolves.toEqual({ failedSlices: [] });
+    expect(store.dispatch).not.toHaveBeenCalled();
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    err.mockRestore();
+  });
+
+  it("(vi-b) superseding also drops a debounced, unsent write of the book", async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+
+    mw({ type: 'cast/setCharacters' });
+    mw(supersedeBookSaves('book-1'));
+    await advance(2000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it("(vi-c) superseding one book leaves another book's in-flight retry running", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    void mw(flushBookPersistence('book-1'));
+    await advance(1500);
+    mw(supersedeBookSaves('book-2'));
+    await advance(10000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
     err.mockRestore();
   });
 
