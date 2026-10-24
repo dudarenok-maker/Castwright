@@ -132,3 +132,69 @@ describe('StageRunner.runFreeText', () => {
     expect(prepareSignal).toBe(ac.signal);
   });
 });
+
+/* Review finding 5: these messages reach the user verbatim as `character_failed.errorReason`, so the
+   persona path names the persona settings (Voice-style model / Persona generation engine), not analysis's. */
+describe('StageRunner.runFreeText failure wording (persona path)', () => {
+  function runnerOn(kind: 'gemini' | 'openai' | 'ollama', model: string, r: TransportResult) {
+    const transport: ChatTransport = { kind, model, send: async () => r };
+    return new StageRunner({
+      transport,
+      policy: OLLAMA_RETRY_POLICY,
+      settings: () => ({ structuredOutput: 'schema', maxOutputTokens: 4096 }),
+      adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    });
+  }
+
+  it('a Gemini block names the Voice-style model and the Persona generation engine', async () => {
+    const err = (await runnerOn('gemini', 'gemini-3.1-flash-lite', result('', { finish: 'blocked', blockReason: 'RECITATION' }))
+      .runFreeText({ prompt: 'P' })
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GeminiContentBlockedError);
+    expect(err.message).toBe(
+      'Gemini gemini-3.1-flash-lite blocked the persona request (reason=RECITATION): a content filter refused it. ' +
+        'Change the Voice-style model (VOICE_STYLE_MODEL) or the Persona generation engine in Advanced Settings.',
+    );
+  });
+
+  it('an OpenAI-compatible content_filter is named for the endpoint model, not Gemini', async () => {
+    const err = (await runnerOn('openai', 'qwen3', result('', { finish: 'blocked', blockReason: 'content_filter' }))
+      .runFreeText({ prompt: 'P' })
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(GeminiContentBlockedError);
+    expect(err.message).toBe(
+      'OpenAI-compatible model qwen3 blocked the persona request (reason=content_filter): a content filter refused it. ' +
+        'Change the Persona generation engine in Advanced Settings.',
+    );
+  });
+
+  it.each([[undefined], ['STOP'], ['FINISH_REASON_UNSPECIFIED']])(
+    'an empty Gemini reply with block reason %s is NOT a block: the text comes back empty for the empty-persona guard',
+    async (blockReason) => {
+      const runner = runnerOn('gemini', 'gemini-3.1-flash-lite', result('', { finish: 'blocked', blockReason }));
+      await expect(runner.runFreeText({ prompt: 'P' })).resolves.toBe('');
+    },
+  );
+
+  it('a persona reasoning overflow does not talk about splitting a chunk', async () => {
+    const err = (await runnerOn('ollama', 'qwen3:8b', result('', { finish: 'length', usage: { reasoningTokens: 900 } }))
+      .runFreeText({ prompt: 'P' })
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(err.message).toBe(
+      'ollama qwen3:8b used its whole output budget on reasoning (900 reasoning tokens) and returned no persona. ' +
+        'Pick a model that reasons less, or change the Persona generation engine in Advanced Settings.',
+    );
+  });
+
+  it('analysis-path messages are unchanged', () => {
+    expect(new GeminiContentBlockedError('gemini-x', 'RECITATION').message).toBe(
+      'Gemini gemini-x returned an empty response (reason=RECITATION). A content filter blocked the text — gemini-* models block copyrighted' +
+        ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or switch' +
+        ' to Local Ollama in Admin → Model Manager.',
+    );
+    expect(new AnalyzerReasoningOverflowError('ollama', 'm', 900).message).toBe(
+      'ollama m used its whole output budget on reasoning (900 reasoning tokens) and returned no answer — splitting the chunk cannot shrink reasoning.',
+    );
+  });
+});

@@ -211,10 +211,14 @@ export class StageRunner {
       ? { ...sent, text: '', reasoningSeen: true }
       : { ...sent, text: think.text };
     if (answer.finish === 'blocked') {
-      throw new GeminiContentBlockedError(this.transport.model, answer.blockReason);
+      /* Gemini reports an empty STOP reply (or none at all) through the same 'blocked' finish as a real
+         filter; that is an empty persona, not a block, so the caller's empty-persona guard words it. */
+      const real = answer.blockReason && answer.blockReason !== 'FINISH_REASON_UNSPECIFIED' && answer.blockReason !== 'STOP';
+      if (!real) return '';
+      throw new GeminiContentBlockedError(this.transport.model, answer.blockReason, { transport: this.transport.kind });
     }
     if (answer.finish === 'length' && answer.text.trim() === '' && hasReasoningEvidence(answer)) {
-      throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens);
+      throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true });
     }
     return answer.text;
   }

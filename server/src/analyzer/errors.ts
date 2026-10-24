@@ -150,6 +150,9 @@ export class GeminiContentBlockedError extends Error {
     /** The stop/block reason (RECITATION / SAFETY / PROHIBITED_CONTENT), or
         undefined when the stream ended empty without one. */
     public readonly reason?: string,
+    /** Set by `StageRunner.runFreeText` (persona generation): the message then names the persona
+        settings and the engine that answered, not analysis's. Analysis callers leave it unset. */
+    persona?: { transport: TransportKind },
   ) {
     const named =
       reason && reason !== 'FINISH_REASON_UNSPECIFIED' ? ` (reason=${reason})` : '';
@@ -159,7 +162,20 @@ export class GeminiContentBlockedError extends Error {
           ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or switch' +
           ' to Local Ollama in Admin → Model Manager.'
         : '';
-    super(`Gemini ${model} returned an empty response${named}.${hint}`);
+    const personaWho =
+      persona?.transport === 'gemini'
+        ? `Gemini ${model}`
+        : persona?.transport === 'openai'
+          ? `OpenAI-compatible model ${model}`
+          : `${persona?.transport} ${model}`;
+    super(
+      persona
+        ? `${personaWho} blocked the persona request${named}: a content filter refused it. ` +
+            (persona.transport === 'gemini'
+              ? 'Change the Voice-style model (VOICE_STYLE_MODEL) or the Persona generation engine in Advanced Settings.'
+              : 'Change the Persona generation engine in Advanced Settings.')
+        : `Gemini ${model} returned an empty response${named}.${hint}`,
+    );
     this.name = 'GeminiContentBlockedError';
   }
 }
@@ -212,12 +228,14 @@ export class AnalyzerReasoningOverflowError extends Error {
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
-    opts?: { endpointId?: string },
+    opts?: { endpointId?: string; persona?: boolean },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
         (reasoningTokens ? ` (${reasoningTokens} reasoning tokens)` : '') +
-        ' and returned no answer — splitting the chunk cannot shrink reasoning.',
+        (opts?.persona
+          ? ' and returned no persona. Pick a model that reasons less, or change the Persona generation engine in Advanced Settings.'
+          : ' and returned no answer — splitting the chunk cannot shrink reasoning.'),
     );
     this.name = 'AnalyzerReasoningOverflowError';
     this.endpointId = opts?.endpointId;
