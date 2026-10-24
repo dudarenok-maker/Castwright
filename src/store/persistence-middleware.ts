@@ -419,9 +419,16 @@ export const persistenceMiddleware: Middleware = (store) => {
      rollback snapshot like a first-try success would. Only `onSuccess` is kept:
      a re-send that fails again behaves as a plain kept save, not a rename. */
   const retainedOnSuccess = new Map<FlushKey, PersistFailureHandler['onSuccess']>();
+  /* #3421 — the generation the kept save's write was made at. */
+  const retainedGen = new Map<FlushKey, number>();
   /* #3421 — a send-and-retry sequence's captured patch (and success handler)
      while it runs, so `supersedeBookSaves` can park what it is still sending. */
-  type SavedPatch = { patch: Record<string, unknown>; onSuccess?: PersistFailureHandler['onSuccess'] };
+  type SavedPatch = {
+    patch: Record<string, unknown>;
+    onSuccess?: PersistFailureHandler['onSuccess'];
+    /* The `generation` its write was made at; orders the layers of a park. */
+    gen?: number;
+  };
   const sending = new Map<FlushKey, Set<SavedPatch>>();
   /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
      (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
@@ -528,6 +535,7 @@ export const persistenceMiddleware: Middleware = (store) => {
           if (!refused && !rolledBack) {
             retained.set(key, patch as Record<string, unknown>);
             if (onSuccess) retainedOnSuccess.set(key, onSuccess);
+            retainedGen.set(key, gen);
           }
           if (handler) {
             const bookTitle = refused
@@ -562,7 +570,7 @@ export const persistenceMiddleware: Middleware = (store) => {
         }
       }
     };
-    const mine: SavedPatch = { patch: patch as Record<string, unknown>, onSuccess };
+    const mine: SavedPatch = { patch: patch as Record<string, unknown>, onSuccess, gen };
     const mineSet = sending.get(key) ?? new Set<SavedPatch>();
     mineSet.add(mine);
     sending.set(key, mineSet);
@@ -600,6 +608,7 @@ export const persistenceMiddleware: Middleware = (store) => {
         if (key.startsWith(`${a.payload}:`)) {
           retained.delete(key);
           retainedOnSuccess.delete(key);
+          retainedGen.delete(key);
         }
       }
       for (const key of Array.from(parked.keys())) {
@@ -641,15 +650,26 @@ export const persistenceMiddleware: Middleware = (store) => {
         ...sending.keys(),
       ])) {
         if (!key.startsWith(prefix)) continue;
-        /* Oldest first, newest on top: kept, then running, then queued. A
-           second supersede before the first resolves merges under what the
-           first already parked. */
-        const layers: SavedPatch[] = [
-          ...(parked.has(key) ? [parked.get(key)!] : []),
+        /* Oldest first, newest on top: the kept and running saves ordered by the
+           generation their writes were made at (a hung older PUT can still be
+           running when a newer one was given up on and kept), then the queued
+           one. A second supersede before the first resolves merges under what
+           the first already parked. */
+        const made = [
           ...(retained.has(key)
-            ? [{ patch: retained.get(key)!, onSuccess: retainedOnSuccess.get(key) }]
+            ? [
+                {
+                  patch: retained.get(key)!,
+                  onSuccess: retainedOnSuccess.get(key),
+                  gen: retainedGen.get(key) ?? generation.get(key) ?? 0,
+                },
+              ]
             : []),
           ...(sending.get(key) ?? []),
+        ].sort((x, y) => (x.gen ?? 0) - (y.gen ?? 0));
+        const layers: SavedPatch[] = [
+          ...(parked.has(key) ? [parked.get(key)!] : []),
+          ...made,
           ...(pending.has(key)
             ? [{ patch: pending.get(key) as Record<string, unknown>, onSuccess: toastPending.get(key)?.onSuccess }]
             : []),
@@ -681,6 +701,7 @@ export const persistenceMiddleware: Middleware = (store) => {
         toastPending.delete(key);
         retained.delete(key);
         retainedOnSuccess.delete(key);
+        retainedGen.delete(key);
       }
       return result;
     }
