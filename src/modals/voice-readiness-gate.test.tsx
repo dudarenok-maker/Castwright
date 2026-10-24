@@ -249,7 +249,7 @@ describe('VoiceReadinessGateModal', () => {
 describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
   const chars = [qwenChar({ id: 'a', name: 'Alice', lines: 5 })];
 
-  it('Design full cast on a same-card endpoint persona engine with a render streaming asks first; the gate stays open until Confirm', () => {
+  it('Design full cast on a same-card endpoint persona engine with a render streaming asks first; the gate stays open until Confirm', async () => {
     const store = makeStore({ characters: chars });
     seedSameCardPersona(store);
     render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
@@ -258,7 +258,10 @@ describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
     expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
     expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
     expect(store.getState().ui.stage).not.toMatchObject({ view: 'cast' });
-    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    /* The design starts once the halt has settled, a microtask later. */
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    });
     expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     expect(store.getState().ui.voiceReadinessGate).toBeNull();
     expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });

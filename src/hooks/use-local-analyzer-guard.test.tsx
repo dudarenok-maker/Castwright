@@ -16,6 +16,7 @@ import { useLocalAnalyzerGuard } from './use-local-analyzer-guard';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { accountSlice } from '../store/account-slice';
 import { configSlice, fetchConfig } from '../store/config-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import type { TtsReportedDevices } from '../lib/analyzer-endpoints';
 
 /* The guard's confirm dispatches haltActiveGeneration (requestStreamHalt +
@@ -44,7 +45,7 @@ function makeStore(opts: {
   personaEngine?: string;
 }) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, account: accountSlice.reducer, config: configSlice.reducer },
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, account: accountSlice.reducer, config: configSlice.reducer, notifications: notificationsSlice.reducer },
   });
   store.dispatch(uiSlice.actions.setSelectedModel(opts.selectedModel));
   if (opts.activeStream) store.dispatch(chaptersSlice.actions.setActiveStream(opts.activeStream));
@@ -321,7 +322,7 @@ describe('useLocalAnalyzerGuard — purpose "design" (persona engine)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
   }
 
-  it('prompts for a same-card endpoint persona engine while a render streams; Confirm halts then proceeds', () => {
+  it('prompts for a same-card endpoint persona engine while a render streams; Confirm halts then proceeds', async () => {
     /* The selected analysis model is Gemini: only the persona engine can make this prompt. */
     const store = makeStore({
       selectedModel: 'gemini-2.5-flash',
@@ -335,11 +336,57 @@ describe('useLocalAnalyzerGuard — purpose "design" (persona engine)', () => {
 
     expect(screen.getByText(TITLE)).toBeInTheDocument();
     expect(proceed).not.toHaveBeenCalled();
-    act(() => {
+    await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
     });
     expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  describe('awaits the halt before a design starts (N2)', () => {
+    const designStore = () =>
+      makeStore({
+        selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: [sameCard], ttsDevice: 'cuda:0', personaEngine: 'openai:same-card::m0',
+      });
+
+    it('asks for a halt that waits for the render to release, and proceeds only after it settles', async () => {
+      let release!: () => void;
+      vi.mocked(haltActiveGeneration).mockImplementationOnce((() => () => new Promise<void>((r) => { release = r; })) as never);
+      const proceed = vi.fn();
+      renderDesign(designStore(), proceed);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+      });
+      expect(haltActiveGeneration).toHaveBeenCalledWith({ awaitRelease: true });
+      expect(proceed).not.toHaveBeenCalled();
+      expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+
+      await act(async () => release());
+      expect(proceed).toHaveBeenCalledTimes(1);
+    });
+
+    it('never proceeds when the halt fails, and says so', async () => {
+      vi.mocked(haltActiveGeneration).mockImplementationOnce((() => () => Promise.reject(new Error('pause failed'))) as never);
+      const proceed = vi.fn();
+      const store = designStore();
+      renderDesign(store, proceed);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+      });
+      expect(proceed).not.toHaveBeenCalled();
+      expect(store.getState().notifications.toasts.some((t) => t.kind === 'error' && /didn.t start/.test(t.message))).toBe(true);
+    });
+
+    it('leaves the analysis purpose as it was: a plain halt, proceed in the same tick', () => {
+      vi.mocked(haltActiveGeneration).mockImplementationOnce((() => () => new Promise<void>(() => {})) as never);
+      const proceed = vi.fn();
+      const store = makeStore({ selectedModel: 'qwen3.5:4b', activeStream: liveSnapshot });
+      render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and analyse' }));
+      expect(haltActiveGeneration).toHaveBeenCalledWith();
+      expect(proceed).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('Wait cancels the design without halting the render', () => {

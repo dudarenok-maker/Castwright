@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { VoiceNudgeToast } from './voice-nudge-toast';
@@ -84,7 +84,7 @@ describe('VoiceNudgeToast', () => {
 });
 
 describe('VoiceNudgeToast — design guard (#3084 W4)', () => {
-  it('a same-card endpoint persona engine with a render streaming asks first; Confirm halts, then designs and dismisses', () => {
+  it('a same-card endpoint persona engine with a render streaming asks first; Confirm halts, then designs and dismisses', async () => {
     const store = makeStore(false);
     seedSameCardPersona(store);
     render(<Provider store={store}><VoiceNudgeToast toast={toast} /></Provider>);
@@ -92,7 +92,10 @@ describe('VoiceNudgeToast — design guard (#3084 W4)', () => {
 
     expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
     expect(recorded.some((a) => a.type === 'castDesign/designAllRequested')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    /* The design starts once the halt has settled, a microtask later. */
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    });
     expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     expect(recorded.some((a) => a.type === 'castDesign/designAllRequested')).toBe(true);
     expect(recorded.some((a) => a.type === 'notifications/dismissToast')).toBe(true);

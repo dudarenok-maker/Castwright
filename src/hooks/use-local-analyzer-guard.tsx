@@ -37,6 +37,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
+import { notificationsActions } from '../store/notifications-slice';
 import { engineForModelId } from '../lib/models';
 import { analyzerSharesTtsDevice, endpointForModelId, ttsDeviceKeyFor } from '../lib/analyzer-endpoints';
 import type { TtsModelKey } from '../lib/types';
@@ -175,10 +176,30 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
            (and POSTs /pause) immediately so the analyzer owns the GPU within
            the chapter, and queue.paused stops the dispatcher from re-draining.
            The user resumes generation from the queue modal afterwards. */
-        void dispatch(haltActiveGeneration());
         const run = pending;
         close();
-        run?.();
+        if (!designing) {
+          void dispatch(haltActiveGeneration());
+          run?.();
+          return;
+        }
+        /* A design shares the render's card, so it starts only after the halt has settled
+           (N2) — and not at all if the halt failed, or it would race the render it asked to stop. */
+        void (async () => {
+          try {
+            await dispatch(haltActiveGeneration({ awaitRelease: true }));
+          } catch (e) {
+            console.warn('[guard] halt before design failed', e);
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: "Couldn't pause audio generation, so voice design didn't start. Please try again.",
+              }),
+            );
+            return;
+          }
+          run?.();
+        })();
       }}
       onClose={close}
     />
