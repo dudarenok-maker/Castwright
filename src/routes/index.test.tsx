@@ -79,6 +79,8 @@ vi.mock('../lib/api', () => ({
   api: {
     completeSetup: () => completeSetupMock(),
     setChapterExcluded: (...a: unknown[]) => setChapterExcludedMock(...a),
+    /* #3774 — the Generate view's Include gate reads which jobs hold the book. */
+    getBookBusy: () => Promise.resolve([]),
     runAnalysisForChapters: (...a: unknown[]) => runAnalysisForChaptersMock(...a),
     analyseManuscript: (manuscriptId: string, opts: unknown) => {
       analyseMock(manuscriptId, opts);
