@@ -103,7 +103,11 @@ describe('VoiceNudgeToast — design guard (#3084 W4)', () => {
     seedSameCardPersona(store);
     render(<Provider store={store}><VoiceNudgeToast toast={toast} /></Provider>);
     fireEvent.click(screen.getByRole('button', { name: /design now/i }));
+    /* The DESIGN dialog must be the one asking: with design mode off the guard falls back to the analysis
+       dialog (also has a Wait button), and a Wait that only checks "nothing started" passes either way. */
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
     expect(recorded.some((a) => a.type === 'castDesign/designAllRequested')).toBe(false);
     expect(recorded.some((a) => a.type === 'notifications/dismissToast')).toBe(false);
   });
