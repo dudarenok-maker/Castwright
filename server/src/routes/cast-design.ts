@@ -57,6 +57,7 @@ import {
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { personaSharesGpu, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import {
+  AnalysisAbortedError,
   AnalyzerUnreachableError,
   AnalyzerEndpointMissingError,
   AnalyzerTimeoutError,
@@ -956,21 +957,40 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* #2260 FINAL ROUND (B2) nit — 'unknown' left this backstop unable to reach
        the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links for a
        lock-contention failure, same as the analysis path's own
-       `classifyAnalysisFailure` (failure-taxonomy.ts) already does. Two
-       literal branches, not a `code` variable, so the literal `code: '...'`
-       stays greppable/regex-extractable the way every other code on this
-       event already is (see single-design.ts's identical nit for the guard
-       this matters to). */
+       `classifyAnalysisFailure` (failure-taxonomy.ts) already does. */
     if (isLockAcquisitionTimeout(e)) {
       endJob(job, {
         type: 'error',
         code: 'lock-contention',
         message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
       });
+    } else if (e instanceof AnalysisAbortedError && job.controller.signal.aborted) {
+      /* #3084 W4 — defence in depth for a pause. Both persona paths now stop cleanly before this
+         point: the pre-pass returns on abort, and the lazy call's own per-character catch
+         breaks out of the loop on abort too. Nothing routinely reaches this branch;
+         it exists so that any abort that DOES escape the loop reads as a clean stop rather than a
+         `code: 'unknown'` halt. */
+      endJob(job, {
+        type: 'idle',
+        done: job.done,
+        total: job.total,
+        skipped: job.skipped,
+        clonedSkips: job.clonedSkips,
+        failures: job.failures,
+      });
     } else {
+      /* #3084 W4 — every other error that escapes the design loop carries the analysis failure
+         taxonomy's code: `auth` for a refused key (401/403) or a key bound to another origin,
+         `analyzer-endpoint-missing`, `analyzer-timeout`, and `unknown` only when the taxonomy
+         recognises nothing. In practice that is the pre-pass's wholesale rethrows. The LAZY
+         persona call does NOT arrive here: it has had its own per-character catch since
+         `6222e483` (second half of #3027), so its failure is a `character_failed` carrying a
+         reason string and the job carries on — which is what #3230 asked for, and is P20's
+         voice-design carve-out. The code is a variable, not a literal: the taxonomy owns this
+         set, and `CastDesignEvent.code` admits any `FailureCode`. The message stays the curated one. */
       endJob(job, {
         type: 'error',
-        code: 'unknown',
+        code: classifyAnalysisFailure(e, 'Persona generation').code,
         message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
       });
     }

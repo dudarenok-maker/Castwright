@@ -1587,7 +1587,7 @@ describe('cast-design persona pre-pass', () => {
       const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
       return new AnalyzerTimeoutError('openai', 'qwen3', 1_800_000, 'ceiling');
     }],
-  ])('a %s in the pre-pass ends the job once (code %s) instead of failing every character', async (_name, _code, makeErr) => {
+  ])('a %s in the pre-pass ends the job once (code %s) instead of failing every character', async (_name, code, makeErr) => {
     personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
@@ -1612,8 +1612,7 @@ describe('cast-design persona pre-pass', () => {
 
     const events = parseSse(res.text);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
-    /* Task 4.6a stops at "ends once, no character_failed": the backstop still writes `unknown` until Task 4.6b
-       adds its classified code. Task 4.6b adds here: expect(events.find((e) => e.type === 'error')?.code).toBe(code); */
+    expect(events.find((e) => e.type === 'error')?.code).toBe(code);
     expect(events.some((e) => e.type === 'character_failed')).toBe(false);
     expect(events.some((e) => e.type === 'idle')).toBe(false);
     expect(designSpy).not.toHaveBeenCalled();

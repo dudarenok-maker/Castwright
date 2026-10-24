@@ -247,7 +247,7 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
      the `description: |` match fails and the truncation is caught. */
   it('CastDesignEvent.code and SingleDesignEvent.code descriptions use block scalars to avoid YAML comment truncation (#2509 B2)', () => {
     const castBlock = schemaBlock(yaml, 'CastDesignEvent');
-    expect(castBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(castBlock).toMatch(/code:\r?\n\s+anyOf:\r?\n(?:[ \t]+\S.*\r?\n)*?[ \t]+description: \|/);
     expect(castBlock).toContain('stated language with no sidecar mapping');
 
     const singleBlock = schemaBlock(yaml, 'SingleDesignEvent');
