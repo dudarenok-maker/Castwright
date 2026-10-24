@@ -15,7 +15,7 @@ import { configSlice } from '../store/config-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import { CastView } from './cast';
-import type { Character } from '../lib/types';
+import type { Character, Sentence } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -53,7 +53,7 @@ const qwenChar = (over: Partial<Character> & { id: string }): Character =>
 const needsVoice = qwenChar({ id: 'marrow', name: 'Mr. Marrow' });
 const nonQwen = qwenChar({ id: 'plain', name: 'Plain', ttsEngine: 'kokoro' });
 
-function setup(chars: Character[]) {
+function setup(chars: Character[], sentences?: Sentence[]) {
   const actions: Array<{ type: string; payload?: unknown }> = [];
   const recorder = () => (next: (a: unknown) => unknown) => (action: unknown) => {
     actions.push(action as { type: string; payload?: unknown });
@@ -76,6 +76,7 @@ function setup(chars: Character[]) {
     <Provider store={store}>
       <CastView
         characters={characters}
+        sentences={sentences}
         setCharacters={() => {}}
         library={[]}
         title="X"
@@ -113,5 +114,57 @@ describe('CastView — design guard prompt lifetime', () => {
     expect(screen.queryByText(DIALOG)).not.toBeInTheDocument();
     expect(haltActiveGeneration).not.toHaveBeenCalled();
     expect(designStarted(actions)).toBe(false);
+  });
+});
+
+describe('CastView — design guard only asks when a persona will be generated', () => {
+  const withPersona = (id: string) => qwenChar({ id, name: id, voiceStyle: 'a steady adult voice' });
+  /* wren: base designed, no persona on record, an in-use emotion without a variant. */
+  const wren = qwenChar({
+    id: 'wren',
+    name: 'Wren',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: {} } },
+  } as Partial<Character> & { id: string });
+  const wrenSentences: Sentence[] = [{ id: 10, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' }];
+
+  it('Variants only builds no base task, so it starts without asking', () => {
+    const { actions } = setup([wren], wrenSentences);
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-variants'));
+    expect(screen.queryByText(DIALOG)).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(designStarted(actions)).toBe(true);
+  });
+
+  it('Bases starts without asking when every target already has a persona', () => {
+    const { actions } = setup([withPersona('a'), withPersona('b')]);
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-bases'));
+    expect(screen.queryByText(DIALOG)).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(designStarted(actions)).toBe(true);
+  });
+
+  it('Bases asks when one target lacks a persona', () => {
+    const { actions } = setup([withPersona('a'), qwenChar({ id: 'b', name: 'b' })]);
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-bases'));
+    expect(screen.getByText(DIALOG)).toBeInTheDocument();
+    expect(designStarted(actions)).toBe(false);
+  });
+
+  it('Everything asks when a base target lacks a persona, and starts without asking when none does', () => {
+    const lacking = setup([withPersona('a'), qwenChar({ id: 'b', name: 'b' }), wren], wrenSentences);
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-both'));
+    expect(screen.getByText(DIALOG)).toBeInTheDocument();
+    expect(designStarted(lacking.actions)).toBe(false);
+    cleanup();
+
+    const covered = setup([withPersona('a'), wren], wrenSentences);
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-both'));
+    expect(screen.queryByText(DIALOG)).not.toBeInTheDocument();
+    expect(designStarted(covered.actions)).toBe(true);
   });
 });

@@ -1018,6 +1018,14 @@ export function CastView({
     }
   }
 
+  /* Mirrors the server's persona pre-pass (cast-design.ts runPersonaPrePass): only a BASE task
+     generates a persona, and only for a character with an empty `voiceStyle`. A 'variants' run
+     builds no base task, and a base run over characters that all have a persona makes no persona
+     call, so neither has anything to pause the render for. */
+  const designWillGeneratePersona = (scope: CastDesignScope) =>
+    scope !== 'variants' &&
+    characters.some((c) => needsVoiceIds.includes(c.id) && !(c.voiceStyle ?? '').trim());
+
   const startDesign = (scope: CastDesignScope) => {
     setScopeOpen(false);
     if (!bookId) return;
@@ -1401,7 +1409,8 @@ export function CastView({
                       variantBlockedChars={variantWork.blockedChars}
                       onPick={(scope) => {
                         setScopeOpen(false);
-                        designGuard(() => startDesign(scope));
+                        if (designWillGeneratePersona(scope)) designGuard(() => startDesign(scope));
+                        else startDesign(scope);
                       }}
                       onClose={() => setScopeOpen(false)}
                     />
