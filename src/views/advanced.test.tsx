@@ -13,6 +13,7 @@ import { accountSlice, fetchAccountSettings, fetchAnalyzerCatalog } from '../sto
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
 import type { AnalyzerCatalog, ConfigResponse, GpuDevicesResponse, UserSettings } from '../lib/types';
+import { allKnobDescriptors } from '../../server/src/config/descriptors';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -1198,3 +1199,36 @@ describe('AdvancedView — dropped endpoint entries (#3084 P31)', () => {
   });
 });
 
+describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
+  it('lists endpoint models from the analyzer catalog in the persona engine row', async () => {
+    /* allKnobDescriptors() projects the real server registry (the same function src/lib/api.ts feeds
+       MOCK_CONFIG_DESCRIPTORS from), so a regression in the persona knob's descriptor type is caught here
+       rather than hidden behind a hand-typed fixture. */
+    const personaDescriptor = allKnobDescriptors().find((d) => d.key === 'analyzer.personaGeneration.engine');
+    expect(personaDescriptor?.type).toBe('analyzer-engine');
+    const PERSONA_CONFIG: ConfigResponse = {
+      ...FIXTURE_CONFIG,
+      groups: [{ id: 'analyzer-models', label: 'Analyzer models', help: 'Models.', risk: 'low', collapsedByDefault: false }],
+      descriptors: [{ ...personaDescriptor!, group: 'analyzer-models' }],
+      values: {
+        'analyzer.personaGeneration.engine': {
+          key: 'analyzer.personaGeneration.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    };
+    mockGetConfig.mockResolvedValue(PERSONA_CONFIG);
+    /* The view reads the catalog from the store (s.account.analyzerCatalog), which renderView seeds. */
+    renderView(
+      'local',
+      { groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab box', status: 'ok', models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b' }] }] } as unknown as AnalyzerCatalog,
+    );
+    const select = (await screen.findByRole('combobox', { name: 'Persona generation engine' })) as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...select.options].map((o) => o.value)).toEqual(['local', 'gemini', 'openai:lab::qwen3-30b']),
+    );
+  });
+});
