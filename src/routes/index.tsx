@@ -26,7 +26,11 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { dropRetainedSaves, supersedeBookSaves } from '../store/persistence-middleware';
+import {
+  dropRetainedSaves,
+  restoreSupersededSaves,
+  supersedeBookSaves,
+} from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -154,6 +158,7 @@ export function BooksRoute() {
         try {
           await api.deleteBook(b.bookId);
         } catch (err) {
+          dispatch(restoreSupersededSaves(b.bookId));
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
@@ -192,6 +197,7 @@ export function BooksRoute() {
         try {
           result = await api.replaceManuscript(b.bookId, file);
         } catch (err) {
+          dispatch(restoreSupersededSaves(b.bookId));
           showError(`Couldn't replace "${b.title}"`, (err as Error).message, 'Replace');
           return;
         }
@@ -247,6 +253,7 @@ export function BooksRoute() {
         try {
           result = await api.reparseBook(b.bookId);
         } catch (err) {
+          dispatch(restoreSupersededSaves(b.bookId));
           showError(`Couldn't re-parse "${b.title}"`, (err as Error).message, 'Re-parse');
           return;
         }

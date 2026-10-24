@@ -983,6 +983,80 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       expect(putBookStateMock).toHaveBeenCalledTimes(1);
       release({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
     });
+
+    /* #3421 S1 — the cancel runs before the RPC, so a wipe that FAILED must
+       give back what it cancelled: nothing was wiped, and memory still shows
+       the edit. Success is the control: the wiped book's saves stay gone. */
+    const sentVane = () =>
+      putBookStateMock.mock.calls.filter((c) => JSON.stringify(c[1]).includes('Eliza Vane'));
+
+    /* Rename, then leave the book. */
+    async function renameThenLeave(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Vane' } as Character]));
+      void store.dispatch(flushBookPersistence('b1') as never);
+      await vi.advanceTimersByTimeAsync(0);
+      store.dispatch(uiActions.goHome());
+    }
+
+    async function runWipe(
+      store: ReturnType<typeof makeStore>,
+      rpcMock: ReturnType<typeof vi.fn>,
+      trigger: () => void,
+    ) {
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      trigger();
+      await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    async function reopenAndFlush(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      await store.dispatch(flushBookPersistence('b1') as never);
+    }
+
+    describe.each(cases)('$name', ({ rpc, trigger }) => {
+      it('S1/P1: a kept save is re-sent on reopen when the RPC fails', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(5);
+      });
+
+      it('S1/P2: a retry in flight is re-sent on reopen when the RPC fails', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(2);
+      });
+
+      it('S1 control: nothing is re-sent on reopen when the RPC succeeds', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+      });
+    });
   });
 
   /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must

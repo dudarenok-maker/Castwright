@@ -352,10 +352,22 @@ export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, pay
    (which would otherwise PUT the pre-wipe roster into the wiped book seconds
    later). Unlike `dropRetainedSaves` it bumps the generation, so a running
    sequence reads as superseded: it ends quietly, with no toast, exactly as when
-   a newer write overtakes it. Layout's re-read must NOT use this — it would
+   a newer write overtakes it. What it cancels is PARKED, not discarded: the
+   call may fail and leave the book untouched, so the handler either lets go of
+   the parked saves on success (`dropRetainedSaves`) or gives them back with
+   `restoreSupersededSaves`. Layout's re-read must NOT use this — it would
    cancel a newer edit. Not a reducer action. */
 const SUPERSEDE_BOOK = 'persistence/supersedeBook';
 export const supersedeBookSaves = (bookId: string) => ({ type: SUPERSEDE_BOOK, payload: bookId });
+
+/* #3421 — the wipe call failed: move what `supersedeBookSaves` parked back into
+   the kept saves, under any newer edit, so the book's next flush re-sends it.
+   Not a reducer action. */
+const RESTORE_SUPERSEDED = 'persistence/restoreSuperseded';
+export const restoreSupersededSaves = (bookId: string) => ({
+  type: RESTORE_SUPERSEDED,
+  payload: bookId,
+});
 
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
@@ -389,6 +401,13 @@ export const persistenceMiddleware: Middleware = (store) => {
      rollback snapshot like a first-try success would. Only `onSuccess` is kept:
      a re-send that fails again behaves as a plain kept save, not a rename. */
   const retainedOnSuccess = new Map<FlushKey, PersistFailureHandler['onSuccess']>();
+  /* #3421 — a send-and-retry sequence's captured patch (and success handler)
+     while it runs, so `supersedeBookSaves` can park what it is still sending. */
+  type SavedPatch = { patch: Record<string, unknown>; onSuccess?: PersistFailureHandler['onSuccess'] };
+  const sending = new Map<FlushKey, Set<SavedPatch>>();
+  /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
+     (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
+  const parked = new Map<FlushKey, SavedPatch>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -509,11 +528,17 @@ export const persistenceMiddleware: Middleware = (store) => {
         }
       }
     };
+    const mine: SavedPatch = { patch: patch as Record<string, unknown>, onSuccess };
+    const mineSet = sending.get(key) ?? new Set<SavedPatch>();
+    mineSet.add(mine);
+    sending.set(key, mineSet);
     const settled = attemptSend();
     const set = inFlight.get(key) ?? new Set<Promise<{ slice: StateSlice; ok: boolean }>>();
     set.add(settled);
     inFlight.set(key, set);
     void settled.then(() => {
+      mineSet.delete(mine);
+      if (mineSet.size === 0 && sending.get(key) === mineSet) sending.delete(key);
       set.delete(settled);
       if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
     });
@@ -542,6 +567,21 @@ export const persistenceMiddleware: Middleware = (store) => {
           retainedOnSuccess.delete(key);
         }
       }
+      for (const key of Array.from(parked.keys())) {
+        if (key.startsWith(`${a.payload}:`)) parked.delete(key);
+      }
+      return result;
+    }
+
+    if (type === RESTORE_SUPERSEDED && typeof a.payload === 'string') {
+      for (const [key, saved] of Array.from(parked)) {
+        if (!key.startsWith(`${a.payload}:`)) continue;
+        parked.delete(key);
+        const newer = retained.get(key);
+        retained.set(key, { ...saved.patch, ...newer });
+        const onSuccess = retainedOnSuccess.get(key) ?? saved.onSuccess;
+        if (onSuccess) retainedOnSuccess.set(key, onSuccess);
+      }
       return result;
     }
 
@@ -552,8 +592,28 @@ export const persistenceMiddleware: Middleware = (store) => {
         ...inFlight.keys(),
         ...pending.keys(),
         ...retained.keys(),
+        ...sending.keys(),
       ])) {
         if (!key.startsWith(prefix)) continue;
+        /* Oldest first, newest on top: kept, then running, then queued. A
+           second supersede before the first resolves merges under what the
+           first already parked. */
+        const layers: SavedPatch[] = [
+          ...(parked.has(key) ? [parked.get(key)!] : []),
+          ...(retained.has(key)
+            ? [{ patch: retained.get(key)!, onSuccess: retainedOnSuccess.get(key) }]
+            : []),
+          ...(sending.get(key) ?? []),
+          ...(pending.has(key)
+            ? [{ patch: pending.get(key) as Record<string, unknown>, onSuccess: toastPending.get(key)?.onSuccess }]
+            : []),
+        ];
+        if (layers.length > 0) {
+          parked.set(key, {
+            patch: Object.assign({}, ...layers.map((l) => l.patch)),
+            onSuccess: [...layers].reverse().find((l) => l.onSuccess)?.onSuccess,
+          });
+        }
         generation.set(key, (generation.get(key) ?? 0) + 1);
         const timer = timers.get(key);
         if (timer) clearTimeout(timer);
