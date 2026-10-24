@@ -7,6 +7,8 @@
 > Implementation plan: [`docs/superpowers/plans/2026-09-11-openai-compatible-analyzer.md`](../superpowers/plans/2026-09-11-openai-compatible-analyzer.md)
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
+>
+> Register row: A109 (§10 below, rewritten by #3777; the id is unchanged).
 
 ---
 
@@ -313,5 +315,28 @@ Run by / date / SHA:
     "busy; not unloading" line for B. B's run ends while the admission polls → B unloaded within
     the same admission; or, if it gave up first, the failure names B as busy for the whole wait.
     Timestamps of A's POST / B's run end / B's POST: ___ Result:
+
+Run by / date / SHA:
+
+## 10. Persona generation on a same-card endpoint — register row A109
+
+**Hardware:** a single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or
+LM Studio) holding a model on that same card (the endpoint's `gpu` = the card Qwen targets),
+Qwen VoiceDesign. A book whose characters have no voice description, and a second book with a
+chapter you can render.
+
+**Preconditions.** Advanced Settings → Persona generation engine MUST be set to the endpoint's
+model (`openai:<endpointId>::<model>`). The default is `gemini`; left alone, the run never
+touches the endpoint and proves nothing. Follow the endpoint's server log.
+
+1. No render streaming. Start Design full cast. The endpoint's server log shows the persona
+   requests arriving before VoiceDesign loads. First persona request at ___, VoiceDesign load at ___.
+   Result:
+2. W3d's eviction unloads the endpoint's model before VoiceDesign loads, and VoiceDesign loads and
+   designs without an OOM. Unload line at ___, VoiceDesign load at ___. Result:
+3. With a chapter render streaming on that card, start Design full cast. "Pause audio generation
+   to design voices?" shows. Choose **Pause and design**: the render halts before any persona
+   request reaches the endpoint. Render stopped at ___, first persona request at ___. Result:
+4. After the design finishes, a chapter render on that card succeeds. Result:
 
 Run by / date / SHA:
