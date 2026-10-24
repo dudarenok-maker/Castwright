@@ -5895,7 +5895,7 @@ timeout tolerance tuning.
 ### A109 · A same-card OpenAI-compatible endpoint yields its card to Qwen VoiceDesign after the analyzer pre-pass ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), design [`docs/superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md`](../superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md)) · **single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on that same card, Qwen VoiceDesign**
 
 Minted by the design PR against a design rather than shipped code; wave 4 (#3777, persona
-generation through the analyzer transports) has now merged the pre-pass, so the row is
+generation through the analyzer transports) ships the pre-pass, so the row is
 rewritten to exercise it. The run MUST set Advanced Settings → Persona generation engine to the
 same-card endpoint's model (`openai:<endpointId>::<model>`, the endpoint's `gpu` on the card
 Qwen targets). The default persona engine is `gemini`, so a run that leaves it alone never
@@ -5922,7 +5922,10 @@ on it) and a real render being halted before any persona request.
    "Pause audio generation to design voices?". Choosing **Pause and design** halts the render
    before any persona request reaches the endpoint (the render stops, then the first persona
    request appears in the server log, never the reverse).
-4. Neither path leaves the card stranded: after the design finishes, a subsequent chapter
+4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
+   against the same-card endpoint. It does not OOM and does not silently fall back to another
+   engine.
+5. Neither path leaves the card stranded: after the design finishes, a subsequent chapter
    render on that card succeeds.
 
 *Cost:* medium — needs a real third-party server installed and pinned to the same card, plus

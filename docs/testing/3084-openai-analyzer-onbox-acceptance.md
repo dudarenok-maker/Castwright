@@ -337,6 +337,9 @@ touches the endpoint and proves nothing. Follow the endpoint's server log.
 3. With a chapter render streaming on that card, start Design full cast. "Pause audio generation
    to design voices?" shows. Choose **Pause and design**: the render halts before any persona
    request reaches the endpoint. Render stopped at ___, first persona request at ___. Result:
-4. After the design finishes, a chapter render on that card succeeds. Result:
+4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
+   against the same-card endpoint. It does not OOM and does not silently fall back to another
+   engine. Result:
+5. After the design finishes, a chapter render on that card succeeds. Result:
 
 Run by / date / SHA:
