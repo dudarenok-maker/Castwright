@@ -1034,7 +1034,7 @@ paths:
         restructure claim and the per-book state lock. Like them it is
         refused with 409 while analysis or any other long job is running on
         the book. Re-sending the current title of an already-overridden
-        chapter changes nothing and renames no audio.
+        chapter changes no title or slug and renames no audio.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
@@ -1070,6 +1070,7 @@ paths:
           description: Book or chapter not found
         '409':
           description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } }
 
   /api/books/{bookId}/chapters/merge:
     post:
@@ -1112,7 +1113,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. non-contiguous ids, fewer than 2 ids)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/split:
     post:
@@ -1153,7 +1154,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. split after last sentence)' }
         '404': { description: Book, chapter, or sentence not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/reorder:
     post:
@@ -1187,7 +1188,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/exclude:
     post:
@@ -1222,7 +1223,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (missing / empty chapterIds, non-boolean excluded)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/refresh-titles:
     post:
@@ -1255,7 +1256,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/cover/candidates:
     get:
@@ -5072,6 +5073,19 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
+    RestructureConflictError:
+      type: object
+      description: >-
+        409 body of the chapter-restructure routes (merge, split, reorder,
+        bulk exclude, rename, refresh-titles). `analysis_running`: an analysis
+        job holds the book (or a restructure already claimed it). `book_busy`
+        (#3774): ANY long job (render, analysis, scoring, voice design, script
+        review or export) is registered for the book. `error` is a curated
+        sentence with no filesystem path.
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [analysis_running, book_busy] }
     # --- Cast merge suggestions -------------------------------------
     MergeSuggestion:
       type: object

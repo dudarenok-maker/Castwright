@@ -679,7 +679,7 @@ export interface paths {
          *     restructure claim and the per-book state lock. Like them it is
          *     refused with 409 while analysis or any other long job is running on
          *     the book. Re-sending the current title of an already-overridden
-         *     chapter changes nothing and renames no audio.
+         *     chapter changes no title or slug and renames no audio.
          */
         post: operations["renameChapter"];
         delete?: never;
@@ -783,7 +783,8 @@ export interface paths {
          * @description Sets `Chapter.excluded` on every listed chapter in one atomic
          *     restructure pass. Sentence remap is identity; audio files are left
          *     on disk. For a single chapter the Generate-view toggle uses
-         *     `setChapterExcluded` instead.
+         *     `setChapterExcluded` instead. Un-hiding (`excluded: false`) is not
+         *     refused with `book_busy` while a long job runs; hiding is (#3774).
          */
         post: operations["excludeChapters"];
         delete?: never;
@@ -3402,6 +3403,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book. `error` is a curated sentence with no filesystem path. */
+        RestructureConflictError: {
+            error: string;
+            /** @enum {string} */
+            code: "analysis_running" | "book_busy";
+        };
         /**
          * @description A suggested merge pair produced by the dedup pass (Tier-2b).
          *     `sourceId` is the diminutive/duplicate character; `targetId` is the
@@ -8339,7 +8346,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. */
+            /** @description Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8406,7 +8413,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8458,7 +8467,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8511,7 +8522,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8561,7 +8574,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8611,7 +8626,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8654,7 +8671,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
