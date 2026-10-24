@@ -91,7 +91,7 @@ When the target `books/<Author>/<Series>/<Title>/` directory already exists:
 | `onConflict` | Behaviour |
 |---|---|
 | `rename` (default) | Appends ` (imported)`, then ` (imported 2)`, ` (imported 3)`, … to the title until the slug-based directory is free. state.json's `title` + `bookId` are rewritten in-place to match. The response includes `conflict: { strategy: 'rename', renamedTo: '<new path>' }`. Capped at 100 attempts. |
-| `overwrite` | Writes into the existing directory, replacing files by path. Files on disk that are NOT in the bundle are LEFT IN PLACE — listen-progress.json survives an overwrite. |
+| `overwrite` | Writes into the existing directory, replacing files by path. Files on disk that are NOT in the bundle are LEFT IN PLACE — listen-progress.json survives an overwrite — except a local `.audiobook/manuscript-hints.json` the bundle does not carry, which is deleted as soon as the bundle's `state.json` lands (#3703). |
 | `fail` | Returns HTTP 409 with `{ error: 'bundle_conflict', existingPath }` without touching disk. |
 
 ## Round-trip guarantee

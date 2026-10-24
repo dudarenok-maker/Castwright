@@ -21,6 +21,8 @@ import { ZipFile } from 'yazl';
    below race deterministically: the FIRST mkdir of `slowMkdir.path` stalls. A
    pass-through for every other call. */
 const slowMkdir = vi.hoisted(() => ({ path: null as string | null, ms: 250 }));
+/* #3703 -- fails the FIRST rename whose destination is `path` with EBUSY. */
+const failRename = vi.hoisted(() => ({ path: null as string | null }));
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
@@ -32,6 +34,13 @@ vi.mock('node:fs/promises', async () => {
       }
       return (actual.mkdir as (...a: unknown[]) => Promise<unknown>)(p, ...rest);
     }) as typeof actual.mkdir,
+    rename: (async (from: string, to: string) => {
+      if (failRename.path !== null && to === failRename.path) {
+        failRename.path = null;
+        throw Object.assign(new Error('EBUSY: injected'), { code: 'EBUSY' });
+      }
+      return actual.rename(from, to);
+    }) as typeof actual.rename,
   };
 });
 import sharp from 'sharp';
@@ -687,6 +696,65 @@ describe('importPortableBundle', () => {
         expect(restored).toEqual(original);
         expect(restored).not.toEqual(moved);
       } finally {
+        removeManuscript(state.manuscriptId!);
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+
+    /* Review pass 3: the hints file must go the moment the bundle's state.json
+       is live, not after the whole rename loop -- a later rename failing (EBUSY on
+       the manuscript) otherwise leaves the local file beside the restored state. */
+    it("'overwrite' that fails after state.json still drops the local manuscript-hints.json", async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from(
+        '# Alpha\n\nAlpha first. Alpha second.\n\n# Beta\n\nBeta first. Beta second.\n',
+        'utf8',
+      );
+      const sourceDir = writeSourceBook(state, manuscript);
+      const built = await buildPortableBundle(sourceDir, state);
+      expect(built.entries).not.toContain('manuscript-hints.json');
+
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      mkdirSync(audioDir(target), { recursive: true });
+      mkdirSync(dotAudiobook(target), { recursive: true });
+      writeFileSync(stateJsonPath(target), JSON.stringify(state, null, 2));
+      writeFileSync(join(target, 'manuscript.txt'), manuscript);
+      const { getOrHydrateManuscript, removeManuscript } = await import('../store/manuscripts.js');
+      try {
+        const moved = ['Alpha first.', 'Beta first. Beta second. Alpha second.'];
+        await writeManuscriptHints(
+          target,
+          composeHintsFile(
+            buildHintsEntry({
+              manuscriptId: state.manuscriptId!,
+              manuscriptFile: state.manuscriptFile,
+              sourceSha256: sha256Hex(manuscript),
+              hints: moved.map((body, i) => ({ id: i + 1, body })),
+              stateChapters: state.chapters,
+            }),
+            null,
+            state,
+            sha256Hex(manuscript),
+          ),
+        );
+        removeManuscript(state.manuscriptId!);
+
+        failRename.path = join(target, 'manuscript.txt');
+        await expect(importPortableBundle(built.buffer, { onConflict: 'overwrite' })).rejects.toThrow(
+          /EBUSY/,
+        );
+        failRename.path = null;
+
+        expect(existsSync(manuscriptHintsJsonPath(target))).toBe(false);
+        /* A restart: nothing warm, hydrate from disk. */
+        removeManuscript(state.manuscriptId!);
+        const hydrated = (await getOrHydrateManuscript(state.manuscriptId!))!.chapterHints.map(
+          (h) => h.body,
+        );
+        expect(hydrated).not.toEqual(moved);
+      } finally {
+        failRename.path = null;
         removeManuscript(state.manuscriptId!);
         rmSync(target, { recursive: true, force: true });
       }

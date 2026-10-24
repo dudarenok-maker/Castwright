@@ -389,7 +389,8 @@ export async function importPortableBundle(
        still carries `expectedId` (null = it carried none), else it is a conflict;
        then rename the staged files over the live ones, state.json first, holding
        state-json(target) as before. Files only on disk are LEFT IN PLACE, except
-       a local manuscript-hints.json the bundle does not carry (dropped). */
+       a local manuscript-hints.json the bundle does not carry (dropped as soon
+       as state.json lands). */
     const commitOverwrite = (
       targetDir: string,
       expectedId: string | null,
@@ -402,28 +403,41 @@ export async function importPortableBundle(
         }
         const bookId = expectedId ?? (await idForNewBook(baseTitle, true));
         await writeStagedState(bookId, baseTitle);
-        await withStateJsonLock(stateJsonPath(targetDir), async () => {
-          for (const rel of stagedRel) {
-            const dest = join(targetDir, rel);
-            await mkdir(dirname(dest), { recursive: true });
-            await rename(join(stage, rel), dest);
-          }
-          /* #3703 -- the manuscript on disk is the bundle's now, so a local
-             restructure's hints describe another book's bodies. A bundle that
-             carries a hints file just replaced it above; one that carries none
-             (never restructured, or exported before this) must not leave the
-             local file behind: it can still validate (same uuid sequence, same
-             manuscript bytes) and hand back the pre-restore bodies. */
-          if (!stagedRel.includes(relative(stage, manuscriptHintsJsonPath(stage)))) {
-            await rm(manuscriptHintsJsonPath(targetDir), { force: true });
-          }
-        });
-        /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
-           warm ManuscriptRecord for either id is now another book's text: drop
-           both, and the next reader (a restructure, an analysis start)
-           re-hydrates from disk. */
-        if (live?.manuscriptId) removeManuscript(live.manuscriptId);
-        if (state.manuscriptId) removeManuscript(state.manuscriptId);
+        /* #3703 -- the manuscript on disk is becoming the bundle's, so a local
+           restructure's hints describe another book's bodies and can still
+           validate (same uuid sequence, same manuscript bytes). The hints file
+           is therefore settled the moment the bundle's state.json is live -- the
+           bundle's own renamed in right behind it, or, when the bundle carries
+           none, the local one removed -- NOT after the loop: a later rename
+           failing (EBUSY on the manuscript or an audio file) would otherwise
+           leave the restored state beside the stale local file. */
+        const hintsRel = relative(stage, manuscriptHintsJsonPath(stage));
+        const bundleHasHints = stagedRel.includes(hintsRel);
+        const order = [
+          stateRel,
+          ...(bundleHasHints ? [hintsRel] : []),
+          ...stagedRel.filter((rel) => rel !== stateRel && rel !== hintsRel),
+        ];
+        try {
+          await withStateJsonLock(stateJsonPath(targetDir), async () => {
+            for (const [i, rel] of order.entries()) {
+              const dest = join(targetDir, rel);
+              await mkdir(dirname(dest), { recursive: true });
+              await rename(join(stage, rel), dest);
+              if (i === 0 && !bundleHasHints) {
+                await rm(manuscriptHintsJsonPath(targetDir), { force: true });
+              }
+            }
+          });
+        } finally {
+          /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
+             warm ManuscriptRecord for either id is now another book's text: drop
+             both, and the next reader (a restructure, an analysis start)
+             re-hydrates from disk. In a `finally`: an overwrite that fails part-way
+             has still replaced some files, so the warm record is stale either way. */
+          if (live?.manuscriptId) removeManuscript(live.manuscriptId);
+          if (state.manuscriptId) removeManuscript(state.manuscriptId);
+        }
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });
 
