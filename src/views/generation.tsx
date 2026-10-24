@@ -530,6 +530,9 @@ export function GenerationView({
     const wasExcluded =
       store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded === true;
     let includedHere = false;
+    /* #3774 — set once the include POST landed. A failure before it started no
+       job of ours, so the snapshot taken over above is not ours to clear. */
+    let includePosted = false;
     /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
        attributed: no Phase 1 frame) or S14 (the targets were attributed in
        Phase 1). Only S14 finished this chapter's analysis. */
@@ -540,6 +543,7 @@ export function GenerationView({
     let targetFailedMessage = '';
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
+      includePosted = true;
       if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
       includedHere = wasExcluded;
 
@@ -692,7 +696,13 @@ export function GenerationView({
          surfaced an error, and the row's own error state inside subsetByChapter
          carries the message for the user. */
       haltOnReasoningOverflow(e);
-      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) {
+        /* #3774 — a refused include POST (e.g. 409 `book_busy` while another
+           subset run holds the book) started no job: put back what it took
+           over, as the refusal branch above does. */
+        if (!includePosted && priorSnapshot) dispatch(analysisActions.setActiveStream(priorSnapshot));
+        else dispatch(analysisActions.clearActiveStream());
+      }
       const message = (e as Error).message || 'Subset analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. Only a chapter that is

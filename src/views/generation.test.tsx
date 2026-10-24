@@ -2520,6 +2520,36 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
+  /* #3774 — the include POST itself can now be refused (409 book_busy while
+     another subset run holds the book's analysis lease). That error is not an
+     AnalysisError, so it must not fall through to the generic branch that
+     clears the snapshot: the other run's snapshot is still live. */
+  it('#3774 — Include flow: a refused include POST (book_busy) restores the other job\'s snapshot', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+    const busy = 'This book is busy (analysing). Stop it or wait for it to finish, then include chapters.';
+    setChapterExcludedSpy.mockRejectedValueOnce(Object.assign(new Error(busy), { code: 'book_busy' }));
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(new RegExp(busy.replace(/[.()]/g, '\\$&'), 'i'));
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+  });
+
   /* #3435 decision A — the server refuses a subset run while a main analysis
      run is live for the book, so the controls that start one are disabled
      until it is paused. */
