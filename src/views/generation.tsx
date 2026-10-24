@@ -443,6 +443,17 @@ export function GenerationView({
         if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
       } catch (e) {
         console.error('[generation] exclude failed', e);
+        /* #3774 — the server refuses an exclude with a 409 `book_busy` while a
+           job is registered for the book; its curated sentence is the
+           `Error.message` (`realSetChapterExcluded`). Say so rather than
+           leaving the click looking dead. */
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message: e instanceof Error && e.message ? e.message : 'Could not exclude the chapter.',
+            dedupeKey: 'gen-exclude-failed',
+          }),
+        );
       }
       return;
     }

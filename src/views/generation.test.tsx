@@ -2605,6 +2605,26 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toBeNull();
   });
 
+  /* #3774 — the server refuses an Exclude with 409 `book_busy` while a job is
+     registered; `realSetChapterExcluded` rejects with `new Error(<sentence>)`.
+     The sentence must reach the user (a warn toast) and the row must not change. */
+  it('#3774 an Exclude refused with the 409 book_busy sentence shows it as a toast and leaves the row alone', async () => {
+    const busy = 'This book is busy (rendering audio). Stop it or wait for it to finish, then exclude chapters.';
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockRejectedValueOnce(new Error(busy));
+    renderInclude(store);
+    // Chapter 2 is queued: its expanded panel carries Exclude.
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts).toEqual([
+        expect.objectContaining({ kind: 'warn', message: busy, dedupeKey: 'gen-exclude-failed' }),
+      ]),
+    );
+    expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 2, true);
+    expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBeFalsy();
+  });
+
   it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
     const message = 'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.';
     const store = makeIncludeStore();
