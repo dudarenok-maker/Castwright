@@ -1164,6 +1164,39 @@ describe('POST /:bookId/chapters/exclude (plan 70b)', () => {
     expect(state.chapters.find((c) => c.id === 2)?.excluded).toBeUndefined();
   });
 
+  it('#3774 un-excluding a never-analysed (zero-sentence) chapter keeps it — not pruned, later audio not renamed', async () => {
+    seedAudio('03-chapter-three');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narr', text: 'A.' },
+          { id: 1, chapterId: 3, characterId: 'narr', text: 'C.' },
+        ],
+      }),
+    );
+    expect(
+      (
+        await request(app)
+          .post(`/api/books/${bookId}/chapters/exclude`)
+          .send({ chapterIds: [2], excluded: true })
+      ).status,
+    ).toBe(200);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: false });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    expect(state.chapters.map((c) => [c.id, c.slug])).toEqual([
+      [1, '01-chapter-one'],
+      [2, '02-chapter-two'],
+      [3, '03-chapter-three'],
+    ]);
+    expect(state.chapters.find((c) => c.id === 2)?.excluded).toBeUndefined();
+    expect(existsSync(join(audioRoot, '03-chapter-three.mp3'))).toBe(true);
+  });
+
   it('preserves audio files on disk when excluding', async () => {
     expect(existsSync(join(audioRoot, '02-chapter-two.mp3'))).toBe(true);
     await request(app)

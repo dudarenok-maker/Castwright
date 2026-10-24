@@ -497,8 +497,13 @@ function renumberGenericTitlesInChapters(
 
    Excluded chapters are not pruned even when empty — preserving the
    soft-hide invariant. Excluded chapters with sentences attached are
-   kept as well. */
-function pruneEmptyChaptersInResult(result: RestructureResult): {
+   kept as well. `keepIds` names chapters the SAME operation just un-excluded
+   (#3774): a never-analysed chapter has zero sentences, so pruning it would
+   delete the chapter the user just included. */
+function pruneEmptyChaptersInResult(
+  result: RestructureResult,
+  keepIds: ReadonlySet<number> = new Set(),
+): {
   result: RestructureResult;
   /** pre-prune chapter id → post-prune id; absent = pruned. Identity when nothing pruned. */
   idRemap: Map<number, number> | null;
@@ -516,7 +521,7 @@ function pruneEmptyChaptersInResult(result: RestructureResult): {
   }
 
   const pruned = result.state.chapters.filter(
-    (c) => !c.excluded && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
+    (c) => !c.excluded && !keepIds.has(c.id) && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
   );
   if (pruned.length === 0) return { result, idRemap: null };
 
@@ -592,8 +597,11 @@ function pruneEmptyChaptersInResult(result: RestructureResult): {
    caller, yet its files must follow it. Only chapters flagged
    `titleSynthesized` are renumbered — an explicit title (rename, merge
    `mergedTitle`) clears the flag — so a user-chosen title is never rewritten. */
-function postProcessRestructure(result: RestructureResult): RestructureResult {
-  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result);
+function postProcessRestructure(
+  result: RestructureResult,
+  keepIds?: ReadonlySet<number>,
+): RestructureResult {
+  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result, keepIds);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
   if (titled.renumbered === 0 && idRemap === null) return pruned;
 
@@ -1199,18 +1207,28 @@ export function applyExclude(
     state.chapters.map((c) => c.id),
   );
 
-  return postProcessRestructure({
-    state: {
-      ...state,
-      chapters: newStateChapters,
-      updatedAt: new Date().toISOString(),
+  /* #3774 -- a chapter this op just un-excluded is never pruned: a
+     never-analysed chapter has no sentences, so the prune would delete the
+     chapter being included. */
+  const justIncluded = new Set(
+    op.excluded ? [] : state.chapters.filter((c) => c.excluded && targetIds.has(c.id)).map((c) => c.id),
+  );
+
+  return postProcessRestructure(
+    {
+      state: {
+        ...state,
+        chapters: newStateChapters,
+        updatedAt: new Date().toISOString(),
+      },
+      hints: newHints,
+      sentences: newSentences,
+      remap,
+      audioOps: [],
+      warnings,
     },
-    hints: newHints,
-    sentences: newSentences,
-    remap,
-    audioOps: [],
-    warnings,
-  });
+    justIncluded,
+  );
 }
 
 /* -- rename --------------------------------------------------------- */
