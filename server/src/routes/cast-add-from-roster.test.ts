@@ -300,8 +300,15 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
      (pulling different characters from the prior book) race that source
      book's cast.json. Unlocked, both requests' readJson resolve before
      either writeJsonAtomic lands, so the later write replays a `characters`
-     snapshot taken before the earlier write happened and silently drops it. */
-  it('#1981 — keeps both new characters when two add-from-roster calls for one book overlap', async () => {
+     snapshot taken before the earlier write happened and silently drops it.
+
+     #3773 — Route-level coverage only: both requests hold
+     `book-op:<bookId>` (#3711), which by itself serialises them, so this
+     stays green with `withCastLock` replaced by a no-op (confirmed: no-op
+     cast lock green; no-op cast lock AND book-op red). It pins that the real
+     stack, as wired, keeps both characters; it does NOT prove the cast lock.
+     The "#2123" describe below does, with a racer that holds no book-op. */
+  it('#1981 — keeps both new characters when two add-from-roster calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
     const [resLinnet, resWren] = await Promise.all([
       callAdd(sourceBookId, { targetBookId: priorBookId, targetCharacterId: 'councillor-linnet' }),
       callAdd(sourceBookId, { targetBookId: priorBookId, targetCharacterId: 'wren' }),
@@ -332,13 +339,11 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
    per `cast-not-linked-to.test.ts`'s #2123 comment on the same principle.
 
    The #1981 test just above (a bare `Promise.all` self-race on the SAME
-   source book) happens to also catch both the lock-neutralised and the
-   read-hoisted-outside-a-retained-lock mutations reliably in local testing —
-   but it is a natural, untimed race, not the deterministic scripted
-   construction this branch has standardised on elsewhere (see
-   cast-not-linked-to.test.ts's #2123 block comment on why a natural race is
-   not treated as sufficient coverage here). This detector is added
-   independently of that test, not as a replacement for it.
+   source book) does NOT catch the lock-neutralised mutation (#3773): both of
+   its requests hold `book-op:<bookId>`, which serialises them on its own.
+   This detector is the cast-lock proof: its racer is a bare `withCastLock`
+   consumer holding no book-op, so only the cast lock separates it from the
+   parked route (confirmed: no-op cast lock RED at the `racerEntered` check).
 
    Unlike cast-not-linked-to.ts, there is no separate unlocked pre-lock read
    of the SOURCE book's cast.json to confuse the gate with: `findBookByBookId`
@@ -452,7 +457,7 @@ async function runLockDetector(
 }
 
 describe('#2123 — cast.json lock is real, and its read stays inside it', () => {
-  it('a concurrent withCastLock writer on the same book survives add-from-roster', async () => {
+  it('#3773 — cast lock alone: a concurrent withCastLock writer (no book-op) on the same book survives add-from-roster', async () => {
     await runLockDetector(
       () =>
         callAdd(sourceBookId, {
