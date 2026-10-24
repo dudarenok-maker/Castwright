@@ -1419,6 +1419,33 @@ paths:
         '400': { description: Body is missing fields or contains non-numeric values }
         '404': { description: Book not found, or book has no cover pinned }
 
+  /api/books/{bookId}/busy:
+    get:
+      summary: Which long jobs are registered for the book right now
+      operationId: getBookBusy
+      description: |
+        Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+        design, script-review, export) currently registered for the book
+        (#3774). Lock-free read of the in-memory busy registry; an unknown book
+        is simply not busy (`kinds: []`, never a 404). The Generate view
+        disables "Include in book" while any kind is listed.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The registered job kinds, empty when the book is idle
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kinds]
+                properties:
+                  kinds:
+                    type: array
+                    items:
+                      type: string
+                      enum: [render, scoring, analysis, design, script-review, export]
+
   /api/books/{bookId}/listen-progress:
     get:
       summary: Read the per-book resume bookmark

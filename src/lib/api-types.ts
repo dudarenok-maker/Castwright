@@ -781,10 +781,11 @@ export interface paths {
         /**
          * Soft-hide or un-hide a set of chapters
          * @description Sets `Chapter.excluded` on every listed chapter in one atomic
-         *     restructure pass. Sentence remap is identity; audio files are left
-         *     on disk. For a single chapter the Generate-view toggle uses
-         *     `setChapterExcluded` instead. Un-hiding (`excluded: false`) is not
-         *     refused with `book_busy` while a long job runs; hiding is (#3774).
+         *     restructure pass. Sentence remap is identity; the pass also prunes
+         *     zero-sentence chapters and renumbers the rest, so it can move audio
+         *     files. Refused with `book_busy` in both directions while a long job
+         *     runs (#3774). For a single chapter the Generate-view toggle uses
+         *     `setChapterExcluded` instead; only its hiding direction is refused.
          */
         post: operations["excludeChapters"];
         delete?: never;
@@ -930,6 +931,30 @@ export interface paths {
          *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
          */
         patch: operations["setCoverFraming"];
+        trace?: never;
+    };
+    "/api/books/{bookId}/busy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which long jobs are registered for the book right now
+         * @description Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+         *     design, script-review, export) currently registered for the book
+         *     (#3774). Lock-free read of the in-memory busy registry; an unknown book
+         *     is simply not busy (`kinds: []`, never a 404). The Generate view
+         *     disables "Include in book" while any kind is listed.
+         */
+        get: operations["getBookBusy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/books/{bookId}/listen-progress": {
@@ -8920,6 +8945,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getBookBusy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The registered job kinds, empty when the book is idle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        kinds: ("render" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
+                    };
+                };
             };
         };
     };

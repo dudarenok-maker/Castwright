@@ -892,6 +892,15 @@ bookStateRouter.get('/:bookId/analysis/state', async (req: Request, res: Respons
   }
 });
 
+/* #3774 — which long jobs (`BookJobKind`) are registered for the book right now.
+   The Generate view disables "Include in book" while any is, so the include's
+   Cancel rollback only ever meets its own subset run. A lock-free read of the
+   in-memory registry (a leaf: nothing here writes, so no book-op); an unknown
+   book is simply not busy. */
+bookStateRouter.get('/:bookId/busy', (req: Request, res: Response) => {
+  res.json({ kinds: bookJobKinds(req.params.bookId) });
+});
+
 bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
