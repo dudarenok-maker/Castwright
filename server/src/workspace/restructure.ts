@@ -1217,7 +1217,7 @@ export function applyExclude(
 
 /** Hard-set a chapter's title to a user-supplied value and lock it
     against future heuristic refresh passes via `titleOverridden=true`.
-    Pure label mutation — chapter id is unchanged, sentence ids are
+    No content change — chapter id is unchanged, sentence ids are
     untouched, sentence remap is identity. The chapter's slug is
     re-derived from the new title; if the chapter has rendered audio
     on disk, an audio rename op is emitted so the file follows the new
