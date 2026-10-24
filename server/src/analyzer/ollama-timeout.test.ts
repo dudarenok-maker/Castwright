@@ -250,6 +250,47 @@ describe('OllamaAnalyzer fetch timeout', () => {
     expect(err).not.toBeInstanceOf(AnalyzerTimeoutError);
   });
 
+  /* Headers go out at once, then the body stalls: the budget (or a caller abort) fires DURING
+     response.json(), whose `.catch(() => ({}))` used to turn that into '' and so into the
+     empty-persona error instead of the typed stop. */
+  function startStalledBodyOllama(): Promise<string> {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"message":{"content":"par');
+    });
+    return new Promise((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const addr = server!.address();
+        resolve(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`);
+      });
+    });
+  }
+
+  it('a budget that fires while the free-text (persona) body is being read is AnalyzerTimeoutError, not an empty persona', async () => {
+    const url = await startStalledBodyOllama();
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', ollama: { onCpu: true, absoluteMaxMs: 250 } })
+      .then(
+        (v) => v,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalyzerTimeoutError);
+    expect((err as AnalyzerTimeoutError).reason).toBe('ceiling');
+  });
+
+  it('a caller abort while the free-text (persona) body is being read is AnalysisAbortedError', async () => {
+    const url = await startStalledBodyOllama();
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', signal: ac.signal, ollama: { onCpu: true } })
+      .then(
+        (v) => v,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalysisAbortedError);
+  });
+
   it('a non-OK free-text (persona) body is redacted against the known analyzer secrets before the error is built (P22)', async () => {
     const SECRET = 'AIzaSy-persona-echo-secret-1';
     const savedEnvKey = process.env.GEMINI_API_KEY;

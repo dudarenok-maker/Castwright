@@ -230,7 +230,18 @@ export class OllamaTransport implements ChatTransport {
       }
       /* CHANGED: also reads done_reason and message.thinking, so runFreeText can tell a length stop
          that only reasoned apart from an empty answer. */
-      const json = (await response.json().catch(() => ({}))) as {
+      const json = (await response.json().catch(() => {
+        /* The budget or a caller abort can fire AFTER the headers, while the body is still being read.
+           Swallowing that into {} reads as an empty persona; report the typed stop, as the fetch phase
+           does. A malformed body with neither fired keeps the old empty result. */
+        if (req.signal?.aborted) {
+          throw new AnalysisAbortedError(`Ollama ${this.model} persona call aborted (paused or client disconnected).`);
+        }
+        if (budget.aborted) {
+          throw new AnalyzerTimeoutError('ollama', this.model, Date.now() - startedAt, 'ceiling');
+        }
+        return {};
+      })) as {
         message?: { content?: string; thinking?: string };
         done_reason?: string;
       };
