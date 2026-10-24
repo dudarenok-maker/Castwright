@@ -904,6 +904,21 @@ export function Layout() {
                  library entry. */
               dispatch(revisionsActions.hydrate({ bookId, state: null, requestSeq }));
               revisionsReadFor.current = bookId;
+            } else {
+              /* #3624 — if the slices still hold ANOTHER book, reset them so
+                 this book starts empty with its own identity stamped (edits
+                 then persist to it, not get dropped by the gate). Read live;
+                 a null identity means an in-flight upload of THIS book, so
+                 leave the slices on their in-memory defaults. Non-persisted
+                 actions only: the reset itself must never PUT (#3376). */
+              const held = store.getState().manuscript.bookId;
+              if (held !== null && held !== bookId) {
+                dispatch(manuscriptActions.resetForBook(bookId));
+                dispatch(castActions.hydrateCharacters([]));
+                dispatch(castActions.setRenderedFallback({}));
+                dispatch(castActions.setOrphanedCharacterFallbacks({}));
+                dispatch(changeLogActions.hydrateFromBookState(null));
+              }
             }
             return;
           }

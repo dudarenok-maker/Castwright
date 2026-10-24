@@ -117,6 +117,20 @@ function bulkUndoConflicts(s: ManuscriptState, touched: string[]): boolean {
   return touched.some((k) => moved.has(k));
 }
 
+/* Fields `reset` and `resetForBook` both clear; each sets `bookId` itself. */
+function clearBookFields(s: ManuscriptState): void {
+  s.manuscriptId = null;
+  s.title = null;
+  s.format = null;
+  s.wordCount = 0;
+  s.sourceText = null;
+  s.sentences = [];
+  s.importCandidate = null;
+  s.pendingReupload = null;
+  s.mergedAwayKeys = [];
+  s.lastBulkReassign = null;
+}
+
 export const manuscriptSlice = createSlice({
   name: 'manuscript',
   initialState,
@@ -237,17 +251,18 @@ export const manuscriptSlice = createSlice({
       s.lastBulkReassign = null;
     },
     reset: (s) => {
+      clearBookFields(s);
       s.bookId = null;
-      s.manuscriptId = null;
-      s.title = null;
-      s.format = null;
-      s.wordCount = 0;
-      s.sourceText = null;
-      s.sentences = [];
-      s.importCandidate = null;
-      s.pendingReupload = null;
-      s.mergedAwayKeys = [];
-      s.lastBulkReassign = null;
+    },
+    /* #3624 — an empty book-state read after the slices held another book:
+       clear exactly what `reset` clears, then stamp the opened book's identity
+       so the persistence gate keeps protecting it. A disk read, not an edit,
+       so it bumps hydrateSeq like hydrateFromBookState and is NOT in
+       PERSIST_RULES. */
+    resetForBook: (s, a: PayloadAction<string>) => {
+      clearBookFields(s);
+      s.bookId = a.payload;
+      s.hydrateSeq = (s.hydrateSeq ?? 0) + 1;
     },
 
     /* Plan 74 — capture the user's re-uploaded manuscript without

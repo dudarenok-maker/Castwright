@@ -107,6 +107,7 @@ describe('restructureGuardMiddleware', () => {
       'hydrateFromAnalysis',
       'hydrateFromBookState',
       'reset',
+      'resetForBook',
       'previewReuploadDiff',
       'discardReupload',
       'applyChapterRestructure',
