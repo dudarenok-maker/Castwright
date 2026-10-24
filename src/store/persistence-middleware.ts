@@ -31,6 +31,8 @@ interface PersistableRootState {
   manuscript: ManuscriptState;
   changeLog: ChangeLogState;
   bookMeta: BookMetaState;
+  /* Optional like `settings`: only the toast title fallback reads it. */
+  library?: { books: { bookId: string; title: string }[] };
   /* fe-2 — user-tunable autosave debounce. Optional so this type stays
      decoupled from the settings slice's full shape (and tests that build a
      partial root state don't have to supply it). */
@@ -276,9 +278,17 @@ const PERSIST_RULES: Record<
 
 };
 
-/* The saved title of `bookId`, for a toast that can fire after the user left it. */
+/* The title `bookId` has on disk, for a toast that can fire after the user left
+   it. `lastCommitted` holds the server-accepted baseline while a rename is
+   unsaved (`saved` already carries the new, unsaved title then); `saved` is only
+   seeded by a full read, so a fresh book on analysing/confirm falls back to its
+   library entry. */
 function savedTitleOf(s: PersistableRootState, bookId: string): string | undefined {
-  return s.bookMeta?.saved?.[bookId]?.title;
+  return (
+    s.bookMeta?.lastCommitted?.[bookId]?.saved?.title ??
+    s.bookMeta?.saved?.[bookId]?.title ??
+    s.library?.books?.find((b) => b.bookId === bookId)?.title
+  );
 }
 
 function bookIdFromState(s: PersistableRootState): string | null {
@@ -341,8 +351,8 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
    that book's slices are re-read from disk or wiped (Layout's full hydrate, a
    re-parse, a manuscript replace, a delete): the user has seen the failure and
    the revert, so a kept save landing later would contradict what they see (or
-   re-send a pre-reparse roster). Touches only the kept saves — a newer edit
-   already queued for the book is untouched. Not a reducer action. */
+   re-send a pre-reparse roster). Touches only the kept and parked (superseded)
+   saves — a newer edit already queued for the book is untouched. Not a reducer action. */
 const DROP_RETAINED = 'persistence/dropRetained';
 export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
 

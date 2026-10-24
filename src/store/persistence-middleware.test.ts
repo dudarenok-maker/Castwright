@@ -1247,3 +1247,48 @@ describe("a handler's given-up save toast names the book (#3421 N4)", () => {
     expect(toast.payload.message).toBe(`Book details couldn't be saved: ${sentence}`);
   });
 });
+
+describe('a given-up save toast names the last-saved title (#3421 S2)', () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+  /* Edit a book, leave it for another before the retries run out, and return
+     the generic given-up toast for `book-1`. */
+  const givenUpToast = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+    err.mockRestore();
+    return (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === 'book-persist-failed:book-1');
+  };
+
+  it('names the title on disk, not the renamed title that never saved', async () => {
+    const toast = await givenUpToast(
+      baseState({
+        bookMeta: {
+          draft: null,
+          saved: { 'book-1': { title: 'The Southern Cross' } },
+          lastCommitted: {
+            'book-1': { saved: { title: 'The Northern Star' }, draft: { title: 'The Southern Cross' } },
+          },
+        },
+      }),
+    );
+    expect(toast.payload.message).toContain('"The Northern Star"');
+    expect(toast.payload.message).not.toContain('Southern Cross');
+  });
+
+  it('falls back to the library title when bookMeta holds nothing for the book', async () => {
+    const toast = await givenUpToast(
+      baseState({
+        library: { books: [{ bookId: 'book-1', title: 'The Library Title' }] },
+      }),
+    );
+    expect(toast.payload.message).toContain('"The Library Title"');
+  });
+});
