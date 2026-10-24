@@ -828,6 +828,38 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     err.mockRestore();
   });
 
+  it('clears the rollback snapshot when a kept book-meta save lands, so a later 409 does not restore the pre-save title/author (#3421 N2)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    await vi.advanceTimersByTimeAsync(20000);
+
+    /* The kept save is re-sent on its own by the book's next flush, no hydrate. */
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(putBookState).toHaveBeenCalled();
+
+    /* A colliding rename is then refused: the rollback must land on T1, not T0. */
+    putBookState.mockReset();
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Collides' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const saved = (store.getState() as { bookMeta: { saved: Record<string, { title: string; author: string }> } }).bookMeta.saved.b1;
+    expect(saved.title).toBe('T1');
+    expect(saved.author).toBe('New Author');
+    err.mockRestore();
+  });
+
   it('does NOT keep a rolled-back book-meta save for re-send on the next flush (#3421)', async () => {
     putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});

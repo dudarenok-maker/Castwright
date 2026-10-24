@@ -361,6 +361,10 @@ export const persistenceMiddleware: Middleware = (store) => {
      from disk or wiped (`dropRetainedSaves`). A newer edit for the same key
      merges over the kept patch when it is queued. */
   const retained = new Map<FlushKey, Record<string, unknown>>();
+  /* #3421 — the success handler of a kept save, so its re-send clears the
+     rollback snapshot like a first-try success would. Only `onSuccess` is kept:
+     a re-send that fails again behaves as a plain kept save, not a rename. */
+  const retainedOnSuccess = new Map<FlushKey, PersistFailureHandler['onSuccess']>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -402,6 +406,8 @@ export const persistenceMiddleware: Middleware = (store) => {
     timers.delete(key);
     const handler = toastPending.get(key);
     toastPending.delete(key);
+    const onSuccess = handler?.onSuccess ?? retainedOnSuccess.get(key);
+    retainedOnSuccess.delete(key);
     const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
     const attemptSend = async (): Promise<{ slice: StateSlice; ok: boolean }> => {
@@ -415,8 +421,8 @@ export const persistenceMiddleware: Middleware = (store) => {
              newer write has since been scheduled (gen advanced), a fresh snapshot
              belongs to it and must not be cleared by this older, superseded
              flush. */
-          if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
-            store.dispatch(handler.onSuccess(bookId));
+          if (onSuccess && gen === (generation.get(key) ?? 0)) {
+            store.dispatch(onSuccess(bookId));
           }
           return { slice, ok: true };
         } catch (err) {
@@ -442,7 +448,10 @@ export const persistenceMiddleware: Middleware = (store) => {
              save that rolled back (the user's draft is restored for them to
              save again). A save that gave up WITHOUT rolling back has no draft
              left, so it is kept and re-sent. */
-          if (!refused && !rolledBack) retained.set(key, patch as Record<string, unknown>);
+          if (!refused && !rolledBack) {
+            retained.set(key, patch as Record<string, unknown>);
+            if (onSuccess) retainedOnSuccess.set(key, onSuccess);
+          }
           if (handler) {
             store.dispatch(
               notificationsActions.pushToast({
@@ -501,7 +510,10 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
       for (const key of Array.from(retained.keys())) {
-        if (key.startsWith(`${a.payload}:`)) retained.delete(key);
+        if (key.startsWith(`${a.payload}:`)) {
+          retained.delete(key);
+          retainedOnSuccess.delete(key);
+        }
       }
       return result;
     }
