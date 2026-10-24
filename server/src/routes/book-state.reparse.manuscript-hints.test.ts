@@ -9,6 +9,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
@@ -226,5 +227,46 @@ describe('#3703 part 3 -- reparse / replace-manuscript drop manuscript-hints.jso
     removeManuscript(MANUSCRIPT_ID); // restart
     const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
     expect(record?.chapterHints).toHaveLength(3);
+  });
+});
+
+/* The cached record's `sourceSha256` is what a later restructure compares to the
+   file on disk (chapters-restructure.ts): a record built without it, or from the
+   wrong bytes, makes the restructure answer 200 yet persist nothing. */
+describe('#3703 -- the record reparse / replace-manuscript cache carries the sha of the on-disk bytes', () => {
+  const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
+
+  it('reparse stamps the cached record, and a restructure right after persists a hints entry', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const { getManuscript } = await import('../store/manuscripts.js');
+    const onDisk = readFileSync(join(bookDir, 'manuscript.md'));
+    expect(getManuscript(MANUSCRIPT_ID)?.sourceSha256).toBe(sha(onDisk));
+
+    await mergeOneAndTwo(); // asserts the hints file now exists
+    const file = JSON.parse(readFileSync(hintsPath(), 'utf8')) as {
+      entries: { sourceSha256: string }[];
+    };
+    expect(file.entries[0]!.sourceSha256).toBe(sha(onDisk));
+  });
+
+  it('replace-manuscript stamps the RAW upload bytes (BOM + CRLF), not the decoded text', async () => {
+    const upload = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('# Fresh One\r\n\r\nHello there.\r\n\r\n# Fresh Two\r\n\r\nGeneral Kenobi.\r\n'),
+    ]);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', upload, { filename: 'fresh.md', contentType: 'text/markdown' });
+    expect(res.status).toBe(200);
+
+    const { getManuscript } = await import('../store/manuscripts.js');
+    const record = getManuscript(MANUSCRIPT_ID);
+    const onDisk = readFileSync(join(bookDir, 'manuscript.md'));
+    expect(onDisk.equals(upload)).toBe(true);
+    // the decoded text hashes differently, so hashing it instead cannot pass
+    expect(sha(record!.sourceText)).not.toBe(sha(upload));
+    expect(record?.sourceSha256).toBe(sha(upload));
   });
 });

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, cpSync, m
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
@@ -72,6 +73,19 @@ describe('samples router', () => {
     );
     expect('language' in state).toBe(true);
     expect(state.language).toBe(bundleState.language ?? null);
+  });
+
+  it('the registered record carries the sha of the manuscript bytes on disk (#3703)', async () => {
+    if (!bundleReady()) return;
+    const res = await request(app).post(`/api/samples/${SLUG}/load`);
+    expect(res.status).toBe(200);
+    const dir = join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+    const state = JSON.parse(readFileSync(join(dir, '.audiobook', 'state.json'), 'utf8'));
+    const { getManuscript } = await import('../store/manuscripts.js');
+    const record = getManuscript(state.manuscriptId);
+    expect(record).toBeDefined();
+    const onDisk = readFileSync(join(dir, state.manuscriptFile));
+    expect(record?.sourceSha256).toBe(createHash('sha256').update(onDisk).digest('hex'));
   });
 
   it('is idempotent — a second load is a no-op 200', async () => {

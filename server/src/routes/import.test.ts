@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { detectManuscriptLanguage } from '../tts/detect-language.js';
@@ -113,6 +114,34 @@ describe('POST /api/books — binary preservation', () => {
     expect(written).toBe(md);
     expect(written).toContain('# A Real Title');
     expect(written).toContain('## Chapter One');
+  });
+});
+
+describe('POST /api/books — the cached record carries the sha of the on-disk bytes (#3703)', () => {
+  it('sourceSha256 is sha256 of the verbatim manuscript file, not of the decoded text', async () => {
+    const md = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('# Sha Book\r\n\r\n## One\r\n\r\nFirst chapter.\r\n\r\n## Two\r\n\r\nSecond chapter.\r\n'),
+    ]);
+    const importRes = await request(app)
+      .post('/api/import')
+      .attach('file', md, { filename: 'sha.md', contentType: 'text/markdown' });
+    expect(importRes.status).toBe(200);
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Sha Author',
+      title: 'Sha Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+
+    const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
+    const onDisk = readFileSync(join(confirmRes.body.paths.bookDir, 'manuscript.md'));
+    const { getManuscript } = await import('../store/manuscripts.js');
+    const record = getManuscript(confirmRes.body.manuscriptId);
+    expect(sha(record!.sourceText)).not.toBe(sha(onDisk));
+    expect(record?.sourceSha256).toBe(sha(onDisk));
   });
 });
 
