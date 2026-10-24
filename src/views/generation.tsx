@@ -648,6 +648,9 @@ export function GenerationView({
     const wasExcluded =
       store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded === true;
     let includedHere = false;
+    /* #3774 — set when a rollback gave up: the chapter is still included, which the
+       row's gap note must keep saying even when the run's own error follows. */
+    let rollbackGapNote = '';
     /* #3774 — set once the include POST landed. A failure before it started no
        job of ours, so the snapshot taken over above is not ours to clear. */
     let includePosted = false;
@@ -798,6 +801,7 @@ export function GenerationView({
           const reason =
             rollbackErr instanceof Error && rollbackErr.message ? ` ${rollbackErr.message}` : '';
           const message = `Could not take ${chapterName} back out of the book — it is still included, with no analysis.${reason}`;
+          rollbackGapNote = message;
           if (isOpenBook()) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
           if (mountedRef.current && isOpenBook()) {
             dispatch(
@@ -855,7 +859,13 @@ export function GenerationView({
       const stillIncluded =
         store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded !== true;
       if (stillIncluded && !shrink && isOpenBook()) {
-        dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+        /* #3774 — the run's own error must not replace the "still included" note. */
+        dispatch(
+          chaptersActions.setAnalysisGap({
+            chapterId,
+            message: rollbackGapNote ? `${rollbackGapNote} The analysis also failed: ${message}` : message,
+          }),
+        );
       }
       patchSubset(chapterId, { error: message, shrink });
     }

@@ -3281,6 +3281,23 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       }
     });
 
+    it("a failed run whose rollback also fails keeps the 'still included' note, with the run's own error beside it", async () => {
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+        if (excluded) throw new Error('The workspace is read-only.');
+        return { id, title: '', slug: '', excluded };
+      });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(store.getState().chapters.analysisGapById?.[3]).toBeDefined());
+      await screen.findByText(/analyzer offline/);
+      const gap = store.getState().chapters.analysisGapById?.[3]?.message ?? '';
+      expect(gap).toContain('still included');
+      expect(gap).toContain('analyzer offline');
+      expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).not.toBe(true);
+    });
+
     it('a failed run waits out the lease the same way (no stop request) and then re-excludes', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
@@ -3820,8 +3837,11 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
       renderInclude(store2);
       fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      /* #3774 — the gap keeps the "still included" note and carries the run's error too */
       await waitFor(() =>
-        expect(store2.getState().chapters.analysisGapById?.[3]).toEqual({ message: 'The analyzer timed out.' }),
+        expect(store2.getState().chapters.analysisGapById?.[3]?.message).toMatch(
+          /still included.*The analyzer timed out\./,
+        ),
       );
     });
 
