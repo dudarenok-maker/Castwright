@@ -15,7 +15,18 @@ import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { librarySlice } from '../store/library-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
+import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import type { Character } from '../lib/types';
+
+/* The guard's Confirm dispatches haltActiveGeneration; stub it to a plain action so the test asserts the call. */
+vi.mock('../store/queue-thunks', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../store/queue-thunks')>()),
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
+}));
 
 afterEach(cleanup);
 
@@ -37,6 +48,9 @@ function makeStore(opts: {
       voices: voicesSlice.reducer,
       library: librarySlice.reducer,
       castDesign: castDesignSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
     },
     preloadedState: {
       ui: {
@@ -229,5 +243,34 @@ describe('VoiceReadinessGateModal', () => {
     ).toBe(false);
     expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
     expect(store.getState().ui.voiceReadinessGate).toBeNull();
+  });
+});
+
+describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
+  const chars = [qwenChar({ id: 'a', name: 'Alice', lines: 5 })];
+
+  it('Design full cast on a same-card endpoint persona engine with a render streaming asks first; the gate stays open until Confirm', () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+    expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
+    expect(store.getState().ui.stage).not.toMatchObject({ view: 'cast' });
+    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    expect(store.getState().ui.voiceReadinessGate).toBeNull();
+    expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
+  });
+
+  it('Wait leaves the gate open and starts nothing', () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
   });
 });

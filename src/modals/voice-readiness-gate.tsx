@@ -12,6 +12,7 @@
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { uiActions } from '../store/ui-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -34,6 +35,7 @@ export function VoiceReadinessGateModal() {
   const dispatch = useAppDispatch();
   const gate = useAppSelector((s) => s.ui.voiceReadinessGate);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const designActive = useAppSelector((s) => s.castDesign.active);
   const undesigned = useAppSelector((s) =>
     gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
@@ -68,19 +70,25 @@ export function VoiceReadinessGateModal() {
       );
       return;
     }
-    if (!designRunningHere) {
-      dispatch(
-        castDesignActions.designAllRequested({
-          bookId,
-          characterIds: undesigned.map((c) => c.id),
-          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
-          scope: 'bases',
-          variantTasks: [],
-        }),
-      );
-    }
-    dispatch(uiActions.changeView('cast'));
-    onClose();
+    const proceed = () => {
+      if (!designRunningHere) {
+        dispatch(
+          castDesignActions.designAllRequested({
+            bookId,
+            characterIds: undesigned.map((c) => c.id),
+            modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+            scope: 'bases',
+            variantTasks: [],
+          }),
+        );
+      }
+      dispatch(uiActions.changeView('cast'));
+      onClose();
+    };
+    /* #3084 W4 — a design that is not already running asks first when its persona engine shares a rendering card;
+       the gate stays mounted while the dialog is open (it renders it). */
+    if (designRunningHere) proceed();
+    else designGuard(proceed);
   };
 
   const onProceedAnyway = () => {
@@ -152,6 +160,8 @@ export function VoiceReadinessGateModal() {
           </div>
         </div>
       </div>
+      {/* After the gate's own overlay (same z-index), so the dialog stacks above it. */}
+      {designGuardModal}
     </>
   );
 }

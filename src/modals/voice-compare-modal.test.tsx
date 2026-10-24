@@ -45,6 +45,7 @@ const currentSubject = {
 } as unknown as Voice;
 
 function renderModal(overrides?: {
+  guard?: (proceed: () => void) => void;
   onApprove?: () => void;
   onClose?: () => void;
   character?: Character;
@@ -65,6 +66,7 @@ function renderModal(overrides?: {
       initial={{ voiceId: 'qwen-x-preview', previewUrl: '/audio/initial.mp3', persona: 'initial persona' }}
       onApprove={onApprove}
       onClose={onClose}
+      guard={overrides?.guard}
     />,
   );
   return { onApprove, onClose };
@@ -138,6 +140,16 @@ describe('VoiceCompareModal', () => {
       modelKey: 'qwen3-tts-0.6b',
       preview: true,
     });
+  });
+
+  it('Regenerate runs through the opener-owned guard: nothing is generated until the guard proceeds (#3084 W4)', async () => {
+    let proceed: (() => void) | undefined;
+    renderModal({ guard: (p) => { proceed = p; } });
+    vi.mocked(api.generateVoiceStyle).mockClear();
+    fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+    expect(api.generateVoiceStyle).not.toHaveBeenCalled();
+    proceed!();
+    await waitFor(() => expect(api.generateVoiceStyle).toHaveBeenCalledWith('b1', 'x'));
   });
 
   it('Regenerate fills the persona textarea from the generator', async () => {

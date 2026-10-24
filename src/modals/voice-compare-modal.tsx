@@ -46,6 +46,8 @@ interface Props {
   initial: { voiceId: string; previewUrl: string; persona: string };
   onApprove: (next: { voiceId: string; persona: string; previewUrl: string; voiceUuid?: string }) => void;
   onClose: () => void;
+  /** #3084 W4 — wraps a persona regeneration (opener-owned: this modal has no store access). Omitted = run at once. */
+  guard?: (proceed: () => void) => void;
 }
 
 export function VoiceCompareModal({
@@ -59,6 +61,7 @@ export function VoiceCompareModal({
   initial,
   onApprove,
   onClose,
+  guard,
 }: Props) {
   const playback = useSamplePlayback();
   const [persona, setPersona] = useState(initial.persona);
@@ -133,8 +136,12 @@ export function VoiceCompareModal({
     onClose();
   }
 
-  async function regenerate() {
+  function regenerate() {
     if (personaBusy) return;
+    if (guard) guard(() => void runRegenerate());
+    else void runRegenerate();
+  }
+  async function runRegenerate() {
     setPersonaBusy(true);
     setError(null);
     try {
