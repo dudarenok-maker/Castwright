@@ -26,13 +26,14 @@ import type { BookStateJson } from './scan.js';
 type Chapter = BookStateJson['chapters'][number];
 
 /** The identity key shared with the scan self-heal (`scan.ts`): a client
- *  chapter is the same chapter as a disk chapter only on `id` AND `slug`,
- *  AND `uuid` when both sides carry one (#3683). `id` alone is not enough: a
+ *  chapter is the same chapter as a disk chapter only on `id` AND `slug`;
+ *  `uuid` is NOT part of the key, so a client uuid that differs is ignored
+ *  and the disk uuid wins (#3683, owner decision 2026-10-25). `id` alone is not enough: a
  *  restructure renumbers ids 1..N and recomputes slugs while each chapter
  *  keeps its uuid and stamps, so a pre-restructure copy shares ids with the
  *  wrong chapters. */
 function sameChapter(a: Chapter, b: Chapter): boolean {
-  return a.id === b.id && a.slug === b.slug && (!a.uuid || !b.uuid || a.uuid === b.uuid);
+  return a.id === b.id && a.slug === b.slug;
 }
 
 function indexById(chapters: readonly Chapter[]): Map<number, Chapter> {
@@ -130,8 +131,8 @@ const CLIENT_CLEARABLE_CHAPTER_FIELDS = [
 
 /** Carry the server-owned chapter fields across a wholesale chapter replace
  *  (operator decision 2026-10-23, #3683): the matching on-disk copy
- *  (`sameChapter`: `id` AND `slug`, AND `uuid` when both carry one; owner
- *  decision 2026-10-24) always wins, so a stale client copy can never erase or overwrite a server
+ *  (`sameChapter`: `id` AND `slug`; owner decision 2026-10-25)
+ *  always wins, so a stale client copy can never erase or overwrite a server
  *  stamp. `SERVER_OWNED_CHAPTER_FIELDS` come from disk only; a client value is
  *  never used, even for a chapter with no match. For
  *  `CLIENT_CLEARABLE_CHAPTER_FIELDS` an explicit client `null` clears the

@@ -182,6 +182,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
         audioModelKey: 'kokoro',
         audioQa: { score: 0.1 },
         duration: '09:99:99',
+        uuid: 'client-uuid',
       }),
     );
     expect(res.status).toBe(204);

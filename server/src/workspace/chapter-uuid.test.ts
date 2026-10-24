@@ -104,15 +104,22 @@ describe('reconcileChapterUuids', () => {
     expect(out[1].uuid).toMatch(UUID_RE);
   });
 
+  it('ignores a client uuid when the existing chapter has one (#3683)', () => {
+    const existing = [ch({ id: 1, uuid: 'old' })];
+    const incoming = [ch({ id: 1, uuid: 'client-supplied' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('old');
+  });
+
   it('never lets a client claim a uuid another existing chapter holds (#3683)', () => {
     const existing = [ch({ id: 1, uuid: 'old' }), ch({ id: 2, uuid: 'other' })];
     const incoming = [ch({ id: 1, uuid: 'other' })];
 
     const out = reconcileChapterUuids(incoming, existing);
 
-    expect(out[0].uuid).toMatch(UUID_RE);
-    expect(out[0].uuid).not.toBe('other');
-    expect(out[0].uuid).not.toBe('old');
+    expect(out[0].uuid).toBe('old');
   });
 
   it('keeps a client uuid for an id with no existing uuid', () => {
@@ -133,13 +140,13 @@ describe('reconcileChapterUuids', () => {
     expect(out[0].uuid).toBe('u-1');
   });
 
-  it('a uuid mismatch is not a match, so the disk uuid is not carried (#3683)', () => {
+  it('same id+slug with a different client uuid still carries the disk uuid (#3683)', () => {
     const existing = [ch({ id: 1, uuid: 'disk' })];
     const incoming = [ch({ id: 1, uuid: 'other' })];
 
     const out = reconcileChapterUuids(incoming, existing);
 
-    expect(out[0].uuid).toBe('other');
+    expect(out[0].uuid).toBe('disk');
   });
 
   it('an unmatched chapter whose client uuid a disk chapter holds gets a fresh one (#3683)', () => {
@@ -219,7 +226,7 @@ describe('carryTitleSynthesized', () => {
 
     expect('titleSynthesized' in incoming[0]).toBe(false);
   });
-  it('does not carry the flag across a slug or uuid mismatch (#3683)', () => {
+  it('carries the flag across a uuid mismatch but not a slug mismatch (#3683)', () => {
     const existing = [ch({ id: 1, slug: '01-two', title: 'T', uuid: 'a', titleSynthesized: true })];
 
     expect(
@@ -229,7 +236,7 @@ describe('carryTitleSynthesized', () => {
     expect(
       carryTitleSynthesized([ch({ id: 1, slug: '01-two', title: 'T', uuid: 'b' })], existing)[0]
         .titleSynthesized,
-    ).toBeUndefined();
+    ).toBe(true);
   });
 });
 
@@ -412,7 +419,7 @@ describe('carryServerOwnedChapterFields (#3683)', () => {
 
     expect(incoming).toEqual(before);
   });
-  it('h) carries nothing across a slug mismatch or a uuid mismatch (#3683)', () => {
+  it('h) carries nothing across a slug mismatch but carries across a uuid mismatch (#3683)', () => {
     const existing = [ch({ id: 1, slug: '01-two', uuid: 'u-2', duration: '00:20:00' })];
 
     const slugMiss = carryServerOwnedChapterFields(
@@ -425,7 +432,7 @@ describe('carryServerOwnedChapterFields (#3683)', () => {
       [ch({ id: 1, slug: '01-two', uuid: 'u-1', duration: 'client' })],
       existing,
     );
-    expect(uuidMiss[0].duration).toBeUndefined();
+    expect(uuidMiss[0].duration).toBe('00:20:00');
   });
 
   it('i) matches when one side carries no uuid', () => {
