@@ -149,6 +149,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+  writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
   writeSpy.fail = false;
   stateWriteSpy.fail = false;
   seedState();
@@ -162,13 +163,18 @@ beforeEach(async () => {
 afterEach(() => {
   writeSpy.fail = false;
   stateWriteSpy.fail = false;
+  // A stale-body test edits the manuscript on disk; vitest's retry and every
+  // later test must see the original again.
+  writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
 });
 
-/* Stamp the cached record with a sha that is not the manuscript's, as if the
-   file had been edited after the record was cached. */
-async function makeRecordStale(): Promise<void> {
-  const { getManuscript, putManuscript } = await import('../store/manuscripts.js');
-  putManuscript({ ...getManuscript(MANUSCRIPT_ID)!, sourceSha256: 'stale-sha' });
+const EDITED_BODY = MANUSCRIPT_BODY.replace('Alpha first.', 'Edited opener.');
+
+/* Edit the manuscript on disk after the record was cached from it: the record's
+   bodies are now from a file that no longer exists, which is the only way a
+   restructure sees a stale body. */
+function editManuscriptOnDisk(): void {
+  writeFileSync(join(bookDir, 'manuscript.md'), EDITED_BODY);
 }
 
 describe('restructure persists manuscript-hints.json (#3703)', () => {
@@ -243,15 +249,15 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
     expect(record!.chapterHints[1]!.body).toContain('Gamma first.');
   });
 
-  it('a stale-body restructure whose state.json write fails keeps the previous hints file', async () => {
+  it('a stale-body restructure whose state.json write fails leaves state.json untouched and a restart re-parses the edited manuscript', async () => {
     const merge = await request(app)
       .post(`/api/books/${bookId}/chapters/merge`)
       .send({ chapterIds: [1, 2] });
     expect(merge.status).toBe(200);
-    const before = readFileSync(hintsPath());
 
-    // The cached record's bodies no longer match the manuscript on disk.
-    await makeRecordStale();
+    // The record was cached from the original manuscript; now the file changes.
+    editManuscriptOnDisk();
+    const stateBefore = readFileSync(statePath());
 
     stateWriteSpy.fail = true;
     const reorder = await request(app)
@@ -259,17 +265,16 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
       .send({ order: [2, 1] });
     expect(reorder.status).toBe(500);
     stateWriteSpy.fail = false;
+    expect(readFileSync(statePath()).equals(stateBefore)).toBe(true);
 
-    // The previous structure still stands, so its hints file must too.
-    expect(existsSync(hintsPath())).toBe(true);
-    expect(readFileSync(hintsPath()).equals(before)).toBe(true);
-
-    // A restart hydrates the merged structure that landed, not a fresh parse.
+    // A restart: no kept entry validates against the edited file's sha, so the
+    // hydrate fresh-parses the EDITED manuscript. Old bodies never come back.
     const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
     removeManuscript(MANUSCRIPT_ID);
     const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
-    expect(record?.chapterHints).toHaveLength(2);
-    expect(record!.chapterHints[0]!.body).toContain('Beta first.');
+    const bodies = record!.chapterHints.map((c) => c.body).join('\n');
+    expect(bodies).toContain('Edited opener.');
+    expect(bodies).not.toContain('Alpha first.');
   });
 
   it('a stale-body restructure whose state.json write lands removes the stale hints file', async () => {
@@ -279,7 +284,7 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
     expect(merge.status).toBe(200);
     expect(existsSync(hintsPath())).toBe(true);
 
-    await makeRecordStale();
+    editManuscriptOnDisk();
 
     const reorder = await request(app)
       .post(`/api/books/${bookId}/chapters/reorder`)
