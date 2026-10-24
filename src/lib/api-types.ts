@@ -11955,7 +11955,8 @@ export interface operations {
                      *     stored list: a stored chapter missing from the payload is
                      *     gone. Each incoming chapter is matched to a stored chapter
                      *     by `id` AND `slug` together. On a match, the stored `uuid`
-                     *     and the server-owned fields (`duration`,
+                     *     (a client `uuid` is ignored when the stored chapter has
+                     *     one, else kept if unique) and the server-owned fields (`duration`,
                      *     `audioRenderedAt`, `audioModelKey`, `audioEngines`,
                      *     `audioQa`, `generationState`, `generationError`,
                      *     `generationErrorCode`, `generationRemediation`) come from
@@ -11968,8 +11969,8 @@ export interface operations {
                      *     `id`/`slug` that changed, e.g. a copy taken before a
                      *     restructure) carries no server-owned fields over and its
                      *     client values for them are dropped; its client `uuid` is
-                     *     kept only if no stored chapter and no other incoming
-                     *     chapter holds it, otherwise a fresh one is minted. Output
+                     *     kept only if no stored chapter and no earlier chapter
+                     *     in the payload holds it, otherwise a fresh one is minted. Output
                      *     `uuid`s are always unique.
                      *     #2246 Task 9 — BCP-47 `language` field on the `state`
                      *     slice: string | null. `null` is "stated absence" (a

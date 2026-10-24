@@ -25,10 +25,12 @@ import type { BookStateJson } from './scan.js';
 
 type Chapter = BookStateJson['chapters'][number];
 
-/** The identity key shared with the scan self-heal (`scan.ts`): a client
- *  chapter is the same chapter as a disk chapter only on `id` AND `slug`;
- *  `uuid` is NOT part of the key, so a client uuid that differs is ignored
- *  and the disk uuid wins (#3683, owner decision 2026-10-25). `carryTitleSynthesized`
+/** The identity key for this PUT: a client chapter is the same chapter as a
+ *  disk chapter only on `id` AND `slug`. It is NOT the scan self-heal's key
+ *  (`scan.ts` also requires the uuids to agree when both sides carry one):
+ *  here `uuid` is deliberately not part of the key, so a client uuid that
+ *  differs is ignored and the disk uuid wins (#3683, owner decision
+ *  2026-10-25). `carryTitleSynthesized`
  *  deliberately does not use it (see there). `id` alone is not enough: a
  *  restructure renumbers ids 1..N and recomputes slugs while each chapter
  *  keeps its uuid and stamps, so a pre-restructure copy shares ids with the

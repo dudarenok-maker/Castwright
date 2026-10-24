@@ -1203,8 +1203,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         return {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid` or `titleSynthesized`, so a
+          /* srv-35 — no in-app caller sends `chapters` on this slice; the merge
+             guards an API caller sending a (possibly stale) chapters list that
+             doesn't track the server-only `uuid` or `titleSynthesized`, so a
              wholesale replace would strip them. reconcileChapterUuids
              carries each uuid across from the stored chapter matching on
              id + slug (and mints for a genuinely-new chapter);

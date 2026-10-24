@@ -39,7 +39,7 @@ existing web player. **Lands before `srv-32`.**
   - `server/src/workspace/chapter-uuid.ts` — `ensureChapterUuids(state)` (mint a
     `uuid` for any chapter lacking one; idempotent; covers excluded chapters) and
     `reconcileChapterUuids(incoming, existing)` (carry a chapter's `uuid` across a
-    wholesale `chapters` replacement, matched by `id`; mint for genuinely-new
+    wholesale `chapters` replacement, matched by `id` + `slug`; mint for genuinely-new
     chapters). These are the lazy-migration + anti-strip primitives.
   - Optional `uuid?: string` on the `state.json` chapter shape
     (`BookStateJson.chapters[]`, `scan.ts`) and an optional `chapterUuid` on
@@ -64,7 +64,7 @@ existing web player. **Lands before `srv-32`.**
   `PUT /:bookId/state` replaces `chapters` wholesale
   (`book-state.ts:568 — chapters: patch.chapters ?? state.chapters`); a frontend
   that doesn't track `uuid` would otherwise erase it on every chapter edit, so the
-  patch is routed through `reconcileChapterUuids` to preserve `uuid` by `id`.
+  patch is routed through `reconcileChapterUuids` to preserve `uuid` by `id` + `slug`.
 - **Reversibility:** Fully additive. Deleting the `uuid` field + the helper
   reverts cleanly; existing books keep loading (the field is optional everywhere
   it appears, and every keyed-by-`uuid` path falls back to `id`).
