@@ -38,6 +38,7 @@ import type {
   Sentence,
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
 import { castActions, selectCastTierByCharacterId } from '../store/cast-slice';
 import type { OrphanedCharacterFallback } from '../store/cast-slice';
@@ -463,6 +464,8 @@ export function CastView({
   /* "Design full cast" — the open book + the in-flight bulk-design snapshot. */
   const bookId = useAppSelector((s) => (s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null));
   const designActive = useAppSelector((s) => s.castDesign.active);
+  /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
+  const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   /* fe-16 — per-character render-time fallback engine (Qwen → Kokoro), hydrated
      from book-state. Threaded into resolveVoiceStatus so a character that
      actually rendered in Kokoro shows "Fallback (Kokoro)" instead of its
@@ -1381,11 +1384,15 @@ export function CastView({
                       variantReady={variantWork.readyTasks}
                       variantBlocked={variantWork.blockedTasks}
                       variantBlockedChars={variantWork.blockedChars}
-                      onPick={startDesign}
+                      onPick={(scope) => {
+                        setScopeOpen(false);
+                        designGuard(() => startDesign(scope));
+                      }}
                       onClose={() => setScopeOpen(false)}
                     />
                   </>
                 )}
+                {designGuardModal}
               </div>
             )}
             {/* PR4 — bulk 1.7B tier pin/reset buttons; visible only for Qwen books */}

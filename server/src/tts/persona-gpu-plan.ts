@@ -26,7 +26,10 @@ export interface PersonaGpuPlan {
     sequential workflow (design happens in cast-review, render happens after)
     keeps them from actually overlapping, so no proactive Node-side eviction
     is needed here any more — busy still falls back to CPU, idle just runs on
-    GPU directly. */
+    GPU directly. That CPU fallback is local Ollama's alone: an OpenAI-compatible
+    endpoint ignores the plan, so on a same-card endpoint the protection against a busy
+    card is the frontend's pause-generation confirm (useLocalAnalyzerGuard, purpose
+    'design'), not this function. */
 export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
   const busy =
     activeGenerationBooks().length > 0 ||
@@ -47,8 +50,10 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
       no card or on a card Qwen does not use) → `{ onCpu: false, keepAlive: 0 }`.
     - persona shares the GPU (local Ollama, or an endpoint on the Qwen card, #3084 W4)
       → resolve the plan directly. Only the Ollama transport reads `onCpu`/`keepAlive`;
-      for an endpoint the plan is inert, and what "like local" buys it is the design
-      job's ordering (personas before VoiceDesign loads — see routes/cast-design.ts).
+      for an endpoint a busy plan is ignored server-side (the call still goes to the card),
+      and what "like local" buys it is the design job's ordering (personas before
+      VoiceDesign loads — see routes/cast-design.ts). The protection against a render on
+      that card is the frontend's pause-generation confirm before the design starts.
 
     `_signal` is kept in the signature for call-site compatibility
     (`routes/cast-design.ts` still passes its job's AbortSignal), but is

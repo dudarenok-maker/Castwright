@@ -40,6 +40,8 @@ function makeStore(opts: {
   ttsDevice?: string;
   /** N5 — what the sidecar's last /health reported. */
   reported?: TtsReportedDevices;
+  /** #3084 W4 — analyzer.personaGeneration.engine's effective value. */
+  personaEngine?: string;
 }) {
   const store = configureStore({
     reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, account: accountSlice.reducer, config: configSlice.reducer },
@@ -48,10 +50,14 @@ function makeStore(opts: {
   if (opts.activeStream) store.dispatch(chaptersSlice.actions.setActiveStream(opts.activeStream));
   for (const extra of opts.extraStreams ?? []) store.dispatch(chaptersSlice.actions.setActiveStream(extra));
   if (opts.endpoints) store.dispatch({ type: 'account/fetch/fulfilled', payload: { analyzerEndpoints: opts.endpoints } });
-  if (opts.ttsDevice) {
+  if (opts.ttsDevice || opts.personaEngine) {
+    const entry = (key: string, effective: string) => ({ key, effective, source: 'override' as const, locked: false, overridden: true });
     store.dispatch(
       fetchConfig.fulfilled(
-        { groups: [], descriptors: [], values: { 'tts.coqui.device': { key: 'tts.coqui.device', effective: opts.ttsDevice, source: 'override', locked: false, overridden: true } }, restartPending: false, cudaEnvShadow: false, envCleanupCandidates: [] },
+        { groups: [], descriptors: [], values: {
+          ...(opts.ttsDevice ? { 'tts.coqui.device': entry('tts.coqui.device', opts.ttsDevice) } : {}),
+          ...(opts.personaEngine ? { 'analyzer.personaGeneration.engine': entry('analyzer.personaGeneration.engine', opts.personaEngine) } : {}),
+        }, restartPending: false, cudaEnvShadow: false, envCleanupCandidates: [] },
         '',
         undefined,
       ),
@@ -73,8 +79,8 @@ const liveSnapshot: ActiveStreamSnapshot = {
   halted: false,
 };
 
-function Harness({ onProceed, modelId }: { onProceed: () => void; modelId?: string }) {
-  const { guard, modal } = useLocalAnalyzerGuard({ modelId });
+function Harness({ onProceed, modelId, purpose }: { onProceed: () => void; modelId?: string; purpose?: 'analyse' | 'design' }) {
+  const { guard, modal } = useLocalAnalyzerGuard({ modelId, purpose });
   return (
     <>
       <button onClick={() => guard(onProceed)}>Trigger</button>
@@ -296,5 +302,80 @@ describe('useLocalAnalyzerGuard', () => {
     render(<Provider store={store}><Harness onProceed={vi.fn()} modelId="openai:lab::m" /></Provider>);
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+  });
+});
+
+/* #3084 W4 — the design-start guard: the model about to be called is the PERSONA engine, not
+   the analysis model the session has selected. */
+describe('useLocalAnalyzerGuard — purpose "design" (persona engine)', () => {
+  const sameCard = { id: 'same-card', name: 'Same card', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 8192 };
+  const noCard = { ...sameCard, id: 'no-card', name: 'No card', gpu: 'none' };
+  const TITLE = 'Pause audio generation to design voices?';
+
+  function renderDesign(store: ReturnType<typeof makeStore>, proceed: () => void) {
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} purpose="design" />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+  }
+
+  it('prompts for a same-card endpoint persona engine while a render streams; Confirm halts then proceeds', () => {
+    /* The selected analysis model is Gemini: only the persona engine can make this prompt. */
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: liveSnapshot,
+      endpoints: [sameCard],
+      ttsDevice: 'cuda:0',
+      personaEngine: 'openai:same-card::m0',
+    });
+    const proceed = vi.fn();
+    renderDesign(store, proceed);
+
+    expect(screen.getByText(TITLE)).toBeInTheDocument();
+    expect(proceed).not.toHaveBeenCalled();
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    });
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('Wait cancels the design without halting the render', () => {
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: [sameCard], ttsDevice: 'cuda:0', personaEngine: 'openai:same-card::m0',
+    });
+    const proceed = vi.fn();
+    renderDesign(store, proceed);
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(proceed).not.toHaveBeenCalled();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a Gemini persona engine', 'gemini', []],
+    ['the default (unset) persona engine', undefined, []],
+    ['a gpu "none" endpoint', 'openai:no-card::m0', [noCard]],
+    ['local Ollama (the server moves it to system RAM)', 'local', []],
+  ])('passes straight through for %s', (_name, personaEngine, endpoints) => {
+    const store = makeStore({
+      selectedModel: 'qwen3.5:4b', activeStream: liveSnapshot, endpoints, ttsDevice: 'cuda:0', personaEngine,
+    });
+    const proceed = vi.fn();
+    renderDesign(store, proceed);
+    expect(proceed).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  it('passes straight through for a same-card endpoint when no generation is running', () => {
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash', activeStream: null, endpoints: [sameCard], ttsDevice: 'cuda:0', personaEngine: 'openai:same-card::m0',
+    });
+    const proceed = vi.fn();
+    renderDesign(store, proceed);
+    expect(proceed).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
   });
 });
