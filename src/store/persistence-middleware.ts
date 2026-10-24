@@ -295,7 +295,8 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
    slices that still failed; a write that was given up on has already raised
    a toast. A given-up save is kept and re-sent first by the book's next
    flush (#3421), so this promise also covers that re-send, and a chapter
-   restructure waits for it. Plan 286 — revisions
+   restructure waits for it. It is let go (`dropRetainedSaves`) once the book's
+   slices are re-read from disk or wiped. Plan 286 — revisions
    no longer persists from the client, so the write-then-re-read hazard this
    describes now applies only to the other slices.
    Not a reducer action: no slice handles it. */
@@ -321,6 +322,15 @@ const FLUSH_FAILED_MESSAGE =
 const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
 
+/* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
+   that book's slices are re-read from disk or wiped (Layout's full hydrate, a
+   re-parse, a manuscript replace, a delete): the user has seen the failure and
+   the revert, so a kept save landing later would contradict what they see (or
+   re-send a pre-reparse roster). Touches only the kept saves — a newer edit
+   already queued for the book is untouched. Not a reducer action. */
+const DROP_RETAINED = 'persistence/dropRetained';
+export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
+
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
   const pending = new Map<FlushKey, unknown>();
@@ -344,9 +354,10 @@ export const persistenceMiddleware: Middleware = (store) => {
      reject promises, so `flushBookPersistence` can await them. Each entry
      covers a whole send-and-retry sequence (#3421), not one PUT. */
   const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
-  /* #3421 — saves given up on after their retries, kept (not dropped) until the
-     next flush of their book re-sends them first. A newer edit for the same
-     key merges over the kept patch when it is queued. */
+  /* #3421 — saves given up on after their retries, kept until the next flush of
+     their book re-sends them first, or until that book's slices are re-read
+     from disk or wiped (`dropRetainedSaves`). A newer edit for the same key
+     merges over the kept patch when it is queued. */
   const retained = new Map<FlushKey, Record<string, unknown>>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
@@ -473,6 +484,13 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (lastBookId !== bookId) {
       if (lastBookId) flushBookNow(lastBookId);
       lastBookId = bookId;
+    }
+
+    if (type === DROP_RETAINED && typeof a.payload === 'string') {
+      for (const key of Array.from(retained.keys())) {
+        if (key.startsWith(`${a.payload}:`)) retained.delete(key);
+      }
+      return result;
     }
 
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {

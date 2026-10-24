@@ -26,6 +26,7 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
+import { dropRetainedSaves } from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -156,6 +157,7 @@ export function BooksRoute() {
            under the same id reads as a different book (OD31: and drop its
            preview — the new take stays live, nothing is restored). */
         dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
@@ -198,6 +200,7 @@ export function BooksRoute() {
            (OD31: and drop its preview — the new take stays live). */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(dropRetainedSaves(b.bookId));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -255,6 +258,7 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(dropRetainedSaves(b.bookId));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());

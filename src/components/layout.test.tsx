@@ -2770,6 +2770,50 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
     }
   });
 
+  it('exhausted, then the server recovers: the reverted edit is not silently re-sent on the next leave', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    /* The confirm-stage voice match PUTs the cast it re-reads, and that newer
+       edit would itself supersede the kept save. Hold it back so the kept save
+       is the only thing that could reach disk. */
+    matchVoicesMock.mockReturnValue(new Promise(() => {}));
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = Infinity;
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
+
+      m.model.failNextCastPutsForA = 0;
+      const putsAtRecovery = putBookStateMock.mock.calls.length;
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+
+      /* Layout may still PUT the (old-named) cast it re-read; the reverted
+         rename must not be among the PUTs. */
+      const stale = putBookStateMock.mock.calls
+        .slice(putsAtRecovery)
+        .filter(
+          ([id, req]) =>
+            id === 'A' &&
+            (req as { slice: string; patch: { characters?: Character[] } }).slice === 'cast' &&
+            (req as { patch: { characters?: Character[] } }).patch.characters?.some((c) => c.name === 'Eliza Vane'),
+        );
+      expect(stale).toHaveLength(0);
+      expect(m.disk.A[0].name).toBe('Eliza');
+    } finally {
+      m.unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
   it('control: staying on the book, the retry heals a failed save with no toast', async () => {
     const store = makeStoreWithScopeAndPersistence();
     const m = diskModel(store);

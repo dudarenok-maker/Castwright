@@ -8,7 +8,12 @@ const { putBookState } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
-import { persistenceMiddleware, flushBookPersistence, type BookFlushOutcome } from './persistence-middleware';
+import {
+  persistenceMiddleware,
+  flushBookPersistence,
+  dropRetainedSaves,
+  type BookFlushOutcome,
+} from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
@@ -943,6 +948,47 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     expect(putBookState.mock.calls[0][1].patch).toEqual(
       expect.objectContaining({ castConfirmed: true, ...meta }),
     );
+    err.mockRestore();
+  });
+
+  it('(v) a re-parse/reset of the book drops its kept saves: the next flush does not re-send the old roster', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'pre-reparse' }] } });
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(dropRetainedSaves('book-1'));
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(500);
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['manuscript']);
+    err.mockRestore();
+  });
+
+  it("(v-b) dropping one book's kept saves leaves another book's alone", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(dropRetainedSaves('book-2'));
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(putBookState).toHaveBeenCalledTimes(1);
     err.mockRestore();
   });
 
