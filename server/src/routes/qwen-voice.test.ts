@@ -1093,13 +1093,14 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
 /* #1981, Task 7 — promote-voice's stale-variants teardown write races
    POST /voice-library/:voiceUuid/assign for a DIFFERENT character of the same
-   book. Unlocked, each side's own `readJson` can land before the other side's
-   write, so whichever side writes LAST replays a `characters` snapshot that
-   predates the other's write and silently drops it — which side loses
-   depends on interleaving (measured: promote-voice's own teardown was the
-   one lost, not assign's), so both survival assertions below matter, not
-   just one. Locked, promote-voice re-reads fresh cast.json inside
-   `withCastLock`, so both mutations survive regardless of interleaving.
+   book. Pre-#3711 history (the #3773 paragraph below says what the /assign
+   variant still proves): unlocked, each side's own `readJson` could land
+   before the other side's write, so whichever side wrote LAST replayed a
+   `characters` snapshot that predated the other's write and silently dropped
+   it — which side lost depended on interleaving (measured: promote-voice's
+   own teardown was the one lost, not assign's), so both survival assertions
+   below matter, not just one. Locked, promote-voice re-reads fresh cast.json
+   inside `withCastLock`, so both mutations survive regardless of interleaving.
 
    #1981 race-hardening round (Aug 2026) — a bare `Promise.all` of the two
    requests (the original shape of this test) does NOT interleave reliably:
@@ -1132,15 +1133,17 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    teardown write is based on — read the real bytes immediately (so the read
    genuinely happens-before assign's write, matching the bug's precondition)
    but hold the JS-visible resolution open behind a manually-released gate.
-   /assign then gets a generous one-directional head start: it completes
-   fully when unlocked (the bug window) or queues behind promote-voice's
-   still-held lock when locked (the fix) — either way nothing depends on
+   The second writer then gets a generous one-directional head start: it
+   completes fully when unlocked (the bug window) or queues behind
+   promote-voice's still-held lock when locked (the fix) — either way nothing depends on
    tuning a tight timing window. This lands a single trial, deterministically,
    in the same 200-of-200-class category the cast-lock.ts docstring cites for
    the base primitive — no in-process repetition needed, and none of the
-   process-correlation risk that repetition carries. Confirmed empirically:
-   20/20 external re-runs of THIS version go red against the same mutation
-   (see the hardening report).
+   process-correlation risk that repetition carries. Confirmed empirically
+   pre-#3711, with /assign as the second writer: 20/20 external re-runs went
+   red against the `withCastLock` pass-through (see the hardening report).
+   That no longer holds for /assign (below); the cast-lock-alone test is the
+   one that still goes red under that mutation.
 
    #3773 — the route-level /assign race below is NOT cast-lock proof: both
    promote-voice and /assign hold `book-op:<bookId>` (#3711), which serialises
@@ -1668,11 +1671,12 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
   });
 
   /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
-     characters in the SAME book race that book's cast.json. Unlocked, both
-     requests' readJson resolve before either writeJsonAtomic lands, so the
-     later write replays a `characters` snapshot taken before the earlier
-     write happened and silently drops it — one character's variant map
-     reverts to its pre-delete state. `nopersona` gets its own qwen override
+     characters in the SAME book race that book's cast.json. Pre-#3711, with
+     the cast lock as the only guard, both requests' readJson resolved before
+     either writeJsonAtomic landed, so the later write replayed a `characters`
+     snapshot taken before the earlier write happened and silently dropped it.
+     Since #3711 book-op serialises the two DELETEs on its own — the
+     cast-lock-alone test above is the cast-lock proof. `nopersona` gets its own qwen override
      here (it has none by default) purely so it has a second, independent
      variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
      `{ force: true }` / try-catch best-effort, so this doesn't need matching
