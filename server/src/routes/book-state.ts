@@ -959,7 +959,7 @@ export function busySentence(
     return `This book is busy (${what}). Stop it or wait for it to finish, then change the chapters.`;
   }
   if (action === 'exclude') {
-    return `This book is busy (${what}). Stop it or wait for it to finish, then exclude or include chapters.`;
+    return `This book is busy (${what}). Stop it or wait for it to finish, then exclude chapters.`;
   }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
@@ -1985,13 +1985,14 @@ bookStateRouter.post(
       const outcome = await withBookOp(req.params.bookId, async (book) => {
         const { bookDir, state } = book;
 
-        /* #3774 — refuse while ANY long job is registered for the book, FIRST:
-           excluding deletes the chapter's audio + segments, and a render that is
-           still exporting would write the take back (resurrecting excluded
-           audio). `runBookJob` registers its token inside `withBookOp`, so this
-           check cannot race a registration. */
+        /* #3774 — refuse an EXCLUDE while ANY long job is registered for the book,
+           FIRST: excluding deletes the chapter's audio + segments, and a render that
+           is still exporting would write the take back (resurrecting excluded
+           audio). Including deletes nothing, so it is not refused. `runBookJob`
+           registers its token inside `withBookOp`, so this check cannot race a
+           registration. */
         const kinds = bookJobKinds(book.bookId);
-        if (kinds.length > 0) {
+        if (excluded && kinds.length > 0) {
           return { status: 409, body: { error: busySentence(kinds, 'exclude'), code: 'book_busy' } };
         }
 

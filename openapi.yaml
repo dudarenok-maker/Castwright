@@ -1001,7 +1001,7 @@ paths:
         '404':
           description: Book or chapter not found
         '409':
-          description: 'A long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted.'
+          description: 'Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason.'
           content:
             application/json:
               schema:
@@ -1197,7 +1197,8 @@ paths:
         Sets `Chapter.excluded` on every listed chapter in one atomic
         restructure pass. Sentence remap is identity; audio files are left
         on disk. For a single chapter the Generate-view toggle uses
-        `setChapterExcluded` instead.
+        `setChapterExcluded` instead. Un-hiding (`excluded: false`) is not
+        refused with `book_busy` while a long job runs; hiding is (#3774).
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:

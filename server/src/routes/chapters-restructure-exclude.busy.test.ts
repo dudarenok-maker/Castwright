@@ -290,6 +290,19 @@ describe('#3774 — restructure refuses with 409 book_busy while a long job is r
     }
   });
 
+  it('(g) bulk INCLUDE is not refused — it proceeds with a render registered', async () => {
+    expect((await post('chapters/exclude', { chapterIds: [2], excluded: true })).status).toBe(200);
+    const render = await holdJob('render');
+    try {
+      const res = await post('chapters/exclude', { chapterIds: [2], excluded: false });
+      expect(res.status).toBe(200);
+      const chapters = JSON.parse(readFileSync(statePath(), 'utf8')).chapters;
+      expect(chapters.find((c: { id: number }) => c.id === 2).excluded).toBeUndefined();
+    } finally {
+      await render.finish();
+    }
+  });
+
   it('(c) control — once the job is released, merge proceeds', async () => {
     const render = await holdJob('render');
     await render.finish();
@@ -312,7 +325,7 @@ describe('#3774 — single-chapter exclude refuses with 409 book_busy while a lo
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
       expect(res.body.error).toMatch(/rendering audio/);
-      expect(res.body.error).toMatch(/exclude or include chapters/);
+      expect(res.body.error).toMatch(/exclude chapters/);
       expect(res.text).not.toContain(workspaceRoot);
       expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
       expect(existsSync(audioFile('01-chapter-one'))).toBe(true);
@@ -323,17 +336,42 @@ describe('#3774 — single-chapter exclude refuses with 409 book_busy while a lo
     }
   });
 
-  it('(b) any kind — an export job also refuses; so does un-excluding', async () => {
+  it('(b) any kind — an export job also refuses an exclude', async () => {
     const before = snapshot();
     const job = await holdJob('export');
     try {
-      const res = await exclude(1, false);
+      const res = await exclude(1, true);
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
       expect(res.body.error).toMatch(/exporting/);
       expect(snapshot()).toBe(before);
     } finally {
       await job.finish();
+    }
+  });
+
+  it('(g) include (un-exclude) is NOT refused — it proceeds with a render registered', async () => {
+    expect((await exclude(1, true)).status).toBe(200);
+    const render = await holdJob('render');
+    try {
+      const res = await exclude(1, false);
+      expect(res.status).toBe(200);
+      expect(res.body.excluded).toBeFalsy();
+      const chapters = JSON.parse(readFileSync(statePath(), 'utf8')).chapters;
+      expect(chapters.find((c: { id: number }) => c.id === 1).excluded).toBeUndefined();
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['render']);
+    } finally {
+      await render.finish();
+    }
+  });
+
+  it('(g) race — an include queued BEHIND a job that registers while it waits still proceeds', async () => {
+    expect((await exclude(1, true)).status).toBe(200);
+    const { res, finishJob } = await raceJobAheadOfRoute(() => exclude(1, false));
+    try {
+      expect(res.status).toBe(200);
+    } finally {
+      await finishJob();
     }
   });
 
