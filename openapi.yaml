@@ -4088,6 +4088,17 @@ paths:
                     `manuscript`, and `changeLog` slices with entirely
                     different payloads. A `revisions` slice is always
                     refused (plan 286) regardless of `patch`.
+                    #3683 — for the `state` slice, `chapters` is merged by
+                    chapter `id` against the stored chapters. The
+                    server-owned fields (`duration`, `audioRenderedAt`,
+                    `audioModelKey`, `audioEngines`, `audioQa`,
+                    `generationState`, `generationError`,
+                    `generationErrorCode`, `generationRemediation`, `uuid`)
+                    are always taken from the stored copy and a client value
+                    for them is ignored. There is one exception: an explicit
+                    `null` for `generationState` / `generationError` /
+                    `generationErrorCode` / `generationRemediation` clears
+                    that field, while an omitted key keeps the stored value.
                     #2246 Task 9 — BCP-47 `language` field on the `state`
                     slice: string | null. `null` is "stated absence" (a
                     book whose language the user has not set), distinct

@@ -87,6 +87,7 @@ import {
   ensureChapterUuids,
   reconcileChapterUuids,
   carryTitleSynthesized,
+  carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
 import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
@@ -1207,10 +1208,18 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              wholesale replace would strip them. reconcileChapterUuids
              carries each uuid across by id (and mints for a genuinely-new
              chapter); carryTitleSynthesized does the same for the
-             app-made-title flag, ignoring whatever the client sent. */
+             app-made-title flag, ignoring whatever the client sent.
+             #3683 — carryServerOwnedChapterFields then takes the render and
+             failure stamps (duration, audio*, generation*, uuid) from the
+             locked fresh read: a client value is ignored, and only an
+             explicit `null` clears a generation* field (an absent key keeps
+             disk), so a stale copy can't revert a finalize or a failure. */
           chapters: patch.chapters
-            ? carryTitleSynthesized(
-                reconcileChapterUuids(patch.chapters, state.chapters),
+            ? carryServerOwnedChapterFields(
+                carryTitleSynthesized(
+                  reconcileChapterUuids(patch.chapters, state.chapters),
+                  state.chapters,
+                ),
                 state.chapters,
               )
             : state.chapters,

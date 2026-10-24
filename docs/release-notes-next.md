@@ -714,6 +714,8 @@ Two chains land together. The first stops a refusal being issued against a pessi
 
 - **Security sweep and literal `%s` log lines** (#3721). Bumped `ip-address` to 10.7.4 in `server/package-lock.json` (IPv6 subnet advisories, advisory range <=10.7.3; only that entry changed). `logger.ts` `installTimestamps()` always passes the timestamp as Node's format argument, so a `%s` placeholder in a server `console` call printed literally in production; the sites that used them (`export`, `queue`, `voice-style`, `voice-library` revoke/delete, `purge-clone-artifacts` x5 calls; 10 sites in all) now build the message with a template literal. `logger.test.ts` now pins the real patch's rendering (via `util.format`): a specifier inside a template-literal first argument stays literal and keeps its error argument, and a first-argument `%s` is not substituted. CodeQL #227-#236 triage is recorded in `docs/security/codeql-dismissal-residue.md` (#233/#236 `js/tainted-format-string` are neutralised by that boot-time patch, not by a code change). Corrected the `exc-text-safe` citation for `VoiceLanguageUnsupportedError` in `tts-sidecar/main.py` (comment only).
 
+- **`PUT /books/:bookId/state` (`slice: 'state'`) now keeps a chapter's server-stamped render fields from disk** (#3683). Duration, render date, engine, QA, failure state and uuid are taken from the stored chapter, so a stale client `chapters` copy can't revert a finished render or erase a failure stamp. An explicit `null` on one of the four `generation*` fields still clears it; an omitted key keeps the stored value. Documented in `openapi.yaml`.
+
 ---
 
 **Full changelog:** v1.14.0...v1.15.0
