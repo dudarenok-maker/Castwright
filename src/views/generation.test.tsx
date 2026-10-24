@@ -2760,6 +2760,80 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     });
   });
 
+  /* #3774 pass 3 (F) — a job started while an include's subset run is live would
+     hold the book, so the include's Cancel rollback (re-exclude) is refused for
+     up to 20 s and the chapter ends included with no analysis. The Generate view
+     disables every control that starts a job until the include run ends. */
+  describe('#3774 — job-start controls are disabled while an include run is live', () => {
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'kokoro-v1' };
+    const failed: Chapter = {
+      id: 5,
+      title: 'Chapter 5',
+      duration: '00:00',
+      state: 'failed',
+      progress: 0,
+      errorReason: 'The voice engine crashed.',
+      characters: { narrator: 'failed' },
+    };
+    const allDone: Chapter = { ...chapter2, state: 'done', progress: 1, characters: { narrator: 'done' } };
+    const mixed = [drifted, chapter2, failed, ch3Excluded];
+    const complete = [chapter1, allDone, ch3Excluded];
+
+    const cases: [string, Chapter[], string | null, () => HTMLElement][] = [
+      ['Resume generation', mixed, null, () => screen.getByTestId('generation-view-resume')],
+      ['Regenerate all (drifted chapters)', mixed, null, () => screen.getByRole('button', { name: /Regenerate all/ })],
+      ['the book-level Regenerate', complete, null, () => screen.getByRole('button', { name: /^Regenerate$/ })],
+      ['a done row\'s Regenerate', mixed, null, () => screen.getByRole('button', { name: 'Regenerate this chapter' })],
+      ['a failed row\'s Retry', mixed, null, () => screen.getByRole('button', { name: /^Retry$/ })],
+      ['Generate this chapter', mixed, 'Chapter 2', () => screen.getByTestId('chapter-row-2-generate')],
+      ['a per-character Regenerate', mixed, 'Chapter 1', () => screen.getByRole('button', { name: 'Regenerate Narrator in this chapter' })],
+    ];
+
+    async function startRun(chapters: Chapter[], expand: string | null) {
+      /* a run that ends (rejecting AbortError) when its Cancel aborts the signal */
+      runAnalysisForChaptersSpy.mockImplementation(
+        (_m: string, _c: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_, reject) =>
+            opts.signal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })),
+            ),
+          ),
+      );
+      const store = makeIncludeStore({ chapters });
+      renderInclude(store, chapters);
+      if (expand) fireEvent.click(screen.getByText(expand));
+      return store;
+    }
+    async function clickInclude() {
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+    }
+
+    it.each(cases)('%s is disabled with a visible reason while a chapter is being included, and enabled again after Cancel', async (_label, chapters, expand, find) => {
+      await startRun(chapters, expand);
+      expect(find()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      await clickInclude();
+      expect(find()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toHaveTextContent(
+        /being included.*before starting generation/i,
+      );
+      /* Cancel ends the run: the controls come back */
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      await waitFor(() => expect(find()).toBeEnabled());
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('a re-analyse run does not disable them (only an include run strands a chapter)', async () => {
+      await startRun(mixed, null);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+  });
+
   /* #3435 decision A — the server refuses a subset run while a main analysis
      run is live for the book, so the controls that start one are disabled
      until it is paused. */

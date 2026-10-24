@@ -57,6 +57,10 @@ function busyIncludeReason(kinds: readonly string[]): string | undefined {
 /* #3774 — this tab already has a subset run (an include or a re-analyse) going. */
 const INCLUDE_RUN_LIVE_REASON =
   'Another chapter is being analysed. Wait for it to finish (or cancel it), then include this one.';
+/* #3774 — an include's subset run is live: starting a job now would hold the book
+   and the include's Cancel rollback (re-exclude) would be refused. */
+const JOB_START_BLOCKED_REASON =
+  'A chapter is being included and analysed. Wait for it to finish, or cancel it, before starting generation.';
 /* #3774 — the click-time busy read failed. */
 const BUSY_CHECK_FAILED_REASON =
   'Could not check whether this book is busy. Try again in a moment.';
@@ -393,6 +397,10 @@ export function GenerationView({
      job: this is a client-side guard. */
   const [busyKinds, setBusyKinds] = useState<string[]>([]);
   const subsetRunning = Object.values(subsetByChapter).some(isSubsetRunning);
+  const includeRunLive = Object.values(subsetByChapter).some(
+    (e) => e.origin === 'include' && isSubsetRunning(e),
+  );
+  const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
@@ -1133,6 +1141,7 @@ export function GenerationView({
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
     if (refuseIfRestructuring()) return;
+    if (jobStartBlockedReason) return;
     if (analysisBusy) {
       const msg =
         analysisBusyMessage(store.getState(), bookId) ??
@@ -1533,7 +1542,8 @@ export function GenerationView({
             <button
               type="button"
               onClick={() => dispatch(startGenerationFlow())}
-              disabled={startGenerationPending}
+              disabled={startGenerationPending || includeRunLive}
+              title={jobStartBlockedReason}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
@@ -1544,7 +1554,8 @@ export function GenerationView({
           {allComplete && (
             <button
               onClick={onRegenerateBook}
-              disabled={analysisBusy}
+              disabled={analysisBusy || includeRunLive}
+              title={jobStartBlockedReason}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconRefresh className="w-4 h-4" /> Regenerate
@@ -1552,6 +1563,16 @@ export function GenerationView({
           )}
         </div>
       </div>
+
+      {includeRunLive && (
+        /* #3774 — visible (not title-only) so touch users see why the controls are off. */
+        <p
+          data-testid="generation-job-start-blocked"
+          className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-3 text-sm text-amber-900"
+        >
+          {JOB_START_BLOCKED_REASON}
+        </p>
+      )}
 
       {lastError && (
         <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50/70 px-5 py-4 flex items-start gap-3 fade-in">
@@ -1607,7 +1628,8 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            disabled={analysisBusy}
+            disabled={analysisBusy || includeRunLive}
+            title={jobStartBlockedReason}
             className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
@@ -1771,6 +1793,7 @@ export function GenerationView({
               onIncludeClick={handleIncludeClick}
               mainAnalysisLive={mainAnalysisLive}
               includeBusyReason={includeBusyReason}
+              jobStartBlockedReason={jobStartBlockedReason}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               onAcceptShrink={handleAcceptShrink}
@@ -1915,6 +1938,8 @@ interface ChapterRowProps {
   mainAnalysisLive: boolean;
   /** #3774 — why Include is unavailable: a long job holds the book. */
   includeBusyReason: string | undefined;
+  /** #3774 — why the controls that start a job are off: an include's subset run is live. */
+  jobStartBlockedReason: string | undefined;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   /** #3435 — re-run this chapter's subset with allowStage1Shrink. */
@@ -1960,6 +1985,7 @@ function ChapterRow({
   onIncludeClick,
   mainAnalysisLive,
   includeBusyReason,
+  jobStartBlockedReason,
   onCancelSubset,
   onRetrySubset,
   onAcceptShrink,
@@ -2327,7 +2353,9 @@ function ChapterRow({
               e.stopPropagation();
               onRegenerate(chapter);
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors"
+            disabled={jobStartBlockedReason != null}
+            title={jobStartBlockedReason}
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-rose-700 hover:text-rose-900 disabled:opacity-40 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
@@ -2411,7 +2439,9 @@ function ChapterRow({
               onRegenerate(chapter);
             }}
             aria-label={chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={jobStartBlockedReason != null}
+            title={jobStartBlockedReason}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" />{' '}
             {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate'}
@@ -2436,9 +2466,13 @@ function ChapterRow({
               }}
               data-testid={`chapter-row-${chapter.id}-generate`}
               aria-label={`Generate chapter ${chapter.id}`}
-              disabled={restructuring}
+              disabled={restructuring || jobStartBlockedReason != null}
               className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-magenta hover:text-magenta/80 disabled:opacity-40 transition-colors"
-              title={restructuring ? RESTRUCTURING_REASON : 'Queue this chapter for synthesis now.'}
+              title={
+                restructuring
+                  ? RESTRUCTURING_REASON
+                  : (jobStartBlockedReason ?? 'Queue this chapter for synthesis now.')
+              }
             >
               <IconPlay className="w-3.5 h-3.5" /> Generate this chapter
             </button>
@@ -2576,7 +2610,8 @@ function ChapterRow({
                         e.stopPropagation();
                         onRegenerateCharacterInChapter(cid, chapter.id);
                       }}
-                      title={`Regenerate ${c.name} in this chapter`}
+                      disabled={jobStartBlockedReason != null}
+                      title={jobStartBlockedReason ?? `Regenerate ${c.name} in this chapter`}
                       aria-label={`Regenerate ${c.name} in this chapter`}
                       className="opacity-100 fine-pointer:opacity-0 fine-pointer:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 fine-pointer:w-7 fine-pointer:h-7 rounded-full hover:bg-ink/6 transition-all"
                     >
