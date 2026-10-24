@@ -378,6 +378,8 @@ The frontend already surfaces `error` verbatim.
 | DELETE while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then delete it." *(My call: refuse.)* |
 | Reparse while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then re-parse it." Checked FIRST inside `book-op`, before the newer-schema revisions refusal (#3717). |
 | Replace-manuscript while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then replace its manuscript." Checked FIRST inside `book-op`, before the newer-schema revisions refusal (#3717). |
+| Chapter restructure (merge / split / reorder / bulk exclude AND bulk include / rename / refresh-titles) while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then change the chapters." Checked FIRST inside `applyRestructure`, the `withBookOp` callback's first statement, ahead of the restructure-gate claim and the `book` lock (#3774). Any `BookJobKind`, analysis included. |
+| Single-chapter EXCLUDE (`excluded: true`) while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then exclude chapters." Checked FIRST inside `book-op`, ahead of the chapter lookup and the audio delete (#3774). Include (`excluded: false`) deletes no audio and is NOT refused by the server (operator decision, PR #3779 review). The Generate view disables its Include button while `GET /api/books/:bookId/busy` (lock-free read of `bookJobKinds`) reports any job, so an Include → Cancel rollback only ever meets the include's own subset run, which Cancel stops with `/analysis/pause`. |
 | DELETE of a gone book | **204** (idempotent, unchanged: `book-state.ts:1787-1790`) *(coordinator call)* |
 | DELETE half-done (`rm` failed after `state.json` was gone) | **409** `code:'book_partly_deleted'` "The book was removed from your library, but some of its files in its folder are still open in another program and were left behind. Close that program and delete the leftover \"<title>\" folder by hand." It does **not** advise a retry *(coordinator call)*. |
 | Waiter resumes after an in-process move | It continues on the moved folder (200/204). |
@@ -402,10 +404,11 @@ The frontend already surfaces `error` verbatim.
 - A move is refused for the whole registration.
 - Its `state.json` stamp keeps its absent-refusal (`state-migrate.ts:152-173`) as out-of-process defence.
 
-So it needs no lock against moves. Reparse and replace-manuscript are closed by #3717: both are refused
-with 409 `book_busy` while a long job is registered. Chapter restructure and chapter exclude remain open:
-restructure is gated only on a running analysis, and exclude deletes chapter audio without checking for a
-running render. Tracked in #3774 (the design decision is owed).
+So it needs no lock against moves. Reparse and replace-manuscript are closed by #3717, and the chapter
+restructure routes and the single-chapter exclude toggle by #3774: all are refused with 409 `book_busy`
+while a long job is registered. Restructure's older analysis-only gate (`beginRestructure`, code
+`analysis_running`) stays: its claim half is what refuses an analysis START mid-restructure, and its probe
+still answers for an analysis job that has no `runBookJob` lease (a hand-registered one in a test).
 
 **b. Restructure's unbounded `withBookLock` (`chapters-restructure.ts:72-99`) is deleted.**
 - It is replaced by book-op, with the **10 s budget kept** *(my call)*.

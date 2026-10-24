@@ -2381,6 +2381,23 @@ async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateRespo
   return null;
 }
 
+/* #3774 — which long jobs hold the book right now (`GET /:bookId/busy`). The
+   Generate view disables "Include in book" while any is registered. Mock mode
+   has no job registry, so it is never busy. */
+type BookBusyKinds =
+  ApiPaths['/api/books/{bookId}/busy']['get']['responses']['200']['content']['application/json']['kinds'];
+
+async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/busy`);
+  if (!res.ok)
+    throw new Error(`Book busy fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return ((await res.json()) as { kinds: BookBusyKinds }).kinds;
+}
+
+async function mockGetBookBusy(_bookId: string): Promise<BookBusyKinds> {
+  return [];
+}
+
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
    drift, voice-drift mismatches, config-drift events). */
 async function realGetQaReport(bookId: string): Promise<BookQaReport> {
@@ -5422,12 +5439,17 @@ async function realSetChapterExcluded(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Exclude toggle failed (${res.status}).`);
+    /* #3774 — `code` lets a caller tell a `book_busy` refusal (a job holds the
+       book; retry once it settles) from any other failure. */
+    throw Object.assign(new Error(detail || `Exclude toggle failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -10654,6 +10676,7 @@ const real = {
   uploadCover: realUploadCover,
   patchCoverFraming: realPatchCoverFraming,
   getAnalysisState: realGetAnalysisState,
+  getBookBusy: realGetBookBusy,
   getActiveAnalyses: realGetActiveAnalyses,
   getDroppedQuotes: realGetDroppedQuotes,
   importManuscript: realImportManuscript,
@@ -11000,6 +11023,7 @@ const mock = {
   uploadCover: mockUploadCover,
   patchCoverFraming: mockPatchCoverFraming,
   getAnalysisState: mockGetAnalysisState,
+  getBookBusy: mockGetBookBusy,
   getActiveAnalyses: mockGetActiveAnalyses,
   getDroppedQuotes: mockGetDroppedQuotes,
   importManuscript: mockImportManuscript,
