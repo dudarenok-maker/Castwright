@@ -5908,25 +5908,30 @@ release, the limiter estimate, key-origin and missing-endpoint refusals, endpoin
 real HTTP server, the same-card rule, the pre-pass ordering and errors, and each design entry
 point's prompt. The consequences automation cannot reach are the real VRAM handover (a
 third-party server's model must actually release the card so a 1.7B VoiceDesign load succeeds
-on it) and a real render being halted before any persona request.
+on it) and how a real render's pause lines up with the first persona requests (the pause is
+acknowledged first, but an in-flight sidecar synth is not awaited).
 
 *Criteria:*
 1. With a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on
    the single 8 GB card, Persona generation engine set to that endpoint's model, and no render
-   streaming, start Design full cast on a book whose characters have no voice description.
+   streaming and VoiceDesign NOT resident at the start (idle past `QWEN_DESIGN_IDLE_TTL`,
+   default 120 s, so the design produces a load line to order against), start Design full cast
+   on a book whose characters have no voice description.
    The endpoint's server log shows the persona requests arriving **before** VoiceDesign loads.
 2. W3d's eviction unloads the endpoint's model before VoiceDesign loads (the unload request or
    model-unload line in the server log, then the VoiceDesign load), and VoiceDesign loads and
    designs without an OOM.
 3. With a chapter render streaming on that card, start Design full cast. Castwright shows
-   "Pause audio generation to design voices?". Choosing **Pause and design** halts the render
-   before any persona request reaches the endpoint (the render stops, then the first persona
-   request appears in the server log, never the reverse).
+   "Pause audio generation to design voices?". Choosing **Pause and design** acknowledges the
+   render's abort before the first persona request: the pause route aborts and answers at once,
+   and the design starts only after that answer. It does not wait for an in-flight sidecar
+   synth, so the run RECORDS whether the last synth's tail overlapped the first persona
+   requests, and whether that caused an OOM.
 4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
    against the same-card endpoint. It does not OOM and does not silently fall back to another
    engine.
-5. Neither path leaves the card stranded: after the design finishes, a subsequent chapter
-   render on that card succeeds.
+5. Neither path leaves the card stranded: after both complete (the design and the
+   reverse-order analysis), a subsequent chapter render on that card succeeds.
 
 *Cost:* medium — needs a real third-party server installed and pinned to the same card, plus
 one cast design, one design over a streaming render, and one chapter render. No golden-audio

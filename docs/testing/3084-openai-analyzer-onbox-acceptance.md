@@ -329,17 +329,23 @@ chapter you can render.
 model (`openai:<endpointId>::<model>`). The default is `gemini`; left alone, the run never
 touches the endpoint and proves nothing. Follow the endpoint's server log.
 
-1. No render streaming. Start Design full cast. The endpoint's server log shows the persona
-   requests arriving before VoiceDesign loads. First persona request at ___, VoiceDesign load at ___.
+1. No render streaming, and VoiceDesign NOT resident at the start (idle past `QWEN_DESIGN_IDLE_TTL`,
+   default 120 s, so there is a load line to order against). Start Design full cast. The
+   endpoint's server log shows the persona requests arriving before VoiceDesign loads. First persona request at ___, VoiceDesign load at ___.
    Result:
 2. W3d's eviction unloads the endpoint's model before VoiceDesign loads, and VoiceDesign loads and
    designs without an OOM. Unload line at ___, VoiceDesign load at ___. Result:
 3. With a chapter render streaming on that card, start Design full cast. "Pause audio generation
-   to design voices?" shows. Choose **Pause and design**: the render halts before any persona
-   request reaches the endpoint. Render stopped at ___, first persona request at ___. Result:
+   to design voices?" shows. Choose **Pause and design**: the render's abort is acknowledged
+   before the first persona request (the pause route aborts and answers at once; the design
+   starts only after that answer). It does not wait for an in-flight sidecar synth, so record
+   whether the last synth's tail overlapped the first persona requests, and whether that caused
+   an OOM. Pause acknowledged at ___, last synth ended at ___, first persona request at ___.
+   Overlap: yes / no. OOM: yes / no. Result:
 4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
    against the same-card endpoint. It does not OOM and does not silently fall back to another
    engine. Result:
-5. After the design finishes, a chapter render on that card succeeds. Result:
+5. After both complete (the design and the reverse-order analysis in step 4), a chapter render
+   on that card succeeds. Result:
 
 Run by / date / SHA:
