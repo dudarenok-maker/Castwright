@@ -13,6 +13,7 @@ import {
   flushBookPersistence,
   dropRetainedSaves,
   supersedeBookSaves,
+  restoreSupersededSaves,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
@@ -1182,6 +1183,59 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     await advance(10000);
     expect(putBookState).toHaveBeenCalledTimes(4);
     err.mockRestore();
+  });
+
+  /* #3421 S3 — a write made after the park already carries the current value; a
+     restore must not put the parked one back over it. */
+  const titlePuts = () =>
+    putBookState.mock.calls
+      .filter((c) => c[1].slice === 'state' && 'title' in c[1].patch)
+      .map((c) => c[1].patch.title);
+  const keepRenameThenPark = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* The rename is made, then the user leaves: with the book not open the
+       give-up keeps the save instead of rolling the draft back. */
+    mw({ type: 'bookMeta/commitDraft' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(supersedeBookSaves('book-1'));
+    /* The book is opened again while the wipe call runs. */
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    return mw;
+  };
+
+  it('(vii) a restore does not put a parked title back over a newer one that was sent meanwhile (S3)', async () => {
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'T1' } } },
+    });
+    const mw = await keepRenameThenPark(state);
+    state.bookMeta = { draft: null, saved: { 'book-1': { title: 'T2' } } };
+    mw({ type: 'bookMeta/commitDraft' });
+    await mw(flushBookPersistence('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    mw(flushBookPersistence('book-1'));
+    await advance(1000);
+    expect(titlePuts()).toEqual(['T2']);
+  });
+
+  it('(vii-b) a restore still re-sends the parked fields a newer write on the same key did not carry (S3)', async () => {
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'T1' } } },
+    });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' });
+    await mw(flushBookPersistence('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([true, undefined]);
   });
 
   it('(iv) a 4xx refusal is not kept', async () => {

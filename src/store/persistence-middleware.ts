@@ -371,7 +371,8 @@ const SUPERSEDE_BOOK = 'persistence/supersedeBook';
 export const supersedeBookSaves = (bookId: string) => ({ type: SUPERSEDE_BOOK, payload: bookId });
 
 /* #3421 — the wipe call failed: move what `supersedeBookSaves` parked back into
-   the kept saves, under any newer edit, so the book's next flush re-sends it.
+   the kept saves, minus the fields a write made since the park carried, so the
+   book's next flush re-sends only what is still owed.
    Not a reducer action. */
 const RESTORE_SUPERSEDED = 'persistence/restoreSuperseded';
 export const restoreSupersededSaves = (bookId: string) => ({
@@ -417,7 +418,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   const sending = new Map<FlushKey, Set<SavedPatch>>();
   /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
      (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
-  const parked = new Map<FlushKey, SavedPatch>();
+  const parked = new Map<FlushKey, SavedPatch & { newerFields: Set<string> }>();
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -587,8 +588,17 @@ export const persistenceMiddleware: Middleware = (store) => {
       for (const [key, saved] of Array.from(parked)) {
         if (!key.startsWith(`${a.payload}:`)) continue;
         parked.delete(key);
+        /* A write made after the park (book reopened, edited, flushed) carried
+           its own value for every field it built and has gone out or is going
+           out; putting the parked value back would re-send over it. Only the
+           fields it did not carry are still owed (the `state` slice's
+           confirmCast and commitDraft patch different fields of one key). */
+        const owed = Object.fromEntries(
+          Object.entries(saved.patch).filter(([field]) => !saved.newerFields.has(field)),
+        );
+        if (Object.keys(owed).length === 0) continue;
         const newer = retained.get(key);
-        retained.set(key, { ...saved.patch, ...newer });
+        retained.set(key, { ...owed, ...newer });
         const onSuccess = retainedOnSuccess.get(key) ?? saved.onSuccess;
         if (onSuccess) retainedOnSuccess.set(key, onSuccess);
       }
@@ -622,6 +632,7 @@ export const persistenceMiddleware: Middleware = (store) => {
           parked.set(key, {
             patch: Object.assign({}, ...layers.map((l) => l.patch)),
             onSuccess: [...layers].reverse().find((l) => l.onSuccess)?.onSuccess,
+            newerFields: parked.get(key)?.newerFields ?? new Set<string>(),
           });
         }
         generation.set(key, (generation.get(key) ?? 0) + 1);
@@ -658,6 +669,9 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     const key = flushKey(bookId, rule.slice);
     const built = rule.build(after, bookId);
+    /* #3421 — a write made after a park supersedes the parked fields it carries. */
+    const parkedHere = parked.get(key);
+    if (parkedHere) for (const field of Object.keys(built as object)) parkedHere.newerFields.add(field);
     /* #3421 — a save given up on is re-sent with this one: the newer fields win. */
     const kept = retained.get(key);
     if (kept) retained.delete(key);

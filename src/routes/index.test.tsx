@@ -1056,6 +1056,33 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         await reopenAndFlush(store);
         expect(putBookStateMock).toHaveBeenCalledTimes(4);
       });
+
+      it('S3: a failed wipe does not put a parked save back over a newer one that landed meanwhile', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        let reject!: (e: unknown) => void;
+        rpcMock.mockReturnValue(new Promise((_r, rj) => (reject = rj)));
+        await runWipe(store, rpcMock, trigger);
+        /* The book is opened while the RPC runs and renamed again; that save lands. */
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+        store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Q' } as Character]));
+        await store.dispatch(flushBookPersistence('b1') as never);
+        reject(new Error('Service Unavailable'));
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const lastCast = putBookStateMock.mock.calls
+          .filter((c) => (c[1] as { slice: string }).slice === 'cast')
+          .map((c) => (c[1] as { patch: { characters: { name: string }[] } }).patch.characters[0].name)
+          .pop();
+        expect(lastCast).toBe('Eliza Q');
+      });
     });
   });
 
