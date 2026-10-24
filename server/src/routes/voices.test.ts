@@ -1913,8 +1913,14 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released = resolve;
     });
     let intercepted = false;
+    let castReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === castPath) {
+      /* Park the SECOND read of this cast.json: the first is
+         `hasClonedSlotAmongMatches`'s lock-free upfront scan, which runs before
+         any lock is taken — parking there leaves the persona writer unblocked
+         under ANY lock layout (even with the lock removed), so the test could
+         not fail. The second is the in-lock read this test pins. */
+      if (!intercepted && path === castPath && ++castReads === 2) {
         intercepted = true;
         const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
         await gate; // hold the RESOLUTION open until released below
@@ -2004,8 +2010,14 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released = resolve;
     });
     let intercepted = false;
+    let raceCastReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === raceCastPath) {
+      /* Park the SECOND read of this cast.json: the first is
+         `hasClonedSlotAmongMatches`'s lock-free upfront scan, which runs before
+         any lock is taken — parking there leaves the persona writer unblocked
+         under ANY lock layout (even with the lock removed), so the test could
+         not fail. The second is the in-lock read this test pins. */
+      if (!intercepted && path === raceCastPath && ++raceCastReads === 2) {
         intercepted = true;
         const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
         await gate; // hold the RESOLUTION open until released below
@@ -2114,8 +2126,14 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released = resolve;
     });
     let intercepted = false;
+    let heldReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === heldCastPath) {
+      /* Park the SECOND read of the held book's cast.json: the first is
+         `hasClonedSlotAmongMatches`'s lock-free upfront scan, which runs before
+         the walk takes any lock — parking there would leave the writer unblocked
+         under ANY lock layout, hoisted or not. The second is the walk's own
+         in-lock read (the `withCastLock` span being pinned). */
+      if (!intercepted && path === heldCastPath && ++heldReads === 2) {
         intercepted = true;
         const value = await actual.readJson(path); // real bytes, now — happens-before the target write
         await gate; // hold the RESOLUTION open until released below
@@ -2152,12 +2170,28 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
         return w;
       });
 
-      // Generous window: settles quickly when locking is per-book (what this
-      // pins); never settles within it when one lock spans the whole walk,
-      // since the target book's own key would still be held by the walk.
-      await new Promise((r) => setTimeout(r, 150));
+      // Order-based proof (no fixed sleep): wait for the writer to settle while
+      // the walk's read is STILL parked on the gate — the gate is only released
+      // after this await, so the writer settling here IS the ordering proof. The
+      // 8 s race is a hang detector only, not an assertion about speed: when one
+      // lock spans the whole walk the writer queues behind the gated walk, and
+      // this fails loudly here instead of hanging to the test timeout.
+      let writerTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          writerPromise,
+          new Promise<never>((_, rej) => {
+            writerTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: writer blocked behind the in-flight walk')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(writerTimer);
+      }
 
-      // THE assertion: an unrelated matching book's own writer completes
+      // THE assertion: an unrelated matching book's own writer completed
       // WHILE this book's read is still gated — proving the walk does not
       // hold a single lock across every book it touches.
       expect(writerSettled).toBe(true);

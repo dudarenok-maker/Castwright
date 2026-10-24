@@ -337,24 +337,24 @@ describe('voice-style routes apply the persona GPU plan', () => {
 });
 
 /* #1981 review fix round — the site the review flagged as holding the book's
-   cast lock across the WHOLE batch. Proves the fix by racing a full
-   /generate-all (several characters, each generator call artificially
-   delayed) against a concurrent add-alias on the same book, and asserting
-   the add-alias resolves quickly — nowhere near the total batch duration.
+   cast lock across the WHOLE batch. Proves the fix with an ordering proof,
+   not a wall-clock budget: the mocked generator parks its FIRST call on a
+   manually released gate, a concurrent add-alias on the same book is posted
+   and shown to complete while that call is still pending, and only then is
+   the generator released.
    Under the pre-fix-round design (one withCastLock wrapping
    preparePersonaBatch + every generateVoiceStylePersona call + the final
    write), the add-alias's own withCastLock call couldn't even START until
-   the whole batch released the lock, so it would have taken >= the full
-   batch duration to land — impossible to distinguish from "eventually
-   correct" without a timing assertion, which is exactly why this needs its
-   own dedicated test rather than folding into the plain correctness checks
-   above. Own isolated book (own bookId/app reuse, own cast.json) so the
-   extra characters and the artificial LLM delay can't disturb the timing-
-   sensitive assertions above or its own repeat runs. */
+   the whole batch released the lock, so the add-alias would block behind
+   the gated generator (which blocks on the test) and the deadlock race
+   fires — a property of ordering, independent of runner speed, which is
+   exactly why this needs its own dedicated test rather than folding into
+   the plain correctness checks above. Own isolated book (own bookId/app
+   reuse, own cast.json) so the extra characters and the gated generator
+   can't disturb the assertions above or its own repeat runs. */
 describe('#1981 — /generate-all no longer holds the book lock across the whole batch', () => {
   const RACE_TITLE = 'Voice Style Batch Race Book';
   const BATCH_CHARACTER_IDS = ['echo', 'foxtrot', 'golf', 'hotel'];
-  const PERSONA_DELAY_MS = 150;
   let raceBookId: string;
   let raceBookDir: string;
 
@@ -404,38 +404,99 @@ describe('#1981 — /generate-all no longer holds the book lock across the whole
 
   it('lets a concurrent add-alias land quickly instead of waiting for the whole batch', async () => {
     generateVoiceStylePersona.mockReset();
-    generateVoiceStylePersona.mockImplementation(
-      (c: { id: string }) =>
-        new Promise<string>((resolve) => {
-          setTimeout(() => resolve(`persona-for-${c.id}`), PERSONA_DELAY_MS);
-        }),
-    );
+
+    /* Order-based proof (replaces this test's old wall-clock budget): the
+       mocked generator signals on entry, then parks on a gate only the test
+       releases — no setTimeout stub, no milliseconds. */
+    let releaseGenerator!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseGenerator = r;
+    });
+    let enteredGenerator!: () => void;
+    const entered = new Promise<void>((r) => {
+      enteredGenerator = r;
+    });
+    /* Gate only the FIRST generator call; later calls return immediately,
+       so after the release the whole 4-character batch still completes and
+       the closing "every character got its voiceStyle" assertions stay
+       meaningful. */
+    let firstGeneratorCall = true;
+    generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => {
+      if (firstGeneratorCall) {
+        firstGeneratorCall = false;
+        enteredGenerator();
+        await gate;
+        aliasLandedWhenGeneratorResumed = aliasLanded;
+      }
+      return `persona-for-${c.id}`;
+    });
+    /* Witness for the ordering: set once the add-alias response has resolved,
+       and read by the generator the moment it resumes from the gate. */
+    let aliasLanded = false;
+    let aliasLandedWhenGeneratorResumed: boolean | undefined;
 
     const genAllPromise = request(app).post(
       `/api/books/${raceBookId}/cast/voice-style/generate-all`,
     );
     genAllPromise.catch(() => {}); // supertest is lazy — force real dispatch now
 
-    // Let generate-all reach (and start) its first LLM call.
-    await new Promise((r) => setTimeout(r, 20));
+    try {
+      /* Wait until generate-all has actually STARTED its first LLM call,
+         bounded by a deadlock race so a route that never gets there fails
+         loudly instead of hanging. */
+      let enteredTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          entered,
+          new Promise<never>((_, rej) => {
+            enteredTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: route never reached the LLM call')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(enteredTimer);
+      }
 
-    const start = Date.now();
-    const addAliasRes = await request(app)
-      .post(`/api/books/${raceBookId}/cast/add-alias`)
-      .send({ characterId: 'echo', aliasName: 'Fast' });
-    const elapsed = Date.now() - start;
+      /* A concurrent add-alias on the same book must land WHILE the generator
+         is still pending on the gate; the witness assertion after the
+         generator is released proves it. The 8 s race is a hang detector only — it sits under the 15 s testTimeout and is NOT
+         an assertion about speed; under the pre-fix design the add-alias
+         would block behind the gated generator and turn this red here
+         instead of hanging. */
+      let aliasTimer!: ReturnType<typeof setTimeout>;
+      let addAliasRes!: { status: number };
+      try {
+        addAliasRes = await Promise.race([
+          request(app)
+            .post(`/api/books/${raceBookId}/cast/add-alias`)
+            .send({ characterId: 'echo', aliasName: 'Fast' }),
+          new Promise<never>((_, rej) => {
+            aliasTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: add-alias blocked behind the LLM call')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(aliasTimer);
+      }
 
-    expect(addAliasRes.status).toBe(200);
-    /* The whole batch (4 characters × 150ms delayed generator) takes >=
-       600ms. Under the pre-fix design that whole span was one held lock, so
-       add-alias's own write couldn't even begin until then. 400ms is
-       generous headroom above the new per-character-lock latency (waiting
-       on at most ONE character's own brief lock, a few ms) while staying
-       comfortably under the batch total. */
-    expect(elapsed).toBeLessThan(400);
+      aliasLanded = true;
+      expect(addAliasRes.status).toBe(200);
+    } finally {
+      /* Release the generator even on a failed run (e.g. under the
+         pre-fix-design mutation), so the supertest generate-all request is
+         never left dangling on the gate. */
+      releaseGenerator();
+    }
 
     const genAllRes = await genAllPromise;
     expect(genAllRes.status).toBe(200);
+    /* The ordering witness: add-alias had already resolved when the parked
+       generator resumed, i.e. it completed while the generator was pending. */
+    expect(aliasLandedWhenGeneratorResumed).toBe(true);
 
     const cast = JSON.parse(
       readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
@@ -451,14 +512,13 @@ describe('#1981 — /generate-all no longer holds the book lock across the whole
 /* #1981 review fix round 2 — the sibling defect the re-review flagged
    (NEW-1): /generate held the book's cast lock across the LLM call (and, on
    the Gemini path, geminiRateLimiter.acquire's unbounded sleep ahead of it).
-   Same proof shape as the /generate-all race above: delay the single
-   generator call artificially and assert a concurrent add-alias on the same
-   book lands quickly rather than waiting out the whole generation. Own
-   isolated book so the artificial delay can't disturb the timing-sensitive
-   assertions in the sibling describe block above. */
+   Same proof shape as the /generate-all race above: hold the single
+   generator call open on a manually released gate and show a concurrent
+   add-alias on the same book completes while that call is still pending —
+   ordering, not milliseconds. Own isolated book so the gated generator
+   can't disturb the assertions in the sibling describe block above. */
 describe('#1981 — /generate no longer holds the book lock across the LLM call', () => {
   const RACE_TITLE = 'Voice Style Single Race Book';
-  const PERSONA_DELAY_MS = 300;
   let raceBookId: string;
   let raceBookDir: string;
 
@@ -502,38 +562,91 @@ describe('#1981 — /generate no longer holds the book lock across the LLM call'
 
   it('lets a concurrent add-alias land quickly instead of waiting for the generation', async () => {
     generateVoiceStylePersona.mockReset();
-    generateVoiceStylePersona.mockImplementation(
-      (c: { id: string }) =>
-        new Promise<string>((resolve) => {
-          setTimeout(() => resolve(`persona-for-${c.id}`), PERSONA_DELAY_MS);
-        }),
-    );
+
+    /* Order-based proof (replaces this test's old wall-clock budget): the
+       single mocked generator call signals on entry, then parks on a gate
+       only the test releases — no setTimeout stub, no milliseconds. */
+    let releaseGenerator!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseGenerator = r;
+    });
+    let enteredGenerator!: () => void;
+    const entered = new Promise<void>((r) => {
+      enteredGenerator = r;
+    });
+    generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => {
+      enteredGenerator();
+      await gate;
+      aliasLandedWhenGeneratorResumed = aliasLanded;
+      return `persona-for-${c.id}`;
+    });
+    /* Witness for the ordering: set once the add-alias response has resolved,
+       and read by the generator the moment it resumes from the gate. */
+    let aliasLanded = false;
+    let aliasLandedWhenGeneratorResumed: boolean | undefined;
 
     const generatePromise = request(app).post(
       `/api/books/${raceBookId}/cast/india/voice-style/generate`,
     );
     generatePromise.catch(() => {}); // supertest is lazy — force real dispatch now
 
-    // Let /generate reach (and start) its LLM call.
-    await new Promise((r) => setTimeout(r, 20));
+    try {
+      /* Wait until /generate has actually STARTED its LLM call, bounded by
+         a deadlock race so a route that never gets there fails loudly
+         instead of hanging. */
+      let enteredTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          entered,
+          new Promise<never>((_, rej) => {
+            enteredTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: route never reached the LLM call')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(enteredTimer);
+      }
 
-    const start = Date.now();
-    const addAliasRes = await request(app)
-      .post(`/api/books/${raceBookId}/cast/add-alias`)
-      .send({ characterId: 'india', aliasName: 'Fast' });
-    const elapsed = Date.now() - start;
+      /* A concurrent add-alias on the same book must land WHILE the generator
+         is still pending on the gate; the witness assertion after the
+         generator is released proves it. The 8 s race is a hang detector only — it sits under the 15 s testTimeout and is NOT
+         an assertion about speed; under the pre-fix design the add-alias
+         would block behind the gated generator and turn this red here
+         instead of hanging. */
+      let aliasTimer!: ReturnType<typeof setTimeout>;
+      let addAliasRes!: { status: number };
+      try {
+        addAliasRes = await Promise.race([
+          request(app)
+            .post(`/api/books/${raceBookId}/cast/add-alias`)
+            .send({ characterId: 'india', aliasName: 'Fast' }),
+          new Promise<never>((_, rej) => {
+            aliasTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: add-alias blocked behind the LLM call')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(aliasTimer);
+      }
 
-    expect(addAliasRes.status).toBe(200);
-    /* Under the pre-fix-round design (one withCastLock wrapping the whole
-       generate-then-write span), add-alias's own withCastLock call couldn't
-       even start until the 300ms generator resolved and the lock released —
-       so it would take >= ~300ms to land. 150ms is generous headroom above
-       the new unlocked-generate latency (a few ms) while staying comfortably
-       under the generator delay. */
-    expect(elapsed).toBeLessThan(150);
+      aliasLanded = true;
+      expect(addAliasRes.status).toBe(200);
+    } finally {
+      /* Release the generator even on a failed run (e.g. under the
+         pre-fix-design mutation), so the supertest generate request is
+         never left dangling on the gate. */
+      releaseGenerator();
+    }
 
     const generateRes = await generatePromise;
     expect(generateRes.status).toBe(200);
+    /* The ordering witness: add-alias had already resolved when the parked
+       generator resumed, i.e. it completed while the generator was pending. */
+    expect(aliasLandedWhenGeneratorResumed).toBe(true);
 
     const cast = JSON.parse(
       readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
