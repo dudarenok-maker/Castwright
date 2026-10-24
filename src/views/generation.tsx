@@ -2701,6 +2701,12 @@ function ExcludedChapterRow({
   /* #3774 â€” Retry / Accept smaller cast on an include-origin error row re-run the
      include, so they follow Include's busy reason; a re-analyse retry does not. */
   const retryBusyReason = errored?.origin === 'include' ? includeBusyReason : undefined;
+  /* #3774 — the reason is rendered as a visible line (a title never shows on a
+     disabled pointer-events-none button, and touch has no hover) under the row
+     variants that offer Include / Retry / Accept smaller cast. */
+  const busyReasonShown =
+    !running && !noticed && (!errored || errored.origin === 'include') ? includeBusyReason : undefined;
+  const busyReasonId = `include-busy-${chapter.id}`;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-ink/3 overflow-hidden">
@@ -2743,6 +2749,11 @@ function ExcludedChapterRow({
           {!running && mainAnalysisLive && (
             <span className="block text-[11px] text-ink/45 mt-0.5">Pause the analysis first</span>
           )}
+          {busyReasonShown && (
+            <span id={busyReasonId} className="block text-[11px] text-ink/60 mt-0.5">
+              {busyReasonShown}
+            </span>
+          )}
         </span>
         {running ? (
           <button
@@ -2760,7 +2771,8 @@ function ExcludedChapterRow({
                 type="button"
                 onClick={() => onAcceptShrink(chapter.id)}
                 disabled={mainAnalysisLive || retryBusyReason != null}
-                title={mainAnalysisLive ? 'Pause the analysis first' : retryBusyReason}
+                aria-describedby={retryBusyReason ? busyReasonId : undefined}
+                title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
                 className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
               >
                 Accept smaller cast
@@ -2770,7 +2782,8 @@ function ExcludedChapterRow({
               type="button"
               onClick={() => onRetrySubset(chapter.id)}
               disabled={mainAnalysisLive || retryBusyReason != null}
-              title={mainAnalysisLive ? 'Pause the analysis first' : retryBusyReason}
+              aria-describedby={retryBusyReason ? busyReasonId : undefined}
+              title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
               className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconRefresh className="w-3.5 h-3.5" /> Retry
@@ -2788,12 +2801,9 @@ function ExcludedChapterRow({
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
             disabled={mainAnalysisLive || restructuring || includeBusyReason != null}
+            aria-describedby={includeBusyReason ? busyReasonId : undefined}
             title={
-              restructuring
-                ? RESTRUCTURING_REASON
-                : mainAnalysisLive
-                  ? 'Pause the analysis first'
-                  : includeBusyReason
+              restructuring ? RESTRUCTURING_REASON : mainAnalysisLive ? 'Pause the analysis first' : undefined
             }
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >

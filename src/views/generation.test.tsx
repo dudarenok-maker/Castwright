@@ -2603,7 +2603,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       ['an export', ['export'], 'exporting'],
       ['another chapter\'s subset analysis', ['analysis'], 'analysing'],
       ['two jobs at once', ['render', 'scoring'], 'rendering audio, scoring'],
-    ])('%s disables Include with the reason as its title; it re-enables when the job ends', async (_label, kinds, phrase) => {
+    ])('%s disables Include with the reason as visible text; it re-enables when the job ends', async (_label, kinds, phrase) => {
       getBookBusySpy.mockResolvedValue(kinds);
       const store = makeIncludeStore();
       vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -2611,14 +2611,21 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         renderInclude(store);
         const include = screen.getByRole('button', { name: /\+ Include in book/i });
         await waitFor(() => expect(include).toBeDisabled(), { timeout: 1000 });
-        expect(include).toHaveAttribute('title', expect.stringContaining(phrase));
+        /* the reason is visible text on the row, not a hover-only title (a
+           disabled pointer-events-none button never shows its title; touch has
+           no hover) */
+        const reason = screen.getByText(new RegExp(`This book is busy \\(${phrase}\\)`));
+        expect(reason).toBeVisible();
+        expect(include).toHaveAttribute('aria-describedby', reason.id);
+        expect(include).not.toHaveAttribute('title');
         fireEvent.click(include);
         expect(setChapterExcludedSpy).not.toHaveBeenCalled();
         /* the job ends: the next refresh re-enables the control */
         getBookBusySpy.mockResolvedValue([]);
         await vi.advanceTimersByTimeAsync(6000);
         await waitFor(() => expect(include).toBeEnabled(), { timeout: 1000 });
-        expect(include).not.toHaveAttribute('title');
+        expect(screen.queryByText(/This book is busy/)).toBeNull();
+        expect(include).not.toHaveAttribute('aria-describedby');
       } finally {
         vi.useRealTimers();
       }
@@ -2667,6 +2674,15 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(screen.getByText('Re-analysis failed: analyzer offline')).toBeInTheDocument();
       /* the click-time read taught the row: Retry is now disabled */
       await waitFor(() => expect(screen.getByRole('button', { name: /Retry/ })).toBeDisabled());
+    });
+
+    it('the busy reason shows as visible text beside a disabled Retry', async () => {
+      await renderFailedInclude(new Error('analyzer offline'));
+      getBookBusySpy.mockResolvedValue(['render']);
+      fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+      const reason = await screen.findByText(/This book is busy \(rendering audio\)/);
+      expect(reason).toBeVisible();
+      expect(screen.getByRole('button', { name: /Retry/ })).toBeDisabled();
     });
 
     it('"Accept smaller cast" on an include-origin error row is refused while the book is busy', async () => {
