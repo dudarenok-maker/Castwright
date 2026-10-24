@@ -12105,7 +12105,9 @@ export interface operations {
              *     manuscript changed while it was being prepared; retry), `book_moved`
              *     (the book was moved outside the app while it was being re-parsed;
              *     an in-app rename waits for the re-parse instead; reload and retry),
-             *     or absent (the manuscript file is missing on disk).
+             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     script review or export — holds the book; stop it or wait for it
+             *     to finish), or absent (the manuscript file is missing on disk).
              */
             409: {
                 headers: {
@@ -12115,7 +12117,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "manuscript_changed" | "book_moved";
+                        code?: "manuscript_changed" | "book_moved" | "book_busy";
                     };
                 };
             };
@@ -12179,7 +12181,10 @@ export interface operations {
             /**
              * @description Refused (nothing was written). `code` is `book_moved` (the book was
              *     moved outside the app while it was being re-parsed; an in-app
-             *     rename waits for the replace instead; reload and retry).
+             *     rename waits for the replace instead; reload and retry), or
+             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     script review or export — holds the book; stop it or wait for it
+             *     to finish).
              */
             409: {
                 headers: {
@@ -12189,7 +12194,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "book_moved";
+                        code?: "book_moved" | "book_busy";
                     };
                 };
             };

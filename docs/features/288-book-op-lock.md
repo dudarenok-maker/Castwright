@@ -376,6 +376,8 @@ The frontend already surfaces `error` verbatim.
 |---|---|
 | Rename while a long job is registered | **409** `code:'book_busy'`. For analysis, the sentence stays verbatim (`book-state.ts:1125`). Other kinds: "This book is busy (rendering audio / scoring audio / designing voices / reviewing the script / exporting). Wait for it to finish before renaming it — a rename now would split the book across two folders." It is checked before the path-collision 409 (`code:'book_path_taken'`), as today. |
 | DELETE while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then delete it." *(My call: refuse.)* |
+| Reparse while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then re-parse it." Checked FIRST inside `book-op`, before the newer-schema revisions refusal (#3717). |
+| Replace-manuscript while a long job is registered | **409** `code:'book_busy'` "This book is busy (…). Stop it or wait for it to finish, then replace its manuscript." Checked FIRST inside `book-op`, before the newer-schema revisions refusal (#3717). |
 | DELETE of a gone book | **204** (idempotent, unchanged: `book-state.ts:1787-1790`) *(coordinator call)* |
 | DELETE half-done (`rm` failed after `state.json` was gone) | **409** `code:'book_partly_deleted'` "The book was removed from your library, but some of its files in its folder are still open in another program and were left behind. Close that program and delete the leftover \"<title>\" folder by hand." It does **not** advise a retry *(coordinator call)*. |
 | Waiter resumes after an in-process move | It continues on the moved folder (200/204). |
@@ -400,8 +402,10 @@ The frontend already surfaces `error` verbatim.
 - A move is refused for the whole registration.
 - Its `state.json` stamp keeps its absent-refusal (`state-migrate.ts:152-173`) as out-of-process defence.
 
-So it needs no lock against moves. A quick op racing a render (for example a reparse wiping `audio/`) is
-pre-existing, not a move, and out of scope.
+So it needs no lock against moves. Reparse and replace-manuscript are closed by #3717: both are refused
+with 409 `book_busy` while a long job is registered. Chapter restructure and chapter exclude remain open:
+restructure is gated only on a running analysis, and exclude deletes chapter audio without checking for a
+running render. Tracked in #3774 (the design decision is owed).
 
 **b. Restructure's unbounded `withBookLock` (`chapters-restructure.ts:72-99`) is deleted.**
 - It is replaced by book-op, with the **10 s budget kept** *(my call)*.
