@@ -31,7 +31,7 @@
    Same lazy-import-after-WORKSPACE_DIR pattern as cast-not-linked-to.test.ts
    so paths.ts binds BOOKS_ROOT against the temp workspace. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +39,15 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+
+/* #3773 — hoisted `vi.mock` (passthrough by default) so the cast-lock-alone
+   race test can park the route's in-lock cast.json `readJson`, which is bound
+   at the route module's own load time. Every other test in this file sees the
+   real implementation. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'Standalones';
@@ -818,11 +827,10 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
 });
 
 /* #1981 — this route's cast.json read-modify-write (the notLinkedTo edge) is
-   now locked (withCastLock). Mirrors cast-aliases.test.ts's add-alias race
-   (the bare-Promise.all shape is adequate here: two DIFFERENT characters in
-   the SAME book, no shared state to give either call a head start — per this
-   branch's Task 8 finding, a bare Promise.all is a placebo only for a
-   SAME-TICK acquisition pair, not for "does a lock exist" in general).
+   now locked (withCastLock). The route-level test below (two reject calls,
+   bare Promise.all) is end-to-end coverage only: both calls hold
+   `book-op:<bookId>` (#3711), which serialises them with or without the cast
+   lock (#3773); the "cast lock alone" test beside it is the cast-lock proof.
    rejectOrphanedId/forgetSupersededId are NOT part of what this race
    exercises: they already take their own `cast-id-history:<bookDir>` lock
    (cast-id-history.ts), a locked leaf this route's cast lock doesn't wrap. */
@@ -830,6 +838,17 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
   const RACE_TITLE = 'Cast Reject Orphan Race Book';
   let raceBookId: string;
   let raceBookDir: string;
+
+  const seedRaceCast = () =>
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'race-x', name: 'Race X', role: 'character', color: 'unset' },
+          { id: 'race-y', name: 'Race Y', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
 
   beforeAll(async () => {
     const { makeBookId } = await import('../workspace/paths.js');
@@ -855,18 +874,122 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
       }),
     );
     writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
-    writeFileSync(
-      join(raceBookDir, '.audiobook', 'cast.json'),
-      JSON.stringify({
-        characters: [
-          { id: 'race-x', name: 'Race X', role: 'character', color: 'unset' },
-          { id: 'race-y', name: 'Race Y', role: 'character', color: 'unset' },
-        ],
-      }),
-    );
+    seedRaceCast();
   });
 
-  it('keeps both notLinkedTo edges when two reject-orphan-match calls for one book overlap', async () => {
+  /* Re-seeded before EACH test: the two race tests below write the same
+     characters, and an edge the first test already left on disk would let the
+     second pass without its own write ever landing. */
+  beforeEach(() => {
+    seedRaceCast();
+  });
+
+  /* #3773 — cast-lock-alone proof. The route-level race below is NOT cast-lock
+     proof: both reject-orphan-match calls hold `book-op:<bookId>` (#3711),
+     which serialises them on its own, so it stays green with `withCastLock`
+     replaced by a no-op (confirmed: no-op cast lock green; no-op cast lock AND
+     book-op red). Here the real reject-orphan-match is parked at its in-lock
+     cast.json read while the second writer, `persistEmotionVariant` (cast
+     lock, NO book-op), runs directly on the other character. */
+  it('#3773 — cast lock alone: a reject-orphan-match and a cast-lock-only writer on a different character both survive', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const raceCastPath = castJsonPath(raceBookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let castReads = 0;
+    let readsWhileParked = 0;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* reject-orphan-match's FIRST cast.json read is the in-lock one; park it, and count every later cast.json read (the second writer's) while it is parked. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      castReads++;
+      if (castReads > 1) {
+        readsWhileParked++;
+        return actual.readJson(path);
+      }
+      if (castReads < 1) return actual.readJson(path);
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resReject: request.Response;
+    let second: unknown;
+    let rejectPromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      rejectPromise = callReject(raceBookId, 'race-x', { orphanedId: 'race-x-orphan' });
+      rejectPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: reject-orphan-match never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(castReads).toBe(1);
+
+      secondPromise = persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-v_race-y__angry');
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind the route's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Pin the premise: the second writer really ran (it did its lock-free
+         early-out read) while reject-orphan-match was parked. Wrap it in
+         book-op and it blocks before any read — this goes red instead of
+         silently decaying. */
+      expect(readsWhileParked).toBeGreaterThanOrEqual(1);
+
+      released();
+      [resReject, second] = await Promise.all([rejectPromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([rejectPromise, secondPromise]);
+    }
+    expect(resReject.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as {
+      characters: Array<{
+        id: string;
+        notLinkedTo?: Array<{ characterId: string }>;
+        overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
+      }>;
+    };
+    const x = cast.characters.find((c) => c.id === 'race-x')!;
+    const y = cast.characters.find((c) => c.id === 'race-y')!;
+    /* reject-orphan-match's own mutation survived. */
+    expect(x.notLinkedTo).toEqual([{ bookId: raceBookId, characterId: 'race-x-orphan' }]);
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    expect(y.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_race-y__angry' });
+  });
+
+  it('keeps both notLinkedTo edges when two reject-orphan-match calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. */
     const [resX, resY] = await Promise.all([
       callReject(raceBookId, 'race-x', { orphanedId: 'race-x-orphan' }),
       callReject(raceBookId, 'race-y', { orphanedId: 'race-y-orphan' }),
