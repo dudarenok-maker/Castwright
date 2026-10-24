@@ -1173,6 +1173,11 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
      is only called once promote-voice is parked INSIDE its cast-lock span. */
   async function racePromoteVoiceAgainst(
     startSecondWriter: (bookDir: string) => Promise<unknown>,
+    /* Opt-in premise pin (#3773): assert the second writer made its own
+       cast.json read while promote-voice was parked. A writer serialised by
+       book-op (e.g. /assign) legitimately fails it, so only the cast-lock-
+       alone test sets it. */
+    opts: { requireSecondWriterRead?: boolean } = {},
   ): Promise<{ resPromote: request.Response; second: unknown }> {
     const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
     mkdirSync(qwenDir(), { recursive: true });
@@ -1273,6 +1278,12 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       // tight window either way.
       await new Promise((r) => setTimeout(r, 50));
 
+      /* Premise: reads #1 and #2 are promote-voice's own, so a #3 means the
+         second writer ran its (lock-free) cast.json read while promote-voice
+         was parked. If something other than the cast lock held it back (a
+         book-op span), this stays at 2 and the race below proves nothing. */
+      if (opts.requireSecondWriterRead) expect(callsForCastPath).toBeGreaterThanOrEqual(3);
+
       released();
       [resPromote, second] = await Promise.all([promotePromise, secondPromise]);
     } finally {
@@ -1296,8 +1307,9 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
        promote-voice (which holds book-op across its whole handler). The
        only thing standing between the two is `withCastLock` — a no-op cast
        lock makes this red (#3773). */
-    const { resPromote, second } = await racePromoteVoiceAgainst((bookDir) =>
-      persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+    const { resPromote, second } = await racePromoteVoiceAgainst(
+      (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+      { requireSecondWriterRead: true },
     );
     expect(resPromote.status).toBe(200);
     expect(second).toBe('applied');
@@ -1568,6 +1580,7 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
       released = resolve;
     });
     let intercepted = false;
+    let readsAfterIntercept = 0;
     let signalRead!: () => void;
     const readReached = new Promise<void>((resolve) => {
       signalRead = resolve;
@@ -1575,7 +1588,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     /* The DELETE handler's FIRST cast.json read is the in-lock one (it has no
        upfront lock-free read): hold its resolution open behind the gate. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (path !== raceCastPath || intercepted) return actual.readJson(path);
+      if (path !== raceCastPath) return actual.readJson(path);
+      if (intercepted) {
+        readsAfterIntercept += 1;
+        return actual.readJson(path);
+      }
       intercepted = true;
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
@@ -1611,6 +1628,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the DELETE's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
+
+      /* Premise: the second writer ran its own (lock-free) cast.json read
+         while the DELETE was parked. If a book-op span held it back this stays
+         0 and the race below proves nothing about the cast lock. */
+      expect(readsAfterIntercept).toBeGreaterThanOrEqual(1);
 
       released();
       [resDelete, second] = await Promise.all([deletePromise, secondPromise]);
