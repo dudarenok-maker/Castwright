@@ -1196,10 +1196,11 @@ paths:
       operationId: excludeChapters
       description: |
         Sets `Chapter.excluded` on every listed chapter in one atomic
-        restructure pass. Sentence remap is identity; audio files are left
-        on disk. For a single chapter the Generate-view toggle uses
-        `setChapterExcluded` instead. Un-hiding (`excluded: false`) is not
-        refused with `book_busy` while a long job runs; hiding is (#3774).
+        restructure pass. Sentence remap is identity; the pass also prunes
+        zero-sentence chapters and renumbers the rest, so it can move audio
+        files. Refused with `book_busy` in both directions while a long job
+        runs (#3774). For a single chapter the Generate-view toggle uses
+        `setChapterExcluded` instead; only its hiding direction is refused.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:

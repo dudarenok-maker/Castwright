@@ -290,14 +290,16 @@ describe('#3774 — restructure refuses with 409 book_busy while a long job is r
     }
   });
 
-  it('(g) bulk INCLUDE is not refused — it proceeds with a render registered', async () => {
+  it('(g) bulk INCLUDE is refused too — its prune pass renumbers and moves audio', async () => {
     expect((await post('chapters/exclude', { chapterIds: [2], excluded: true })).status).toBe(200);
+    const before = snapshot();
     const render = await holdJob('render');
     try {
       const res = await post('chapters/exclude', { chapterIds: [2], excluded: false });
-      expect(res.status).toBe(200);
-      const chapters = JSON.parse(readFileSync(statePath(), 'utf8')).chapters;
-      expect(chapters.find((c: { id: number }) => c.id === 2).excluded).toBeUndefined();
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(snapshot()).toBe(before);
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['render']);
     } finally {
       await render.finish();
     }

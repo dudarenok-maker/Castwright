@@ -201,7 +201,6 @@ async function applyRestructure(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
   ) => RestructureResult,
-  opts: { skipBusyCheck?: boolean } = {},
 ): Promise<{
   status: number;
   body: unknown;
@@ -212,9 +211,9 @@ async function applyRestructure(
      registers its token inside `withBookOp`, so this check cannot race a
      registration. Every `BookJobKind` counts (analysis included); the gate
      claim below stays for the synchronous analysis-start exclusion. A bulk
-     INCLUDE (`skipBusyCheck`) deletes no audio and renumbers nothing, so it is
-     the one route that skips the check. */
-  const busyKinds = opts.skipBusyCheck ? [] : bookJobKinds(book.bookId);
+     include is NOT exempt: its prune pass drops and renumbers zero-sentence
+     chapters, moving audio. */
+  const busyKinds = bookJobKinds(book.bookId);
   if (busyKinds.length > 0) {
     return {
       status: 409,
@@ -629,7 +628,6 @@ chaptersRestructureRouter.post(
       const result = await withBookOp(req.params.bookId, (book) =>
         applyRestructure(book, prep, (state, hints, sentences) =>
           applyExclude(state, hints, sentences, op),
-          { skipBusyCheck: !op.excluded },
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
