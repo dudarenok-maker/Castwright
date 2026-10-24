@@ -318,6 +318,8 @@ const FLUSH_RETRY_DELAYS_MS = [1000, 2000, 4000];
 const PUT_REFUSED_RE = /^Book state PUT failed \(4\d\d\)/;
 const FLUSH_FAILED_MESSAGE =
   "Some changes to this book couldn't be saved. Check your connection and try again.";
+const flushFailedMessage = (title: string) =>
+  `Couldn't save your changes to "${title}". Check your connection and try again.`;
 
 const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
@@ -453,11 +455,16 @@ export const persistenceMiddleware: Middleware = (store) => {
                a title the server rejected; roll the optimistic saved update back
                (and restore the draft so the user's text is preserved for retry). */
             if (rolledBack) store.dispatch(handler.rollback!(bookId));
-          } else {
+          } else if (!refused) {
+            /* Only a save that was retried and given up on (network / 5xx) gets
+               the generic toast; a 4xx is the server's deliberate refusal, which
+               stayed silent before #3421. It fires seconds after the user may
+               have left, so it names the book rather than saying "this book". */
+            const title = (store.getState() as PersistableRootState).bookMeta?.saved?.[bookId]?.title;
             store.dispatch(
               notificationsActions.pushToast({
                 kind: 'error',
-                message: FLUSH_FAILED_MESSAGE,
+                message: title ? flushFailedMessage(title) : FLUSH_FAILED_MESSAGE,
                 dedupeKey: `book-persist-failed:${bookId}`,
               }),
             );

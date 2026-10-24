@@ -483,6 +483,47 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
     err.mockRestore();
   });
 
+  it('the given-up toast names the book by title even though another book is open by then (#3421 F3)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'The Northern Star' } } },
+    });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    /* Leaving the book sends the write; the user opens another before it gives up. */
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+
+    const toast = (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === 'book-persist-failed:book-1');
+    expect(toast.payload.message).toContain('"The Northern Star"');
+    err.mockRestore();
+  });
+
+  it('a 4xx refusal on a slice with no failure handler raises no generic save toast (#3421 F3)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(20000);
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.payload?.dedupeKey === 'book-persist-failed:book-1',
+      ),
+    ).toBe(false);
+    err.mockRestore();
+  });
+
   it('a newer write supersedes a pending retry (#3421)', async () => {
     putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
     const state: Record<string, unknown> = baseState();
