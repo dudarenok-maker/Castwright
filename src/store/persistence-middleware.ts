@@ -430,7 +430,12 @@ export const persistenceMiddleware: Middleware = (store) => {
             /* #2230 — a refused rename must not leave the persisted value claiming
                a title the server rejected; roll the optimistic saved update back
                (and restore the draft so the user's text is preserved for retry). */
-            if (handler.rollback) store.dispatch(handler.rollback(bookId));
+            /* The rollback restores a shared, book-agnostic draft, and the retry
+               window (#3421) lets the user open another book first — applying it
+               then would overlay this book's text on that one. */
+            if (handler.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId) {
+              store.dispatch(handler.rollback(bookId));
+            }
           } else {
             store.dispatch(
               notificationsActions.pushToast({

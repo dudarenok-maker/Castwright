@@ -12,7 +12,7 @@ import { persistenceMiddleware, flushBookPersistence, type BookFlushOutcome } fr
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
-import { bookMetaSlice, bookMetaActions } from './book-meta-slice';
+import { bookMetaSlice, bookMetaActions, selectEffectiveMeta } from './book-meta-slice';
 
 function makeStore(state: Record<string, unknown>) {
   return {
@@ -715,6 +715,42 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
     /* …and the user's typed text survives in the editor for retry. */
     expect(state.bookMeta.draft?.title).toBe('Renamed Book');
+  });
+
+  it('rolls the draft back after a transient failure exhausts its retries while the book is still open (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const state = store.getState() as { bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null } };
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(state.bookMeta.draft?.title).toBe('Typed for A');
+    err.mockRestore();
+  });
+
+  it("does NOT restore book A's draft over book B when the user switched books during the retry window (#3421 F4)", async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b2',
+        state: { title: 'Book B', author: 'B', series: '', prosodyEnabled: false } as never,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const s = store.getState() as never;
+    expect(selectEffectiveMeta(s, 'b2')?.title).toBe('Book B');
+    err.mockRestore();
   });
 
   it('does NOT toast, roll back, or keep a snapshot on a SUCCESSFUL save', async () => {
