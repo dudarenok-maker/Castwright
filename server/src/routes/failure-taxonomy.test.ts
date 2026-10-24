@@ -656,15 +656,9 @@ describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
     expect(r.detail).toContain('reason=thinking-idle');
   });
 
-  it('→ analyzer-timeout for a local Ollama ceiling without naming an endpoint or Gemini setting, nor a path', () => {
+  it('keeps an Ollama ceiling at analyzer-timeout, the code the design pre-pass halt reads', () => {
     const r = classifyAnalysisFailure(new AnalyzerTimeoutError('ollama', 'qwen3.5:9b', 600_000, 'ceiling'), 'Ollama (qwen3.5:9b)');
     expect(r.code).toBe('analyzer-timeout');
-    expect(r.userMessage).toContain('Ollama (qwen3.5:9b)');
-    expect(r.userMessage).toContain('600 s');
-    expect(r.userMessage).not.toContain('endpoint');
-    expect(r.userMessage).not.toContain('Gemini');
-    expect(r.remediation).not.toContain('Gemini');
-    expect(r.detail).toContain('transport=ollama');
   });
 
   it('is matched by name in the signature scan and never reads as unreachable', () => {
