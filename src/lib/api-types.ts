@@ -8327,6 +8327,19 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description A long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "book_busy";
+                    };
+                };
+            };
         };
     };
     renameChapter: {
@@ -8376,7 +8389,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8428,7 +8441,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8481,7 +8494,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8531,7 +8544,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8581,7 +8594,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8624,7 +8637,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;

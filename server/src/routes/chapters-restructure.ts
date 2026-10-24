@@ -54,8 +54,10 @@ import {
   peekBook,
   readBookStateOrThrow,
   withBookOp,
+  bookJobKinds,
   type BookHandle,
 } from '../workspace/book-op-lock.js';
+import { busySentence } from './book-state.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
 import { dropPendingForChapters } from '../workspace/revisions-store.js';
@@ -203,6 +205,20 @@ async function applyRestructure(
   status: number;
   body: unknown;
 }> {
+  /* #3774 -- refuse while ANY long job is registered for the book, FIRST: a
+     restructure renumbers slugs and rewrites or deletes chapter audio, and a
+     render still finalizing would write its take to a stale slug. `runBookJob`
+     registers its token inside `withBookOp`, so this check cannot race a
+     registration. Every `BookJobKind` counts (analysis included); the gate
+     claim below stays for the synchronous analysis-start exclusion. */
+  const busyKinds = bookJobKinds(book.bookId);
+  if (busyKinds.length > 0) {
+    return {
+      status: 409,
+      body: { error: busySentence(busyKinds, 'restructure'), code: 'book_busy' },
+    };
+  }
+
   const manuscriptId = book.state.manuscriptId;
   if (!manuscriptId) {
     return {

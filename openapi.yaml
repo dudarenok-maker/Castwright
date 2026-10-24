@@ -1000,6 +1000,16 @@ paths:
                   excluded: { type: boolean }
         '404':
           description: Book or chapter not found
+        '409':
+          description: 'A long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted.'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [book_busy] }
 
   /api/books/{bookId}/chapters/{chapterId}/rename:
     post:
@@ -1047,7 +1057,7 @@ paths:
         '404':
           description: Book or chapter not found
         '409':
-          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.'
+          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.'
 
   /api/books/{bookId}/chapters/merge:
     post:
@@ -1090,7 +1100,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. non-contiguous ids, fewer than 2 ids)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
 
   /api/books/{bookId}/chapters/split:
     post:
@@ -1131,7 +1141,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. split after last sentence)' }
         '404': { description: Book, chapter, or sentence not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
 
   /api/books/{bookId}/chapters/reorder:
     post:
@@ -1165,7 +1175,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
 
   /api/books/{bookId}/chapters/exclude:
     post:
@@ -1199,7 +1209,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (missing / empty chapterIds, non-boolean excluded)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
 
   /api/books/{bookId}/chapters/refresh-titles:
     post:
@@ -1232,7 +1242,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.' }
 
   /api/books/{bookId}/cover/candidates:
     get:
