@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
-import { coerceAndValidate } from './resolver.js';
+import { coerceAndValidate, configValue } from './resolver.js';
 import { parseEndpointModelId } from '../analyzer/model-id.js';
 
 describe('config registry', () => {
@@ -278,6 +280,74 @@ describe('analyzer.fallback.target', () => {
     for (const id of ['openai:latest', 'openai:Lab::qwen3', 'openai:lab_1::qwen3', 'openai:::qwen3', 'openai:lab:qwen3', 'openai']) {
       expect(parseEndpointModelId(id), id).toBeNull();
       expect(coerceAndValidate(knob(), id).ok, id).toBe(false);
+    }
+  });
+});
+
+/* #3084 W4 (spec §10) — persona generation's engine is a model-id-style selection. */
+describe('analyzer.personaGeneration.engine', () => {
+  const knob = () => getKnob('analyzer.personaGeneration.engine')!;
+  const CASES = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../analyzer/__fixtures__/model-id-cases.json', import.meta.url)), 'utf8'),
+  ) as Array<{ id: string; engine: string; endpointId?: string; model?: string }>;
+  afterEach(() => {
+    delete process.env.PERSONA_GEN_ENGINE;
+  });
+
+  it('is an analyzer-engine knob offering local and gemini, default gemini, env PERSONA_GEN_ENGINE', () => {
+    expect(knob().type).toBe('analyzer-engine');
+    expect(knob().options).toEqual(['local', 'gemini']);
+    expect(knob().default).toBe('gemini');
+    expect(knob().env).toBe('PERSONA_GEN_ENGINE');
+    expect(knob().apply).toBe('live');
+  });
+
+  it.each(['local', 'gemini', ' local ', 'openai:lab::qwen3-30b', 'openai:my-box-2::meta-llama/llama-3.1-8b:free'])(
+    'accepts %j',
+    (v) => {
+      expect(coerceAndValidate(knob(), v)).toEqual({ ok: true, value: v.trim() });
+    },
+  );
+
+  it.each([
+    '',
+    'Local',
+    'GEMINI',
+    'openai',
+    'openai:lab:qwen3',
+    'openai:lab::',
+    'openai:Lab::qwen3',
+    'openai:latest',
+    'qwen3.5:9b',
+    'gemini-3.1-flash-lite',
+    `openai:${'a'.repeat(41)}::m`,
+  ])('rejects %j', (v) => {
+    expect(coerceAndValidate(knob(), v).ok).toBe(false);
+  });
+
+  it("accepts no id that parseEndpointModelId rejects, including the table's endpoint-shaped negatives", () => {
+    const endpointShaped = CASES.filter((c) => c.id.startsWith('openai'));
+    const negatives = endpointShaped.filter((c) => c.engine !== 'openai');
+    expect(negatives.map((c) => c.id)).toEqual(
+      expect.arrayContaining(['openai:latest', 'openai:Lab::qwen3', 'openai:lab_1::qwen3', 'openai:::qwen3', 'openai:lab:qwen3', 'openai']),
+    );
+    for (const c of negatives) {
+      expect(parseEndpointModelId(c.id), c.id).toBeNull();
+      expect(coerceAndValidate(knob(), c.id).ok, c.id).toBe(false);
+    }
+    /* The knob is deliberately STRICTER than the parser (non-empty model, endpoint id ≤ 40), never looser. */
+    for (const c of endpointShaped) {
+      if (coerceAndValidate(knob(), c.id).ok) expect(parseEndpointModelId(c.id), c.id).not.toBeNull();
+    }
+    for (const c of endpointShaped.filter((e) => e.engine === 'openai' && e.model !== '' && (e.endpointId ?? '').length <= 40)) {
+      expect(coerceAndValidate(knob(), c.id).ok, c.id).toBe(true);
+    }
+  });
+
+  it('PERSONA_GEN_ENGINE=local and =gemini still resolve (existing .env files keep working)', () => {
+    for (const v of ['local', 'gemini']) {
+      process.env.PERSONA_GEN_ENGINE = v;
+      expect(configValue<string>('analyzer.personaGeneration.engine')).toBe(v);
     }
   });
 });

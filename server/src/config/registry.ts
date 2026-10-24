@@ -1166,9 +1166,13 @@ export const KNOBS: ConfigKnob[] = [
     env: 'PERSONA_GEN_ENGINE',
     group: 'analyzer-models',
     label: 'Persona generation engine',
-    help: '"gemini" (default) designs each cast member\'s voice persona via the Gemini API — the locked quality choice. "local" routes persona generation through the local Ollama daemon so a no-Gemini install can still design voices. No silent cross-provider fallback: gemini with no key, or local with the daemon down, fails with a clear message.',
-    type: 'enum',
+    help: '"gemini" (default) designs each cast member\'s voice persona via the Gemini API (Voice-style model) — the locked quality choice. "local" routes it through the local Ollama daemon (Persona local model) so a no-Gemini install can still design voices. An OpenAI-compatible endpoint model (openai:<endpoint>::<model>, picked from the list) routes it to that endpoint, with its rate limits, concurrency and GPU card. No silent cross-provider fallback: gemini with no key, local with the daemon down, or an endpoint that is missing or unreachable, fails with a clear message. Saving an endpoint model whose endpoint is not configured is refused.',
+    type: 'analyzer-engine',
     options: ['local', 'gemini'],
+    /* local | gemini | an endpoint model id — the grammar of analyzer/model-id.ts, repeated as a literal
+       because registry.ts must stay pure data (registry-imports.guard.test.ts); registry.test.ts pins it
+       against parseEndpointModelId over the shared id case table. Case-sensitive, like the old enum. */
+    pattern: /^(local|gemini|openai:[a-z0-9-]{1,40}::.+)$/,
     default: 'gemini',
     apply: 'live',
     risk: 'medium',

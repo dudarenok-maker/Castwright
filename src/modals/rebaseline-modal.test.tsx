@@ -18,7 +18,18 @@ import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import { chaptersSlice } from '../store/chapters-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
+import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import type { Character, Voice } from '../lib/types';
+
+/* The guard's Confirm dispatches haltActiveGeneration; stub it to a plain action so the test asserts the call. */
+vi.mock('../store/queue-thunks', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../store/queue-thunks')>()),
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
+}));
 
 /* Mock the api surface the modal calls. designQwenVoice returns a derived
    voiceId per character; generateVoiceStyle is the per-character persona
@@ -135,6 +146,9 @@ function makeStore(
       voices: voicesSlice.reducer,
       notifications: notificationsSlice.reducer,
       rebaseline: rebaselineSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
     },
     preloadedState: {
       ui,
@@ -893,5 +907,49 @@ describe('RebaselineModal — audition resolves the character\'s own engine (#18
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
     const lastCall = vi.mocked(playSampleWithAutoLoad).mock.calls.at(-1)![0];
     expect(lastCall.args.modelKey).toBe('coqui-xtts-v2');
+  });
+});
+
+describe('RebaselineModal — design guard (#3084 W4)', () => {
+  const TITLE = 'Pause audio generation to design voices?';
+
+  it('Propose on a same-card endpoint persona engine with a render streaming asks once, before any design starts; Confirm halts then runs the batch', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    seedSameCardPersona(store);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    fireEvent.click(screen.getByTestId('rebaseline-propose'));
+
+    expect(screen.getByText(TITLE)).toBeInTheDocument();
+    expect(store.getState().rebaseline.status).toBe('setup');
+    expect(designQwenVoice).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(designQwenVoice).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+  });
+
+  it('Wait leaves the modal in setup and designs nothing', async () => {
+    const store = makeStore(CHARACTERS, VOICES);
+    seedSameCardPersona(store);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    /* The DESIGN dialog must be the one asking: with design mode off the guard falls back to the analysis
+       dialog (also has a Wait button), and a Wait that only checks "nothing started" passes either way. */
+    expect(screen.getByText(TITLE)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+    expect(store.getState().rebaseline.status).toBe('setup');
+    expect(designQwenVoice).not.toHaveBeenCalled();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
   });
 });

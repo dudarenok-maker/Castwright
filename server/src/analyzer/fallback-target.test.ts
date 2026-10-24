@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { resolveAnalyzerFallbackTarget, fallbackTargetSaveError } from './fallback-target.js';
+import { resolveAnalyzerFallbackTarget, fallbackTargetSaveError, personaEngineSaveError } from './fallback-target.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
 afterEach(() => {
@@ -44,5 +44,22 @@ describe('fallbackTargetSaveError (#3084 P30)', () => {
   it('off and local need nothing', () => {
     expect(fallbackTargetSaveError('off', { endpointIds: [], geminiKey: false })).toBeNull();
     expect(fallbackTargetSaveError('local', { endpointIds: [], geminiKey: false })).toBeNull();
+  });
+});
+
+describe('personaEngineSaveError (#3084 W4, owner decision 4.4-B1)', () => {
+  it('always saves local and gemini: a missing Gemini key stays a run-time error for personas', () => {
+    expect(personaEngineSaveError('local', { endpointIds: [] })).toBeNull();
+    expect(personaEngineSaveError('gemini', { endpointIds: [] })).toBeNull();
+  });
+
+  it('refuses an endpoint model whose endpoint is not saved, naming it', () => {
+    expect(personaEngineSaveError('openai:gone::m', { endpointIds: ['lab'] })).toMatch(
+      /^analyzer\.personaGeneration\.engine: no analyzer endpoint "gone" is saved/,
+    );
+  });
+
+  it('saves an endpoint model whose endpoint is saved', () => {
+    expect(personaEngineSaveError('openai:lab::m', { endpointIds: ['lab'] })).toBeNull();
   });
 });

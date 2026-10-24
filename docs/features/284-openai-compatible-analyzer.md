@@ -42,7 +42,7 @@ owner: null
   - Keys are never returned by GET, as with the Gemini key.
   - No endpoint is selectable before its sizing, GPU coordination and concurrency exist.
 - **Migration:**
-  - The internal `AnalysisEngine` type (`'local' | 'gemini' | 'openai'`) and the shared id grammar (`openai:<endpointId>::<model>`, implemented once per side in `server/src/analyzer/model-id.ts` / `src/lib/model-id.ts`) landed in PR 3a. Every site that turns a selection id into an Ollama call already runs that grammar. The persisted/validated `analysisEngine` enum — `ANALYSIS_ENGINE_VALUES`, the `PERSONA_GEN_ENGINE` enum, and the OpenAPI `analysisEngine` enums — still refuses `openai` and gains it only in PR 3d, once an endpoint is actually selectable.
+  - The internal `AnalysisEngine` type (`'local' | 'gemini' | 'openai'`) and the shared id grammar (`openai:<endpointId>::<model>`, implemented once per side in `server/src/analyzer/model-id.ts` / `src/lib/model-id.ts`) landed in PR 3a. Every site that turns a selection id into an Ollama call already runs that grammar. The persisted/validated `analysisEngine` enum — `ANALYSIS_ENGINE_VALUES`, and the OpenAPI `analysisEngine` enums — still refuses `openai` and gains it only in PR 3d, once an endpoint is actually selectable. The `PERSONA_GEN_ENGINE` knob is a separate case: wave 4 made it an `analyzer-engine` knob that accepts `openai:<endpointId>::<model>` (invariant 8).
   - `analyzer.gemini.maxOutputTokens` gains `0` = Auto as its default; an explicit value keeps its meaning.
   - The six `rate.*.gemma*` knobs move into `analyzerRateLimitsByModel`.
   - `analyzer.personaGeneration.engine` accepts endpoint model ids.
@@ -59,6 +59,14 @@ owner: null
 5. **Chunk budgets.** Budgets for today's engines stay byte-identical to the pinning fixture captured from `main` before wave 2 (`server/src/analyzer/stage1-chunk.ts:95-125`, `stage2-chunk.ts:70`, `chapter-chunker.ts:130-139`).
 6. **In-flight eviction.** TTS eviction never unloads an analyzer model while a call that shares a GPU is in flight (`server/src/gpu/capacity-retry.ts:273-290`, `server/src/tts/sidecar.ts:191-194`).
 7. **A reasoning overflow points at the settings that fix it.** A terminal `analyzer-reasoning-overflow` error carries a structured `fixes` list (`server/src/routes/failure-taxonomy.ts`'s `reasoningOverflowFixes`). The Analysing view renders it as a "How to fix:" list in the run-level "What to do:" block, and the analysis-stream middleware pushes the same list onto a persistent notification (`src/components/reasoning-overflow-toast.tsx`, no auto-dismiss timer) — persistent because that stream, not the view's, is the one that survives navigation (`src/store/analysis-stream-middleware.ts`; `analysing.tsx`'s own stream aborts on unmount). Each entry is either an Advanced Settings deep link (`#/advanced?focus=<settingKey>`, built in `src/lib/failure-fixes.ts` and parsed by `AdvancedRoute`), a wiki link, or plain text — the label-only "Switch to a different analyzer model" entry. The Gemini thinking window (`analyzer.gemini.thinkingIdleTimeoutMs`) is never offered as a fix: it bounds silence, not output room. `fixes` rides the SSE terminal `error` event only; it is deliberately not written to the `#3004` last-outcome record, which has no reader for it.
+8. **Persona generation.** A persona runs through the selected engine's transport with no cross-provider fallback (`server/src/analyzer/voice-style.ts`).
+   - **Ollama:** the call stays non-streaming with a caller `keep_alive` and CPU placement. It is bounded by `PERSONA_ABSOLUTE_MAX_MS`, which starts after the analyzer slot is acquired, and the slot is released on every path (`server/src/analyzer/transports/ollama-transport.ts`, `ollama-timeout.test.ts`).
+   - **Gemini:** the limiter estimate stays `ceil(prompt.length / 4) + 200`, and the persona wire carries no system instruction, temperature or output cap. It asks for no thoughts, so its `thoughtsTokenCount` is not reasoning evidence (one flag, P27).
+   - **Shared card:** a persona engine that shares the Qwen card (local, or a same-card endpoint) is generated before VoiceDesign loads (`server/src/routes/cast-design.ts`).
+   - **Cancellation and whole-job errors:** the design job's abort signal reaches every persona call, and a pause is a clean stop (a local persona call aborted before its first byte included). When the persona engine shares the voice card (`personaSharesGpu()`: local Ollama, an endpoint on the Qwen card, or a missing endpoint), the pre-pass ends the job once on an unreachable, missing, key-mismatched, timed-out or 401/403 persona engine. A timed-out local Ollama engine throws `AnalyzerTimeoutError` (`analyzer-timeout`, Ollama wording), so it ends the job once instead of waiting `PERSONA_ABSOLUTE_MAX_MS` per character. Every other engine (Gemini, a `gpu: 'none'` endpoint, an endpoint on another card) takes the lazy path, where each failure is a per-character `character_failed` (#3230); a missing endpoint fails before any call on either path. On the shared-GPU path a persona-less character the pre-pass did not own is reported as `character_failed`, not skipped silently.
+   - **Design guard:** when the persona engine is an endpoint on the Voice engine's card and a render is streaming, every design entry point asks "Pause audio generation to design voices?": Design full cast, the profile drawer's voice-style button and Qwen auto-generate, compare-modal Regenerate, rebaseline Propose, the nudge toast and the readiness gate. **Pause and design** halts the render. Local Ollama is not asked (the server moves it to system RAM), nor are Gemini, `gpu: 'none'` and other-card endpoints. A direct API caller is unguarded, the same as analysis.
+   - **Persona failure wording:** a persona failure names the Voice-style model (`VOICE_STYLE_MODEL`) and Persona generation engine settings, not analysis's. An empty Gemini reply is the empty-persona error; only a real block reason is `analyzer-content-blocked`.
+   - **Failure codes:** any error that ends a design job carries its failure-taxonomy code (`auth` for a key problem), and `unknown` only when the taxonomy recognises nothing. A lazy-path persona failure does **not** end the job: since `6222e483` (#3027 second half) it is a per-character `character_failed` carrying `itemFailureReason`'s reason string, a reasoning overflow included (P20's voice-design carve-out). #3230 (closed) asked for that behaviour and that commit delivered it.
 
 ## Test plan
 
@@ -79,7 +87,15 @@ The full list is in the implementation plan; each wave's tasks name their test f
   - Payload merge, protected keys and redaction.
   - Key-origin matching.
 - **Routes (server).** Endpoint CRUD refusals, the key write, Detect, the catalog, and the Test action's `enforced` / `ignored` / `rejected` records.
-- **Eviction (server).** Same-card only, never while in flight, the latch shared with Ollama, and a capacity re-probe after unload.
+- **Eviction (server).** Same-card only, never while in flight, and a capacity re-probe after unload.
+- **Persona generation (server and frontend).**
+  - The runner's free-text path, and each transport's free-text wire shape against a stage-request control.
+  - The persona engine knob's grammar, pinned to the shared id case table.
+  - Selection errors before any call (missing endpoint, key origin), and endpoint wiring over a real server (key header, per-call busy registration, served-model record, served-models listing, concurrency 1).
+  - The same-card rule (W3d's `endpointsSharingDevice`), the design pre-pass's wholesale errors and their codes, and the job signal reaching the persona call (a pause aborts a real in-flight endpoint request).
+  - The pre-pass halt set against each transport's real timeout error (a timed-out local Ollama engine ends the job once), the lazy path staying per-character for an engine that does not share the voice card, and a persona-less character on the shared-GPU path counted as failed.
+  - The design guard: the "Pause audio generation to design voices?" prompt at each design entry point for a same-card endpoint while a render streams, and none for local Ollama, Gemini, `gpu: 'none'` and other-card endpoints. A direct API caller is unguarded, so there is no server-side test for it.
+  - The Advanced Settings picker.
 - **E2E (Playwright, mock mode).**
   - Add an endpoint and pick its model; the label shows the structured-output state and "+ custom params".
   - The GPU guard prompts for a same-card endpoint only.
@@ -93,5 +109,6 @@ These run in mock mode (`npm run dev:mock`) once PR 3d has merged.
 2. Add an endpoint with base URL `http://127.0.0.1:8080/v1` and no context size. Save is refused with "Context size is required". Enter `32768` and save. The endpoint's GPU defaults to "Any card".
 3. Open the analysis model picker. An endpoint group lists its models. Picking one sets the id `openai:<endpointId>::<model>`.
 4. Change the endpoint's host to `http://192.168.1.20:8080/v1`. The form asks for the API key again.
+5. Open Advanced configuration → Analyzer models. **Persona generation engine** lists `local`, `gemini` and the endpoint's models. Pick an endpoint model; the row shows it as overridden with Revert.
 
 **On-box acceptance** (live structured output, thinking-model output, long silent prefill, same-card eviction, capacity recalibration) is recorded in `docs/testing/onbox-acceptance-register.md` by the PRs that ship each behaviour.

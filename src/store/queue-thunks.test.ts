@@ -458,4 +458,45 @@ describe('haltActiveGeneration (plan 102 Should #5 — local-analyzer GPU halt)'
     );
     expect(store.getState().queue.paused).toBe(true);
   });
+
+  describe('awaitRelease (#3084 W4 N2 — a design waits for the render to let go of the card)', () => {
+    const makeHaltStore = () =>
+      configureStore({
+        reducer: { queue: queueSlice.reducer, notifications: notificationsSlice.reducer, chapters: chaptersSlice.reducer },
+      });
+    const stream = (bookId: string, chapterId: number) =>
+      chaptersSlice.actions.setActiveStream({
+        streamKey: `${bookId}::${chapterId}`, bookId, chapterId, modelKey: 'coqui-xtts-v2', done: 0, total: 3, inProgress: 1, lastTickAt: 0, halted: false,
+      });
+
+    it('does not settle until the server has acknowledged the pause of every book that was rendering', async () => {
+      fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: true }));
+      const acks: Array<() => void> = [];
+      const pause = vi.spyOn(api, 'pauseGeneration').mockImplementation(() => new Promise<void>((r) => { acks.push(r); }));
+      const store = makeHaltStore();
+      store.dispatch(stream('book-A', 1));
+      store.dispatch(stream('book-A', 2));
+      store.dispatch(stream('book-B', 1));
+
+      let settled = false;
+      const p = (store.dispatch as unknown as TestDispatch)(haltActiveGeneration({ awaitRelease: true })).then(() => { settled = true; });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pause.mock.calls.map((c) => c[0].bookId).sort()).toEqual(['book-A', 'book-B']);
+      expect(settled).toBe(false);
+
+      acks.forEach((a) => a());
+      await p;
+      expect(settled).toBe(true);
+      pause.mockRestore();
+    });
+
+    it('rejects when the queue pause fails, where the default halt only warns', async () => {
+      fetchMock.mockResolvedValue(mockJsonResponse({ error: 'down' }, 500));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const store = makeHaltStore();
+      await expect((store.dispatch as unknown as TestDispatch)(haltActiveGeneration())).resolves.toBeUndefined();
+      await expect((store.dispatch as unknown as TestDispatch)(haltActiveGeneration({ awaitRelease: true }))).rejects.toBeDefined();
+      warn.mockRestore();
+    });
+  });
 });

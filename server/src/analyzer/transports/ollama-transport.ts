@@ -41,12 +41,24 @@ import { detectOllamaGpuSplit } from '../../gpu/ollama-gpu-split.js';
 import { configValue } from '../../config/resolver.js';
 import { getLastKnownVram } from '../../gpu/vram-state.js';
 import type { RawEvalTiming } from '../analyzer-eval-stats.js';
-import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from '../errors.js';
+import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
-import type { ChatTransport, StructuredOutputRequest, TransportRequest, TransportResult } from '../runner/transport.js';
+import { isAnyAnalyzerRunBusy } from '../../tts/design-lock.js';
+import { PERSONA_ABSOLUTE_MAX_MS } from '../runner/transport.js';
+import type {
+  ChatTransport,
+  FreeTextOptions,
+  StructuredOutputRequest,
+  TransportRequest,
+  TransportResult,
+} from '../runner/transport.js';
+
+/* The persona ceiling lives in runner/transport.ts (#3084 W4, owner decision 4.3-B1); re-exported
+   so ollama.ts can pass it on to voice-style.ts. */
+export { PERSONA_ABSOLUTE_MAX_MS };
 
 /* Long-call dispatcher — see the header note. `headersTimeout: 0` is the
    load-bearing field: Ollama sends no response headers until the first
@@ -110,6 +122,130 @@ export class OllamaTransport implements ChatTransport {
     this.dispatcher = opts.dispatcher ?? ANALYZER_DISPATCHER;
   }
 
+  /** #3084 W4 — the free-text path (spec §10): one NON-streaming /api/chat call with no response
+      `format`, GPU-plan aware. Moved from the former ollama.ts persona function (main 80be2f1d).
+        - onCpu  → num_gpu:0 (system RAM only); the analyzer slot is still taken with onCpu=true.
+        - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0 for one-shot / CPU). */
+  private async sendFreeText(req: TransportRequest, freeText: FreeTextOptions): Promise<TransportResult> {
+    const onCpu = freeText.onCpu === true;
+    const url = this.url; // CHANGED: was getResolvedOllamaUrl() — voice-style.ts resolves it into the analyzer
+    const body = {
+      model: this.model, // CHANGED: was the `model` parameter
+      /* CHANGED: was [{ role: 'user', content: prompt }]. A persona passes system '' and one user
+         turn, so the wire is identical. */
+      messages: [
+        ...(req.system !== '' ? [{ role: 'system' as const, content: req.system }] : []),
+        ...req.messages,
+      ],
+      stream: false,
+      think: false,
+      /* Pin during an active analysis run (same rationale as keepAliveFor); the
+         caller-supplied keepAlive is the post-run idle window otherwise. */
+      keep_alive: isAnyAnalyzerRunBusy() ? -1 : (freeText.keepAlive ?? 0), // CHANGED: opts → freeText
+      options: {
+        temperature: req.temperature, // CHANGED: was resolveOllamaTemperature(); voice-style.ts passes that value
+        ...(onCpu ? { num_gpu: 0 } : {}),
+      },
+    };
+
+    /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
+       else must bound this call — and unlike chat() (whose StageCall carries the
+       analysis signal) and warmOllamaModel (which builds its own controller from
+       warmTimeoutMs), nothing upstream of here supplies one: voice-style.ts
+       passes only { onCpu, keepAlive }. Without this, a daemon wedged in the
+       connected-but-never-responding state (mid-/api/pull, hung GPU driver — the
+       listener stays up so connectTimeout never fires) would hang FOREVER, and
+       because the analyzer slot above is released only in the finally below,
+       it would leak a token from a bounded semaphore and silently block every
+       later analyzer call. The hidden 300s cap used to be the only stop; removing
+       it without replacing it would have traded a wrong diagnosis for a deadlock.
+       Ceiling matches design-voice-core.ts's DESIGN_ABSOLUTE_MAX_MS — the same
+       "a big local model on CPU is slow but not infinite" judgement. */
+    const releaseSlot = await acquireAnalyzerSlot(this.model, onCpu); // CHANGED: model → this.model
+    /* Start the clock AFTER the semaphore, not before: AbortSignal.timeout
+       cannot be paused, so building it above the acquire charges FIFO queue
+       time to the request. With K=2 held by two slow chapter calls, a persona
+       request could exhaust its whole budget waiting and then reject without
+       sending a byte — reported as a bare "operation was aborted due to
+       timeout" naming neither daemon nor model, about an Ollama that never saw
+       it. undici's implicit clock started at socket dispatch too, so this also
+       keeps the replacement bound faithful to what it replaced. */
+    try {
+      /* Built INSIDE the try: AbortSignal.timeout/any can throw (ERR_OUT_OF_RANGE
+         on a bad ceiling, TypeError on a non-signal), and the slot is already
+         held by this point — anything that throws between the acquire and the
+         try would leak it, which is the exact harm the regression test guards. */
+      const maxMs =
+        freeText.absoluteMaxMs && freeText.absoluteMaxMs > 0 ? freeText.absoluteMaxMs : PERSONA_ABSOLUTE_MAX_MS; // CHANGED: opts → freeText
+      const budget = AbortSignal.timeout(maxMs);
+      const startedAt = Date.now();
+      const signal = req.signal ? AbortSignal.any([budget, req.signal]) : budget; // CHANGED: opts.signal → req.signal
+      let response: Awaited<ReturnType<typeof undiciFetch>>;
+      try {
+        /* Same ANALYZER_DISPATCHER as chat(), and this call needs it MORE:
+           `stream: false` above means Ollama withholds response headers until
+           the ENTIRE generation is finished, so undici's 300s default would
+           cover load + prefill + full decode rather than prefill alone. The
+           CPU path (`num_gpu: 0`, set by voice-style.ts for persona
+           generation) blows through that on any large local tag — and there is
+           no Gemini fallback on this path, so the misclassified
+           LocalUnreachableError below surfaces to the user as "Ollama is
+           unreachable, start the daemon" about a daemon that is running fine
+           and still generating. */
+        response = await undiciFetch(`${url}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+          dispatcher: this.dispatcher, // CHANGED: the field is non-optional (defaulted to ANALYZER_DISPATCHER in the constructor), so the injected test dispatcher is honoured, like send()
+        });
+      } catch (err) {
+        /* CHANGED: the design job's abort signal now reaches this call (req.signal, #3084 W4). A pause
+           aborts the fetch before the first byte; report the clean stop it is, as send()'s streaming
+           body does, never an unreachable daemon. A budget timeout (no caller abort) classifies as before. */
+        if (req.signal?.aborted) {
+          throw new AnalysisAbortedError(`Ollama ${this.model} persona call aborted (paused or client disconnected).`);
+        }
+        /* The budget fired and the caller did not: the daemon is connected but silent, so say so with
+           the typed timeout the design pre-pass halts on (a bare TimeoutError DOMException matched
+           nothing, so every character waited out the full ceiling and then failed as 'unknown'). */
+        if (budget.aborted) {
+          throw new AnalyzerTimeoutError('ollama', this.model, Date.now() - startedAt, 'ceiling');
+        }
+        throw classifyConnectError(err, url);
+      }
+      if (!response.ok) {
+        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The
+           redaction is PR 3b's (W3b Task 3b.6a), carried through the move: every known analyzer secret
+           is removed BEFORE the body is sliced (P22). With no secret in the body the message text is
+           byte-identical to main's. */
+        const text = await response.text().catch(() => '');
+        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+        throw new AnalyzerHttpError(
+          'ollama',
+          response.status,
+          bodyExcerpt,
+          `Ollama ${url} returned ${response.status} ${response.statusText}: ${bodyExcerpt}`,
+        );
+      }
+      /* CHANGED: also reads done_reason and message.thinking, so runFreeText can tell a length stop
+         that only reasoned apart from an empty answer. */
+      const json = (await response.json().catch(() => ({}))) as {
+        message?: { content?: string; thinking?: string };
+        done_reason?: string;
+      };
+      const text = json.message?.content ?? '';
+      return {
+        text,
+        reasoningSeen: typeof json.message?.thinking === 'string' && json.message.thinking.length > 0,
+        finish: json.done_reason === 'length' ? 'length' : 'stop',
+        receivedBytes: text.length,
+      };
+    } finally {
+      releaseSlot(); // non-nullable (unlike the old acquireGpuTokenIfOnGpu release)
+    }
+  }
+
   /* Streamed chat against /api/chat. Mirrors GeminiAnalyzer.generate so the
      route-layer 45s silence watchdog (analysis.ts) keeps working unchanged —
      each NDJSON line fires onChunk with the assembled buffer.
@@ -118,6 +254,7 @@ export class OllamaTransport implements ChatTransport {
      AnalysisAbortedError so the route can distinguish "client went away,
      drop work silently" from a real model failure. */
   async send(req: TransportRequest): Promise<TransportResult> {
+    if (req.freeText) return this.sendFreeText(req, req.freeText);
     const onChunk = req.call.onChunk;
     const onEvalTiming = req.call.onEvalTiming;
     const signal = req.signal;

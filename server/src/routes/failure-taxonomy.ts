@@ -961,6 +961,16 @@ export function classifyAnalysisFailure(
         detail,
       );
     }
+    if (err.transport === 'ollama') {
+      /* The local persona call has no setting to raise: its ceiling is a fixed built-in, so point at
+         the model and the daemon instead of an endpoint setting that does not exist for Ollama. */
+      return withCopy(
+        'analyzer-timeout',
+        `${modelLabel} did not answer within ${Math.round(err.elapsedMs / 1000)} s, so the request was stopped. Pick a smaller or faster local model, or check that the Ollama daemon is not stuck, then retry.`,
+        detail,
+        'Choose a smaller or faster local model for persona generation (Advanced Settings → Analyzer), or restart the Ollama daemon if it is stuck, then retry.',
+      );
+    }
     const setting =
       err.transport === 'gemini'
         ? "'Gemini request ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS)"

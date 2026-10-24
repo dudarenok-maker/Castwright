@@ -36,6 +36,7 @@ import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-wi
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
 import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
@@ -256,6 +257,8 @@ export function ProfileDrawer({
   const playback = useSamplePlayback();
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
+  const { guard: personaGuard, modal: personaGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const ttsEngine = engineForModelKey(ttsModelKey);
   /* fs-2 — the open book's language, so the preview/calibration default speaks
      the right language (Russian pangram for a Russian book). */
@@ -980,8 +983,11 @@ export function ProfileDrawer({
      has none yet. Mirrors the server's per-character generator, then
      mirrors the result into redux (setVoiceStyle) so a later cast
      re-hydrate keeps it. No-ops without a bookId. */
-  async function generatePersona() {
+  function generatePersona() {
     if (!bookId || personaBusy) return;
+    personaGuard(() => void runGeneratePersona(bookId));
+  }
+  async function runGeneratePersona(bookId: string) {
     setPersonaBusy(true);
     setEngineError(null);
     try {
@@ -1487,6 +1493,7 @@ export function ProfileDrawer({
               bookId &&
               typeof document !== 'undefined' &&
               createPortal(
+                <>
                 <VoiceCompareModal
                   bookId={bookId}
                   character={character}
@@ -1530,7 +1537,8 @@ export function ProfileDrawer({
                     setVoiceCompareInitial(null);
                     dispatch(castDesignActions.clear());
                   }}
-                />,
+                />
+                </>,
                 document.body,
               )}
 
@@ -2218,6 +2226,7 @@ export function ProfileDrawer({
           </PrimaryButton>
         </div>
       </aside>
+      {personaGuardModal}
       {unlinkDialogAlias && onUnlinkAlias && (
         <UnlinkAliasDialog
           aliasName={unlinkDialogAlias}

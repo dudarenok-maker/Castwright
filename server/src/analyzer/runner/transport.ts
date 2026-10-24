@@ -27,15 +27,54 @@ export interface AdaptedSchema {
   dropped: string[];
 }
 
+/* Absolute ceiling for a one-shot persona generation. Needed because
+   ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
+   has no caller-supplied signal to fall back on; see the note in the former Ollama persona
+   function. Deliberately generous: the whole point of the
+   dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
+   DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. Every transport bounds a
+   free-text request at min(its own request ceiling, this). */
+export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
+
+/** #3084 W4 — per-call options for a free-text request. `absoluteMaxMs` is read by EVERY transport;
+    `onCpu` and `keepAlive` are Ollama-only (the Gemini and OpenAI transports otherwise use the
+    PRESENCE of `TransportRequest.freeText`). */
+export interface FreeTextOptions {
+  /** Ollama: run on system RAM (`num_gpu: 0`). The analyzer slot is still acquired (with onCpu=true). */
+  onCpu?: boolean;
+  /** Ollama: `keep_alive` when no analysis run is busy (a busy run pins -1). Default 0. */
+  keepAlive?: string | number;
+  /** Every transport: absolute ceiling for a free-text request; default PERSONA_ABSOLUTE_MAX_MS.
+      Ollama starts it after the slot; Gemini/OpenAI use min(request ceiling, this). Tests pass a
+      small value to prove the bound fires. */
+  absoluteMaxMs?: number;
+}
+
+/** #3084 W4 — input to StageRunner.runFreeText. */
+export interface FreeTextInput {
+  system?: string;
+  prompt: string;
+  signal?: AbortSignal;
+  /** Omitted → the transport omits temperature (server/model default), as the pre-transport
+      Gemini persona call did. The Ollama persona caller passes resolveOllamaTemperature(). */
+  temperature?: number;
+  /** The persona ceiling for ANY engine (see FreeTextOptions.absoluteMaxMs); merged into `freeText`. */
+  absoluteMaxMs?: number;
+  /** Ollama placement (`onCpu`, `keepAlive`); an `absoluteMaxMs` set here is also honoured. */
+  ollama?: FreeTextOptions;
+}
+
 export interface TransportRequest {
   system: string;
   messages: ChatMessage[];
   structuredOutput: StructuredOutputRequest;
-  temperature: number;
+  temperature: number | undefined; // W4: undefined only on a free-text request → the transport omits it
   /** undefined = the transport's pre-wave-2 default (Ollama resolveNumPredict, Gemini GEMINI_FALLBACK_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   estimatedInputTokens: number;
   signal?: AbortSignal;
+  /** W4: set only by StageRunner.runFreeText — a one-shot, unstructured, single-attempt call. */
+  freeText?: FreeTextOptions;
   /* 'onWaiting' deliberately excluded: StageRunner owns the waiting tick
      itself (stage-runner.ts's own setInterval) and no transport reads it off
      the request — a typed field a future transport would read straight off

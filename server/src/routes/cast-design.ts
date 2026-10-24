@@ -14,7 +14,7 @@
    restart loses only the live pill, never work: re-clicking finishes the rest.
 
    The per-character work reuses the EXACT single-design path:
-     - `generateVoiceStylePersona` (Gemini) when the character has no persona,
+     - `generateVoiceStylePersona` (the selected persona engine) when the character has no persona,
      - `designQwenVoiceForCharacter` (sidecar design + audition cache, serialized
        per-book + GPU-fair via the shared design lock + semaphore),
      - `applyOverrideToCastFiles` to persist the override the way the drawer does
@@ -55,8 +55,14 @@ import {
   hasClonedSlotAmongMatches,
 } from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
-import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
-import { LocalUnreachableError } from '../analyzer/ollama.js';
+import { personaSharesGpu, generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import {
+  AnalysisAbortedError,
+  AnalyzerUnreachableError,
+  AnalyzerEndpointMissingError,
+  AnalyzerTimeoutError,
+} from '../analyzer/errors.js';
+import { classifyAnalysisFailure } from './failure-taxonomy.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -272,26 +278,33 @@ function endJob(job: DesignJob, finalEv?: unknown): void {
     either phase. */
 const PERSONA_HEARTBEAT_MS = 6000;
 
-/** LOCAL-engine only: generate `voiceStyle` personas for all base-task
-    characters that lack one, BEFORE the design loop touches the sidecar —
-    so persona generation (Ollama) and VoiceDesign (sidecar) don't interleave
-    per-character. (Historically this pre-pass also let `preparePersonaBatch`
+/** SHARED-GPU persona engines only (local Ollama, or an OpenAI-compatible endpoint on the
+    Qwen card — `personaSharesGpu()`, #3084 W4): generate `voiceStyle` personas for all
+    base-task characters that lack one, BEFORE the design loop touches the sidecar — so
+    persona generation and VoiceDesign don't interleave per-character on one card.
+    (Historically this pre-pass also let `preparePersonaBatch`
     reverse-evict the idle resident sidecar model once on a constrained GPU;
     that eviction step is retired — VRAM arbitration for the sidecar's own
     engines now lives in its capacity admission when SEG_CAPACITY_ADMISSION
     is on, or the sequential cast-review/render workflow when it's off.)
 
-    The `gemini` engine keeps its existing lazy-interleaved persona-gen
-    inside `runDesignJob` unchanged — this function returns immediately for
-    any non-local engine.
+    A persona engine that shares no GPU (gemini, or an endpoint on no card / another card)
+    keeps its lazy-interleaved persona-gen inside `runDesignJob` unchanged — this function
+    returns immediately for it.
 
     Failure modes:
-    - `LocalUnreachableError` → PROPAGATES (wholesale job abort).
+    - `AnalyzerUnreachableError` (incl. Ollama's `LocalUnreachableError`),
+      `AnalyzerEndpointMissingError`, `AnalyzerTimeoutError`, and any error the failure
+      taxonomy codes `auth` (`AnalyzerKeyOriginError`, `AnalyzerHttpError` 401/403, a 400
+      whose body is Google's rejected-key text) → PROPAGATE (wholesale job abort — every
+      remaining character would fail identically).
+    - A pause that aborted the call (the job signal reaches the transport) → return;
+      nothing is recorded.
     - Any other per-character error → recorded to `job.failures` +
       `character_failed` broadcast + continue (design loop will skip
       characters whose persona we could not set). */
-async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<void> {
-  if (resolvePersonaEngine() !== 'local') return;
+async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu: boolean): Promise<void> {
+  if (!sharesGpu) return;
 
   // Deduplicate to base tasks only — variants always reuse the base persona.
   const baseIds = [...new Set(tasks.filter((t) => !t.emotion).map((t) => t.characterId))];
@@ -320,9 +333,20 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
 
       let persona: string;
       try {
-        persona = await generateVoiceStylePersona(character, prep);
+        persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });
       } catch (err) {
-        if (err instanceof LocalUnreachableError) throw err; // wholesale — propagate
+        /* A pause aborted the call (the job signal reaches the transport): a clean stop, not a failure. */
+        if (job.controller.signal.aborted) return;
+        if (
+          err instanceof AnalyzerUnreachableError ||
+          err instanceof AnalyzerEndpointMissingError ||
+          err instanceof AnalyzerTimeoutError ||
+          /* Owner decision B2: the taxonomy decides what is a refused key (key-origin, 401/403, and a 400 whose
+             body is Google's rejected-key text), so this clause never drifts from the failure codes. */
+          classifyAnalysisFailure(err, 'Persona generation').code === 'auth'
+        ) {
+          throw err; // wholesale — every remaining character would fail the same way
+        }
         // Per-character failure: record + skip; the design loop will skip this char.
         const message = (err as Error).message || 'Persona generation failed.';
         job.failures.push({ characterId, name: character.name ?? characterId, error: message });
@@ -352,7 +376,10 @@ async function runDesignJob(
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
-  await runPersonaPrePass(job, tasks);
+  /* Decided ONCE per job: the pre-pass and the per-character lazy-skip below must agree, or a
+     mid-job flip leaves a persona-less character that neither of them records. */
+  const sharesGpu = personaSharesGpu();
+  await runPersonaPrePass(job, tasks, sharesGpu);
   if (job.controller.signal.aborted) {
     endJob(job, {
       type: 'idle',
@@ -498,20 +525,32 @@ async function runDesignJob(
          voice, not the persona. (Variants always have a base so a persona must
          already exist — but we apply the same fallback for safety.)
 
-         ENGINE SPLIT: the LOCAL engine must NOT fall back here.  The pre-pass
-         (`runPersonaPrePass`) owns local persona-gen; it runs before VoiceDesign
-         loads and uses a safe GPU plan (evict or CPU).  If it failed for this
-         character it already recorded a `character_failed` and the character ends
-         up in `job.failures`.  Retrying here — with VoiceDesign already resident
-         on the GPU — would call Ollama inside `withGpuLoad`, the exact plan-108
-         OOM this pre-pass was built to prevent.  Skip silently (no second
-         `character_failed` broadcast — the pre-pass already emitted one). */
+         ENGINE SPLIT: a SHARED-GPU persona engine (local Ollama, or an endpoint on the
+         Qwen card) must NOT fall back here. The pre-pass (`runPersonaPrePass`) owns its
+         persona-gen; it runs before VoiceDesign loads and uses a safe GPU plan (CPU for
+         Ollama when busy). If it failed for this character it already recorded a
+         `character_failed` and the character ends up in `job.failures`. Retrying here —
+         with VoiceDesign already resident on the GPU — would load the persona model onto
+         that card inside `withGpuLoad`, the exact plan-108 OOM this pre-pass was built to
+         prevent. Skip without retrying — and without a second `character_failed` when the
+         pre-pass already recorded one. */
       let persona = (character.voiceStyle ?? '').trim();
       if (!persona) {
-        if (resolvePersonaEngine() === 'local') {
-          /* Skip — the pre-pass owns local persona-gen and already recorded any
-             failure; retrying here with an un-evicted GPU Ollama call as
-             VoiceDesign loads is the plan-108 OOM. */
+        if (sharesGpu) {
+          /* Skip — the pre-pass owns shared-GPU persona-gen; retrying here while VoiceDesign loads
+             on the same card is the plan-108 OOM. The pre-pass records a failure only for a base
+             task it tried, so a character it never reached (a `scope: 'variants'` run builds no
+             base tasks) has no outcome yet: record it, once, or it vanishes from every count. */
+          if (!job.failures.some((f) => f.characterId === characterId)) {
+            const message = 'No voice persona available for this character.';
+            job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+            broadcast(job, {
+              type: 'character_failed',
+              characterId,
+              name: character.name ?? characterId,
+              errorReason: message,
+            });
+          }
           continue;
         }
         /* Gemini persona fallback — a throw here must be a PER-CHARACTER
@@ -525,9 +564,17 @@ async function runDesignJob(
            the pre-pass (runPersonaPrePass), so the non-local path here is the
            only one that needs this wrapper. */
         try {
-          persona = await generateVoiceStylePersona(character);
+          persona = await generateVoiceStylePersona(character, { signal: job.controller.signal });
           await writeVoiceStylePersona(job.bookDir, characterId, persona);
         } catch (e) {
+          /* #3084 W4 — a pause aborted the call (the job signal now reaches the transport): a clean
+             stop, not a failure. Mirrors the pre-pass catch, but `break`s the loop instead of returning:
+             this catch is inside `for (const task of tasks)`, and breaking reaches the final idle
+             `endJob`, which closes the stream; a `return` would skip it and leak the job.
+             Without the check the abort would be recorded as a `character_failed` against the
+             character the user paused on, and the loop's abort check would then end the job
+             `idle` carrying that spurious failure. */
+          if (job.controller.signal.aborted) break;
           /* Route through the SAME per-character-failure shape the inner ride
              loop uses (lines 688-696): record to job.failures, broadcast
              character_failed, and continue to the NEXT character. Do not
@@ -924,21 +971,40 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* #2260 FINAL ROUND (B2) nit — 'unknown' left this backstop unable to reach
        the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links for a
        lock-contention failure, same as the analysis path's own
-       `classifyAnalysisFailure` (failure-taxonomy.ts) already does. Two
-       literal branches, not a `code` variable, so the literal `code: '...'`
-       stays greppable/regex-extractable the way every other code on this
-       event already is (see single-design.ts's identical nit for the guard
-       this matters to). */
+       `classifyAnalysisFailure` (failure-taxonomy.ts) already does. */
     if (isLockAcquisitionTimeout(e)) {
       endJob(job, {
         type: 'error',
         code: 'lock-contention',
         message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
       });
+    } else if (e instanceof AnalysisAbortedError && job.controller.signal.aborted) {
+      /* #3084 W4 — defence in depth for a pause. Both persona paths now stop cleanly before this
+         point: the pre-pass returns on abort, and the lazy call's own per-character catch
+         breaks out of the loop on abort too. Nothing routinely reaches this branch;
+         it exists so that any abort that DOES escape the loop reads as a clean stop rather than a
+         `code: 'unknown'` halt. */
+      endJob(job, {
+        type: 'idle',
+        done: job.done,
+        total: job.total,
+        skipped: job.skipped,
+        clonedSkips: job.clonedSkips,
+        failures: job.failures,
+      });
     } else {
+      /* #3084 W4 — every other error that escapes the design loop carries the analysis failure
+         taxonomy's code: `auth` for a refused key (401/403) or a key bound to another origin,
+         `analyzer-endpoint-missing`, `analyzer-timeout`, and `unknown` only when the taxonomy
+         recognises nothing. In practice that is the pre-pass's wholesale rethrows. The LAZY
+         persona call does NOT arrive here: it has had its own per-character catch since
+         `6222e483` (second half of #3027), so its failure is a `character_failed` carrying a
+         reason string and the job carries on — which is what #3230 asked for, and is P20's
+         voice-design carve-out. The code is a variable, not a literal: the taxonomy owns this
+         set, and `CastDesignEvent.code` admits any `FailureCode`. The message stays the curated one. */
       endJob(job, {
         type: 'error',
-        code: 'unknown',
+        code: classifyAnalysisFailure(e, 'Persona generation').code,
         message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
       });
     }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   IconLink,
   IconAlertTri,
@@ -38,6 +38,7 @@ import type {
   Sentence,
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
 import { castActions, selectCastTierByCharacterId } from '../store/cast-slice';
 import type { OrphanedCharacterFallback } from '../store/cast-slice';
@@ -146,6 +147,19 @@ const STALE_AUDIO_RESOLUTIONS: ReadonlySet<OrphanedCharacterFallback['resolution
    excludes that content from the button's accessible-name computation,
    leaving the button with NO accessible name at all. The Undo button's name
    comes from its own text content instead. */
+/* Owns the design-start guard for the Design full cast block, so its pending prompt lives and dies
+   with that block: if the block unmounts mid-prompt (any route but Wait) the prompt goes with it
+   instead of resurfacing, with a stale start callback, when the block returns. */
+function DesignGuardHost({ children }: { children: (guard: (proceed: () => void) => void) => ReactNode }) {
+  const { guard, modal } = useLocalAnalyzerGuard({ purpose: 'design' });
+  return (
+    <>
+      {children(guard)}
+      {modal}
+    </>
+  );
+}
+
 function OrphanRejectedChips({
   orphanedId,
   targets,
@@ -463,6 +477,7 @@ export function CastView({
   /* "Design full cast" — the open book + the in-flight bulk-design snapshot. */
   const bookId = useAppSelector((s) => (s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null));
   const designActive = useAppSelector((s) => s.castDesign.active);
+  /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
   /* fe-16 — per-character render-time fallback engine (Qwen → Kokoro), hydrated
      from book-state. Threaded into resolveVoiceStatus so a character that
      actually rendered in Kokoro shows "Fallback (Kokoro)" instead of its
@@ -1003,6 +1018,14 @@ export function CastView({
     }
   }
 
+  /* Mirrors the server's persona pre-pass (cast-design.ts runPersonaPrePass): only a BASE task
+     generates a persona, and only for a character with an empty `voiceStyle`. A 'variants' run
+     builds no base task, and a base run over characters that all have a persona makes no persona
+     call, so neither has anything to pause the render for. */
+  const designWillGeneratePersona = (scope: CastDesignScope) =>
+    scope !== 'variants' &&
+    characters.some((c) => needsVoiceIds.includes(c.id) && !(c.voiceStyle ?? '').trim());
+
   const startDesign = (scope: CastDesignScope) => {
     setScopeOpen(false);
     if (!bookId) return;
@@ -1334,34 +1357,37 @@ export function CastView({
           <div className="flex items-center gap-2 flex-wrap">
             {(showDesignFullCast || designRunningElsewhere || fullyDesignedNothingToDo) && (
               <div className="relative">
-                <button
-                  onClick={onDesignFullCast}
-                  disabled={designRunningElsewhere || fullyDesignedNothingToDo}
-                  data-testid="design-full-cast"
-                  data-tour-id="design-full-cast-btn"
-                  aria-haspopup="menu"
-                  aria-expanded={scopeOpen}
-                  className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
-                    designRunningElsewhere || fullyDesignedNothingToDo
-                      ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
-                      : designRunningHere
-                        ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
-                        : 'bg-magenta text-white hover:bg-magenta/90'
-                  }`}
-                  title={
-                    designRunningElsewhere
-                      ? 'A design run is already in progress for another book.'
-                      : fullyDesignedNothingToDo
-                        ? 'Every character already has a voice.'
-                        : undefined
-                  }
-                >
-                  {designRunningHere ? (
+                <DesignGuardHost>
+                  {(designGuard) => (
                     <>
-                      <IconClose className="w-4 h-4" />
-                      <span>
-                        Cancel design · {designActive?.done ?? 0}/{designActive?.total ?? 0}
-                      </span>
+                    <button
+                      onClick={onDesignFullCast}
+                      disabled={designRunningElsewhere || fullyDesignedNothingToDo}
+                      data-testid="design-full-cast"
+                      data-tour-id="design-full-cast-btn"
+                      aria-haspopup="menu"
+                      aria-expanded={scopeOpen}
+                      className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+                        designRunningElsewhere || fullyDesignedNothingToDo
+                          ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
+                          : designRunningHere
+                            ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
+                            : 'bg-magenta text-white hover:bg-magenta/90'
+                      }`}
+                      title={
+                        designRunningElsewhere
+                          ? 'A design run is already in progress for another book.'
+                          : fullyDesignedNothingToDo
+                            ? 'Every character already has a voice.'
+                            : undefined
+                      }
+                    >
+                      {designRunningHere ? (
+                        <>
+                          <IconClose className="w-4 h-4" />
+                          <span>
+                            Cancel design · {designActive?.done ?? 0}/{designActive?.total ?? 0}
+                          </span>
                     </>
                   ) : (
                     <>
@@ -1381,11 +1407,18 @@ export function CastView({
                       variantReady={variantWork.readyTasks}
                       variantBlocked={variantWork.blockedTasks}
                       variantBlockedChars={variantWork.blockedChars}
-                      onPick={startDesign}
+                      onPick={(scope) => {
+                        setScopeOpen(false);
+                        if (designWillGeneratePersona(scope)) designGuard(() => startDesign(scope));
+                        else startDesign(scope);
+                      }}
                       onClose={() => setScopeOpen(false)}
                     />
                   </>
                 )}
+                    </>
+                  )}
+                </DesignGuardHost>
               </div>
             )}
             {/* PR4 — bulk 1.7B tier pin/reset buttons; visible only for Qwen books */}

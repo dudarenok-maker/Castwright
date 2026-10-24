@@ -137,7 +137,7 @@ Setting up an OpenAI-compatible server, and how the analyzer fallback and chunk 
 | Gemini analyzer model | Model used directly, or as the fallback when Analyzer fallback is gemini | `gemini-3.5-flash-lite` | string | live | medium |
 | Analyzer fallback | Where analysis goes, one hop, when Ollama or an OpenAI-compatible endpoint is unreachable: `off`, `local` (the Ollama model a local run uses, shown beside it), `gemini` (needs a Gemini API key) or an endpoint model. A local primary never falls back to `local`. A reply that breaks off or a proxy 502 is retried, never a fallback. Saving a missing endpoint or a keyless `gemini` is refused. An install that turned the old "Cloud fallback" switch off reads as `off` until this is set — see "Fallback" on [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints) | `gemini` | off / local / gemini / endpoint model | live | medium |
 | Voice-style model | Model used to design each cast member's voice persona | `gemini-3.1-flash-lite` | string | live | medium |
-| Persona generation engine | gemini (default, locked quality) vs local persona design | `gemini` | local / gemini | live | medium |
+| Persona generation engine | gemini (default, locked quality), local persona design, or an OpenAI-compatible endpoint model. Saving an endpoint model whose endpoint is not configured is refused. | `gemini` | local / gemini / endpoint model | live | medium |
 | Persona local model | Ollama tag when persona engine=local; blank inherits analyzer model | (blank) | string | live | low |
 | Phase-0 model override | Drives cast detection with a distinct model | (blank) | string | live | medium |
 | Phase-1 model override | Drives sentence attribution with a distinct model | (blank) | string | live | medium |
