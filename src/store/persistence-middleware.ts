@@ -50,7 +50,11 @@ const DEFAULT_DEBOUNCE_MS = 500;
    than a hardcoded copy, and rolls its optimistic saved[] update back so the
    header stops showing a value the server rejected. */
 interface PersistFailureHandler {
-  message: (err: unknown) => string;
+  /** `bookTitle` is passed only for a save that was retried and given up on
+      (network / 5xx), which can fire seconds after the user left the book —
+      so the toast names it. A 4xx refusal is raised at once, on the book the
+      user is still on, and gets no title. */
+  message: (err: unknown, bookTitle?: string) => string;
   dedupeKey: string;
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
       optimistic local update. Returns the action to dispatch. */
@@ -60,13 +64,15 @@ interface PersistFailureHandler {
       so the next commit snapshots a fresh baseline. Returns the action. */
   onSuccess?: (bookId: string) => { type: string };
 }
+const lineReassignFailedMessage = (bookTitle?: string) =>
+  `Line reassignment${bookTitle ? ` in "${bookTitle}"` : ''} could not be saved. Check your connection and try again.`;
 const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
   'manuscript/setSentencesCharacterBulk': {
-    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    message: (_err, bookTitle) => lineReassignFailedMessage(bookTitle),
     dedupeKey: 'bulk-reassign-persist-failed',
   },
   'manuscript/undoBulkReassign': {
-    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    message: (_err, bookTitle) => lineReassignFailedMessage(bookTitle),
     dedupeKey: 'bulk-reassign-persist-failed',
   },
   /* #2230 — a refused rename (409: analysis running; or a folder path
@@ -76,11 +82,13 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
      we strip the api.ts envelope so the toast shows only the refusal sentence,
      degrading gracefully to the raw message if that format ever changes. */
   'bookMeta/commitDraft': {
-    message: (err) => {
+    message: (err, bookTitle) => {
       const raw = err instanceof Error ? err.message : '';
       const sentence =
         raw.replace(/^Book state PUT failed \(\d+\): /, '') || 'an unknown error occurred';
-      return `Book details couldn't be saved: ${sentence}`;
+      return bookTitle
+        ? `Book details for "${bookTitle}" couldn't be saved: ${sentence}`
+        : `Book details couldn't be saved: ${sentence}`;
     },
     dedupeKey: 'book-meta-persist-failed',
     rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
@@ -267,6 +275,11 @@ const PERSIST_RULES: Record<
   },
 
 };
+
+/* The saved title of `bookId`, for a toast that can fire after the user left it. */
+function savedTitleOf(s: PersistableRootState, bookId: string): string | undefined {
+  return s.bookMeta?.saved?.[bookId]?.title;
+}
 
 function bookIdFromState(s: PersistableRootState): string | null {
   const stage = s.ui.stage as { bookId?: string };
@@ -464,10 +477,13 @@ export const persistenceMiddleware: Middleware = (store) => {
             if (onSuccess) retainedOnSuccess.set(key, onSuccess);
           }
           if (handler) {
+            const bookTitle = refused
+              ? undefined
+              : savedTitleOf(store.getState() as PersistableRootState, bookId);
             store.dispatch(
               notificationsActions.pushToast({
                 kind: 'error',
-                message: handler.message(err),
+                message: handler.message(err, bookTitle),
                 dedupeKey: handler.dedupeKey,
               }),
             );
@@ -480,7 +496,7 @@ export const persistenceMiddleware: Middleware = (store) => {
                the generic toast; a 4xx is the server's deliberate refusal, which
                stayed silent before #3421. It fires seconds after the user may
                have left, so it names the book rather than saying "this book". */
-            const title = (store.getState() as PersistableRootState).bookMeta?.saved?.[bookId]?.title;
+            const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
             store.dispatch(
               notificationsActions.pushToast({
                 kind: 'error',

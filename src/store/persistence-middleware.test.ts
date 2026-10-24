@@ -1200,3 +1200,50 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     err.mockRestore();
   });
 });
+
+describe("a handler's given-up save toast names the book (#3421 N4)", () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+  /* Edit a book, leave it for another before the retries run out, and return
+     the toast raised under `dedupeKey`. */
+  const givenUpToast = async (actionType: string, dedupeKey: string, error: Error) => {
+    putBookState.mockRejectedValue(error);
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'The Northern Star' } } },
+    });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: actionType });
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+    err.mockRestore();
+    return (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === dedupeKey);
+  };
+
+  it.each(['manuscript/setSentencesCharacterBulk', 'manuscript/undoBulkReassign'])(
+    'the %s line-reassignment toast names the book after a 5xx exhausts its retries',
+    async (actionType) => {
+      const toast = await givenUpToast(actionType, 'bulk-reassign-persist-failed', down());
+      expect(toast.payload.message).toContain('"The Northern Star"');
+      expect(toast.payload.message).toContain('Line reassignment');
+    },
+  );
+
+  it('the book-details toast names the book after a 5xx exhausts its retries', async () => {
+    const toast = await givenUpToast('bookMeta/commitDraft', 'book-meta-persist-failed', down());
+    expect(toast.payload.message).toContain('"The Northern Star"');
+  });
+
+  it('a 4xx book-details refusal keeps its exact existing message', async () => {
+    const sentence = 'A book already exists at that Author/Series/Title path.';
+    const toast = await givenUpToast(
+      'bookMeta/commitDraft',
+      'book-meta-persist-failed',
+      new Error(`Book state PUT failed (409): ${sentence}`),
+    );
+    expect(toast.payload.message).toBe(`Book details couldn't be saved: ${sentence}`);
+  });
+});
