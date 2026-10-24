@@ -33,7 +33,8 @@ import {
   stateJsonPath,
   slug,
 } from '../workspace/paths.js';
-import { mintBookId, withBookPathClaim } from '../workspace/book-op-lock.js';
+import { sha256Hex } from '../workspace/manuscript-hints.js';
+import { mintBookId,withBookPathClaim } from '../workspace/book-op-lock.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
@@ -487,6 +488,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         excluded: c.excluded,
         titleSynthesized: c.titleSynthesized,
       })) as ChapterHint[],
+      sourceSha256: sha256Hex(entry.originalBuffer),
       bookId,
       bookDir,
     };

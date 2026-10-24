@@ -79,6 +79,7 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
+import { removeManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -1334,7 +1335,8 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
    parsed manuscript, regenerates the chapter list, snapshots the srv-13
    reuse/voice carryover, wipes the now-stale analysis cache / cast / audio,
    reconciles manuscript-edits (via the GET-side merge — the file is left in
-   place here), appends a change-log entry, refreshes the in-memory
+   place here), deletes manuscript-hints.json (#3703: the restructure it
+   recorded is discarded with the old chapter list), appends a change-log entry, refreshes the in-memory
    ManuscriptRecord, and returns the response payload both routes send.
 
    The caller is responsible for everything BEFORE this point: locating the
@@ -1348,6 +1350,9 @@ async function applyReparse(
     changeLogType: string;
     changeLogTitle: string;
     manuscriptFile?: string;
+    /** sha256 of the manuscript file bytes `parsed` came from; stamped onto the
+        refreshed ManuscriptRecord (#3703). */
+    sourceSha256: string;
     /** Called inside the locked step, immediately before state.json is
         written; puts the new manuscript file in place and returns an undo
         that restores the previous one if the state write then fails. */
@@ -1574,6 +1579,18 @@ async function applyReparse(
     /* Absent under the lock: the book was deleted after it was located. Nothing
        was installed or written; the caller answers 404. */
     if (!nextState) return null;
+    /* #3703 -- drop the persisted restructure (manuscript-hints.json) now that the
+       new chapter list has landed, still under the `book` lock. AFTER the state
+       write: deleting first would leave a failed state write holding the old
+       (restructured) chapter list with no file to hydrate it from. The delete
+       protects nothing the write does not already cover -- reparsed chapters
+       carry no uuid, so a leftover file can never validate against them -- so it
+       is housekeeping: best-effort, logged and swallowed, never failing a reparse
+       whose cast / audio / cache wipe already happened. Not in the destructive
+       arms above: they run before the moved-book check. */
+    await removeManuscriptHints(fresh.bookDir).catch((err) => {
+      console.warn(`[book-state] ${nextState!.manuscriptId}: could not remove manuscript-hints.json`, err);
+    });
 
     const newExcludedById = new Map<number, boolean>();
     for (const c of newChapters) {
@@ -1592,6 +1609,7 @@ async function applyReparse(
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),
+      sourceSha256: opts.sourceSha256,
       bookId: nextState.bookId,
       bookDir: fresh.bookDir,
     };
@@ -1653,7 +1671,10 @@ type ParsedManuscript = Awaited<ReturnType<typeof parseManuscript>>;
 
 async function prepareReparse(
   bookId: string,
-): Promise<'gone' | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null }> {
+): Promise<
+  | 'gone'
+  | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null; sourceSha256: string | null }
+> {
   for (let attempt = 0; ; attempt++) {
     const peeked = await peekBook(bookId);
     if (!peeked) return 'gone';
@@ -1682,7 +1703,7 @@ async function prepareReparse(
       : null;
     if (!buffer) {
       if (attempt === 0) continue;
-      return { fingerprint: null, parsed: null };
+      return { fingerprint: null, parsed: null, sourceSha256: null };
     }
     const looksLikeEpub =
       buffer.length >= 4 &&
@@ -1710,7 +1731,7 @@ async function prepareReparse(
         sourcePath: manuscriptPath,
       });
     }
-    return { fingerprint, parsed };
+    return { fingerprint, parsed, sourceSha256: sha256Hex(buffer) };
   }
 }
 
@@ -1765,13 +1786,14 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
           },
         };
       }
-      if (!prep.parsed) {
+      if (!prep.parsed || prep.sourceSha256 === null) {
         return { status: 409, body: { error: `Manuscript file missing on disk: ${state.manuscriptFile}` } };
       }
 
       const payload = await applyReparse(bookDir, state, prep.parsed, {
         changeLogType: 'reparse',
         changeLogTitle: 'Re-parsed manuscript',
+        sourceSha256: prep.sourceSha256,
       });
       if (!payload) return reparseRefusal(book.bookId, bookDir);
       return { status: 200, body: payload };
@@ -1863,6 +1885,7 @@ bookStateRouter.post(
             changeLogType: 'replace-manuscript',
             changeLogTitle: 'Replaced manuscript',
             manuscriptFile: newFile,
+            sourceSha256: sha256Hex(upload),
             installManuscript: async () => {
               /* The upload is written here -- inside the state-json lock, once
                  state.json is confirmed present -- so a book moved or deleted
@@ -1996,9 +2019,14 @@ bookStateRouter.post(
         if (state.manuscriptId) {
           const rec = getManuscript(state.manuscriptId);
           if (rec) {
-            rec.chapterHints = rec.chapterHints.map((h) =>
-              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-            );
+            /* Replace, never mutate in place: only `putManuscript` moves the
+               version a cold hydrate checks before it caches (#3703). */
+            putManuscript({
+              ...rec,
+              chapterHints: rec.chapterHints.map((h) =>
+                h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+              ),
+            });
           }
         }
 

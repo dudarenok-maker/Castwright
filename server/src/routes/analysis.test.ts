@@ -10354,13 +10354,18 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
         await saveAnalysisCache(book.manuscriptId, gapCache());
         let excluded = false;
         const r = await runSubset(book, [2], {
-          saveHook: (c, { record }) => {
+          saveHook: (c) => {
             const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
             /* The loop's save of the target's new take (S9 sets takesPersisted false). */
             if (excluded || take?.[0]?.text !== WORDED[2] || c.takesPersisted !== false) return;
             excluded = true;
-            /* What the exclude toggle does to the live record (book-state.ts). */
-            record.chapterHints = record.chapterHints.map((h) => (h.id === 3 ? { ...h, excluded: true } : h));
+            /* What the exclude toggle does to the store (book-state.ts): it puts
+               a whole new record and leaves the run's own record object alone. */
+            const live = getManuscript(book.manuscriptId)!;
+            putManuscript({
+              ...live,
+              chapterHints: live.chapterHints.map((h) => (h.id === 3 ? { ...h, excluded: true } : h)),
+            });
           },
         });
         expect(excluded).toBe(true);

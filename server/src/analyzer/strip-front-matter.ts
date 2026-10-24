@@ -1,6 +1,7 @@
 /* Layer A (#938) — strip title-page byline + e-library boilerplate from a chapter
    body before the analyzer sees it, so the byline author never reaches stage-1/2.
-   Pure; applied in-memory to the analysis copy of the body (never persisted).
+   Pure; applied in place to the cached record's bodies (a later restructure
+   persists them, #3703; idempotent, so that is harmless).
 
    Two removal classes:
      - Always-safe global patterns (reader-tool headers, copyright/distribution

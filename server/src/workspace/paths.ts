@@ -208,6 +208,12 @@ export function manuscriptEditsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'manuscript-edits.json');
 }
 
+/* #3703 — the restructured chapter bodies, so a server restart hydrates them
+   instead of re-parsing a manuscript that knows nothing about the restructure. */
+export function manuscriptHintsJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'manuscript-hints.json');
+}
+
 /* srv-1 — per-book deterministic merge journal. Each manual merge / auto-fold
    appends or replaces an entry recording which sentences it rewrote, so the
    unlink-alias route can surface exactly those sentences instead of guessing
