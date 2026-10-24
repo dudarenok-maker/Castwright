@@ -426,3 +426,29 @@ describe('useLocalAnalyzerGuard — purpose "design" (persona engine)', () => {
     expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
   });
 });
+
+describe('useLocalAnalyzerGuard — stable store selection', () => {
+  it('does not warn about an unstable selector when the store has no library slice', () => {
+    /* `s.library?.books ?? []` returned a fresh [] on every call in a store without the library
+       slice, which react-redux's dev check reports as "Selector unknown returned a different result". */
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+      function Probe() {
+        useLocalAnalyzerGuard({ purpose: 'design' });
+        return null;
+      }
+      render(
+        <Provider store={store}>
+          <Probe />
+        </Provider>,
+      );
+      const logged = [...warn.mock.calls, ...error.mock.calls].map((c) => String(c[0]));
+      expect(logged.filter((m) => m.includes('returned a different result'))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+});

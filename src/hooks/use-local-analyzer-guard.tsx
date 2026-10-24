@@ -69,6 +69,9 @@ interface GuardResult {
   modal: ReactNode;
 }
 
+/* Stable fallback: a fresh `[]` per selector call defeats react-redux's reference check. */
+const NO_BOOKS: never[] = [];
+
 export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 'analyse' }: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
   /* Defensive reads — the design-start callsites (cast view, profile drawer) mount this hook, and
@@ -78,7 +81,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
   /* A representative generating book for the modal copy (advisory). Stable
      string read so this hook doesn't re-render on every progress tick. */
   const activeBookId = useAppSelector((s) => Object.keys(s.chapters?.activeStreams ?? {})[0] ?? null);
-  const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
+  const libraryBooks = useAppSelector((s) => s.library?.books ?? NO_BOOKS);
   const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   const configValues = useAppSelector((s) => s.config?.values);
   const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null);
