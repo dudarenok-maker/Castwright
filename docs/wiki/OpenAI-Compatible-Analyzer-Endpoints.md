@@ -210,7 +210,9 @@ Then resume — finished chapters are kept.
 
 ## Voice descriptions
 
-An endpoint's model can also write your cast's voice descriptions. Open Advanced Settings and pick it under **Persona generation engine**. It runs under the same limits as analysis, and if the endpoint is missing or can't be reached, design stops once and says so instead of switching to Gemini.
+An endpoint's model can also write your cast's voice descriptions. Open Advanced Settings and pick it under **Persona generation engine**. It runs under the same limits as analysis, and Castwright never switches to Gemini for you. If the endpoint is missing, design fails before any request. If the endpoint runs on the same graphics card as your voices and can't be reached, design stops once and says so. Any other model that fails reports that failure for each character it couldn't write.
+
+If audio generation is streaming on that card, every way of starting a design asks "Pause audio generation to design voices?" first, the same way analysis does: Design full cast, the voice-style button and Qwen auto-generate in a character's profile, Regenerate in the compare window, Propose in rebaseline, the nudge toast and the readiness gate. **Pause and design** halts the render. A local Ollama model isn't asked, because Castwright moves it to system memory. A direct API call isn't asked either; as with analysis, only the app prompts.
 
 ## Troubleshooting
 
