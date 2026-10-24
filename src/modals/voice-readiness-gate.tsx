@@ -23,32 +23,28 @@ import {
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { modelKeyForEngineChoice } from '../lib/tts-models';
-import type { UndesignedCharacterRow } from '../store/voice-readiness-selectors';
 
-/* Stable fallback so the closed-gate case (the common one — this modal is a
-   global, always-mounted overlay) doesn't hand useSelector a fresh `[]` on
-   every call: react-redux's dev-mode stability check flags that as "returned
-   a different result" and forces a re-render on every store dispatch (#1285). */
-const NO_UNDESIGNED_CHARACTERS: UndesignedCharacterRow[] = [];
-
+/* The body is its own component so the design guard's pending prompt lives only while the gate is
+   open: this always-mounted shell unmounts it on any close (not just Wait), so a prompt never
+   outlives the gate and reappears when it reopens. */
 export function VoiceReadinessGateModal() {
-  const dispatch = useAppDispatch();
   const gate = useAppSelector((s) => s.ui.voiceReadinessGate);
+  if (!gate) return null;
+  return <VoiceReadinessGateBody gate={gate} />;
+}
+
+function VoiceReadinessGateBody({ gate }: { gate: { bookId: string } }) {
+  const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const designActive = useAppSelector((s) => s.castDesign.active);
   const undesigned = useAppSelector((s) =>
-    gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
+    selectUndesignedQwenCharacters(s, gate.bookId),
   );
-  const hasNoFallbackEngine = useAppSelector((s) =>
-    gate ? selectHasNoFallbackEngine(s, gate.bookId) : false,
-  );
-  const fallbackEngineName = useAppSelector((s) =>
-    gate ? selectFallbackEngineName(s, gate.bookId) : 'Kokoro',
-  );
-  const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));
+  const hasNoFallbackEngine = useAppSelector((s) => selectHasNoFallbackEngine(s, gate.bookId));
+  const fallbackEngineName = useAppSelector((s) => selectFallbackEngineName(s, gate.bookId));
+  const message = useAppSelector((s) => voiceReadinessGateMessage(s, gate.bookId));
 
-  if (!gate) return null;
   const { bookId } = gate;
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   /* Mirrors cast.tsx's own guard: only one book's bulk design can run at a

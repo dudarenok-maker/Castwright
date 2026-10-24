@@ -6,11 +6,11 @@
        progress" and skips re-dispatching designAllRequested. */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { VoiceReadinessGateModal } from './voice-readiness-gate';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { librarySlice } from '../store/library-slice';
@@ -276,5 +276,20 @@ describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
     expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
     expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
     expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  it('a prompt never outlives the gate: closing the gate by another route drops it, and reopening shows no dialog', () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+
+    act(() => { store.dispatch(uiActions.closeVoiceReadinessGate()); });
+    act(() => { store.dispatch(uiActions.openVoiceReadinessGate({ bookId: 'b1' })); });
+
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(store.getState().castDesign.active).toBeFalsy();
   });
 });
