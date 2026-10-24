@@ -1084,6 +1084,38 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         expect(lastCast).toBe('Eliza Q');
       });
     });
+
+    /* #3421 S4 — a delete that answers 409 `book_partly_deleted` HAS wiped the
+       book (state.json and the analysis cache are gone), so its parked saves
+       must be dropped, not given back: a re-import under the same title reuses
+       the id and would receive the old roster. `book_busy` left it intact. */
+    describe('delete answering 409', () => {
+      const deleteCase = cases[2];
+      const refusal = (code: string) =>
+        Object.assign(new Error('Conflict'), { code });
+
+      it('S4: book_partly_deleted drops the parked saves (nothing re-sent on reopen)', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        deleteBookMock.mockRejectedValue(refusal('book_partly_deleted'));
+        await runWipe(store, deleteBookMock, deleteCase.trigger);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(1);
+      });
+
+      it('S4 control: book_busy leaves the book intact, so the saves are restored', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        deleteBookMock.mockRejectedValue(refusal('book_busy'));
+        await runWipe(store, deleteBookMock, deleteCase.trigger);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(2);
+      });
+    });
   });
 
   /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must

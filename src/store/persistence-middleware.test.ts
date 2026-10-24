@@ -1211,6 +1211,51 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     return mw;
   };
 
+  /* #3421 S4 — two wipes of one book in flight share the parked saves: the
+     first to fail must not give back what the still-pending one cancelled. */
+  const castPuts = () => putBookState.mock.calls.filter((c) => c[1].slice === 'cast');
+  const parkCast = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    return mw;
+  };
+
+  it('(viii) with two wipes pending, the first restore gives nothing back; the last failure does (S4)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1'));
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+  });
+
+  it('(viii-b) if any overlapping wipe succeeded, the last restore gives nothing back (S4)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1'));
+    mw(supersedeBookSaves('book-1'));
+    mw(dropRetainedSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+  });
+
   it('(vii) a restore does not put a parked title back over a newer one that was sent meanwhile (S3)', async () => {
     const state: Record<string, unknown> = baseState({
       bookMeta: { draft: null, saved: { 'book-1': { title: 'T1' } } },

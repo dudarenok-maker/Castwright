@@ -419,6 +419,15 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
      (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
   const parked = new Map<FlushKey, SavedPatch & { newerFields: Set<string> }>();
+  /* #3421 S4 — wipes of a book still running. The parked saves are shared, so
+     only the last wipe to fail gives them back; one that succeeded dropped them. */
+  const pendingWipes = new Map<string, number>();
+  const endWipe = (bookId: string) => {
+    const left = Math.max(0, (pendingWipes.get(bookId) ?? 0) - 1);
+    if (left > 0) pendingWipes.set(bookId, left);
+    else pendingWipes.delete(bookId);
+    return left;
+  };
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -572,6 +581,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
+      endWipe(a.payload);
       for (const key of Array.from(retained.keys())) {
         if (key.startsWith(`${a.payload}:`)) {
           retained.delete(key);
@@ -585,6 +595,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === RESTORE_SUPERSEDED && typeof a.payload === 'string') {
+      if (endWipe(a.payload) > 0) return result;
       for (const [key, saved] of Array.from(parked)) {
         if (!key.startsWith(`${a.payload}:`)) continue;
         parked.delete(key);
@@ -606,6 +617,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === SUPERSEDE_BOOK && typeof a.payload === 'string') {
+      pendingWipes.set(a.payload, (pendingWipes.get(a.payload) ?? 0) + 1);
       const prefix = `${a.payload}:`;
       for (const key of new Set([
         ...generation.keys(),

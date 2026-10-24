@@ -158,7 +158,14 @@ export function BooksRoute() {
         try {
           await api.deleteBook(b.bookId);
         } catch (err) {
-          dispatch(restoreSupersededSaves(b.bookId));
+          /* 409 `book_partly_deleted` answers AFTER state.json and the analysis
+             cache are gone: the book is wiped, so its saves are let go, not
+             given back (a re-import reuses the id) (#3421 S4). */
+          if ((err as { code?: string }).code === 'book_partly_deleted') {
+            dispatch(dropRetainedSaves(b.bookId));
+          } else {
+            dispatch(restoreSupersededSaves(b.bookId));
+          }
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
