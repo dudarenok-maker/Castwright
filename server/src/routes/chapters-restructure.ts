@@ -357,7 +357,13 @@ async function applyRestructureClaimed(
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
-       the restructure itself is still valid -- skip rather than fail it. */
+       the restructure itself is still valid -- skip rather than fail it. Which
+       operations skip: exclude, rename and refresh-titles, which hand the hints
+       back unchanged (so the counts still differ). Merge and split rebuild state
+       from the hints, so they are aligned by construction and DO write a file; a
+       reorder is only accepted with an order naming every parsed chapter, and
+       then writes one too. A file written here persists whatever pairing the
+       in-memory record already had: a pre-upgrade restructure is not repaired. */
     const aligned = result.hints.length === result.state.chapters.length;
     if (bodiesCurrent && !aligned) {
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
