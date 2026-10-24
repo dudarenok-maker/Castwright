@@ -5,6 +5,8 @@
    (book, slice) pair has its own debounce window so an edit to cast doesn't
    delay a write to the manuscript, and one book's write never cancels another's.
    Leaving a book sends its queued writes at once (#3395 pass 4, S3).
+   Opening a different book also clears any unsaved book-meta draft (#3754,
+   #3624) so it cannot fold into the wrong book's save.
 
    Skipped when no bookId is in scope (library browsing, fresh upload
    before confirm), and when the slices hold a different book than the stage
@@ -338,6 +340,12 @@ export const persistenceMiddleware: Middleware = (store) => {
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
 
+  /* #3754 / #3624 — the last NON-NULL book the stage named, for the metadata
+     draft clear in the handler below. Unlike `lastBookId` (S3), a trip to the
+     library never nulls this, so B -> home -> B still reads as the same book
+     and keeps the user's unsaved draft. */
+  let lastOpenBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
+
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce. */
   const flushBookNow = (bookId: string) => {
@@ -416,6 +424,26 @@ export const persistenceMiddleware: Middleware = (store) => {
       if (lastBookId) flushBookNow(lastBookId);
       lastBookId = bookId;
     }
+
+    /* #3754 / #3624 — the unsaved Listen-view metadata draft belongs to the
+       book it was typed on. Opening a DIFFERENT book clears it: the draft is
+       global (not keyed per book), so left alone it would fold into the
+       newly-opened book's `saved` on the next commitDraft — and the #3748
+       gate deliberately exempts commitDraft (its build reads the per-book
+       `saved[stageBookId]`), so nothing else stops that. It clears only on a
+       switch to a different book, not when leaving for the library or
+       returning to the same one (B -> home -> B keeps the user's typing), and
+       it cannot use `lastBookId` because S3 above nulls that on the library —
+       hence the separate `lastOpenBookId`, which only ever holds a book. */
+    if (
+      bookId !== null &&
+      lastOpenBookId !== null &&
+      bookId !== lastOpenBookId &&
+      Object.keys(after.bookMeta?.draft ?? {}).length > 0
+    ) {
+      store.dispatch(bookMetaActions.cancelDraft());
+    }
+    if (bookId !== null) lastOpenBookId = bookId;
 
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
