@@ -34,6 +34,25 @@ import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
    lease (re-trying the refused exclude every poll) before giving up with a toast. */
 const ROLLBACK_SETTLE_POLL_MS = 400;
 const ROLLBACK_SETTLE_TIMEOUT_MS = 20_000;
+/* #3774 — how often the view re-reads which long jobs hold the book. */
+const BOOK_BUSY_REFRESH_MS = 5000;
+
+/* #3774 — `BookJobKind` -> the phrase the Include tooltip names. */
+const BUSY_KIND_LABELS: Record<string, string> = {
+  render: 'rendering audio',
+  scoring: 'scoring',
+  analysis: 'analysing',
+  design: 'designing voices',
+  'script-review': 'reviewing the script',
+  export: 'exporting',
+};
+
+/* Why Include is unavailable while `kinds` hold the book (undefined when idle). */
+function busyIncludeReason(kinds: readonly string[]): string | undefined {
+  if (kinds.length === 0) return undefined;
+  const what = kinds.map((k) => BUSY_KIND_LABELS[k] ?? k).join(', ');
+  return `This book is busy (${what}). Wait for it to finish, then include chapters.`;
+}
 
 const INERT_ENGINE_LIFECYCLE = {
   state: 'unreachable' as const,
@@ -358,6 +377,42 @@ export function GenerationView({
      analysis and the user needs phase/progress/throttle/error
      feedback inline. */
   const [subsetByChapter, setSubsetByChapter] = useState<Record<number, SubsetProgress>>({});
+  /* #3774 — the server refuses to take a chapter back out (a Cancel's rollback)
+     while a long job holds the book, so Include is disabled while ANY job does
+     (render, scoring, analysis incl. another chapter's subset run, design,
+     script review, export). The kinds come from `GET /:bookId/busy`; the view
+     re-reads them on mount, every few seconds, and as soon as one of its own
+     subset runs starts or ends. The server still accepts an include during a
+     job: this is a client-side guard. */
+  const [busyKinds, setBusyKinds] = useState<string[]>([]);
+  const subsetRunning = Object.values(subsetByChapter).some(isSubsetRunning);
+  useEffect(() => {
+    if (!bookId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const kinds = await api.getBookBusy(bookId);
+        if (!cancelled) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+      } catch {
+        /* best-effort: a failed read keeps the last known state */
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), BOOK_BUSY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [bookId, subsetRunning]);
+  const includeBusyReason = busyIncludeReason(busyKinds);
+  /* #3774 — the give-up toast of a rollback must not fire once this view is gone. */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /* Guard for mid-generation TTS eviction. When the selected analyzer is
      local (Ollama) AND a generation stream is alive, clicking Include
@@ -538,6 +593,11 @@ export function GenerationView({
     /* #3774 — set once the include POST landed. A failure before it started no
        job of ours, so the snapshot taken over above is not ours to clear. */
     let includePosted = false;
+    /* #3774 — set just before the subset request goes out. Cancel's server-side
+       stop is manuscript-wide (it also aborts another chapter's subset run), so
+       it is only sent once THIS include has a request that may have registered a
+       job — never while the include POST is still in flight. */
+    let subsetRequested = false;
     /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
        attributed: no Phase 1 frame) or S14 (the targets were attributed in
        Phase 1). Only S14 finished this chapter's analysis. */
@@ -552,6 +612,7 @@ export function GenerationView({
       if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
       includedHere = wasExcluded;
 
+      subsetRequested = !controller.signal.aborted;
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
         /* #3435 — set only by the row's "Accept smaller cast". */
@@ -669,19 +730,26 @@ export function GenerationView({
          on an included chapter. C1: only an include this click performed is
          rolled back (an excluded-before-click chapter has no audio to lose). */
       if (includedHere) {
-        await rollbackInclude(chapterId, { stopJob: isAbort }).catch((rollbackErr) => {
+        await rollbackInclude(chapterId, { stopJob: isAbort && subsetRequested }).catch((rollbackErr) => {
           console.warn('[generation] include rollback failed', rollbackErr);
-          /* #3774 — never leave the chapter included without saying so. */
-          dispatch(
-            notificationsActions.pushToast({
-              kind: 'warn',
-              message:
-                rollbackErr instanceof Error && rollbackErr.message
-                  ? rollbackErr.message
-                  : 'Could not undo the include.',
-              dedupeKey: 'gen-include-rollback-failed',
-            }),
-          );
+          /* #3774 — never leave the chapter included without saying so: a gap
+             note on the row, and a toast naming the chapter (not once the user
+             has left this view or opened another book). */
+          const chapterTitle = store.getState().chapters.chapters.find((c) => c.id === chapterId)?.title;
+          const chapterName = chapterTitle ? `"${chapterTitle}"` : `Chapter ${chapterId}`;
+          const reason =
+            rollbackErr instanceof Error && rollbackErr.message ? ` ${rollbackErr.message}` : '';
+          const message = `Could not take ${chapterName} back out of the book — it is still included, with no analysis.${reason}`;
+          if (isOpenBook()) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+          if (mountedRef.current && isOpenBook()) {
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message,
+                dedupeKey: 'gen-include-rollback-failed',
+              }),
+            );
+          }
         });
       }
       if (isAbort) {
@@ -713,9 +781,9 @@ export function GenerationView({
          carries the message for the user. */
       haltOnReasoningOverflow(e);
       if (ownsSnapshot()) {
-        /* #3774 — a refused include POST (e.g. 409 `book_busy` while another
-           subset run holds the book) started no job: put back what it took
-           over, as the refusal branch above does. */
+        /* #3774 — an include POST that failed (e.g. a 404 or 500) started no
+           job: put back what this click took over, as the refusal branch above
+           does. Once the POST landed the snapshot is this include's own. */
         if (!includePosted && priorSnapshot) dispatch(analysisActions.setActiveStream(priorSnapshot));
         else dispatch(analysisActions.clearActiveStream());
       }
@@ -744,10 +812,12 @@ export function GenerationView({
   async function rollbackInclude(chapterId: number, opts: { stopJob?: boolean } = {}): Promise<void> {
     /* #3774 — the server refuses an exclude (409 `book_busy`) while a job holds
        the book, and the include's own subset job is sticky: it outlives the
-       aborted fetch and keeps its `analysis` lease until it settles. Cancel
-       therefore asks the server to stop it first, then re-tries the exclude
-       until the lease is released (the refusal IS the "still running" signal).
-       A failed run's job may still be releasing: same wait, no stop. */
+       aborted fetch and keeps its `analysis` lease until it settles. Include is
+       disabled while any other job holds the book, so this is the only job a
+       rollback meets: Cancel asks the server to stop it first (only when its
+       request was sent), then re-tries the exclude until the lease is released
+       (the refusal IS the "still running" signal). A failed run's job may still
+       be releasing: same wait, no stop. Giving up throws; the caller says so. */
     if (opts.stopJob && manuscriptId) await api.pauseAnalysis({ manuscriptId });
     const deadline = Date.now() + ROLLBACK_SETTLE_TIMEOUT_MS;
     for (;;) {
@@ -1650,6 +1720,7 @@ export function GenerationView({
               onToggleExcluded={handleToggleExcluded}
               onIncludeClick={handleIncludeClick}
               mainAnalysisLive={mainAnalysisLive}
+              includeBusyReason={includeBusyReason}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               onAcceptShrink={handleAcceptShrink}
@@ -1792,6 +1863,8 @@ interface ChapterRowProps {
   /** #3435 — the book's main analysis run is live: Re-analyse and Include are
       disabled ("Pause the analysis first"). */
   mainAnalysisLive: boolean;
+  /** #3774 — why Include is unavailable: a long job holds the book. */
+  includeBusyReason: string | undefined;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   /** #3435 — re-run this chapter's subset with allowStage1Shrink. */
@@ -1836,6 +1909,7 @@ function ChapterRow({
   onToggleExcluded,
   onIncludeClick,
   mainAnalysisLive,
+  includeBusyReason,
   onCancelSubset,
   onRetrySubset,
   onAcceptShrink,
@@ -1875,6 +1949,7 @@ function ChapterRow({
         subsetProgress={subsetProgress}
         onIncludeClick={onIncludeClick}
         mainAnalysisLive={mainAnalysisLive}
+        includeBusyReason={includeBusyReason}
         onCancelSubset={onCancelSubset}
         onRetrySubset={onRetrySubset}
         onAcceptShrink={onAcceptShrink}
@@ -2512,6 +2587,7 @@ function ExcludedChapterRow({
   subsetProgress,
   onIncludeClick,
   mainAnalysisLive,
+  includeBusyReason,
   onCancelSubset,
   onRetrySubset,
   onAcceptShrink,
@@ -2521,6 +2597,7 @@ function ExcludedChapterRow({
   subsetProgress: SubsetProgress | null;
   onIncludeClick: (chapterId: number) => void;
   mainAnalysisLive: boolean;
+  includeBusyReason: string | undefined;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   onAcceptShrink: (chapterId: number) => void;
@@ -2622,8 +2699,14 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
-            disabled={mainAnalysisLive || restructuring}
-            title={restructuring ? RESTRUCTURING_REASON : mainAnalysisLive ? 'Pause the analysis first' : undefined}
+            disabled={mainAnalysisLive || restructuring || includeBusyReason != null}
+            title={
+              restructuring
+                ? RESTRUCTURING_REASON
+                : mainAnalysisLive
+                  ? 'Pause the analysis first'
+                  : includeBusyReason
+            }
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             + Include in book
