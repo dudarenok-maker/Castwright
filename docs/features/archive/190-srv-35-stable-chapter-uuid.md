@@ -80,9 +80,11 @@ existing web player. **Lands before `srv-32`.**
    the original on the **first** half and mints a fresh one for the **second**;
    rename/exclude/refresh-titles preserve `uuid` (they spread `...chapter`).
 3. **A wholesale `chapters` PUT never strips `uuid`**
-   (`book-state.ts` PUT `/:bookId/state`) — `reconcileChapterUuids` carries it by
-   `id`. The on-disk `uuid` always wins over one the client sends (#3683); a
-   client `uuid` is kept only for an `id` with no on-disk `uuid`.
+   (`book-state.ts` PUT `/:bookId/state`) — `reconcileChapterUuids` carries it from the
+   on-disk chapter matching on `id` + `slug`. On a match the on-disk `uuid`
+   always wins over one the client sends (#3683); with no match the client
+   `uuid` is kept only if no on-disk chapter and no other output chapter holds
+   it, else a fresh one is minted.
 4. **Resume resolves by `uuid` when present** (`book-state.ts` listen-progress
    GET): a stored `chapterUuid` resolves to the *current* `chapterId`; falls back
    to the stored `chapterId` when the `uuid` is absent (legacy record) or no
@@ -95,9 +97,9 @@ Paired automated tests land with the change:
 
 - **`chapter-uuid.test.ts`** — `ensureChapterUuids` mints for chapters missing a
   `uuid` (including excluded), is idempotent, and never overwrites an existing
-  `uuid`; `reconcileChapterUuids` carries `uuid` by `id`, mints for unmatched
-  incoming chapters, and ignores a client-supplied `uuid` when the on-disk
-  chapter has one (#3683).
+  `uuid`; `reconcileChapterUuids` carries `uuid` by `id` + `slug`, mints for
+  unmatched incoming chapters, and ignores a client-supplied `uuid` when the
+  matching on-disk chapter has one (#3683).
 - **`restructure.test.ts`** — reorder preserves each chapter's `uuid`; merge keeps
   the survivor's; split keeps the first half's + mints a distinct second-half
   `uuid`; rename and exclude preserve `uuid`.

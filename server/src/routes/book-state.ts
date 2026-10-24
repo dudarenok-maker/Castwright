@@ -1206,14 +1206,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           /* srv-35 — the frontend round-trips state.chapters but doesn't
              track the server-only `uuid` or `titleSynthesized`, so a
              wholesale replace would strip them. reconcileChapterUuids
-             carries each uuid across by id (and mints for a genuinely-new
-             chapter); carryTitleSynthesized does the same for the
-             app-made-title flag, ignoring whatever the client sent.
+             carries each uuid across from the stored chapter matching on
+             id + slug (and mints for a genuinely-new chapter);
+             carryTitleSynthesized does the same for the app-made-title flag,
+             ignoring whatever the client sent.
              #3683 — carryServerOwnedChapterFields then takes the render and
-             failure stamps (duration, audio*, generation*, uuid) from the
-             locked fresh read: a client value is ignored, and only an
-             explicit `null` clears a generation* field (an absent key keeps
-             disk), so a stale copy can't revert a finalize or a failure. */
+             failure stamps (duration, audio*, generation*) from the locked
+             fresh read for a chapter matched on id + slug: a client value is
+             ignored, and only an explicit `null` clears a generation* field
+             (an absent key keeps disk), so a stale copy can't revert a
+             finalize or a failure. The uuid is not touched here. */
           chapters: patch.chapters
             ? carryServerOwnedChapterFields(
                 carryTitleSynthesized(
