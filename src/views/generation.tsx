@@ -54,6 +54,13 @@ function busyIncludeReason(kinds: readonly string[]): string | undefined {
   return `This book is busy (${what}). Wait for it to finish, then include chapters.`;
 }
 
+/* #3774 — this tab already has a subset run (an include or a re-analyse) going. */
+const INCLUDE_RUN_LIVE_REASON =
+  'Another chapter is being analysed. Wait for it to finish (or cancel it), then include this one.';
+/* #3774 — the click-time busy read failed. */
+const BUSY_CHECK_FAILED_REASON =
+  'Could not check whether this book is busy. Try again in a moment.';
+
 const INERT_ENGINE_LIFECYCLE = {
   state: 'unreachable' as const,
   onLoad: async () => {},
@@ -404,7 +411,36 @@ export function GenerationView({
       clearInterval(id);
     };
   }, [bookId, subsetRunning]);
-  const includeBusyReason = busyIncludeReason(busyKinds);
+  /* #3774 — Include, Retry and "Accept smaller cast" are unavailable while a job
+     holds the book OR this tab's own subset run is live (the busy read lags a
+     run's start by up to one poll). */
+  const includeBusyReason =
+    busyIncludeReason(busyKinds) ?? (subsetRunning ? INCLUDE_RUN_LIVE_REASON : undefined);
+  /* #3774 — the chapter whose click-time busy read is in flight, so a second
+     Include in that window (another chapter's, or a double click) is caught
+     before the first run has registered anywhere. */
+  const includeGateRef = useRef<number | null>(null);
+  /* #3774 — the include gate, run at click time by every route into the include
+     flow (Include, Retry, Accept smaller cast, the analyzer-guard confirm): the
+     buttons' own disabled state is only as fresh as the last 5 s poll. Resolves
+     to the reason to refuse with, or undefined to go ahead. FAILS CLOSED: if the
+     read errors we cannot tell a busy book from an idle one, and guessing "idle"
+     is what strands a chapter (the rollback is refused, the include sticks); a
+     refused click costs one retry, so the user is told to try again. */
+  async function includeRefusal(chapterId: number): Promise<string | undefined> {
+    if (includeGateRef.current != null || subsetRunning) return INCLUDE_RUN_LIVE_REASON;
+    includeGateRef.current = chapterId;
+    try {
+      const kinds = await api.getBookBusy(bookId);
+      if (mountedRef.current) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+      return busyIncludeReason(kinds);
+    } catch (e) {
+      console.warn('[generation] busy check failed', e);
+      return BUSY_CHECK_FAILED_REASON;
+    } finally {
+      includeGateRef.current = null;
+    }
+  }
   /* #3774 — the give-up toast of a rollback must not fire once this view is gone. */
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -534,6 +570,20 @@ export function GenerationView({
        on this so the user can re-fire the flow without a state-update
        microtask dance. */
     if (isSubsetRunning(subsetByChapter[chapterId])) return;
+    if (includeGateRef.current === chapterId) return;
+
+    /* #3774 — the one gate every route into the include flow meets, ahead of the
+       include POST: refuse (toast the reason, touch nothing) while a job holds
+       the book or this tab's own subset run is live. */
+    const refusal = await includeRefusal(chapterId);
+    if (refusal) {
+      if (mountedRef.current) {
+        dispatch(
+          notificationsActions.pushToast({ kind: 'warn', message: refusal, dedupeKey: 'gen-include-busy' }),
+        );
+      }
+      return;
+    }
 
     const controller = new AbortController();
     setSubsetByChapter((prev) => ({
@@ -2613,6 +2663,9 @@ function ExcludedChapterRow({
   const running = subsetProgress && subsetProgress.error == null && !noticed ? subsetProgress : null;
   const errored = subsetProgress && subsetProgress.error != null ? subsetProgress : null;
   const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
+  /* #3774 â€” Retry / Accept smaller cast on an include-origin error row re-run the
+     include, so they follow Include's busy reason; a re-analyse retry does not. */
+  const retryBusyReason = errored?.origin === 'include' ? includeBusyReason : undefined;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-ink/3 overflow-hidden">
@@ -2671,8 +2724,8 @@ function ExcludedChapterRow({
               <button
                 type="button"
                 onClick={() => onAcceptShrink(chapter.id)}
-                disabled={mainAnalysisLive}
-                title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+                disabled={mainAnalysisLive || retryBusyReason != null}
+                title={mainAnalysisLive ? 'Pause the analysis first' : retryBusyReason}
                 className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
               >
                 Accept smaller cast
@@ -2681,8 +2734,8 @@ function ExcludedChapterRow({
             <button
               type="button"
               onClick={() => onRetrySubset(chapter.id)}
-              disabled={mainAnalysisLive}
-              title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+              disabled={mainAnalysisLive || retryBusyReason != null}
+              title={mainAnalysisLive ? 'Pause the analysis first' : retryBusyReason}
               className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconRefresh className="w-3.5 h-3.5" /> Retry

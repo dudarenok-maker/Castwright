@@ -2232,10 +2232,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     selectedModel,
     activeStream,
     withMiddleware,
+    chapters = [chapter1, chapter2, ch3Excluded],
   }: {
     selectedModel?: string;
     activeStream?: { bookId: string; modelKey: string };
     withMiddleware?: boolean;
+    chapters?: Chapter[];
   } = {}) {
     const store = configureStore({
       reducer: {
@@ -2252,7 +2254,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       },
       middleware: (g) => (withMiddleware ? g().concat(analysisStreamMiddleware) : g()),
     });
-    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     /* Order matters: hydrateFromAnalysis FIRST while manuscriptId is
        still null so the slice takes the wholesale-replace branch and
@@ -2266,7 +2268,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         manuscriptId: 'm1',
         title: 'the Coalfall Commission',
         characters,
-        chapters: [chapter1, chapter2, ch3Excluded],
+        chapters,
         sentences,
       } as any),
     );
@@ -2301,11 +2303,14 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     return store;
   }
 
-  function renderInclude(store: ReturnType<typeof makeIncludeStore>) {
+  function renderInclude(
+    store: ReturnType<typeof makeIncludeStore>,
+    chapters: Chapter[] = [chapter1, chapter2, ch3Excluded],
+  ) {
     return render(
       <Provider store={store}>
         <HostedGenerationView
-          chapters={[chapter1, chapter2, ch3Excluded]}
+          chapters={chapters}
           characters={characters}
           paused
           title="the Coalfall Commission"
@@ -2624,6 +2629,134 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       renderInclude(store);
       await waitFor(() => expect(getBookBusySpy).toHaveBeenCalledWith('b1'));
       expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeEnabled();
+    });
+  });
+
+  /* #3774 pass 3 (E) — Include, Retry and "Accept smaller cast" all end in
+     `handleToggleExcluded(id, false)`; the busy state the buttons read can be up
+     to 5 s stale, so the include branch itself re-reads `GET /busy` at click
+     time and also refuses while this tab's own subset run is live. */
+  describe('#3774 — every route into the include flow is gated at click time', () => {
+    const ch4Excluded: Chapter = { ...ch3Excluded, id: 4, title: 'Chapter 4' };
+    const includePosts = () => setChapterExcludedSpy.mock.calls.filter((c) => c[2] === false);
+
+    async function renderFailedInclude(err: Error) {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(err);
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await screen.findByRole('button', { name: /Retry/ });
+      return store;
+    }
+
+    it('Retry on an include-origin error row is refused while the book is busy: no include POST, the reason is toasted, the row is untouched', async () => {
+      const store = await renderFailedInclude(new Error('analyzer offline'));
+      expect(includePosts()).toHaveLength(1);
+      /* a render started after the last read: the button has not caught up */
+      getBookBusySpy.mockResolvedValue(['render']);
+      const retry = screen.getByRole('button', { name: /Retry/ });
+      expect(retry).toBeEnabled();
+      fireEvent.click(retry);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringContaining('rendering audio') }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(1);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Re-analysis failed: analyzer offline')).toBeInTheDocument();
+      /* the click-time read taught the row: Retry is now disabled */
+      await waitFor(() => expect(screen.getByRole('button', { name: /Retry/ })).toBeDisabled());
+    });
+
+    it('"Accept smaller cast" on an include-origin error row is refused while the book is busy', async () => {
+      const store = await renderFailedInclude(new AnalysisError('Cast shrank.', 'stage1_shrink_refused'));
+      expect(includePosts()).toHaveLength(1);
+      getBookBusySpy.mockResolvedValue(['scoring']);
+      const accept = screen.getByRole('button', { name: /Accept smaller cast/ });
+      expect(accept).toBeEnabled();
+      fireEvent.click(accept);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringContaining('scoring') }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(1);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Accept smaller cast/ })).toBeDisabled());
+    });
+
+    it('Include itself is refused at click time when the book went busy since the last read', async () => {
+      const store = makeIncludeStore();
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      getBookBusySpy.mockResolvedValue(['render']);
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+      expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+    });
+
+    it("a second chapter's Include right after the first one started is refused, whether the first is still being checked or already running", async () => {
+      const both = [chapter1, chapter2, ch3Excluded, ch4Excluded];
+      const store = makeIncludeStore({ chapters: both });
+      renderInclude(store, both);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      const includes = screen.getAllByRole('button', { name: /\+ Include in book/i });
+      expect(includes).toHaveLength(2);
+      /* (1) chapter 3's click-time read is still in flight */
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      fireEvent.click(includes[0]);
+      fireEvent.click(includes[1]);
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 4, false);
+      /* chapter 3's own check passes and its run starts */
+      await act(async () => {
+        release([]);
+      });
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, false));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      /* (2) chapter 3's run is live: chapter 4's Include is unavailable at once,
+         not only after the next 5 s poll */
+      expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeDisabled();
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 4, false);
+    });
+
+    it('fails closed: when the busy read errors at click time nothing is included and the user is told', async () => {
+      getBookBusySpy.mockRejectedValue(new Error('network down'));
+      const store = makeIncludeStore();
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringMatching(/could not check/i) }),
+        ]),
+      );
+      expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    });
+
+    it("the busy read is repeated when this view's own subset run starts and when it ends, not only every 5 s", async () => {
+      const store = makeIncludeStore();
+      let failRun!: (e: Error) => void;
+      runAnalysisForChaptersSpy.mockReturnValue(new Promise((_, rej) => (failRun = rej)));
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      /* start: the click-time gate read (+1) AND the effect's re-read (+1) */
+      await waitFor(() => expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(3));
+      await new Promise((r) => setTimeout(r, 50));
+      const afterStart = getBookBusySpy.mock.calls.length;
+      await act(async () => {
+        failRun(new Error('analyzer offline'));
+      });
+      await screen.findByRole('button', { name: /Retry/ });
+      /* end: one more read, long before the 5 s tick */
+      await waitFor(() => expect(getBookBusySpy.mock.calls.length).toBeGreaterThan(afterStart));
     });
   });
 
