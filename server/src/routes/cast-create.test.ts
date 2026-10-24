@@ -22,6 +22,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_WITH_CAST = 'The Hollow Tide Book One';
@@ -79,6 +87,10 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
+  /* Load the mocked cast-lock first: the concurrent imports below otherwise
+     hand the route a second, real copy of it, which `castLockEntries` cannot
+     see. */
+  await import('../workspace/cast-lock.js');
   const [{ castCreateRouter }, { castMergeRouter }, { castRejectOrphanRouter }, { makeBookId }] =
     await Promise.all([
       import('./cast-create.js'),
@@ -193,25 +205,24 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
     const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
     });
     let intercepted = false;
-    let readsWhileParked = 0;
     let signalRead!: () => void;
     const readReached = new Promise<void>((resolve) => {
       signalRead = resolve;
     });
     /* /create has no upfront lock-free read: its FIRST cast.json read is the
-       in-lock one. Park its resolution behind the gate; count every later
-       cast.json read (the second writer's) while it is parked. */
+       in-lock one. Park its resolution behind the gate. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
-      if (intercepted) {
-        readsWhileParked++;
-        return actual.readJson(path);
-      }
+      if (intercepted) return actual.readJson(path);
       intercepted = true;
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
@@ -247,10 +258,12 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind /create's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
-      /* Pin the premise: the second writer really ran (it did its lock-free
-         early-out read) while /create was parked. Wrap it in book-op and it
-         blocks before any read — this goes red instead of silently decaying. */
-      expect(readsWhileParked).toBeGreaterThanOrEqual(1);
+      /* Pin the premise: /create's entry plus the second writer's own means
+         the second writer reached the cast lock while /create was parked
+         inside it. A book-op span before the lock leaves this at 1 — a read
+         count cannot show that (the writer's lock-free early-out read comes
+         first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resCreate, second] = await Promise.all([createPromise, secondPromise]);

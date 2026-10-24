@@ -30,6 +30,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
@@ -388,12 +396,15 @@ describe('#1981 — two series-patch calls for different characters in one book 
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_BOOK);
     const raceCastPath = castJsonPath(raceBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === raceBookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
     });
     let castReads = 0;
-    let readsWhileParked = 0;
     let signalRead!: () => void;
     const readReached = new Promise<void>((resolve) => {
       signalRead = resolve;
@@ -401,17 +412,11 @@ describe('#1981 — two series-patch calls for different characters in one book 
     /* series-patch reads this book's cast.json twice lock-free (the source read
        inside book-op, then one more on the way in) before the THIRD, which is
        the one inside its cast lock — park that (checked empirically: with the
-       real lock the second writer is then held back after its early-out read),
-       and count every later cast.json read (the second writer's) while it is
-       parked. */
+       real lock the second writer is then held back after its early-out read). */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
       castReads++;
-      if (castReads > 3) {
-        readsWhileParked++;
-        return actual.readJson(path);
-      }
-      if (castReads < 3) return actual.readJson(path);
+      if (castReads !== 3) return actual.readJson(path);
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
       await gate;
@@ -446,11 +451,12 @@ describe('#1981 — two series-patch calls for different characters in one book 
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind series-patch's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
-      /* Pin the premise: the second writer really ran (it did its lock-free
-         early-out read) while series-patch was parked. Wrap it in book-op and
-         it blocks before any read — this goes red instead of silently
-         decaying. */
-      expect(readsWhileParked).toBeGreaterThanOrEqual(1);
+      /* Pin the premise: series-patch's entry plus the second writer's own
+         means the second writer reached the cast lock while series-patch was
+         parked inside it. A book-op span before the lock leaves this at 1 — a
+         read count cannot show that (the writer's lock-free early-out read
+         comes first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resPatch, second] = await Promise.all([patchPromise, secondPromise]);
@@ -515,7 +521,12 @@ describe('series-patch — per-item reason on a lock timeout (#2292)', () => {
 
   async function patchWithThrowOnTidewatcher(toThrow: unknown) {
     const castLock = await import('../workspace/cast-lock.js');
-    const original = castLock.withCastLock;
+    /* The real implementation, not `castLock.withCastLock`: that export is the
+       file-wide passthrough `vi.fn` (#3773), and spying on it would make
+       `original` the spy itself. */
+    const { withCastLock: original } = await vi.importActual<
+      typeof import('../workspace/cast-lock.js')
+    >('../workspace/cast-lock.js');
     const spy = vi
       .spyOn(castLock, 'withCastLock')
       .mockImplementation(async <T,>(dir: string, fn: () => Promise<T>): Promise<T> => {

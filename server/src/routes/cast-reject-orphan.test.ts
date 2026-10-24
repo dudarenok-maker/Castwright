@@ -49,6 +49,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'Standalones';
 const TITLE = 'The Hollow Tide';
@@ -899,24 +907,24 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
     const { castJsonPath } = await import('../workspace/paths.js');
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const raceCastPath = castJsonPath(raceBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === raceBookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
     });
     let castReads = 0;
-    let readsWhileParked = 0;
     let signalRead!: () => void;
     const readReached = new Promise<void>((resolve) => {
       signalRead = resolve;
     });
-    /* reject-orphan-match's FIRST cast.json read is the in-lock one; park it, and count every later cast.json read (the second writer's) while it is parked. */
+    /* reject-orphan-match's FIRST cast.json read is the in-lock one; park it. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
       castReads++;
-      if (castReads > 1) {
-        readsWhileParked++;
-        return actual.readJson(path);
-      }
+      if (castReads > 1) return actual.readJson(path);
       if (castReads < 1) return actual.readJson(path);
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
@@ -952,11 +960,12 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the route's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
-      /* Pin the premise: the second writer really ran (it did its lock-free
-         early-out read) while reject-orphan-match was parked. Wrap it in
-         book-op and it blocks before any read — this goes red instead of
-         silently decaying. */
-      expect(readsWhileParked).toBeGreaterThanOrEqual(1);
+      /* Pin the premise: reject-orphan-match's entry plus the second writer's
+         own means the second writer reached the cast lock while
+         reject-orphan-match was parked inside it. A book-op span before the
+         lock leaves this at 1 — a read count cannot show that (the writer's
+         lock-free early-out read comes first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resReject, second] = await Promise.all([rejectPromise, secondPromise]);

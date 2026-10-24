@@ -68,6 +68,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race tests
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';
@@ -1176,8 +1184,8 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
      is only called once promote-voice is parked INSIDE its cast-lock span. */
   async function racePromoteVoiceAgainst(
     startSecondWriter: (bookDir: string) => Promise<unknown>,
-    /* Opt-in premise pin (#3773): assert the second writer made its own
-       cast.json read while promote-voice was parked. A writer serialised by
+    /* Opt-in premise pin (#3773): assert the second writer entered the cast
+       lock while promote-voice was parked. A writer serialised by
        book-op (e.g. /assign) legitimately fails it, so only the cast-lock-
        alone test sets it. */
     opts: { requireSecondWriterRead?: boolean } = {},
@@ -1220,6 +1228,10 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       '../workspace/state-io.js',
     );
     const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
@@ -1281,11 +1293,14 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       // tight window either way.
       await new Promise((r) => setTimeout(r, 50));
 
-      /* Premise: reads #1 and #2 are promote-voice's own, so a #3 means the
-         second writer ran its (lock-free) cast.json read while promote-voice
-         was parked. If something other than the cast lock held it back (a
-         book-op span), this stays at 2 and the race below proves nothing. */
-      if (opts.requireSecondWriterRead) expect(callsForCastPath).toBeGreaterThanOrEqual(3);
+      /* Premise: promote-voice's entry plus the second writer's own means the
+         second writer reached the cast lock while promote-voice was parked
+         inside it. A book-op span anywhere before the lock would hold it back
+         and this stays at 1 (a read count cannot see that: the writer's
+         lock-free early-out read comes first). */
+      if (opts.requireSecondWriterRead) {
+        expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+      }
 
       released();
       [resPromote, second] = await Promise.all([promotePromise, secondPromise]);
@@ -1578,12 +1593,15 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     const { castJsonPath } = await import('../workspace/paths.js');
     const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
     const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
     });
     let intercepted = false;
-    let readsAfterIntercept = 0;
     let signalRead!: () => void;
     const readReached = new Promise<void>((resolve) => {
       signalRead = resolve;
@@ -1592,10 +1610,7 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
        upfront lock-free read): hold its resolution open behind the gate. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
-      if (intercepted) {
-        readsAfterIntercept += 1;
-        return actual.readJson(path);
-      }
+      if (intercepted) return actual.readJson(path);
       intercepted = true;
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
@@ -1632,10 +1647,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
       // or queues behind the DELETE's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
 
-      /* Premise: the second writer ran its own (lock-free) cast.json read
-         while the DELETE was parked. If a book-op span held it back this stays
-         0 and the race below proves nothing about the cast lock. */
-      expect(readsAfterIntercept).toBeGreaterThanOrEqual(1);
+      /* Premise: the DELETE's entry plus the second writer's own means the
+         second writer reached the cast lock while the DELETE was parked inside
+         it. A book-op span before the lock leaves this at 1 (a read count
+         cannot see that: the writer's lock-free early-out read comes first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resDelete, second] = await Promise.all([deletePromise, secondPromise]);

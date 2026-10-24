@@ -56,6 +56,14 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   return { ...real, resetRevisions: vi.fn(real.resetRevisions) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 const CACHE_DIR = join(SERVER_ROOT, 'handoff', 'cache');
@@ -1145,6 +1153,10 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
     const { castJsonPath } = await import('../workspace/paths.js');
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const lockCastPath = castJsonPath(lockBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === lockBookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
@@ -1157,8 +1169,8 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
     });
     /* Reparse's FIRST cast.json read is its in-lock `existingCast` read (same
        premise as the gap A describe above): hold its resolution behind the
-       gate. Every cast.json read is counted so the test can show the second
-       writer really ran while reparse was parked. */
+       gate. Every cast.json read is counted so the test can show reparse was the
+       only reader when it parked. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path === lockCastPath) castReads += 1;
       if (path !== lockCastPath || intercepted) return actual.readJson(path);
@@ -1195,11 +1207,12 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind reparse's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
-      /* Premise pin: the second writer really started and read cast.json
-         (persistEmotionVariant's early-out read is lock-free) while reparse
-         was parked. Wrapped in book-op it would be blocked behind reparse's
-         book-op, never get here, and this would stop measuring the cast lock. */
-      expect(castReads).toBeGreaterThanOrEqual(2);
+      /* Premise pin: reparse's entry plus the second writer's own means the
+         second writer reached the cast lock while reparse was parked inside
+         it. A book-op span before the lock leaves this at 1 — a read count
+         cannot show that (the writer's lock-free early-out read comes
+         first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resReparse, second] = await Promise.all([reparsePromise, secondPromise]);

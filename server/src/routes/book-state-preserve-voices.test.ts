@@ -33,6 +33,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Preserve Author';
 const SERIES = 'Preserve Series';
 const TITLE = 'Only Book';
@@ -521,6 +529,10 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     const { castJsonPath } = await import('../workspace/paths.js');
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const raceCastPath = castJsonPath(raceBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === raceBookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
@@ -533,8 +545,8 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     });
     /* The PUT's FIRST cast.json read is the in-lock one (inside
        `preserveDesignedVoices`): hold its resolution open behind the gate.
-       Every cast.json read is counted, so the test can show the second writer
-       really ran while the PUT was parked. */
+       Every cast.json read is counted, so the test can show the PUT was the
+       only reader when it parked. */
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path === raceCastPath) castReads += 1;
       if (path !== raceCastPath || intercepted) return actual.readJson(path);
@@ -581,12 +593,12 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the PUT's still-held lock when locked.
       await new Promise((r) => setTimeout(r, 50));
-      /* Premise pin: the second writer really started and read cast.json
-         (persistEmotionVariant's early-out read is lock-free) while the PUT
-         was parked. If it were ever wrapped in book-op it would be blocked
-         behind the PUT's book-op and never get here, and this test would no
-         longer be measuring the cast lock. */
-      expect(castReads).toBeGreaterThanOrEqual(2);
+      /* Premise pin: the PUT's entry plus the second writer's own means the
+         second writer reached the cast lock while the PUT was parked inside
+         it. A book-op span before the lock leaves this at 1 — a read count
+         cannot show that (the writer's lock-free early-out read comes
+         first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
 
       released();
       [resPut, second] = await Promise.all([putPromise, secondPromise]);
