@@ -68,6 +68,14 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race tests
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';
@@ -1093,13 +1101,14 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
 /* #1981, Task 7 — promote-voice's stale-variants teardown write races
    POST /voice-library/:voiceUuid/assign for a DIFFERENT character of the same
-   book. Unlocked, each side's own `readJson` can land before the other side's
-   write, so whichever side writes LAST replays a `characters` snapshot that
-   predates the other's write and silently drops it — which side loses
-   depends on interleaving (measured: promote-voice's own teardown was the
-   one lost, not assign's), so both survival assertions below matter, not
-   just one. Locked, promote-voice re-reads fresh cast.json inside
-   `withCastLock`, so both mutations survive regardless of interleaving.
+   book. Pre-#3711 history (the #3773 paragraph below says what the /assign
+   variant still proves): unlocked, each side's own `readJson` could land
+   before the other side's write, so whichever side wrote LAST replayed a
+   `characters` snapshot that predated the other's write and silently dropped
+   it — which side lost depended on interleaving (measured: promote-voice's
+   own teardown was the one lost, not assign's), so both survival assertions
+   below matter, not just one. Locked, promote-voice re-reads fresh cast.json
+   inside `withCastLock`, so both mutations survive regardless of interleaving.
 
    #1981 race-hardening round (Aug 2026) — a bare `Promise.all` of the two
    requests (the original shape of this test) does NOT interleave reliably:
@@ -1132,20 +1141,31 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    teardown write is based on — read the real bytes immediately (so the read
    genuinely happens-before assign's write, matching the bug's precondition)
    but hold the JS-visible resolution open behind a manually-released gate.
-   /assign then gets a generous one-directional head start: it completes
-   fully when unlocked (the bug window) or queues behind promote-voice's
-   still-held lock when locked (the fix) — either way nothing depends on
+   The second writer then gets a generous one-directional head start: it
+   completes fully when unlocked (the bug window) or queues behind
+   promote-voice's still-held lock when locked (the fix) — either way nothing depends on
    tuning a tight timing window. This lands a single trial, deterministically,
    in the same 200-of-200-class category the cast-lock.ts docstring cites for
    the base primitive — no in-process repetition needed, and none of the
-   process-correlation risk that repetition carries. Confirmed empirically:
-   20/20 external re-runs of THIS version go red against the same mutation
-   (see the hardening report). */
-describe('#1981 — promote-voice races /assign for a different character', () => {
+   process-correlation risk that repetition carries. Confirmed empirically
+   pre-#3711, with /assign as the second writer: 20/20 external re-runs went
+   red against the `withCastLock` pass-through (see the hardening report).
+   That no longer holds for /assign (below); the cast-lock-alone test is the
+   one that still goes red under that mutation.
+
+   #3773 — the route-level /assign race below is NOT cast-lock proof: both
+   promote-voice and /assign hold `book-op:<bookId>` (#3711), which serialises
+   them on its own, so that test stays green with `withCastLock` replaced by a
+   no-op (confirmed: no-op cast lock green; no-op cast lock AND book-op red;
+   no-op book-op alone green). The cast-lock proof drives the second writer
+   through `persistEmotionVariant`, which takes the cast lock and no book-op. */
+describe('#1981 — promote-voice races a concurrent cast writer for a different character', () => {
   let vl: typeof import('../workspace/voice-library.js');
   let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
+  let persistEmotionVariant: typeof import('./qwen-voice.js').persistEmotionVariant;
 
   beforeAll(async () => {
+    persistEmotionVariant = (await import('./qwen-voice.js')).persistEmotionVariant;
     /* voiceLibraryRouter itself is mounted in the file's top-level beforeAll,
        alongside the other routers this file shares — this describe still
        needs the workspace module + castJsonPath for its own test body. */
@@ -1157,7 +1177,19 @@ describe('#1981 — promote-voice races /assign for a different character', () =
     castJsonPath = cjp;
   });
 
-  it('#1981 — keeps both promote-voice’s variant teardown and a concurrent /assign on a different character', async () => {
+  /* Shared scaffold for both race tests below. Seeds maerin with a variants
+     map, then scripts the interleaving: promote-voice's SECOND cast.json
+     `readJson` (its fresh, in-lock read) is held open behind a gate while
+     `startSecondWriter` runs for a generous head start. `startSecondWriter`
+     is only called once promote-voice is parked INSIDE its cast-lock span. */
+  async function racePromoteVoiceAgainst(
+    startSecondWriter: (bookDir: string) => Promise<unknown>,
+    /* Opt-in premise pin (#3773): assert the second writer entered the cast
+       lock while promote-voice was parked. A writer serialised by
+       book-op (e.g. /assign) legitimately fails it, so only the cast-lock-
+       alone test sets it. */
+    opts: { requireSecondWriterRead?: boolean } = {},
+  ): Promise<{ resPromote: request.Response; second: unknown }> {
     const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
     mkdirSync(qwenDir(), { recursive: true });
     writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'), 'EMBEDDING');
@@ -1187,27 +1219,19 @@ describe('#1981 — promote-voice races /assign for a different character', () =
       JSON.stringify({ characters: withVariants }),
     );
 
-    const raceVoiceUuid = 'race-assign-promote-1';
-    await vl.writeEntry({
-      voiceUuid: raceVoiceUuid,
-      name: 'Race Assign Voice',
-      provenance: 'imported',
-      tags: [],
-      pinned: false,
-      engines: {},
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    });
-
     /* Script the interleaving: hold promote-voice's SECOND `readJson` call
-       for this book's cast.json (its fresh, in-lock read) open until assign
-       has had a generous chance to write. See this describe's header
-       comment for the full rationale. */
+       for this book's cast.json (its fresh, in-lock read) open until the
+       second writer has had a generous chance to write. See this describe's
+       header comment for the full rationale. */
     const stateIo = await import('../workspace/state-io.js');
     const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
       '../workspace/state-io.js',
     );
     const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
     let released!: () => void;
     const gate = new Promise<void>((resolve) => {
       released = resolve;
@@ -1227,7 +1251,7 @@ describe('#1981 — promote-voice races /assign for a different character', () =
       if (callsForCastPath === 2) {
         interceptedSecondRead = true;
         signalSecondRead();
-        const value = await actual.readJson(path); // real bytes, now — happens-before assign's write
+        const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
         await gate; // hold the RESOLUTION open until released below
         return value;
       }
@@ -1235,9 +1259,11 @@ describe('#1981 — promote-voice races /assign for a different character', () =
     });
 
     let resPromote: request.Response;
-    let resAssign: request.Response;
+    let second: unknown;
+    let promotePromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
     try {
-      const promotePromise = request(app)
+      promotePromise = request(app)
         .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
         .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
       promotePromise.catch(() => {}); // supertest is lazy — force real dispatch now
@@ -1260,23 +1286,90 @@ describe('#1981 — promote-voice races /assign for a different character', () =
       }
       expect(interceptedSecondRead).toBe(true);
 
-      const assignPromise = request(app)
-        .post(`/api/voice-library/${raceVoiceUuid}/assign`)
-        .send({ bookId, characterId: 'nopersona' });
-      assignPromise.catch(() => {}); // force dispatch now (see above)
-      // Generous head start: completes fully when unlocked, queues harmlessly
-      // behind promote-voice's held lock when locked. Not a tight window.
+      secondPromise = startSecondWriter(bookDir);
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind promote-voice's still-held lock when locked. Not a
+      // tight window either way.
       await new Promise((r) => setTimeout(r, 50));
 
+      /* Premise: promote-voice's entry plus the second writer's own means the
+         second writer reached the cast lock while promote-voice was parked
+         inside it. A book-op span anywhere before the lock would hold it back
+         and this stays at 1 (a read count cannot see that: the writer's
+         lock-free early-out read comes first). */
+      if (opts.requireSecondWriterRead) {
+        expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+      }
+
       released();
-      [resPromote, resAssign] = await Promise.all([promotePromise, assignPromise]);
+      [resPromote, second] = await Promise.all([promotePromise, secondPromise]);
     } finally {
+      // Idempotent — a throw ANYWHERE above still releases a held `readJson`
+      // rather than leaving it stuck on `await gate` forever.
+      released();
       // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
       // `vi.mock` factory), not a `vi.spyOn` spy — restore its default
       // passthrough behaviour explicitly.
       spy.mockImplementation(actual.readJson);
+      // Don't return while either writer is still in flight against fixtures
+      // `afterAll` is about to delete.
+      await Promise.allSettled([promotePromise, secondPromise]);
     }
+    return { resPromote, second };
+  }
 
+  it('#3773 — cast lock alone: promote-voice’s variant teardown and a cast-lock-only writer on a different character both survive', async () => {
+    /* The second writer is `persistEmotionVariant` called directly: it takes
+       the cast lock and NO book-op, so book-op cannot serialise it against
+       promote-voice (which holds book-op across its whole handler). The
+       only thing standing between the two is `withCastLock` — a no-op cast
+       lock makes this red (#3773). */
+    const { resPromote, second } = await racePromoteVoiceAgainst(
+      (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+      { requireSecondWriterRead: true },
+    );
+    expect(resPromote.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
+    /* promote-voice's own mutation survived: variants dropped, base kept. */
+    expect(maerinQwen.qwen.variants).toBeUndefined();
+    expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    const nopersonaQwen = nopersona.overrideTtsVoices as
+      | { qwen?: { variants?: Record<string, { name: string }> } }
+      | undefined;
+    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_nopersona__angry' });
+  });
+
+  it('#1981 — promote-voice and a concurrent /assign on a different character both survive (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: BOTH handlers hold `book-op:<bookId>`, which
+       by itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. It
+       pins that the real stack, as wired, keeps both edits. */
+    const raceVoiceUuid = 'race-assign-promote-1';
+    await vl.writeEntry({
+      voiceUuid: raceVoiceUuid,
+      name: 'Race Assign Voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const { resPromote, second } = await racePromoteVoiceAgainst(
+      (_bookDir) =>
+        request(app)
+          .post(`/api/voice-library/${raceVoiceUuid}/assign`)
+          .send({ bookId, characterId: 'nopersona' }) as unknown as Promise<request.Response>,
+    );
+    const resAssign = second as request.Response;
     expect(resPromote.status).toBe(200);
     expect(resAssign.status).toBe(200);
 
@@ -1287,7 +1380,7 @@ describe('#1981 — promote-voice races /assign for a different character', () =
     /* promote-voice's own mutation survived: variants dropped, base kept. */
     expect(maerinQwen.qwen.variants).toBeUndefined();
     expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
-    /* assign's own mutation survived too — the lost-update this test pins. */
+    /* assign's own mutation survived too. */
     const nopersonaQwen = nopersona.overrideTtsVoices as { qwen?: { libraryUuid?: string } } | undefined;
     expect(nopersonaQwen?.qwen?.libraryUuid).toBe(raceVoiceUuid);
   });
@@ -1483,17 +1576,132 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
 
+  /* #3773 — cast-lock-alone proof for the DELETE route. The route-level race
+     below (two DELETEs) is NOT cast-lock proof: both handlers hold
+     `book-op:<bookId>` (#3711), which serialises them on its own, so it stays
+     green with `withCastLock` replaced by a no-op (confirmed: no-op cast lock
+     green; no-op cast lock AND book-op red; no-op book-op alone green). Here
+     the real DELETE is parked at its in-lock cast.json read while the second
+     writer, `persistEmotionVariant` (cast lock, NO book-op), runs directly. */
+  async function raceDeleteAgainst(
+    startSecondWriter: (bookDir: string) => Promise<unknown>,
+  ): Promise<{ resDelete: request.Response; second: unknown }> {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+    const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* The DELETE handler's FIRST cast.json read is the in-lock one (it has no
+       upfront lock-free read): hold its resolution open behind the gate. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      if (intercepted) return actual.readJson(path);
+      intercepted = true;
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resDelete: request.Response;
+    let second: unknown;
+    let deletePromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      deletePromise = request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`);
+      deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: DELETE emotion-variant never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(intercepted).toBe(true);
+
+      secondPromise = startSecondWriter(bookDir);
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind the DELETE's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+
+      /* Premise: the DELETE's entry plus the second writer's own means the
+         second writer reached the cast lock while the DELETE was parked inside
+         it. A book-op span before the lock leaves this at 1 (a read count
+         cannot see that: the writer's lock-free early-out read comes first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resDelete, second] = await Promise.all([deletePromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([deletePromise, secondPromise]);
+    }
+    return { resDelete, second };
+  }
+
+  it('#3773 — cast lock alone: a DELETE emotion-variant and a cast-lock-only writer on a different character both survive', async () => {
+    seedVariants();
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const { resDelete, second } = await raceDeleteAgainst((bookDir) =>
+      persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+    );
+    expect(resDelete.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    /* the DELETE's own mutation survived: angry removed, sad kept. */
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    const nopersonaQwen = nopersona.overrideTtsVoices as
+      | { qwen?: { variants?: Record<string, { name: string }> } }
+      | undefined;
+    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_nopersona__angry' });
+  });
+
   /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
-     characters in the SAME book race that book's cast.json. Unlocked, both
-     requests' readJson resolve before either writeJsonAtomic lands, so the
-     later write replays a `characters` snapshot taken before the earlier
-     write happened and silently drops it — one character's variant map
-     reverts to its pre-delete state. `nopersona` gets its own qwen override
+     characters in the SAME book race that book's cast.json. Pre-#3711, with
+     the cast lock as the only guard, both requests' readJson resolved before
+     either writeJsonAtomic landed, so the later write replayed a `characters`
+     snapshot taken before the earlier write happened and silently dropped it.
+     Since #3711 book-op serialises the two DELETEs on its own — the
+     cast-lock-alone test above is the cast-lock proof. `nopersona` gets its own qwen override
      here (it has none by default) purely so it has a second, independent
      variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
      `{ force: true }` / try-catch best-effort, so this doesn't need matching
      .pt/.json fixtures on disk. */
-  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap', async () => {
+  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: BOTH handlers hold `book-op:<bookId>`, which
+       by itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. It
+       pins that the real stack, as wired, keeps both deletions. */
     seedVariants();
     const withSecond = readCast().characters.map((c) =>
       c.id === 'nopersona'

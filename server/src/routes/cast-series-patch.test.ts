@@ -21,6 +21,23 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* #3773 — hoisted `vi.mock` (passthrough by default) so the cast-lock-alone
+   race test can park the route's in-lock cast.json `readJson`, which is bound
+   at the route module's own load time. Every other test in this file sees the
+   real implementation. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
@@ -337,9 +354,10 @@ describe('#1981 — two series-patch calls for different characters in one book 
   const RACE_BOOK = 'Race Book';
   let raceBookId: string;
 
-  beforeAll(async () => {
-    const { makeBookId } = await import('../workspace/paths.js');
-    raceBookId = makeBookId(AUTHOR, SERIES, RACE_BOOK);
+  /* Re-seeded before EACH test (not once): the two race tests below write the
+     same characters, and a patch value the first test already left on disk
+     would let the second pass without its own write ever landing. */
+  const seedRaceBook = () =>
     writeBookOnDisk(
       workspaceRoot,
       AUTHOR,
@@ -352,9 +370,120 @@ describe('#1981 — two series-patch calls for different characters in one book 
       ],
       { isStandalone: true },
     );
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_BOOK);
   });
 
-  it('keeps both patches when two series-patch calls for one book overlap', async () => {
+  beforeEach(() => {
+    seedRaceBook();
+  });
+
+  /* #3773 — cast-lock-alone proof. The route-level race below is NOT cast-lock
+     proof: both series-patch calls hold `book-op:<bookId>` (#3711), which
+     serialises them on its own, so it stays green with `withCastLock` replaced
+     by a no-op (confirmed: no-op cast lock green; no-op cast lock AND book-op
+     red). Here the real series-patch is parked at its in-lock cast.json read
+     while the second writer, `persistEmotionVariant` (cast lock, NO book-op),
+     runs directly on the other character. */
+  it('#3773 — cast lock alone: a series-patch and a cast-lock-only writer on a different character both survive', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_BOOK);
+    const raceCastPath = castJsonPath(raceBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === raceBookDir).length;
+    const entriesBefore = castLockEntries();
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let castReads = 0;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* series-patch reads this book's cast.json twice lock-free (the source read
+       inside book-op, then one more on the way in) before the THIRD, which is
+       the one inside its cast lock — park that (checked empirically: with the
+       real lock the second writer is then held back after its early-out read). */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      castReads++;
+      if (castReads !== 3) return actual.readJson(path);
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resPatch: request.Response;
+    let second: unknown;
+    let patchPromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      patchPromise = callPatch(raceBookId, 'race-a', { ageRange: 'child' });
+      patchPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: series-patch never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(castReads).toBe(3);
+
+      secondPromise = persistEmotionVariant(raceBookDir, 'race-b', 'angry', 'qwen-v_race-b__angry');
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind series-patch's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Pin the premise: series-patch's entry plus the second writer's own
+         means the second writer reached the cast lock while series-patch was
+         parked inside it. A book-op span before the lock leaves this at 1 — a
+         read count cannot show that (the writer's lock-free early-out read
+         comes first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resPatch, second] = await Promise.all([patchPromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([patchPromise, secondPromise]);
+    }
+    expect(resPatch.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = readCast(workspaceRoot, AUTHOR, SERIES, RACE_BOOK);
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    /* series-patch's own mutation survived. */
+    expect((byId['race-a'] as { ageRange?: string }).ageRange).toBe('child');
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    const raceB = byId['race-b'] as {
+      overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
+    };
+    expect(raceB.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_race-b__angry' });
+  });
+
+  it('keeps both patches when two series-patch calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. */
     const [resA, resB] = await Promise.all([
       callPatch(raceBookId, 'race-a', { ageRange: 'child' }),
       callPatch(raceBookId, 'race-b', { ageRange: 'elderly' }),
@@ -392,7 +521,12 @@ describe('series-patch — per-item reason on a lock timeout (#2292)', () => {
 
   async function patchWithThrowOnTidewatcher(toThrow: unknown) {
     const castLock = await import('../workspace/cast-lock.js');
-    const original = castLock.withCastLock;
+    /* The real implementation, not `castLock.withCastLock`: that export is the
+       file-wide passthrough `vi.fn` (#3773), and spying on it would make
+       `original` the spy itself. */
+    const { withCastLock: original } = await vi.importActual<
+      typeof import('../workspace/cast-lock.js')
+    >('../workspace/cast-lock.js');
     const spy = vi
       .spyOn(castLock, 'withCastLock')
       .mockImplementation(async <T,>(dir: string, fn: () => Promise<T>): Promise<T> => {
