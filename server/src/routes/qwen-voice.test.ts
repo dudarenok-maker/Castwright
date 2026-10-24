@@ -1546,6 +1546,105 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
 
+  /* #3773 — cast-lock-alone proof for the DELETE route. The route-level race
+     below (two DELETEs) is NOT cast-lock proof: both handlers hold
+     `book-op:<bookId>` (#3711), which serialises them on its own, so it stays
+     green with `withCastLock` replaced by a no-op (confirmed: no-op cast lock
+     green; no-op cast lock AND book-op red; no-op book-op alone green). Here
+     the real DELETE is parked at its in-lock cast.json read while the second
+     writer, `persistEmotionVariant` (cast lock, NO book-op), runs directly. */
+  async function raceDeleteAgainst(
+    startSecondWriter: (bookDir: string) => Promise<unknown>,
+  ): Promise<{ resDelete: request.Response; second: unknown }> {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+    const raceCastPath = castJsonPath(bookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* The DELETE handler's FIRST cast.json read is the in-lock one (it has no
+       upfront lock-free read): hold its resolution open behind the gate. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath || intercepted) return actual.readJson(path);
+      intercepted = true;
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resDelete: request.Response;
+    let second: unknown;
+    let deletePromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      deletePromise = request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`);
+      deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: DELETE emotion-variant never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(intercepted).toBe(true);
+
+      secondPromise = startSecondWriter(bookDir);
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind the DELETE's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [resDelete, second] = await Promise.all([deletePromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([deletePromise, secondPromise]);
+    }
+    return { resDelete, second };
+  }
+
+  it('#3773 — cast lock alone: a DELETE emotion-variant and a cast-lock-only writer on a different character both survive', async () => {
+    seedVariants();
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const { resDelete, second } = await raceDeleteAgainst((bookDir) =>
+      persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+    );
+    expect(resDelete.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    /* the DELETE's own mutation survived: angry removed, sad kept. */
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    const nopersonaQwen = nopersona.overrideTtsVoices as
+      | { qwen?: { variants?: Record<string, { name: string }> } }
+      | undefined;
+    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_nopersona__angry' });
+  });
+
   /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
      characters in the SAME book race that book's cast.json. Unlocked, both
      requests' readJson resolve before either writeJsonAtomic lands, so the
@@ -1556,7 +1655,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
      variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
      `{ force: true }` / try-catch best-effort, so this doesn't need matching
      .pt/.json fixtures on disk. */
-  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap', async () => {
+  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: BOTH handlers hold `book-op:<bookId>`, which
+       by itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. It
+       pins that the real stack, as wired, keeps both deletions. */
     seedVariants();
     const withSecond = readCast().characters.map((c) =>
       c.id === 'nopersona'
