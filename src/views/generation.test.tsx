@@ -67,6 +67,7 @@ const getOllamaHealthSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
 const setChapterExcludedSpy = vi.fn();
 const runAnalysisForChaptersSpy = vi.fn();
+const pauseAnalysisSpy = vi.fn();
 const getQaReportSpy = vi.fn();
 
 vi.mock('../lib/api', () => ({
@@ -113,6 +114,8 @@ vi.mock('../lib/api', () => ({
     /* fs-51 — QaReportCard's useQaReport hook fetches on mount and on the
        live chapter_complete refetch trigger under test below. */
     getQaReport: (bookId: string) => getQaReportSpy(bookId),
+    /* #3774 — Cancel on an Include stops the server's subset job. */
+    pauseAnalysis: (args: { manuscriptId: string }) => pauseAnalysisSpy(args),
   },
   /* Stub class so `instanceof AnalysisError` checks in production code
      don't throw "Right-hand side of instanceof is not callable". */
@@ -135,6 +138,8 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   setChapterExcludedSpy.mockReset();
   runAnalysisForChaptersSpy.mockReset();
+  pauseAnalysisSpy.mockReset();
+  pauseAnalysisSpy.mockResolvedValue(undefined);
   getQaReportSpy.mockReset();
   getQaReportSpy.mockResolvedValue(MOCK_QA_REPORT);
   vi.mocked(api.getChapterAudio).mockReset();
@@ -2846,6 +2851,111 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(capturedSignal?.aborted).toBe(true);
     /* Row reverts to idle — Include CTA is back. */
     expect(await screen.findByRole('button', { name: /\+ Include in book/i })).toBeInTheDocument();
+  });
+
+  /* #3774 — the server's subset job is sticky and holds the book's `analysis`
+     lease until it settles; an Exclude is refused (409 `book_busy`) meanwhile.
+     Cancel must stop the job, wait for the lease to release, then re-exclude.
+     The mock models the sticky job: the re-exclude is refused until the stop
+     has been requested AND two further polls have passed. */
+  describe('#3774 — Include → Cancel stops the server job, waits, then re-excludes', () => {
+    const busy = 'This book is busy (analysing). Stop it or wait for it to finish, then exclude chapters.';
+    const busyErr = () => Object.assign(new Error(busy), { code: 'book_busy' });
+
+    function stickyJob(): void {
+      let polls = 0;
+      setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+        if (excluded) {
+          const stopped = pauseAnalysisSpy.mock.calls.length > 0;
+          if (!stopped || polls++ < 2) throw busyErr();
+        }
+        return { id, title: '', slug: '', excluded };
+      });
+      runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+        const signal = (opts as { signal?: AbortSignal }).signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            const err: Error & { name: string } = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        });
+      });
+    }
+
+    it('calls the stop endpoint, retries the refused re-exclude until the job settles, and ends excluded', async () => {
+      const store = makeIncludeStore();
+      stickyJob();
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+
+      await waitFor(
+        () => expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true),
+        { timeout: 5000 },
+      );
+      expect(pauseAnalysisSpy).toHaveBeenCalledWith({ manuscriptId: 'm1' });
+      const excludeCalls = setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true);
+      expect(excludeCalls.length).toBe(3); // two refused (job still holding its lease), one accepted
+      /* the first refused re-exclude came after the stop request */
+      expect(pauseAnalysisSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        setChapterExcludedSpy.mock.invocationCallOrder[1],
+      );
+      expect(store.getState().notifications.toasts).toEqual([]);
+    });
+
+    it('a job that never settles surfaces the server sentence as a toast and leaves the chapter included', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+          if (excluded) throw busyErr();
+          return { id, title: '', slug: '', excluded };
+        });
+        runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+          const signal = (opts as { signal?: AbortSignal }).signal;
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              const err: Error & { name: string } = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        });
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await waitFor(() =>
+          expect(store.getState().notifications.toasts).toEqual([
+            expect.objectContaining({ kind: 'warn', message: expect.stringContaining(busy) }),
+          ]),
+        );
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).not.toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a failed run waits out the lease the same way (no stop request) and then re-excludes', async () => {
+      const store = makeIncludeStore();
+      let polls = 0;
+      setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+        if (excluded && polls++ < 1) throw busyErr();
+        return { id, title: '', slug: '', excluded };
+      });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      /* chapter 3 starts excluded, so wait for the 2nd exclude attempt (the
+         accepted retry) before reading the slice. */
+      await waitFor(
+        () => expect(setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true).length).toBe(2),
+        { timeout: 5000 },
+      );
+      await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true));
+      expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('on error, surfaces the message inline with a Retry button that re-runs the subset call', async () => {

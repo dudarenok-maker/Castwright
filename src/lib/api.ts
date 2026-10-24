@@ -5422,12 +5422,17 @@ async function realSetChapterExcluded(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Exclude toggle failed (${res.status}).`);
+    /* #3774 — `code` lets a caller tell a `book_busy` refusal (a job holds the
+       book; retry once it settles) from any other failure. */
+    throw Object.assign(new Error(detail || `Exclude toggle failed (${res.status}).`), { code });
   }
   return res.json();
 }

@@ -30,6 +30,11 @@ import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
    (today: the cross-book Generate title regression test that bypasses
    the Layout wrapper). Inert state, no-op handlers. Real call sites
    always come through Layout → outlet context. */
+/* #3774 — how long an Include rollback waits for the book's job to release its
+   lease (re-trying the refused exclude every poll) before giving up with a toast. */
+const ROLLBACK_SETTLE_POLL_MS = 400;
+const ROLLBACK_SETTLE_TIMEOUT_MS = 20_000;
+
 const INERT_ENGINE_LIFECYCLE = {
   state: 'unreachable' as const,
   onLoad: async () => {},
@@ -664,8 +669,19 @@ export function GenerationView({
          on an included chapter. C1: only an include this click performed is
          rolled back (an excluded-before-click chapter has no audio to lose). */
       if (includedHere) {
-        await rollbackInclude(chapterId).catch((rollbackErr) => {
+        await rollbackInclude(chapterId, { stopJob: isAbort }).catch((rollbackErr) => {
           console.warn('[generation] include rollback failed', rollbackErr);
+          /* #3774 — never leave the chapter included without saying so. */
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message:
+                rollbackErr instanceof Error && rollbackErr.message
+                  ? rollbackErr.message
+                  : 'Could not undo the include.',
+              dedupeKey: 'gen-include-rollback-failed',
+            }),
+          );
         });
       }
       if (isAbort) {
@@ -725,8 +741,24 @@ export function GenerationView({
      stays readable. The server call runs whatever book is open now: it
      names this book, and leaving the chapter included-but-unanalysed on disk
      is the drift the rollback exists to prevent. */
-  async function rollbackInclude(chapterId: number): Promise<void> {
-    await api.setChapterExcluded(bookId, chapterId, true);
+  async function rollbackInclude(chapterId: number, opts: { stopJob?: boolean } = {}): Promise<void> {
+    /* #3774 — the server refuses an exclude (409 `book_busy`) while a job holds
+       the book, and the include's own subset job is sticky: it outlives the
+       aborted fetch and keeps its `analysis` lease until it settles. Cancel
+       therefore asks the server to stop it first, then re-tries the exclude
+       until the lease is released (the refusal IS the "still running" signal).
+       A failed run's job may still be releasing: same wait, no stop. */
+    if (opts.stopJob && manuscriptId) await api.pauseAnalysis({ manuscriptId });
+    const deadline = Date.now() + ROLLBACK_SETTLE_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await api.setChapterExcluded(bookId, chapterId, true);
+        break;
+      } catch (e) {
+        if ((e as { code?: string })?.code !== 'book_busy' || Date.now() >= deadline) throw e;
+        await new Promise((resolve) => setTimeout(resolve, ROLLBACK_SETTLE_POLL_MS));
+      }
+    }
     if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
   }
 
