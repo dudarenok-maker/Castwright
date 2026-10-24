@@ -104,13 +104,15 @@ describe('reconcileChapterUuids', () => {
     expect(out[1].uuid).toMatch(UUID_RE);
   });
 
-  it('ignores a client uuid when the existing chapter has one (#3683)', () => {
-    const existing = [ch({ id: 1, uuid: 'old' })];
-    const incoming = [ch({ id: 1, uuid: 'client-supplied' })];
+  it('never lets a client claim a uuid another existing chapter holds (#3683)', () => {
+    const existing = [ch({ id: 1, uuid: 'old' }), ch({ id: 2, uuid: 'other' })];
+    const incoming = [ch({ id: 1, uuid: 'other' })];
 
     const out = reconcileChapterUuids(incoming, existing);
 
-    expect(out[0].uuid).toBe('old');
+    expect(out[0].uuid).toMatch(UUID_RE);
+    expect(out[0].uuid).not.toBe('other');
+    expect(out[0].uuid).not.toBe('old');
   });
 
   it('keeps a client uuid for an id with no existing uuid', () => {
@@ -120,6 +122,44 @@ describe('reconcileChapterUuids', () => {
     const out = reconcileChapterUuids(incoming, existing);
 
     expect(out[0].uuid).toBe('client-supplied');
+  });
+
+  it('id-only match with a slug mismatch carries nothing and keeps a free client uuid (#3683)', () => {
+    const existing = [ch({ id: 1, slug: '01-two', uuid: 'u-2' })];
+    const incoming = [ch({ id: 1, slug: '01-one', uuid: 'u-1' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('u-1');
+  });
+
+  it('a uuid mismatch is not a match, so the disk uuid is not carried (#3683)', () => {
+    const existing = [ch({ id: 1, uuid: 'disk' })];
+    const incoming = [ch({ id: 1, uuid: 'other' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('other');
+  });
+
+  it('an unmatched chapter whose client uuid a disk chapter holds gets a fresh one (#3683)', () => {
+    const existing = [ch({ id: 3, slug: '03-four', uuid: 'u-4' })];
+    const incoming = [ch({ id: 3, slug: '03-three', uuid: 'u-3' }), ch({ id: 4, uuid: 'u-4' })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(out[0].uuid).toBe('u-3');
+    expect(out[1].uuid).toMatch(UUID_RE);
+    expect(out[1].uuid).not.toBe('u-4');
+  });
+
+  it('output uuids are unique even when two incoming chapters claim one disk chapter (#3683)', () => {
+    const existing = [ch({ id: 1, uuid: 'u1' })];
+    const incoming = [ch({ id: 1 }), ch({ id: 1 })];
+
+    const out = reconcileChapterUuids(incoming, existing);
+
+    expect(new Set(out.map((c) => c.uuid)).size).toBe(2);
   });
 
   it('does not mutate the incoming array', () => {
@@ -178,6 +218,18 @@ describe('carryTitleSynthesized', () => {
     carryTitleSynthesized(incoming, existing);
 
     expect('titleSynthesized' in incoming[0]).toBe(false);
+  });
+  it('does not carry the flag across a slug or uuid mismatch (#3683)', () => {
+    const existing = [ch({ id: 1, slug: '01-two', title: 'T', uuid: 'a', titleSynthesized: true })];
+
+    expect(
+      carryTitleSynthesized([ch({ id: 1, slug: '01-one', title: 'T', uuid: 'a' })], existing)[0]
+        .titleSynthesized,
+    ).toBeUndefined();
+    expect(
+      carryTitleSynthesized([ch({ id: 1, slug: '01-two', title: 'T', uuid: 'b' })], existing)[0]
+        .titleSynthesized,
+    ).toBeUndefined();
   });
 });
 
@@ -359,5 +411,28 @@ describe('carryServerOwnedChapterFields (#3683)', () => {
     carryServerOwnedChapterFields(incoming, existing);
 
     expect(incoming).toEqual(before);
+  });
+  it('h) carries nothing across a slug mismatch or a uuid mismatch (#3683)', () => {
+    const existing = [ch({ id: 1, slug: '01-two', uuid: 'u-2', duration: '00:20:00' })];
+
+    const slugMiss = carryServerOwnedChapterFields(
+      [ch({ id: 1, slug: '01-one', uuid: 'u-1', duration: 'client' })],
+      existing,
+    );
+    expect(slugMiss[0].duration).toBeUndefined();
+
+    const uuidMiss = carryServerOwnedChapterFields(
+      [ch({ id: 1, slug: '01-two', uuid: 'u-1', duration: 'client' })],
+      existing,
+    );
+    expect(uuidMiss[0].duration).toBeUndefined();
+  });
+
+  it('i) matches when one side carries no uuid', () => {
+    const existing = [ch({ id: 1, duration: '00:20:00' })];
+
+    const out = carryServerOwnedChapterFields([ch({ id: 1, uuid: 'u-1' })], existing);
+
+    expect(out[0].duration).toBe('00:20:00');
   });
 });

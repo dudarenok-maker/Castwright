@@ -182,7 +182,6 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
         audioModelKey: 'kokoro',
         audioQa: { score: 0.1 },
         duration: '09:99:99',
-        uuid: 'client-uuid',
       }),
     );
     expect(res.status).toBe(204);
@@ -225,5 +224,50 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     expect(c1.audioEngines).toEqual(STAMP.audioEngines);
     expect(c1.audioRenderedAt).toBe(STAMP.audioRenderedAt);
     expect(c1.audioQa).toEqual(STAMP.audioQa);
+  });
+
+  it("G. a stale pre-reorder copy gets no other chapter's uuid or stamps", async () => {
+    writeState([
+      { id: 1, title: 'Two', slug: '01-two', uuid: 'u-2', duration: '00:20:00' },
+      { id: 2, title: 'One', slug: '02-one', uuid: 'u-1', duration: '00:10:00' },
+    ]);
+
+    const res = await putChapters([
+      { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
+      { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
+    ]);
+    expect(res.status).toBe(204);
+
+    const ch = readChapters();
+    const one = ch.find((c) => c.title === 'One')!;
+    const two = ch.find((c) => c.title === 'Two')!;
+    expect(one.duration).toBeUndefined();
+    expect(two.duration).toBeUndefined();
+    expect(one.uuid).not.toBe('u-2');
+    expect(two.uuid).not.toBe('u-1');
+    expect(new Set(ch.map((c) => c.uuid)).size).toBe(ch.length);
+  });
+
+  it('H. a stale pre-merge copy never duplicates a uuid or borrows a stamp', async () => {
+    writeState([
+      { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
+      { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
+      { id: 3, title: 'Four', slug: '03-four', uuid: 'u-4', duration: '00:40:00' },
+    ]);
+
+    const res = await putChapters([
+      { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
+      { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
+      { id: 3, title: 'Three', slug: '03-three', uuid: 'u-3' },
+      { id: 4, title: 'Four', slug: '04-four', uuid: 'u-4' },
+    ]);
+    expect(res.status).toBe(204);
+
+    const ch = readChapters();
+    expect(new Set(ch.map((c) => c.uuid)).size).toBe(ch.length);
+    expect(ch.find((c) => c.title === 'Three')!.duration).toBeUndefined();
+    expect(ch.find((c) => c.title === 'Four')!.duration).toBeUndefined();
+    expect(ch.find((c) => c.title === 'Four')!.uuid).not.toBe('u-4');
+    expect(ch.find((c) => c.title === 'Three')!.uuid).not.toBe('u-4');
   });
 });
