@@ -1016,13 +1016,25 @@ paths:
       summary: Override a chapter's title with a user-supplied label
       operationId: renameChapter
       description: |
-        Sets `state.chapters[chapterId-1].title` to the supplied value and
-        flips `titleOverridden` to true so subsequent heuristic refresh
-        passes (`refreshChapterTitles` on book-state GET, and the
-        explicit POST `/chapters/refresh-titles`) leave it alone.
-        Writes state.json atomically; holds the per-book write lock.
-        Pure label mutation — does not touch sentence ids, slugs, audio
-        files, or analysis cache.
+        Sets the title of the chapter whose `id` is `chapterId` to the
+        supplied value and flips `titleOverridden` to true so subsequent
+        heuristic refresh passes (`refreshChapterTitles` on book-state GET,
+        and the explicit POST `/chapters/refresh-titles`) leave it alone.
+        The chapter id and every sentence id are unchanged, but the
+        chapter's slug is re-derived from the new title. When the slug
+        changes and the chapter has rendered audio, its audio files (and
+        companion files) are renamed to the new slug, with the chapter title
+        and id in the segments metadata updated to match; the audio itself
+        is not regenerated. The new title is also written into the chapter's
+        manuscript hints.
+
+        Runs through the same restructure path as merge and split, so it
+        writes state.json atomically, rebuilds the analysis cache from
+        manuscript-edits.json, and takes the per-book operation lock, the
+        restructure claim and the per-book state lock. Like them it is
+        refused with 409 while analysis or any other long job is running on
+        the book. Re-sending the current title of an already-overridden
+        chapter changes nothing and renames no audio.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
