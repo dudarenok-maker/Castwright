@@ -277,6 +277,36 @@ describe('restructure persists manuscript-hints.json (#3703)', () => {
     expect(bodies).not.toContain('Alpha first.');
   });
 
+  it('a stale-body restructure whose state.json write fails keeps the hints file, so reverting the edit before a restart still hydrates the landed structure', async () => {
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(merge.status).toBe(200);
+
+    editManuscriptOnDisk();
+    const stateBefore = readFileSync(statePath());
+
+    stateWriteSpy.fail = true;
+    const reorder = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(500);
+    stateWriteSpy.fail = false;
+    expect(readFileSync(statePath()).equals(stateBefore)).toBe(true);
+
+    // The edit is reverted before the restart: the kept entry validates again,
+    // so removing it before the failed state write would lose the merged structure.
+    writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
+    expect(record?.chapterHints).toHaveLength(readStateUuids().length);
+    expect(record!.chapterHints[0]!.body).toContain('Alpha first.');
+    expect(record!.chapterHints[0]!.body).toContain('Beta first.');
+    expect(record!.chapterHints[1]!.body).toContain('Gamma first.');
+  });
+
   it('a stale-body restructure whose state.json write lands removes the stale hints file', async () => {
     const merge = await request(app)
       .post(`/api/books/${bookId}/chapters/merge`)

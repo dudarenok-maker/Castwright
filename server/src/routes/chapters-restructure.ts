@@ -394,10 +394,11 @@ async function applyRestructureClaimed(
     // state is recoverable via the reconciliation filter in
     // book-state.ts:166-185.
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
-    /* Hygiene only: a stale record means the manuscript on disk changed, so no
-       kept entry validates against its sha and a restart fresh-parses whether or
-       not this file exists. It goes after the state write so a failed write
-       leaves the disk exactly as it was (#3703). Best-effort. */
+    /* A stale record means the manuscript on disk changed, so the kept entry
+       does not validate against its sha today. The order is load-bearing: if the
+       edit is reverted before a restart the kept entry validates again, and
+       removing it before a failed state write would lose the structure that
+       landed (#3703). Best-effort. */
     if (!bodiesCurrent) {
       await removeManuscriptHints(bookDir).catch((err) => {
         console.warn(`[chapters-restructure] ${manuscriptId}: could not remove manuscript-hints.json`, err);
