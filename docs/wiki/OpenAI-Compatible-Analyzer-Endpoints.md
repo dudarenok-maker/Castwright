@@ -208,6 +208,10 @@ finish and are kept.
 
 Then resume — finished chapters are kept.
 
+## Voice descriptions
+
+An endpoint's model can also write your cast's voice descriptions. Open Advanced Settings and pick it under **Persona generation engine**. It runs under the same limits as analysis, and if the endpoint is missing or can't be reached, design stops once and says so instead of switching to Gemini.
+
 ## Troubleshooting
 
 | What you see | What it means | What to do |

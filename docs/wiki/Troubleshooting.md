@@ -304,7 +304,7 @@ In Advanced Configuration each voice engine has its own device pin, listed by th
 
 ### Can I design voices without a Gemini API key?
 
-Yes — voice design's description-writing step has its own engine, **Persona generation engine** in Advanced settings. Set it to Local and Castwright drafts each character's voice from a model running entirely on your machine, so a fully offline setup, or one with no cloud key, can still design a full cast from scratch. Gemini is its default for the richest descriptions; Local is the road for a no-key or offline setup.
+Yes — voice design's description-writing step has its own engine, **Persona generation engine** in Advanced settings. Set it to Local and Castwright drafts each character's voice from a model running entirely on your machine, so a fully offline setup, or one with no cloud key, can still design a full cast from scratch. Gemini is its default for the richest descriptions; Local is the road for a no-key or offline setup. If you've connected an OpenAI-compatible server for analysis, one of its models is a third option: it uses the same limits as analysis, a model whose server isn't set up is refused when you save it and again when the design runs, and Castwright never quietly switches to Gemini in its place.
 
 ### Why is my character gasping, sighing, or laughing when the book doesn't say so?
 
