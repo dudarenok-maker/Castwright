@@ -352,9 +352,16 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
    re-parse, a manuscript replace, a delete): the user has seen the failure and
    the revert, so a kept save landing later would contradict what they see (or
    re-send a pre-reparse roster). Touches only the kept and parked (superseded)
-   saves — a newer edit already queued for the book is untouched. Not a reducer action. */
+   saves — a newer edit already queued for the book is untouched. Only a wipe's
+   own success passes `{ wipeSettled: true }`, which also ends that wipe's
+   pending count (see `restoreSupersededSaves`); Layout's re-read drops plain,
+   since it never started a wipe and must not settle one. Not a reducer action. */
 const DROP_RETAINED = 'persistence/dropRetained';
-export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
+export const dropRetainedSaves = (bookId: string, opts?: { wipeSettled?: boolean }) => ({
+  type: DROP_RETAINED,
+  payload: bookId,
+  wipeSettled: opts?.wipeSettled === true,
+});
 
 /* #3421 — cancel everything of `bookId` that has not landed yet, ahead of a
    destructive server call (re-parse, manuscript replace, delete): its kept
@@ -420,7 +427,8 @@ export const persistenceMiddleware: Middleware = (store) => {
      (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
   const parked = new Map<FlushKey, SavedPatch & { newerFields: Set<string> }>();
   /* #3421 S4 — wipes of a book still running. The parked saves are shared, so
-     only the last wipe to fail gives them back; one that succeeded dropped them. */
+     only the last wipe to fail gives them back; one that succeeded dropped them.
+     Only a wipe's own outcome (a `wipeSettled` drop or a restore) decrements. */
   const pendingWipes = new Map<string, number>();
   const endWipe = (bookId: string) => {
     const left = Math.max(0, (pendingWipes.get(bookId) ?? 0) - 1);
@@ -566,7 +574,7 @@ export const persistenceMiddleware: Middleware = (store) => {
 
   return (next) => (action) => {
     const result = next(action);
-    const a = action as { type?: string; payload?: unknown };
+    const a = action as { type?: string; payload?: unknown; wipeSettled?: boolean };
     const type = a?.type;
     if (!type) return result;
 
@@ -581,7 +589,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
-      endWipe(a.payload);
+      if (a.wipeSettled === true) endWipe(a.payload);
       for (const key of Array.from(retained.keys())) {
         if (key.startsWith(`${a.payload}:`)) {
           retained.delete(key);

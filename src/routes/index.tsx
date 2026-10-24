@@ -162,7 +162,7 @@ export function BooksRoute() {
              cache are gone: the book is wiped, so its saves are let go, not
              given back (a re-import reuses the id) (#3421 S4). */
           if ((err as { code?: string }).code === 'book_partly_deleted') {
-            dispatch(dropRetainedSaves(b.bookId));
+            dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
           } else {
             dispatch(restoreSupersededSaves(b.bookId));
           }
@@ -173,7 +173,7 @@ export function BooksRoute() {
            under the same id reads as a different book (OD31: and drop its
            preview — the new take stays live, nothing is restored). */
         dispatch(revisionsActions.forgetBook(b.bookId));
-        dispatch(dropRetainedSaves(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
@@ -220,7 +220,7 @@ export function BooksRoute() {
            (OD31: and drop its preview — the new take stays live). */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        dispatch(dropRetainedSaves(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -282,7 +282,7 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        dispatch(dropRetainedSaves(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());

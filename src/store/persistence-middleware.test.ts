@@ -1243,12 +1243,41 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     expect(castPuts()).toHaveLength(1);
   });
 
+  it("(viii-c) a Layout-style plain drop does not settle a wipe's pending count (S4)", async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1')); // wipe 1
+    /* Layout's full hydrate lets go of the parked saves; it is not a wipe. */
+    mw(dropRetainedSaves('book-1'));
+    /* The user edits and the PUT fails: the save is kept. */
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    putBookState.mockRejectedValue(down());
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(supersedeBookSaves('book-1')); // wipe 2 parks the kept edit
+    mw(restoreSupersededSaves('book-1')); // wipe 1 fails
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+    mw(restoreSupersededSaves('book-1')); // wipe 2 fails too
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+  });
+
   it('(viii-b) if any overlapping wipe succeeded, the last restore gives nothing back (S4)', async () => {
     const state: Record<string, unknown> = baseState();
     const mw = await parkCast(state);
     mw(supersedeBookSaves('book-1'));
     mw(supersedeBookSaves('book-1'));
-    mw(dropRetainedSaves('book-1'));
+    mw(dropRetainedSaves('book-1', { wipeSettled: true }));
     mw(restoreSupersededSaves('book-1'));
     state.ui = { stage: { bookId: 'book-1' } };
     mw({ type: 'ui/openBook' });
