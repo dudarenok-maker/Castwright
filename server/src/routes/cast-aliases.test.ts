@@ -19,7 +19,7 @@
    Mirrors cast-merge.test.ts's lazy-import pattern: defer module imports
    until WORKSPACE_DIR is set so paths.ts captures the right root. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -37,6 +37,108 @@ let bookDir: string;
 let app: Express;
 let bookId: string;
 let cachePath: string;
+
+/* #3773 — cast-lock-alone proofs. Every add-/unlink-/repoint-alias handler
+   takes `book-op:<bookId>` BEFORE `withCastLock`, so two ROUTE calls race-for-
+   race are serialised by book-op alone and the route-vs-route tests below stay
+   green with `withCastLock` replaced by a no-op (confirmed: no-op cast lock
+   green; no-op cast lock AND book-op red). The helper below parks the REAL
+   route at its in-lock cast.json read and drives the second writer BELOW
+   book-op — `persistEmotionVariant` takes the cast lock and no book-op — so
+   only the cast lock separates the two. `vi.mock`s are hoisted passthroughs:
+   `readJson` so the route's own read (bound at module load) can be parked,
+   `withKeyLock` so the test can pin that the second writer took no book-op. */
+const { lockKeyLog } = vi.hoisted(() => ({
+  lockKeyLog: { on: false, keys: [] as string[] },
+}));
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return {
+    ...actual,
+    withKeyLock: ((key: string, ...rest: unknown[]) => {
+      if (lockKeyLog.on) lockKeyLog.keys.push(key);
+      return (actual.withKeyLock as (...a: unknown[]) => unknown)(key, ...rest);
+    }) as typeof actual.withKeyLock,
+  };
+});
+
+async function raceRouteAgainstCastLockOnlyWriter(opts: {
+  castPath: string;
+  startRoute: () => request.Test;
+  startSecondWriter: () => Promise<unknown>;
+}): Promise<{ resRoute: request.Response; second: unknown; windowKeys: string[] }> {
+  const stateIo = await import('../workspace/state-io.js');
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
+  );
+  let released!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    released = resolve;
+  });
+  let intercepted = false;
+  let signalRead!: () => void;
+  const readReached = new Promise<void>((resolve) => {
+    signalRead = resolve;
+  });
+  /* The handler's FIRST cast.json read is the in-lock one (no upfront
+     lock-free read): hold its resolution open behind the gate. */
+  const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+    if (path !== opts.castPath || intercepted) return actual.readJson(path);
+    intercepted = true;
+    signalRead();
+    const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+    await gate;
+    return value;
+  });
+
+  let resRoute: request.Response;
+  let second: unknown;
+  let windowKeys: string[] = [];
+  let routePromise: request.Test | undefined;
+  let secondPromise: Promise<unknown> | undefined;
+  try {
+    routePromise = opts.startRoute();
+    routePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+    let reachTimer!: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([
+        readReached,
+        new Promise<never>((_, rej) => {
+          reachTimer = setTimeout(
+            () => rej(new Error('HANG: the route never reached its in-lock cast.json read')),
+            8_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(reachTimer);
+    }
+    expect(intercepted).toBe(true);
+
+    lockKeyLog.keys = [];
+    lockKeyLog.on = true;
+    secondPromise = opts.startSecondWriter();
+    secondPromise.catch(() => {}); // force dispatch now (see above)
+    // Generous head start: completes fully when unlocked (the bug window)
+    // or queues behind the route's still-held lock when locked.
+    await new Promise((r) => setTimeout(r, 50));
+    lockKeyLog.on = false;
+    windowKeys = [...lockKeyLog.keys];
+
+    released();
+    [resRoute, second] = await Promise.all([routePromise, secondPromise]);
+  } finally {
+    lockKeyLog.on = false;
+    released(); // idempotent — a throw above still releases the held read
+    spy.mockImplementation(actual.readJson);
+    await Promise.allSettled([routePromise, secondPromise]);
+  }
+  return { resRoute, second, windowKeys };
+}
 
 const sourceCharacter = {
   id: 'saltgrave-figure',
@@ -479,7 +581,12 @@ describe('#1981 — two add-alias calls for one book overlap', () => {
     );
   });
 
-  it('keeps both aliases when two add-alias calls for one book overlap', async () => {
+  it('keeps both aliases when two add-alias calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the '#3773 — cast lock
+       alone' test below does. It pins that the real stack, as wired, keeps
+       both writes. */
     const [resX, resY] = await Promise.all([
       request(app)
         .post(`/api/books/${raceBookId}/cast/add-alias`)
@@ -498,6 +605,52 @@ describe('#1981 — two add-alias calls for one book overlap', () => {
     const y = cast.characters.find((c) => c.id === 'race-y')!;
     expect(x.aliases).toEqual(['Xander']);
     expect(y.aliases).toEqual(['Yara']);
+  });
+
+  it('#3773 — cast lock alone: an add-alias and a cast-lock-only writer on a different character both survive', async () => {
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'race-x', name: 'Race X', role: 'character', color: 'unset', aliases: [] },
+          { id: 'race-y', name: 'Race Y', role: 'character', color: 'unset', aliases: [] },
+        ],
+      }),
+    );
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const { resRoute, second, windowKeys } = await raceRouteAgainstCastLockOnlyWriter({
+      castPath: join(raceBookDir, '.audiobook', 'cast.json'),
+      startRoute: () =>
+        request(app)
+          .post(`/api/books/${raceBookId}/cast/add-alias`)
+          .send({ characterId: 'race-x', aliasName: 'Xander' }),
+      startSecondWriter: () =>
+        persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-v_race-y__angry'),
+    });
+    /* Premise pin: while the route was parked, the second writer queued on
+       the cast lock only — it took no `book-op:` key. If someone later wraps
+       it in book-op the two serialise on that again and this test decays. */
+    expect(windowKeys.filter((k) => k.startsWith('book-op:'))).toEqual([]);
+    expect(resRoute.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as {
+      characters: Array<{
+        id: string;
+        aliases?: string[];
+        overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
+      }>;
+    };
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    /* the route's own mutation survived the second writer's write ... */
+    expect(byId['race-x'].aliases).toEqual(['Xander']);
+    /* ... and the second writer's own mutation survived the route's write —
+       the lost-update this test pins. */
+    expect(byId['race-y'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_race-y__angry',
+    });
   });
 });
 
@@ -548,7 +701,12 @@ describe('#1981 — two unlink-alias calls for one book overlap', () => {
     );
   });
 
-  it('keeps both new characters when two unlink-alias calls for one book overlap', async () => {
+  it('keeps both new characters when two unlink-alias calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the '#3773 — cast lock
+       alone' test below does. It pins that the real stack, as wired, keeps
+       both writes. */
     const [resP, resQ] = await Promise.all([
       request(app)
         .post(`/api/books/${raceBookId}/cast/unlink-alias`)
@@ -568,6 +726,53 @@ describe('#1981 — two unlink-alias calls for one book overlap', () => {
     expect(ids).toContain('aliasq');
     expect(cast.characters.find((c) => c.id === 'src-p')?.aliases).toEqual([]);
     expect(cast.characters.find((c) => c.id === 'src-q')?.aliases).toEqual([]);
+  });
+
+  it('#3773 — cast lock alone: an unlink-alias and a cast-lock-only writer on a different character both survive', async () => {
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'src-p', name: 'Source P', role: 'character', color: 'unset', aliases: ['AliasP'] },
+          { id: 'src-q', name: 'Source Q', role: 'character', color: 'unset', aliases: ['AliasQ'] },
+        ],
+      }),
+    );
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const { resRoute, second, windowKeys } = await raceRouteAgainstCastLockOnlyWriter({
+      castPath: join(raceBookDir, '.audiobook', 'cast.json'),
+      startRoute: () =>
+        request(app)
+          .post(`/api/books/${raceBookId}/cast/unlink-alias`)
+          .send({ sourceCharacterId: 'src-p', aliasName: 'AliasP' }),
+      startSecondWriter: () =>
+        persistEmotionVariant(raceBookDir, 'src-q', 'angry', 'qwen-v_src-q__angry'),
+    });
+    /* Premise pin: while the route was parked, the second writer queued on
+       the cast lock only — it took no `book-op:` key. If someone later wraps
+       it in book-op the two serialise on that again and this test decays. */
+    expect(windowKeys.filter((k) => k.startsWith('book-op:'))).toEqual([]);
+    expect(resRoute.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as {
+      characters: Array<{
+        id: string;
+        aliases?: string[];
+        overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
+      }>;
+    };
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    /* the route's own mutation survived: alias dropped, new character minted */
+    expect(byId['src-p'].aliases).toEqual([]);
+    expect(Object.keys(byId)).toContain('aliasp');
+    /* the second writer's own mutation survived — the lost-update this test pins */
+    expect(byId['src-q'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_src-q__angry',
+    });
+    expect(byId['src-q'].aliases).toEqual(['AliasQ']);
   });
 });
 
@@ -613,7 +818,12 @@ describe('#1981 — two repoint-alias calls for one book overlap', () => {
     );
   });
 
-  it('keeps both repoints when two repoint-alias calls for one book overlap', async () => {
+  it('keeps both repoints when two repoint-alias calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the '#3773 — cast lock
+       alone' test below does. It pins that the real stack, as wired, keeps
+       both writes. */
     const [resM, resN] = await Promise.all([
       request(app)
         .post(`/api/books/${raceBookId}/cast/repoint-alias`)
@@ -633,5 +843,53 @@ describe('#1981 — two repoint-alias calls for one book overlap', () => {
     expect(byId['tgt-m'].aliases).toEqual(['AliasM']);
     expect(byId['src-n'].aliases).toEqual([]);
     expect(byId['tgt-n'].aliases).toEqual(['AliasN']);
+  });
+
+  it('#3773 — cast lock alone: a repoint-alias and a cast-lock-only writer on a different character both survive', async () => {
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'src-m', name: 'Source M', role: 'character', color: 'unset', aliases: ['AliasM'] },
+          { id: 'tgt-m', name: 'Target M', role: 'character', color: 'unset', aliases: [] },
+          { id: 'src-n', name: 'Source N', role: 'character', color: 'unset', aliases: ['AliasN'] },
+          { id: 'tgt-n', name: 'Target N', role: 'character', color: 'unset', aliases: [] },
+        ],
+      }),
+    );
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const { resRoute, second, windowKeys } = await raceRouteAgainstCastLockOnlyWriter({
+      castPath: join(raceBookDir, '.audiobook', 'cast.json'),
+      startRoute: () =>
+        request(app)
+          .post(`/api/books/${raceBookId}/cast/repoint-alias`)
+          .send({ sourceCharacterId: 'src-m', aliasName: 'AliasM', targetCharacterId: 'tgt-m' }),
+      startSecondWriter: () =>
+        persistEmotionVariant(raceBookDir, 'tgt-n', 'angry', 'qwen-v_tgt-n__angry'),
+    });
+    /* Premise pin: while the route was parked, the second writer queued on
+       the cast lock only — it took no `book-op:` key. If someone later wraps
+       it in book-op the two serialise on that again and this test decays. */
+    expect(windowKeys.filter((k) => k.startsWith('book-op:'))).toEqual([]);
+    expect(resRoute.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as {
+      characters: Array<{
+        id: string;
+        aliases?: string[];
+        overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
+      }>;
+    };
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    /* the route's own mutation survived: alias moved src-m -> tgt-m */
+    expect(byId['src-m'].aliases).toEqual([]);
+    expect(byId['tgt-m'].aliases).toEqual(['AliasM']);
+    /* the second writer's own mutation survived — the lost-update this test pins */
+    expect(byId['tgt-n'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_tgt-n__angry',
+    });
   });
 });
