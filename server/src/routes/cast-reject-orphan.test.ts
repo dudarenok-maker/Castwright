@@ -925,7 +925,6 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
       if (path !== raceCastPath) return actual.readJson(path);
       castReads++;
       if (castReads > 1) return actual.readJson(path);
-      if (castReads < 1) return actual.readJson(path);
       signalRead();
       const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
       await gate;
