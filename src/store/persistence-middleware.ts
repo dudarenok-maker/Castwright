@@ -31,6 +31,8 @@ interface PersistableRootState {
   manuscript: ManuscriptState;
   changeLog: ChangeLogState;
   bookMeta: BookMetaState;
+  /* Optional like `settings`: only the toast title fallback reads it. */
+  library?: { books: { bookId: string; title: string }[] };
   /* fe-2 — user-tunable autosave debounce. Optional so this type stays
      decoupled from the settings slice's full shape (and tests that build a
      partial root state don't have to supply it). */
@@ -50,7 +52,11 @@ const DEFAULT_DEBOUNCE_MS = 500;
    than a hardcoded copy, and rolls its optimistic saved[] update back so the
    header stops showing a value the server rejected. */
 interface PersistFailureHandler {
-  message: (err: unknown) => string;
+  /** `bookTitle` is passed only for a save that was retried and given up on
+      (network / 5xx), which can fire seconds after the user left the book —
+      so the toast names it. A 4xx refusal is raised at once, on the book the
+      user is still on, and gets no title. */
+  message: (err: unknown, bookTitle?: string) => string;
   dedupeKey: string;
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
       optimistic local update. Returns the action to dispatch. */
@@ -60,13 +66,15 @@ interface PersistFailureHandler {
       so the next commit snapshots a fresh baseline. Returns the action. */
   onSuccess?: (bookId: string) => { type: string };
 }
+const lineReassignFailedMessage = (bookTitle?: string) =>
+  `Line reassignment${bookTitle ? ` in "${bookTitle}"` : ''} could not be saved. Check your connection and try again.`;
 const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
   'manuscript/setSentencesCharacterBulk': {
-    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    message: (_err, bookTitle) => lineReassignFailedMessage(bookTitle),
     dedupeKey: 'bulk-reassign-persist-failed',
   },
   'manuscript/undoBulkReassign': {
-    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    message: (_err, bookTitle) => lineReassignFailedMessage(bookTitle),
     dedupeKey: 'bulk-reassign-persist-failed',
   },
   /* #2230 — a refused rename (409: analysis running; or a folder path
@@ -76,11 +84,13 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
      we strip the api.ts envelope so the toast shows only the refusal sentence,
      degrading gracefully to the raw message if that format ever changes. */
   'bookMeta/commitDraft': {
-    message: (err) => {
+    message: (err, bookTitle) => {
       const raw = err instanceof Error ? err.message : '';
       const sentence =
         raw.replace(/^Book state PUT failed \(\d+\): /, '') || 'an unknown error occurred';
-      return `Book details couldn't be saved: ${sentence}`;
+      return bookTitle
+        ? `Book details for "${bookTitle}" couldn't be saved: ${sentence}`
+        : `Book details couldn't be saved: ${sentence}`;
     },
     dedupeKey: 'book-meta-persist-failed',
     rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
@@ -268,6 +278,19 @@ const PERSIST_RULES: Record<
 
 };
 
+/* The title `bookId` has on disk, for a toast that can fire after the user left
+   it. `lastCommitted` holds the server-accepted baseline while a rename is
+   unsaved (`saved` already carries the new, unsaved title then); `saved` is only
+   seeded by a full read, so a fresh book on analysing/confirm falls back to its
+   library entry. */
+function savedTitleOf(s: PersistableRootState, bookId: string): string | undefined {
+  return (
+    s.bookMeta?.lastCommitted?.[bookId]?.saved?.title ??
+    s.bookMeta?.saved?.[bookId]?.title ??
+    s.library?.books?.find((b) => b.bookId === bookId)?.title
+  );
+}
+
 function bookIdFromState(s: PersistableRootState): string | null {
   const stage = s.ui.stage as { bookId?: string };
   return stage.bookId ?? null;
@@ -289,16 +312,80 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
 /* #3395 pass 4, S3 — dispatched by Layout's per-book hydrate before it
    re-reads a book's disk state. The middleware sends that book's queued
    writes now and the dispatch returns a promise that settles once every
-   write for the book still in flight has settled (success or failure), or
-   `null` when nothing is queued or in flight — so the re-read never sees
-   disk from before a write that LANDED. A write that FAILED settles the
-   same way, so the re-read still runs and reads disk from before it. Plan
-   286 — revisions no longer persists from the client, so the
-   write-then-re-read hazard this describes now applies only to the other
-   slices. Re-send vs. surface is owed in #3421.
+   write for the book has landed or been given up on after the retries
+   (#3421), or `null` when nothing is queued or in flight — so the re-read
+   never sees disk from before a write that LANDED. It resolves with the
+   slices that still failed; a write that was given up on has already raised
+   a toast. A given-up save is kept and re-sent first by the book's next
+   flush (#3421), so this promise also covers that re-send, and a chapter
+   restructure waits for it. It is let go (`dropRetainedSaves`) once the book's
+   slices are re-read from disk or wiped. Plan 286 — revisions
+   no longer persists from the client, so the write-then-re-read hazard this
+   describes now applies only to the other slices.
    Not a reducer action: no slice handles it. */
+/* #3421 — what `flushBookPersistence` resolves with: the slices whose write was
+   given up on. Empty when every write landed. */
+export interface BookFlushOutcome {
+  failedSlices: StateSlice[];
+}
+/* #3421 — gaps before each resend of a failed book-state PUT: 3 resends after
+   the first attempt, sent at about 0 s, 1 s, 3 s and 7 s. Precedent: the
+   per-book hydrate's doubling backoff from 1 s (layout.tsx
+   REVISIONS_HYDRATE_RETRY_BASE_MS) and the bounded reconnect loop (api.ts
+   RECONNECT_MAX_ATTEMPTS / RECONNECT_BACKOFF_MS). Bounded, unlike the
+   hydrate's, because a flush has a waiter (the re-read) that must eventually
+   run. */
+const FLUSH_RETRY_DELAYS_MS = [1000, 2000, 4000];
+/* A 4xx is a deliberate refusal (analysis running, path collision, consent);
+   it will not change in seven seconds, so it is never re-sent. */
+const PUT_REFUSED_RE = /^Book state PUT failed \(4\d\d\)/;
+const FLUSH_FAILED_MESSAGE =
+  "Some changes to this book couldn't be saved. Check your connection and try again.";
+const flushFailedMessage = (title: string) =>
+  `Couldn't save your changes to "${title}". Check your connection and try again.`;
+
 const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
+
+/* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
+   that book's slices are re-read from disk or wiped (Layout's full hydrate, a
+   re-parse, a manuscript replace, a delete): the user has seen the failure and
+   the revert, so a kept save landing later would contradict what they see (or
+   re-send a pre-reparse roster). Touches only the kept and parked (superseded)
+   saves — a newer edit already queued for the book is untouched. Only a wipe's
+   own success passes `{ wipeSettled: true }`, which also ends that wipe's
+   pending count (see `restoreSupersededSaves`); Layout's re-read drops plain,
+   since it never started a wipe and must not settle one. Not a reducer action. */
+const DROP_RETAINED = 'persistence/dropRetained';
+export const dropRetainedSaves = (bookId: string, opts?: { wipeSettled?: boolean }) => ({
+  type: DROP_RETAINED,
+  payload: bookId,
+  wipeSettled: opts?.wipeSettled === true,
+});
+
+/* #3421 — cancel everything of `bookId` that has not landed yet, ahead of a
+   destructive server call (re-parse, manuscript replace, delete): its kept
+   saves, its debounced writes, and any send-and-retry sequence already running
+   (which would otherwise PUT the pre-wipe roster into the wiped book seconds
+   later). Unlike `dropRetainedSaves` it bumps the generation, so a running
+   sequence reads as superseded: it ends quietly, with no toast, exactly as when
+   a newer write overtakes it. What it cancels is PARKED, not discarded: the
+   call may fail and leave the book untouched, so the handler either lets go of
+   the parked saves on success (`dropRetainedSaves`) or gives them back with
+   `restoreSupersededSaves`. Layout's re-read must NOT use this — it would
+   cancel a newer edit. Not a reducer action. */
+const SUPERSEDE_BOOK = 'persistence/supersedeBook';
+export const supersedeBookSaves = (bookId: string) => ({ type: SUPERSEDE_BOOK, payload: bookId });
+
+/* #3421 — the wipe call failed: move what `supersedeBookSaves` parked back into
+   the kept saves, minus the fields a write made since the park carried, so the
+   book's next flush re-sends only what is still owed.
+   Not a reducer action. */
+const RESTORE_SUPERSEDED = 'persistence/restoreSuperseded';
+export const restoreSupersededSaves = (bookId: string) => ({
+  type: RESTORE_SUPERSEDED,
+  payload: bookId,
+});
 
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
@@ -319,9 +406,46 @@ export const persistenceMiddleware: Middleware = (store) => {
      that a NEWER in-flight PUT (started while the first was still pending) still
      needs — closing the overlapping-in-flight-PUT data-loss race. */
   const generation = new Map<FlushKey, number>();
-  /* #3395 pass 4, S3 — each key's PUTs still in flight, as settle-never-
-     reject promises, so `flushBookPersistence` can await them. */
-  const inFlight = new Map<FlushKey, Set<Promise<void>>>();
+  /* #3395 pass 4, S3 — each key's writes still in flight, as settle-never-
+     reject promises, so `flushBookPersistence` can await them. Each entry
+     covers a whole send-and-retry sequence (#3421), not one PUT. */
+  const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
+  /* #3421 — saves given up on after their retries, kept until the next flush of
+     their book re-sends them first, or until that book's slices are re-read
+     from disk or wiped (`dropRetainedSaves`). A newer edit for the same key
+     merges over the kept patch when it is queued. */
+  const retained = new Map<FlushKey, Record<string, unknown>>();
+  /* #3421 — the success handler of a kept save, so its re-send clears the
+     rollback snapshot like a first-try success would. Only `onSuccess` is kept:
+     a re-send that fails again behaves as a plain kept save, not a rename. */
+  const retainedOnSuccess = new Map<FlushKey, PersistFailureHandler['onSuccess']>();
+  /* #3421 — the generation the kept save's write was made at. */
+  const retainedGen = new Map<FlushKey, number>();
+  /* #3421 — a send-and-retry sequence's captured patch (and success handler)
+     while it runs, so `supersedeBookSaves` can park what it is still sending. */
+  type SavedPatch = {
+    patch: Record<string, unknown>;
+    onSuccess?: PersistFailureHandler['onSuccess'];
+    /* The `generation` its write was made at; orders the layers of a park. */
+    gen?: number;
+  };
+  const sending = new Map<FlushKey, Set<SavedPatch>>();
+  /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
+     (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
+  const parked = new Map<
+    FlushKey,
+    SavedPatch & { newerFields: Set<string>; landedFields: Set<string> }
+  >();
+  /* #3421 S4 — wipes of a book still running. The parked saves are shared, so
+     only the last wipe to fail gives them back; one that succeeded dropped them.
+     Only a wipe's own outcome (a `wipeSettled` drop or a restore) decrements. */
+  const pendingWipes = new Map<string, number>();
+  const endWipe = (bookId: string) => {
+    const left = Math.max(0, (pendingWipes.get(bookId) ?? 0) - 1);
+    if (left > 0) pendingWipes.set(bookId, left);
+    else pendingWipes.delete(bookId);
+    return left;
+  };
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -329,6 +453,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce. */
   const flushBookNow = (bookId: string) => {
+    resendRetained(bookId);
     for (const [key, timer] of Array.from(timers)) {
       if (!key.startsWith(`${bookId}:`)) continue;
       clearTimeout(timer);
@@ -336,62 +461,134 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
   };
 
+  /* #3421 — re-send, now, every save of `bookId` that was given up on, ahead
+     of whatever the caller is about to send. Deleting from `retained` first
+     keeps `flush` from re-entering for the same key; an entry the nested
+     `flush` already sent is skipped, so each is sent once. */
+  const resendRetained = (bookId: string, exceptKey?: FlushKey) => {
+    for (const [key, patch] of Array.from(retained)) {
+      if (!key.startsWith(`${bookId}:`) || key === exceptKey) continue;
+      /* The loop walks a snapshot, and the nested `flush` below has already
+         re-sent (and deleted) the later entries of this book. */
+      if (!retained.has(key)) continue;
+      retained.delete(key);
+      if (!pending.has(key)) pending.set(key, patch);
+      const timer = timers.get(key);
+      if (timer) clearTimeout(timer);
+      flush(bookId, key.slice(bookId.length + 1) as StateSlice);
+    }
+  };
+
   const flush = (bookId: string, slice: StateSlice) => {
     const key = flushKey(bookId, slice);
+    resendRetained(bookId, key);
     const patch = pending.get(key);
     pending.delete(key);
     timers.delete(key);
     const handler = toastPending.get(key);
     toastPending.delete(key);
+    const onSuccess = handler?.onSuccess ?? retainedOnSuccess.get(key);
+    retainedOnSuccess.delete(key);
     const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
-    const put = api.putBookState(bookId, { slice, patch });
-    const settled = put.then(
-      () => {},
-      () => {},
-    );
-    const set = inFlight.get(key) ?? new Set<Promise<void>>();
+    const attemptSend = async (): Promise<{ slice: StateSlice; ok: boolean }> => {
+      /* #3421 — a failed PUT is re-sent with the patch captured above, never
+         one rebuilt from the store: by the time it fails the stage may name
+         another book (or none). */
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await api.putBookState(bookId, { slice, patch });
+          /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
+             newer write has since been scheduled (gen advanced), a fresh snapshot
+             belongs to it and must not be cleared by this older, superseded
+             flush. */
+          if (onSuccess && gen === (generation.get(key) ?? 0)) {
+            store.dispatch(onSuccess(bookId));
+          }
+          /* #3421 — the server has these fields now; a restore must not re-send them. */
+          const parkedHere = parked.get(key);
+          if (parkedHere) for (const field of Object.keys(patch as object)) parkedHere.landedFields.add(field);
+          return { slice, ok: true };
+        } catch (err) {
+          console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+          const refused = PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err));
+          const superseded = gen !== (generation.get(key) ?? 0);
+          /* A newer full-slice write for this key owns the outcome (and the
+             user's current draft); don't re-send the stale patch over it. */
+          if (superseded) return { slice, ok: true };
+          if (!refused && attempt < FLUSH_RETRY_DELAYS_MS.length) {
+            await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[attempt]));
+            if (gen !== (generation.get(key) ?? 0)) return { slice, ok: true };
+            continue;
+          }
+          /* Final failure of the LATEST write (#2230). The rollback restores a
+             shared, book-agnostic draft, and the retry window (#3421) lets the
+             user open another book first — applying it then would overlay this
+             book's text on that one, so it only runs while this book is open. */
+          const rolledBack =
+            !!handler?.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId;
+          /* Keep the patch for the book's next flush (#3421) — except a 4xx
+             (the server's answer, so re-sending repeats a refused write) and a
+             save that rolled back (the user's draft is restored for them to
+             save again). A save that gave up WITHOUT rolling back has no draft
+             left, so it is kept and re-sent. */
+          if (!refused && !rolledBack) {
+            retained.set(key, patch as Record<string, unknown>);
+            if (onSuccess) retainedOnSuccess.set(key, onSuccess);
+            retainedGen.set(key, gen);
+          }
+          if (handler) {
+            const bookTitle = refused
+              ? undefined
+              : savedTitleOf(store.getState() as PersistableRootState, bookId);
+            store.dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: handler.message(err, bookTitle),
+                dedupeKey: handler.dedupeKey,
+              }),
+            );
+            /* #2230 — a refused rename must not leave the persisted value claiming
+               a title the server rejected; roll the optimistic saved update back
+               (and restore the draft so the user's text is preserved for retry). */
+            if (rolledBack) store.dispatch(handler.rollback!(bookId));
+          } else if (!refused) {
+            /* Only a save that was retried and given up on (network / 5xx) gets
+               the generic toast; a 4xx is the server's deliberate refusal, which
+               stayed silent before #3421. It fires seconds after the user may
+               have left, so it names the book rather than saying "this book". */
+            const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
+            store.dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: title ? flushFailedMessage(title) : FLUSH_FAILED_MESSAGE,
+                dedupeKey: `book-persist-failed:${bookId}`,
+              }),
+            );
+          }
+          return { slice, ok: false };
+        }
+      }
+    };
+    const mine: SavedPatch = { patch: patch as Record<string, unknown>, onSuccess, gen };
+    const mineSet = sending.get(key) ?? new Set<SavedPatch>();
+    mineSet.add(mine);
+    sending.set(key, mineSet);
+    const settled = attemptSend();
+    const set = inFlight.get(key) ?? new Set<Promise<{ slice: StateSlice; ok: boolean }>>();
     set.add(settled);
     inFlight.set(key, set);
     void settled.then(() => {
+      mineSet.delete(mine);
+      if (mineSet.size === 0 && sending.get(key) === mineSet) sending.delete(key);
       set.delete(settled);
       if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
     });
-    put
-      .then(() => {
-        /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
-           newer write has since been scheduled (gen advanced), a fresh snapshot
-           belongs to it and must not be cleared by this older, superseded
-           flush. */
-        if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
-          store.dispatch(handler.onSuccess(bookId));
-        }
-      })
-      .catch((err) => {
-        console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-        /* #2230 — only act on a failure of the LATEST write. An older flush's
-           failure is superseded by a newer in-flight write (which owns the
-           snapshot and the user's current draft), so don't toast/roll back for
-           it — that would wrongly revert the newer edit. */
-        if (handler && gen === (generation.get(key) ?? 0)) {
-          store.dispatch(
-            notificationsActions.pushToast({
-              kind: 'error',
-              message: handler.message(err),
-              dedupeKey: handler.dedupeKey,
-            }),
-          );
-          /* #2230 — a refused rename must not leave the persisted value claiming
-             a title the server rejected; roll the optimistic saved update back
-             (and restore the draft so the user's text is preserved for retry). */
-          if (handler.rollback) store.dispatch(handler.rollback(bookId));
-        }
-      });
   };
 
   return (next) => (action) => {
     const result = next(action);
-    const a = action as { type?: string; payload?: unknown };
+    const a = action as { type?: string; payload?: unknown; wipeSettled?: boolean };
     const type = a?.type;
     if (!type) return result;
 
@@ -405,14 +602,124 @@ export const persistenceMiddleware: Middleware = (store) => {
       lastBookId = bookId;
     }
 
+    if (type === DROP_RETAINED && typeof a.payload === 'string') {
+      if (a.wipeSettled === true) endWipe(a.payload);
+      for (const key of Array.from(retained.keys())) {
+        if (key.startsWith(`${a.payload}:`)) {
+          retained.delete(key);
+          retainedOnSuccess.delete(key);
+          retainedGen.delete(key);
+        }
+      }
+      for (const key of Array.from(parked.keys())) {
+        if (key.startsWith(`${a.payload}:`)) parked.delete(key);
+      }
+      return result;
+    }
+
+    if (type === RESTORE_SUPERSEDED && typeof a.payload === 'string') {
+      if (endWipe(a.payload) > 0) return result;
+      for (const [key, saved] of Array.from(parked)) {
+        if (!key.startsWith(`${a.payload}:`)) continue;
+        parked.delete(key);
+        /* A write made after the park (book reopened, edited, flushed) carried
+           its own value for every field it built and has gone out or is going
+           out; putting the parked value back would re-send over it. Only the
+           fields it did not carry are still owed (the `state` slice's
+           confirmCast and commitDraft patch different fields of one key). */
+        const owed = Object.fromEntries(
+          Object.entries(saved.patch).filter(([field]) => !saved.newerFields.has(field)),
+        );
+        if (Object.keys(owed).length === 0) continue;
+        const newer = retained.get(key);
+        retained.set(key, { ...owed, ...newer });
+        const onSuccess = retainedOnSuccess.get(key) ?? saved.onSuccess;
+        if (onSuccess) retainedOnSuccess.set(key, onSuccess);
+      }
+      return result;
+    }
+
+    if (type === SUPERSEDE_BOOK && typeof a.payload === 'string') {
+      pendingWipes.set(a.payload, (pendingWipes.get(a.payload) ?? 0) + 1);
+      const prefix = `${a.payload}:`;
+      for (const key of new Set([
+        ...generation.keys(),
+        ...inFlight.keys(),
+        ...pending.keys(),
+        ...retained.keys(),
+        ...sending.keys(),
+      ])) {
+        if (!key.startsWith(prefix)) continue;
+        /* Oldest first, newest on top: the kept and running saves ordered by the
+           generation their writes were made at (a hung older PUT can still be
+           running when a newer one was given up on and kept), then the queued
+           one. A second supersede before the first resolves merges under what
+           the first already parked. */
+        const made = [
+          ...(retained.has(key)
+            ? [
+                {
+                  patch: retained.get(key)!,
+                  onSuccess: retainedOnSuccess.get(key),
+                  gen: retainedGen.get(key) ?? generation.get(key) ?? 0,
+                },
+              ]
+            : []),
+          ...(sending.get(key) ?? []),
+        ].sort((x, y) => (x.gen ?? 0) - (y.gen ?? 0));
+        const layers: SavedPatch[] = [
+          ...(parked.has(key) ? [parked.get(key)!] : []),
+          ...made,
+          ...(pending.has(key)
+            ? [{ patch: pending.get(key) as Record<string, unknown>, onSuccess: toastPending.get(key)?.onSuccess }]
+            : []),
+        ];
+        if (layers.length > 0) {
+          const before = parked.get(key);
+          const newerFields = before?.newerFields ?? new Set<string>();
+          const landedFields = before?.landedFields ?? new Set<string>();
+          /* A write this park cancels was never delivered, so its fields are owed
+             again — unless another post-park write carrying them landed. */
+          for (const l of layers) {
+            if (l === before) continue;
+            for (const field of Object.keys(l.patch)) {
+              if (!landedFields.has(field)) newerFields.delete(field);
+            }
+          }
+          parked.set(key, {
+            patch: Object.assign({}, ...layers.map((l) => l.patch)),
+            onSuccess: [...layers].reverse().find((l) => l.onSuccess)?.onSuccess,
+            newerFields,
+            landedFields,
+          });
+        }
+        generation.set(key, (generation.get(key) ?? 0) + 1);
+        const timer = timers.get(key);
+        if (timer) clearTimeout(timer);
+        timers.delete(key);
+        pending.delete(key);
+        toastPending.delete(key);
+        retained.delete(key);
+        retainedOnSuccess.delete(key);
+        retainedGen.delete(key);
+      }
+      return result;
+    }
+
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
       flushBookNow(target);
-      const waits: Promise<void>[] = [];
+      const waits: Promise<{ slice: StateSlice; ok: boolean }>[] = [];
       for (const [key, set] of inFlight) {
         if (key.startsWith(`${target}:`)) waits.push(...set);
       }
-      return waits.length > 0 ? Promise.all(waits).then(() => undefined) : null;
+      return waits.length > 0
+        ? Promise.all(waits).then(
+            (rs): BookFlushOutcome => ({
+              failedSlices: rs.filter((r) => !r.ok).map((r) => r.slice),
+            }),
+          )
+        : null;
     }
 
     const rule = PERSIST_RULES[type];
@@ -420,7 +727,14 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (!bookId) return result;
 
     const key = flushKey(bookId, rule.slice);
-    pending.set(key, rule.build(after, bookId));
+    const built = rule.build(after, bookId);
+    /* #3421 — a write made after a park supersedes the parked fields it carries. */
+    const parkedHere = parked.get(key);
+    if (parkedHere) for (const field of Object.keys(built as object)) parkedHere.newerFields.add(field);
+    /* #3421 — a save given up on is re-sent with this one: the newer fields win. */
+    const kept = retained.get(key);
+    if (kept) retained.delete(key);
+    pending.set(key, kept ? { ...kept, ...(built as Record<string, unknown>) } : built);
     /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
        write; in-flight older flushes keep their captured (lower) generation
        and are therefore gated out of prune/rollback in flush. */

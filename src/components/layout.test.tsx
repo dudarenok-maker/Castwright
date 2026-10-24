@@ -37,7 +37,7 @@ import { tourSlice } from '../store/tour-slice';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
-import { persistenceMiddleware } from '../store/persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -2659,6 +2659,174 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
     seedBookBInSlices(store);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     await assertMatchWaitsForBookA(store);
+  });
+});
+
+describe('Layout — a failed save on leaving a book is re-sent before the re-read (#3421)', () => {
+  const elizaOf = (name: string) => ({ id: 'eliza', name, role: '', color: 'narrator' }) as Character;
+
+  /* A disk model behind the mocked api: `disk` is what getBookState reads and
+     what a successful cast PUT overwrites; `calls` is the ordered log the
+     assertions read. The failure is armed by the test AFTER the edit, so a cast
+     PUT Layout sends on its own (the confirm-stage voice match) is never the one
+     that fails. */
+  function diskModel(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    const disk: Record<string, Character[]> = { A: [elizaOf('Eliza')], B: [{ id: 'b-hero', name: 'Hero', role: '', color: 'peach' } as Character] };
+    const calls: string[] = [];
+    const model = { disk, calls, failNextCastPutsForA: 0 };
+    getBookStateMock.mockImplementation(async (id: string) => {
+      calls.push(`get:${id}`);
+      return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk[id] } });
+    });
+    putBookStateMock.mockImplementation(async (id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+      if (id === 'A' && req.slice === 'cast' && model.failNextCastPutsForA > 0) {
+        model.failNextCastPutsForA -= 1;
+        calls.push('put:A:cast:fail');
+        throw new Error('Book state PUT failed (503): down');
+      }
+      if (req.slice === 'cast') disk[id] = req.patch.characters!;
+      calls.push(`put:${id}:${req.slice}:ok`);
+    });
+    let toasted = false;
+    const unsubscribe = store.subscribe(() => {
+      if (!toasted && store.getState().notifications.toasts.some((t) => t.dedupeKey === 'book-persist-failed:A')) {
+        toasted = true;
+        calls.push('toast');
+      }
+    });
+    return { ...model, model, unsubscribe };
+  }
+
+  const castPutsForA = () =>
+    putBookStateMock.mock.calls.filter(([id, req]) => id === 'A' && (req as { slice: string }).slice === 'cast').length;
+  const hasFailToast = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().notifications.toasts.some((t) => t.kind === 'error' && t.dedupeKey === 'book-persist-failed:A');
+
+  /* Open A, wait for it to land, and flush whatever Layout queued on its own. */
+  async function openAAndSettle(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    openAt(store as never, 'A');
+    renderLayoutAt(store as never, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+  }
+  const renameEliza = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+  const elizaName = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().cast.characters.find((c) => c.id === 'eliza')?.name;
+
+  it('repro: the save sent on leaving fails once, the retry lands, and the edit survives the return', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = 1;
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await waitFor(() => expect(m.calls).toContain('put:A:cast:fail'));
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'), { timeout: 4000 });
+
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(elizaName(store)).toBe('Eliza Vane');
+      const lastGetA = m.calls.lastIndexOf('get:A');
+      expect(lastGetA).toBeGreaterThan(m.calls.lastIndexOf('put:A:cast:ok'));
+      expect(m.calls.lastIndexOf('put:A:cast:ok')).toBeGreaterThan(m.calls.indexOf('put:A:cast:fail'));
+      expect(hasFailToast(store)).toBe(false);
+    } finally {
+      m.unsubscribe();
+    }
+  });
+
+  it('exhausted: every retry fails, a toast is shown, and only then is the book re-read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = Infinity;
+      const putsBefore = castPutsForA();
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      expect(castPutsForA() - putsBefore).toBe(4);
+      expect(hasFailToast(store)).toBe(true);
+
+      openAt(store as never, 'A');
+      /* #3421 retention: the given-up save is kept, so the return re-sends it
+         first (4 more failing PUTs, ~7 s of backoff) before the re-read. */
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
+      expect(m.calls.indexOf('toast')).toBeGreaterThanOrEqual(0);
+      expect(m.calls.indexOf('toast')).toBeLessThan(m.calls.lastIndexOf('get:A'));
+      expect(m.disk.A[0].name).toBe('Eliza');
+    } finally {
+      m.unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('exhausted, then the server recovers: the reverted edit is not silently re-sent on the next leave', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    /* The confirm-stage voice match PUTs the cast it re-reads, and that newer
+       edit would itself supersede the kept save. Hold it back so the kept save
+       is the only thing that could reach disk. */
+    matchVoicesMock.mockReturnValue(new Promise(() => {}));
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = Infinity;
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
+
+      m.model.failNextCastPutsForA = 0;
+      const putsAtRecovery = putBookStateMock.mock.calls.length;
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+
+      /* Layout may still PUT the (old-named) cast it re-read; the reverted
+         rename must not be among the PUTs. */
+      const stale = putBookStateMock.mock.calls
+        .slice(putsAtRecovery)
+        .filter(
+          ([id, req]) =>
+            id === 'A' &&
+            (req as { slice: string; patch: { characters?: Character[] } }).slice === 'cast' &&
+            (req as { patch: { characters?: Character[] } }).patch.characters?.some((c) => c.name === 'Eliza Vane'),
+        );
+      expect(stale).toHaveLength(0);
+      expect(m.disk.A[0].name).toBe('Eliza');
+    } finally {
+      m.unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: staying on the book, the retry heals a failed save with no toast', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = 1;
+      renameEliza(store);
+      await waitFor(() => expect(m.calls).toContain('put:A:cast:fail'));
+      await waitFor(() => expect(m.disk.A[0].name).toBe('Eliza Vane'), { timeout: 4000 });
+      expect(hasFailToast(store)).toBe(false);
+    } finally {
+      m.unsubscribe();
+    }
   });
 });
 

@@ -31,7 +31,7 @@ import { startPreviewRegen, approvePreviewSideEffects, restoreUnrecordedPreview 
 import { selectActivePreviewStub } from '../store/ui-slice';
 import { selectBookEditsLocked } from '../store/restructure-lock';
 import { selectChapterRendering } from '../store/splice-slice';
-import { flushBookPersistence } from '../store/persistence-middleware';
+import { dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
@@ -908,6 +908,10 @@ export function Layout() {
             return;
           }
           if (!revisionsOnly) {
+            /* #3421 — the flush above already re-sent any kept save of this book;
+               one still kept was given up on again and its edit is reverted by
+               this re-read, so it must not land later behind the user's back. */
+            dispatch(dropRetainedSaves(bookId));
             dispatch(
               manuscriptActions.hydrateFromBookState({
                 state: res.state,

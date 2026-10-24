@@ -8,7 +8,7 @@
 // library entry.
 
 import { Suspense } from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -26,7 +26,12 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
-import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  persistenceMiddleware,
+  flushBookPersistence,
+  supersedeBookSaves,
+  restoreSupersededSaves,
+} from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
@@ -907,6 +912,242 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     /* Send b2's queued write now rather than sleeping out the debounce. */
     await store.dispatch(flushBookPersistence('b2') as never);
     expect(putBookStateMock).not.toHaveBeenCalled();
+  });
+
+  /* #3421 N1/N3 — a save of the wiped book that is still retrying must be
+     stopped BEFORE the destructive RPC, not after it resolves: the retry would
+     otherwise PUT the pre-wipe roster into the freshly wiped book. */
+  describe('stops a book’s in-flight save retries before the wipe RPC (#3421)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      getLibraryMock.mockResolvedValue({ authors: [] });
+      getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+      putBookStateMock.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const cases: Array<{
+      name: string;
+      rpc: () => ReturnType<typeof vi.fn>;
+      trigger: () => void;
+    }> = [
+      {
+        name: 're-parse',
+        rpc: () => reparseBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+          const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+      {
+        name: 'manuscript replace',
+        rpc: () => replaceManuscriptMock,
+        trigger: () => {
+          fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+            target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+          });
+          const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+      {
+        name: 'delete',
+        rpc: () => deleteBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+          const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+      },
+    ];
+
+    it.each(cases)('$name', async ({ rpc, trigger }) => {
+      const store = makePopulatedStore({ persist: true });
+      /* A rename's cast PUT fails once while the user is still in the book,
+         then they go home: its retry sequence is now waiting out its 1 s gap. */
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Vane' } as Character]));
+      void store.dispatch(flushBookPersistence('b1') as never);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+      store.dispatch(uiActions.goHome());
+
+      const rpcMock = rpc();
+      let release!: (v?: unknown) => void;
+      rpcMock.mockReturnValue(new Promise((r) => (release = r)));
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      trigger();
+      await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+
+      /* Every retry gap has elapsed while the RPC is still pending. */
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(putBookStateMock).toHaveBeenCalledTimes(1);
+      release({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+    });
+
+    /* #3421 S1 — the cancel runs before the RPC, so a wipe that FAILED must
+       give back what it cancelled: nothing was wiped, and memory still shows
+       the edit. Success is the control: the wiped book's saves stay gone. */
+    const sentVane = () =>
+      putBookStateMock.mock.calls.filter((c) => JSON.stringify(c[1]).includes('Eliza Vane'));
+
+    /* Rename, then leave the book. */
+    async function renameThenLeave(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Vane' } as Character]));
+      void store.dispatch(flushBookPersistence('b1') as never);
+      await vi.advanceTimersByTimeAsync(0);
+      store.dispatch(uiActions.goHome());
+    }
+
+    async function runWipe(
+      store: ReturnType<typeof makeStore>,
+      rpcMock: ReturnType<typeof vi.fn>,
+      trigger: () => void,
+    ) {
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      trigger();
+      await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    async function reopenAndFlush(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      await store.dispatch(flushBookPersistence('b1') as never);
+    }
+
+    describe.each(cases)('$name', ({ rpc, trigger }) => {
+      it('S1/P1: a kept save is re-sent on reopen when the RPC fails', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(5);
+      });
+
+      it('S1/P2: a retry in flight is re-sent on reopen when the RPC fails', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(2);
+      });
+
+      it('S1 control: nothing is re-sent on reopen when the RPC succeeds', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+      });
+
+      it('S3: a failed wipe does not put a parked save back over a newer one that landed meanwhile', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        let reject!: (e: unknown) => void;
+        rpcMock.mockReturnValue(new Promise((_r, rj) => (reject = rj)));
+        await runWipe(store, rpcMock, trigger);
+        /* The book is opened while the RPC runs and renamed again; that save lands. */
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+        store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Q' } as Character]));
+        await store.dispatch(flushBookPersistence('b1') as never);
+        reject(new Error('Service Unavailable'));
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const lastCast = putBookStateMock.mock.calls
+          .filter((c) => (c[1] as { slice: string }).slice === 'cast')
+          .map((c) => (c[1] as { patch: { characters: { name: string }[] } }).patch.characters[0].name)
+          .pop();
+        expect(lastCast).toBe('Eliza Q');
+      });
+
+      it('S5: after a wipe succeeded, a later failed wipe gives back only what was kept since, never the pre-wipe save', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        const rpcMock = rpc();
+        rpcMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+
+        /* The wiped book is reopened, edited, and that save is given up on. */
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+        store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Q' } as Character]));
+        void store.dispatch(flushBookPersistence('b1') as never);
+        await vi.advanceTimersByTimeAsync(0);
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(10000);
+
+        /* A second wipe of the same book fails. */
+        store.dispatch(supersedeBookSaves('b1'));
+        store.dispatch(restoreSupersededSaves('b1'));
+        putBookStateMock.mockClear();
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(0);
+        expect(JSON.stringify(putBookStateMock.mock.calls)).toContain('Eliza Q');
+      });
+    });
+
+    /* #3421 S4 — a delete that answers 409 `book_partly_deleted` HAS wiped the
+       book (state.json and the analysis cache are gone), so its parked saves
+       must be dropped, not given back: a re-import under the same title reuses
+       the id and would receive the old roster. `book_busy` left it intact. */
+    describe('delete answering 409', () => {
+      const deleteCase = cases[2];
+      const refusal = (code: string) =>
+        Object.assign(new Error('Conflict'), { code });
+
+      it('S4: book_partly_deleted drops the parked saves (nothing re-sent on reopen)', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        deleteBookMock.mockRejectedValue(refusal('book_partly_deleted'));
+        await runWipe(store, deleteBookMock, deleteCase.trigger);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(1);
+      });
+
+      it('S4 control: book_busy leaves the book intact, so the saves are restored', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        deleteBookMock.mockRejectedValue(refusal('book_busy'));
+        await runWipe(store, deleteBookMock, deleteCase.trigger);
+        putBookStateMock.mockResolvedValue(undefined);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(2);
+      });
+    });
   });
 
   /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must

@@ -8,11 +8,18 @@ const { putBookState } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
-import { persistenceMiddleware, flushBookPersistence } from './persistence-middleware';
+import {
+  persistenceMiddleware,
+  flushBookPersistence,
+  dropRetainedSaves,
+  supersedeBookSaves,
+  restoreSupersededSaves,
+  type BookFlushOutcome,
+} from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
-import { bookMetaSlice, bookMetaActions } from './book-meta-slice';
+import { bookMetaSlice, bookMetaActions, selectEffectiveMeta } from './book-meta-slice';
 
 function makeStore(state: Record<string, unknown>) {
   return {
@@ -36,7 +43,10 @@ const advance = async (ms: number) => {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  putBookState.mockClear();
+  /* mockReset (not mockClear): the #3421 retry tests install persistent
+     rejections that must not leak into the next test. */
+  putBookState.mockReset();
+  putBookState.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -389,16 +399,158 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
     expect(mw(flushBookPersistence('book-1'))).toBeNull();
   });
 
-  it('flushBookPersistence still resolves when the in-flight PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('boom'));
+  it('flushBookPersistence never rejects when the PUT keeps failing: it resolves with the failed slice (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
     const state: Record<string, unknown> = baseState();
-    const next = vi.fn((x) => x);
-    const mw = persistenceMiddleware(makeStore(state))(next);
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const order: string[] = [];
+    (store.dispatch as ReturnType<typeof vi.fn>).mockImplementation((a: { type: string }) => {
+      if (a.type === 'notifications/pushToast') order.push('toast');
+    });
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    void waited.then(() => order.push('resolved'));
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    await advance(2000);
+    expect(putBookState).toHaveBeenCalledTimes(3);
+    await advance(4000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    const toast = (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.type === 'notifications/pushToast');
+    expect(toast.payload).toEqual(
+      expect.objectContaining({ kind: 'error', dedupeKey: 'book-persist-failed:book-1' }),
+    );
+    expect(order).toEqual(['toast', 'resolved']);
+    err.mockRestore();
+  });
+
+  it('re-sends a transient failure with the captured patch, and the flush waits for it (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     mw({ type: 'cast/setCharacters' });
-    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<void>;
-    await expect(waited).resolves.toBeUndefined();
+    /* Leaving the book sends the write at once; then the roster changes. */
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    state.cast = { characters: [{ id: 'someone-else' }] };
+    await advance(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    let settled = false;
+    void waited.then(() => {
+      settled = true;
+    });
+    await advance(999);
+    expect(settled).toBe(false);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    expect(putBookState.mock.calls[1]).toEqual(putBookState.mock.calls[0]);
+    expect(putBookState.mock.calls[1][1].patch).toEqual({ characters: [{ id: 'halloran' }] });
+    await expect(waited).resolves.toEqual({ failedSlices: [] });
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.type === 'notifications/pushToast',
+      ),
+    ).toBe(false);
+    err.mockRestore();
+  });
+
+  it('does not re-send a 4xx refusal (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it('the given-up toast names the book by title even though another book is open by then (#3421 F3)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'The Northern Star' } } },
+    });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    /* Leaving the book sends the write; the user opens another before it gives up. */
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+
+    const toast = (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === 'book-persist-failed:book-1');
+    expect(toast.payload.message).toContain('"The Northern Star"');
+    err.mockRestore();
+  });
+
+  it('a 4xx refusal on a slice with no failure handler raises no generic save toast (#3421 F3)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(20000);
+    await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.payload?.dedupeKey === 'book-persist-failed:book-1',
+      ),
+    ).toBe(false);
+    err.mockRestore();
+  });
+
+  it('a newer write supersedes a pending retry (#3421)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+
+    /* During the backoff, the user edits again. */
+    state.cast = { characters: [{ id: 'newer' }] };
+    mw({ type: 'cast/setCharacters' });
+    await vi.runAllTimersAsync();
+    await waited;
+
+    const patches = putBookState.mock.calls.map((c) => c[1].patch);
+    expect(patches).toEqual([{ characters: [{ id: 'halloran' }] }, { characters: [{ id: 'newer' }] }]);
+    expect(
+      (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c) => c[0]?.payload?.dedupeKey === 'book-persist-failed:book-1',
+      ),
+    ).toBe(false);
     err.mockRestore();
   });
 });
@@ -505,7 +657,7 @@ describe('bulk-reassign persistence', () => {
   });
 
   it('surfaces an error toast when a bulk apply PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(
       manuscriptActions.setSentencesCharacterBulk({
@@ -520,7 +672,7 @@ describe('bulk-reassign persistence', () => {
   });
 
   it('surfaces an error toast when an undo PUT fails', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(manuscriptActions.undoBulkReassign());
     await vi.runAllTimersAsync();
@@ -528,15 +680,17 @@ describe('bulk-reassign persistence', () => {
     expect(toasts.some((t) => t.kind === 'error')).toBe(true);
   });
 
-  it('does NOT toast when a non-bulk manuscript edit PUT fails (scope)', async () => {
-    putBookState.mockRejectedValueOnce(new Error('net'));
+  it('a non-bulk manuscript edit PUT failure raises the generic save toast, not the bulk one (scope)', async () => {
+    putBookState.mockRejectedValue(new Error('net'));
     const store = makeReduxStore();
     store.dispatch(
       manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' }),
     );
     await vi.runAllTimersAsync();
-    const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
-    expect(toasts.length).toBe(0);
+    const toasts = (store.getState() as { notifications: { toasts: { kind: string; dedupeKey?: string }[] } })
+      .notifications.toasts;
+    expect(toasts.some((t) => t.dedupeKey === 'bulk-reassign-persist-failed')).toBe(false);
+    expect(toasts.some((t) => t.dedupeKey === 'book-persist-failed:b1')).toBe(true);
   });
 });
 /* #2230 — a refused rename (409) from the Listen-view book-meta editor must
@@ -609,6 +763,125 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
     /* …and the user's typed text survives in the editor for retry. */
     expect(state.bookMeta.draft?.title).toBe('Renamed Book');
+  });
+
+  it('rolls the draft back after a transient failure exhausts its retries while the book is still open (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const state = store.getState() as { bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null } };
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(state.bookMeta.draft?.title).toBe('Typed for A');
+    err.mockRestore();
+  });
+
+  it("does NOT restore book A's draft over book B when the user switched books during the retry window (#3421 F4)", async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b2',
+        state: { title: 'Book B', author: 'B', series: '', prosodyEnabled: false } as never,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const s = store.getState() as never;
+    expect(selectEffectiveMeta(s, 'b2')?.title).toBe('Book B');
+    err.mockRestore();
+  });
+
+  it("keeps book A's book-meta save that gave up un-rolled-back after the user left A, and re-sends it on A's next flush (#3421)", async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b2',
+        state: { title: 'Book B', author: 'B', series: '', prosodyEnabled: false } as never,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(selectEffectiveMeta(store.getState() as never, 'b2')?.title).toBe('Book B');
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    const resent = putBookState.mock.calls.filter(
+      ([id, body]) => id === 'b1' && JSON.stringify(body).includes('Typed for A'),
+    );
+    expect(resent.length).toBeGreaterThan(0);
+    err.mockRestore();
+  });
+
+  it('clears the rollback snapshot when a kept book-meta save lands, so a later 409 does not restore the pre-save title/author (#3421 N2)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    await vi.advanceTimersByTimeAsync(20000);
+
+    /* The kept save is re-sent on its own by the book's next flush, no hydrate. */
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(putBookState).toHaveBeenCalled();
+
+    /* A colliding rename is then refused: the rollback must land on T1, not T0. */
+    putBookState.mockReset();
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Collides' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const saved = (store.getState() as { bookMeta: { saved: Record<string, { title: string; author: string }> } }).bookMeta.saved.b1;
+    expect(saved.title).toBe('T1');
+    expect(saved.author).toBe('New Author');
+    err.mockRestore();
+  });
+
+  it('does NOT keep a rolled-back book-meta save for re-send on the next flush (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    /* Retries exhausted with b1 still open: the draft is restored, so the user
+       re-saves it themselves — the give-up must not also keep the patch. */
+    const state = store.getState() as { bookMeta: { draft: { title?: string } | null } };
+    expect(state.bookMeta.draft?.title).toBe('Typed for A');
+    const sent = putBookState.mock.calls.length;
+    expect(sent).toBeGreaterThan(1);
+
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(putBookState).toHaveBeenCalledTimes(sent);
+    err.mockRestore();
   });
 
   it('does NOT toast, roll back, or keep a snapshot on a SUCCESSFUL save', async () => {
@@ -706,5 +979,601 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     };
     expect(after.bookMeta.saved.b1.title).toBe('The Northern Star');
     expect(after.bookMeta.draft?.title).toBe('Edit B');
+  });
+});
+
+describe('a given-up save is kept and re-sent on the next flush (#3421)', () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+
+  it('(i) re-sends the kept save with no new edit, then has nothing left', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(putBookState).toHaveBeenCalledTimes(4);
+
+    putBookState.mockResolvedValue(undefined);
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    expect(putBookState).toHaveBeenCalledTimes(5);
+    expect(putBookState.mock.calls[4]).toEqual(putBookState.mock.calls[0]);
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    err.mockRestore();
+  });
+
+  it('(i-b) a debounced save of the book sends the kept save before its own', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(500);
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['cast', 'manuscript']);
+    err.mockRestore();
+  });
+
+  it('(i-c) two kept slices of one book are each re-sent exactly once', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['cast', 'manuscript']);
+    err.mockRestore();
+  });
+
+  it('(iii-a) a newer edit to the same fields supersedes the kept ones', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'old' }] } });
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    state.cast = { characters: [{ id: 'new' }] };
+    mw({ type: 'cast/setCharacters' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1].patch).toEqual({ characters: [{ id: 'new' }] });
+    err.mockRestore();
+  });
+
+  it('(iii-b) a newer edit to other fields of the shared state slice rides with the kept ones', async () => {
+    putBookState.mockRejectedValue(down());
+    const meta = {
+      title: 'Renamed',
+      author: 'Marin Vale',
+      series: 'NCT · Book 2',
+      narratorCredit: 'Anders Vale',
+      genre: 'Literary fiction',
+      publicationDate: '2026-05-09',
+    };
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'ui/confirmCast' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['state'] });
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    state.bookMeta = { draft: null, saved: { 'book-1': meta } };
+    mw({ type: 'bookMeta/commitDraft' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1].patch).toEqual(
+      expect.objectContaining({ castConfirmed: true, ...meta }),
+    );
+    err.mockRestore();
+  });
+
+  it('(v) a re-parse/reset of the book drops its kept saves: the next flush does not re-send the old roster', async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'pre-reparse' }] } });
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(dropRetainedSaves('book-1'));
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(500);
+    expect(putBookState.mock.calls.map((c) => c[1].slice)).toEqual(['manuscript']);
+    err.mockRestore();
+  });
+
+  it("(v-b) dropping one book's kept saves leaves another book's alone", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(7000);
+    await first;
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(dropRetainedSaves('book-2'));
+    const again = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await expect(again).resolves.toEqual({ failedSlices: [] });
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it("(vi) superseding a book's saves stops a retry already in flight, with no toast and no failed slice (N1)", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'pre-reparse' }] } });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(1500);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+
+    /* The wipe (re-parse / replace / delete) lands while the third send waits. */
+    mw(supersedeBookSaves('book-1'));
+    await advance(10000);
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    await expect(first).resolves.toEqual({ failedSlices: [] });
+    expect(store.dispatch).not.toHaveBeenCalled();
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    err.mockRestore();
+  });
+
+  it("(vi-b) superseding also drops a debounced, unsent write of the book", async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+
+    mw({ type: 'cast/setCharacters' });
+    mw(supersedeBookSaves('book-1'));
+    await advance(2000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it("(vi-c) superseding one book leaves another book's in-flight retry running", async () => {
+    putBookState.mockRejectedValue(down());
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    void mw(flushBookPersistence('book-1'));
+    await advance(1500);
+    mw(supersedeBookSaves('book-2'));
+    await advance(10000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    err.mockRestore();
+  });
+
+  /* #3421 S3 — a write made after the park already carries the current value; a
+     restore must not put the parked one back over it. */
+  const titlePuts = () =>
+    putBookState.mock.calls
+      .filter((c) => c[1].slice === 'state' && 'title' in c[1].patch)
+      .map((c) => c[1].patch.title);
+  const keepRenameThenPark = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* The rename is made, then the user leaves: with the book not open the
+       give-up keeps the save instead of rolling the draft back. */
+    mw({ type: 'bookMeta/commitDraft' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(supersedeBookSaves('book-1'));
+    /* The book is opened again while the wipe call runs. */
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    return mw;
+  };
+
+  /* #3421 S4 — two wipes of one book in flight share the parked saves: the
+     first to fail must not give back what the still-pending one cancelled. */
+  const castPuts = () => putBookState.mock.calls.filter((c) => c[1].slice === 'cast');
+  const parkCast = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    return mw;
+  };
+
+  it('(viii) with two wipes pending, the first restore gives nothing back; the last failure does (S4)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1'));
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+  });
+
+  it("(viii-c) a Layout-style plain drop does not settle a wipe's pending count (S4)", async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1')); // wipe 1
+    /* Layout's full hydrate lets go of the parked saves; it is not a wipe. */
+    mw(dropRetainedSaves('book-1'));
+    /* The user edits and the PUT fails: the save is kept. */
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    putBookState.mockRejectedValue(down());
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(supersedeBookSaves('book-1')); // wipe 2 parks the kept edit
+    mw(restoreSupersededSaves('book-1')); // wipe 1 fails
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+    mw(restoreSupersededSaves('book-1')); // wipe 2 fails too
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+  });
+
+  it('(viii-b) if any overlapping wipe succeeded, the last restore gives nothing back (S4)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = await parkCast(state);
+    mw(supersedeBookSaves('book-1'));
+    mw(supersedeBookSaves('book-1'));
+    mw(dropRetainedSaves('book-1', { wipeSettled: true }));
+    mw(restoreSupersededSaves('book-1'));
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(0);
+  });
+
+  it('(vii) a restore does not put a parked title back over a newer one that was sent meanwhile (S3)', async () => {
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'T1' } } },
+    });
+    const mw = await keepRenameThenPark(state);
+    state.bookMeta = { draft: null, saved: { 'book-1': { title: 'T2' } } };
+    mw({ type: 'bookMeta/commitDraft' });
+    await mw(flushBookPersistence('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    mw(flushBookPersistence('book-1'));
+    await advance(1000);
+    expect(titlePuts()).toEqual(['T2']);
+  });
+
+  it('(vii-b) a restore still re-sends the parked fields a newer write on the same key did not carry (S3)', async () => {
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'T1' } } },
+    });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' });
+    await mw(flushBookPersistence('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([true, undefined]);
+  });
+
+  /* #3421 S5 — what a park keeps and what a restore gives back. */
+  const metaOf = (title: string) => ({ draft: null, saved: { 'book-1': { title } } });
+  const leaveBook = (mw: (a: unknown) => unknown, state: Record<string, unknown>) => {
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+  };
+  const reopenBook = (mw: (a: unknown) => unknown, state: Record<string, unknown>) => {
+    state.ui = { stage: { bookId: 'book-1' } };
+    mw({ type: 'ui/openBook' });
+  };
+  const statePuts = () => putBookState.mock.calls.filter((c) => c[1].slice === 'state');
+
+  it('(ix) a kept edit newer than the parked one wins its fields on restore, and the parked fields it did not carry survive (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* castConfirmed and the T1 rename are both given up on, then parked. */
+    mw({ type: 'ui/confirmCast' });
+    leaveBook(mw, state);
+    await advance(20000);
+    reopenBook(mw, state);
+    mw({ type: 'bookMeta/commitDraft' });
+    leaveBook(mw, state);
+    await advance(20000);
+    mw(supersedeBookSaves('book-1'));
+    /* The wipe is still running: the book is renamed again and that save is
+       given up on too. */
+    reopenBook(mw, state);
+    state.bookMeta = metaOf('T2');
+    mw({ type: 'bookMeta/commitDraft' });
+    leaveBook(mw, state);
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+
+    mw(restoreSupersededSaves('book-1'));
+    reopenBook(mw, state);
+    await mw(flushBookPersistence('book-1'));
+    expect(statePuts()).toHaveLength(1);
+    expect(statePuts()[0][1].patch).toEqual(expect.objectContaining({ castConfirmed: true, title: 'T2' }));
+  });
+
+  it('(x) the park merges its layers newest-on-top: a queued write beats the one still being sent, which beats the kept one (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    putBookState.mockRejectedValue(down());
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* kept: castConfirmed. */
+    mw({ type: 'ui/confirmCast' });
+    leaveBook(mw, state);
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    /* sending: the T1 rename (with the kept field riding along) never answers. */
+    putBookState.mockImplementationOnce(() => new Promise(() => {}));
+    putBookState.mockResolvedValue(undefined);
+    reopenBook(mw, state);
+    mw({ type: 'bookMeta/commitDraft' });
+    void mw(flushBookPersistence('book-1'));
+    await advance(0);
+    expect(statePuts()).toHaveLength(1);
+    /* queued: the T2 rename. */
+    state.bookMeta = metaOf('T2');
+    mw({ type: 'bookMeta/commitDraft' });
+
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    void mw(flushBookPersistence('book-1'));
+    await advance(500);
+    expect(statePuts()).toHaveLength(2);
+    expect(statePuts()[1][1].patch).toEqual(expect.objectContaining({ castConfirmed: true, title: 'T2' }));
+  });
+
+  it('(x-b) a kept newer edit beats an older one whose PUT is still hung when the park merges (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /* T1: its PUT never answers, so it stays in flight. */
+    putBookState.mockImplementationOnce(() => new Promise(() => {}));
+    putBookState.mockRejectedValue(down());
+    mw({ type: 'bookMeta/commitDraft' });
+    void mw(flushBookPersistence('book-1'));
+    await advance(0);
+    /* T2: newer, fails until its retries run out and is kept. */
+    state.bookMeta = metaOf('T2');
+    mw({ type: 'bookMeta/commitDraft' });
+    void mw(flushBookPersistence('book-1'));
+    leaveBook(mw, state); /* a rename given up on while its book is open rolls back instead of being kept */
+    await advance(20000);
+    err.mockRestore();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    reopenBook(mw, state);
+    void mw(flushBookPersistence('book-1'));
+    await advance(500);
+    expect(statePuts()).toHaveLength(1);
+    expect(statePuts()[0][1].patch).toEqual(expect.objectContaining({ title: 'T2' }));
+  });
+
+  it('(xi) a second supersede merges into what the first parked instead of overwriting it (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state); // wipe 1 parks the T1 rename
+    mw({ type: 'ui/confirmCast' });
+    mw(supersedeBookSaves('book-1')); // wipe 2 parks a different save for the same key
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([true]);
+  });
+
+  it("(xi-b) a field of a write the second supersede cancelled is owed again on restore (S5)", async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' }); // queued after the park, never sent
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(statePuts()).toHaveLength(1);
+    expect(statePuts()[0][1].patch).toEqual(expect.objectContaining({ title: 'T1', castConfirmed: true }));
+  });
+
+  it('(xi-c) a field a post-park write landed stays stripped even when a second supersede cancels another write carrying it (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' });
+    await mw(flushBookPersistence('book-1')); // castConfirmed lands
+    mw({ type: 'ui/confirmCast' }); // the same field again, cancelled by wipe 2
+    mw(supersedeBookSaves('book-1'));
+    putBookState.mockClear();
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([undefined]);
+  });
+
+  it('(xii) a save that settled is not parked again, nor restored, by a later supersede (S5)', async () => {
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    mw({ type: 'cast/setCharacters' });
+    await mw(flushBookPersistence('book-1'));
+    expect(castPuts()).toHaveLength(1);
+
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    await advance(1000);
+    expect(castPuts()).toHaveLength(1);
+  });
+
+  it('(iv) a 4xx refusal is not kept', async () => {
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): refused'));
+    const state: Record<string, unknown> = baseState();
+    const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'cast/setCharacters' });
+    const first = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+    await advance(0);
+    await expect(first).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+});
+
+describe("a handler's given-up save toast names the book (#3421 N4)", () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+  /* Edit a book, leave it for another before the retries run out, and return
+     the toast raised under `dedupeKey`. */
+  const givenUpToast = async (actionType: string, dedupeKey: string, error: Error) => {
+    putBookState.mockRejectedValue(error);
+    const state: Record<string, unknown> = baseState({
+      bookMeta: { draft: null, saved: { 'book-1': { title: 'The Northern Star' } } },
+    });
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: actionType });
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+    err.mockRestore();
+    return (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === dedupeKey);
+  };
+
+  it.each(['manuscript/setSentencesCharacterBulk', 'manuscript/undoBulkReassign'])(
+    'the %s line-reassignment toast names the book after a 5xx exhausts its retries',
+    async (actionType) => {
+      const toast = await givenUpToast(actionType, 'bulk-reassign-persist-failed', down());
+      expect(toast.payload.message).toContain('"The Northern Star"');
+      expect(toast.payload.message).toContain('Line reassignment');
+    },
+  );
+
+  it('the book-details toast names the book after a 5xx exhausts its retries', async () => {
+    const toast = await givenUpToast('bookMeta/commitDraft', 'book-meta-persist-failed', down());
+    expect(toast.payload.message).toContain('"The Northern Star"');
+  });
+
+  it('a 4xx book-details refusal keeps its exact existing message', async () => {
+    const sentence = 'A book already exists at that Author/Series/Title path.';
+    const toast = await givenUpToast(
+      'bookMeta/commitDraft',
+      'book-meta-persist-failed',
+      new Error(`Book state PUT failed (409): ${sentence}`),
+    );
+    expect(toast.payload.message).toBe(`Book details couldn't be saved: ${sentence}`);
+  });
+});
+
+describe('a given-up save toast names the last-saved title (#3421 S2)', () => {
+  const down = () => new Error('Book state PUT failed (503): down');
+  /* Edit a book, leave it for another before the retries run out, and return
+     the generic given-up toast for `book-1`. */
+  const givenUpToast = async (state: Record<string, unknown>) => {
+    putBookState.mockRejectedValue(down());
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'cast/setCharacters' });
+    state.ui = { stage: { bookId: 'book-2' } };
+    mw({ type: 'ui/openBook' });
+    await advance(20000);
+    err.mockRestore();
+    return (store.dispatch as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .find((a) => a.payload?.dedupeKey === 'book-persist-failed:book-1');
+  };
+
+  it('names the title on disk, not the renamed title that never saved', async () => {
+    const toast = await givenUpToast(
+      baseState({
+        bookMeta: {
+          draft: null,
+          saved: { 'book-1': { title: 'The Southern Cross' } },
+          lastCommitted: {
+            'book-1': { saved: { title: 'The Northern Star' }, draft: { title: 'The Southern Cross' } },
+          },
+        },
+      }),
+    );
+    expect(toast.payload.message).toContain('"The Northern Star"');
+    expect(toast.payload.message).not.toContain('Southern Cross');
+  });
+
+  it('falls back to the library title when bookMeta holds nothing for the book', async () => {
+    const toast = await givenUpToast(
+      baseState({
+        library: { books: [{ bookId: 'book-1', title: 'The Library Title' }] },
+      }),
+    );
+    expect(toast.payload.message).toContain('"The Library Title"');
   });
 });

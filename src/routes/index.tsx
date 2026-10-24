@@ -26,6 +26,11 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
+import {
+  dropRetainedSaves,
+  restoreSupersededSaves,
+  supersedeBookSaves,
+} from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -146,9 +151,21 @@ export function BooksRoute() {
         )
       }
       onDeleteBook={async (b) => {
+        /* #3421 — stop the book's unsent / retrying saves before the RPC, not
+           after it: a retry that comes due while it runs would PUT into the
+           book being removed. The drop below still lets go of anything kept. */
+        dispatch(supersedeBookSaves(b.bookId));
         try {
           await api.deleteBook(b.bookId);
         } catch (err) {
+          /* 409 `book_partly_deleted` answers AFTER state.json and the analysis
+             cache are gone: the book is wiped, so its saves are let go, not
+             given back (a re-import reuses the id) (#3421 S4). */
+          if ((err as { code?: string }).code === 'book_partly_deleted') {
+            dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
+          } else {
+            dispatch(restoreSupersededSaves(b.bookId));
+          }
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
@@ -156,6 +173,7 @@ export function BooksRoute() {
            under the same id reads as a different book (OD31: and drop its
            preview — the new take stays live, nothing is restored). */
         dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
@@ -179,10 +197,14 @@ export function BooksRoute() {
         if (res) dispatch(libraryActions.hydrate(res));
       }}
       onReplaceManuscript={async (b, file) => {
+        /* #3421 — before the RPC, so no retry puts the old roster into the
+           replaced book while it runs (see onDeleteBook). */
+        dispatch(supersedeBookSaves(b.bookId));
         let result;
         try {
           result = await api.replaceManuscript(b.bookId, file);
         } catch (err) {
+          dispatch(restoreSupersededSaves(b.bookId));
           showError(`Couldn't replace "${b.title}"`, (err as Error).message, 'Replace');
           return;
         }
@@ -198,6 +220,7 @@ export function BooksRoute() {
            (OD31: and drop its preview — the new take stays live). */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -230,10 +253,14 @@ export function BooksRoute() {
         });
       }}
       onReparseBook={async (b) => {
+        /* #3421 — before the RPC, so no retry puts the pre-reparse roster into
+           the re-parsed book while it runs (see onDeleteBook). */
+        dispatch(supersedeBookSaves(b.bookId));
         let result;
         try {
           result = await api.reparseBook(b.bookId);
         } catch (err) {
+          dispatch(restoreSupersededSaves(b.bookId));
           showError(`Couldn't re-parse "${b.title}"`, (err as Error).message, 'Re-parse');
           return;
         }
@@ -255,6 +282,7 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(dropRetainedSaves(b.bookId, { wipeSettled: true }));
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
