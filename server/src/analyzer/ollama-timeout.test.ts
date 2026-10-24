@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
 import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
 import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
-import { AnalysisAbortedError, AnalyzerHttpError } from './errors.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerTimeoutError } from './errors.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
 /* protocol.ts resolves the handoff dirs relative to its own __dirname
@@ -168,6 +168,12 @@ describe('OllamaAnalyzer fetch timeout', () => {
        crucially not swallowed into LocalUnreachableError, which would
        reroute a healthy local daemon to the cloud. */
     expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    /* The design pre-pass halts on AnalyzerTimeoutError; a bare TimeoutError DOMException matched
+       nothing there, so every character waited out the ceiling and failed as 'unknown'. */
+    expect(err).toBeInstanceOf(AnalyzerTimeoutError);
+    expect((err as AnalyzerTimeoutError).reason).toBe('ceiling');
+    expect((err as AnalyzerTimeoutError).transport).toBe('ollama');
+    expect(err).not.toBeInstanceOf(AnalysisAbortedError);
 
     /* The ACTUAL harm this guards: the slot is taken before the await and
        released only in the `finally`, so a hang would leak a token from the
@@ -241,6 +247,7 @@ describe('OllamaAnalyzer fetch timeout', () => {
       );
     expect(err).toBeInstanceOf(AnalysisAbortedError);
     expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    expect(err).not.toBeInstanceOf(AnalyzerTimeoutError);
   });
 
   it('a non-OK free-text (persona) body is redacted against the known analyzer secrets before the error is built (P22)', async () => {

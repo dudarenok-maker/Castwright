@@ -1587,6 +1587,12 @@ describe('cast-design persona pre-pass', () => {
       const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
       return new AnalyzerTimeoutError('openai', 'qwen3', 1_800_000, 'ceiling');
     }],
+    /* The error the Ollama persona transport throws when its free-text budget expires on a connected but
+       silent daemon (ollama-timeout.test.ts pins the transport side). */
+    ['AnalyzerTimeoutError (local Ollama persona budget)', 'analyzer-timeout', async () => {
+      const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+      return new AnalyzerTimeoutError('ollama', 'qwen3.5:9b', 600_000, 'ceiling');
+    }],
   ])('a %s in the pre-pass ends the job once (code %s) instead of failing every character', async (_name, code, makeErr) => {
     personaSharesGpuMock.mockReturnValue(true);
 

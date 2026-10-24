@@ -41,7 +41,7 @@ import { detectOllamaGpuSplit } from '../../gpu/ollama-gpu-split.js';
 import { configValue } from '../../config/resolver.js';
 import { getLastKnownVram } from '../../gpu/vram-state.js';
 import type { RawEvalTiming } from '../analyzer-eval-stats.js';
-import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from '../errors.js';
+import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
@@ -178,6 +178,7 @@ export class OllamaTransport implements ChatTransport {
       const maxMs =
         freeText.absoluteMaxMs && freeText.absoluteMaxMs > 0 ? freeText.absoluteMaxMs : PERSONA_ABSOLUTE_MAX_MS; // CHANGED: opts → freeText
       const budget = AbortSignal.timeout(maxMs);
+      const startedAt = Date.now();
       const signal = req.signal ? AbortSignal.any([budget, req.signal]) : budget; // CHANGED: opts.signal → req.signal
       let response: Awaited<ReturnType<typeof undiciFetch>>;
       try {
@@ -204,6 +205,12 @@ export class OllamaTransport implements ChatTransport {
            body does, never an unreachable daemon. A budget timeout (no caller abort) classifies as before. */
         if (req.signal?.aborted) {
           throw new AnalysisAbortedError(`Ollama ${this.model} persona call aborted (paused or client disconnected).`);
+        }
+        /* The budget fired and the caller did not: the daemon is connected but silent, so say so with
+           the typed timeout the design pre-pass halts on (a bare TimeoutError DOMException matched
+           nothing, so every character waited out the full ceiling and then failed as 'unknown'). */
+        if (budget.aborted) {
+          throw new AnalyzerTimeoutError('ollama', this.model, Date.now() - startedAt, 'ceiling');
         }
         throw classifyConnectError(err, url);
       }
