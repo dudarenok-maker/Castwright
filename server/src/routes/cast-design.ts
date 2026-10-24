@@ -303,8 +303,8 @@ const PERSONA_HEARTBEAT_MS = 6000;
     - Any other per-character error → recorded to `job.failures` +
       `character_failed` broadcast + continue (design loop will skip
       characters whose persona we could not set). */
-async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<void> {
-  if (!personaSharesGpu()) return;
+async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu: boolean): Promise<void> {
+  if (!sharesGpu) return;
 
   // Deduplicate to base tasks only — variants always reuse the base persona.
   const baseIds = [...new Set(tasks.filter((t) => !t.emotion).map((t) => t.characterId))];
@@ -376,7 +376,10 @@ async function runDesignJob(
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
-  await runPersonaPrePass(job, tasks);
+  /* Decided ONCE per job: the pre-pass and the per-character lazy-skip below must agree, or a
+     mid-job flip leaves a persona-less character that neither of them records. */
+  const sharesGpu = personaSharesGpu();
+  await runPersonaPrePass(job, tasks, sharesGpu);
   if (job.controller.signal.aborted) {
     endJob(job, {
       type: 'idle',
@@ -529,14 +532,25 @@ async function runDesignJob(
          `character_failed` and the character ends up in `job.failures`. Retrying here —
          with VoiceDesign already resident on the GPU — would load the persona model onto
          that card inside `withGpuLoad`, the exact plan-108 OOM this pre-pass was built to
-         prevent. Skip silently (no second `character_failed` broadcast — the pre-pass
-         already emitted one). */
+         prevent. Skip without retrying — and without a second `character_failed` when the
+         pre-pass already recorded one. */
       let persona = (character.voiceStyle ?? '').trim();
       if (!persona) {
-        if (personaSharesGpu()) {
-          /* Skip — the pre-pass owns shared-GPU persona-gen and already recorded any
-             failure; retrying here while VoiceDesign loads on the same card is the
-             plan-108 OOM. */
+        if (sharesGpu) {
+          /* Skip — the pre-pass owns shared-GPU persona-gen; retrying here while VoiceDesign loads
+             on the same card is the plan-108 OOM. The pre-pass records a failure only for a base
+             task it tried, so a character it never reached (a `scope: 'variants'` run builds no
+             base tasks) has no outcome yet: record it, once, or it vanishes from every count. */
+          if (!job.failures.some((f) => f.characterId === characterId)) {
+            const message = 'No voice persona available for this character.';
+            job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+            broadcast(job, {
+              type: 'character_failed',
+              characterId,
+              name: character.name ?? characterId,
+              errorReason: message,
+            });
+          }
           continue;
         }
         /* Gemini persona fallback — a throw here must be a PER-CHARACTER

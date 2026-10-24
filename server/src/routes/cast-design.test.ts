@@ -1780,6 +1780,85 @@ describe('cast-design persona pre-pass', () => {
     expect(res.status).toBe(200);
     expect(mark).not.toHaveBeenCalled();
   });
+
+  it('variants-only run on a shared-GPU persona engine reports a persona-less designed character instead of dropping it', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const genSpy = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_marlow__angry', url: '/v/m.mp3' });
+
+    /* quill: base voice designed, voiceStyle empty. scope:variants gives the pre-pass no base task,
+       so nothing else would ever record it. marlow: designed base + persona, designs normally. */
+    const quill = { id: 'quill', name: 'Quill', role: 'supporting', color: 'sky', voiceId: 'v_quill', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_quill' } } };
+    const marlow = { id: 'marlow', name: 'Marlow', role: 'supporting', color: 'sky', voiceId: 'v_marlow', voiceStyle: 'a quick-witted young man', overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } } };
+    writeBookOnDisk([...characters, quill, marlow]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [
+          { characterId: 'quill', emotions: ['angry'] },
+          { characterId: 'marlow', emotions: ['angry'] },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const failed = events.filter((e) => e.type === 'character_failed' && e.characterId === 'quill');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].errorReason).toBeTruthy();
+    expect(genSpy).not.toHaveBeenCalled(); // no lazy persona-gen on the shared card
+    expect(designSpy).toHaveBeenCalledTimes(1); // only marlow designs
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('quill');
+    // Every character is accounted for: done + skipped + failed === total === characters.
+    expect((idle?.done ?? 0) + (idle?.skipped ?? 0) + (idle?.failures?.length ?? 0)).toBe(2);
+    expect(idle?.total).toBe(2);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('decides personaSharesGpu once per job: a mid-job flip cannot desync the pre-pass from the lazy skip', async () => {
+    /* First call (the job's one decision) says shared; any later call would say not shared and send
+       the loop down the lazy Gemini-style path — generating a persona with VoiceDesign resident. */
+    personaSharesGpuMock.mockReset();
+    personaSharesGpuMock.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const genSpy = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_quill__angry', url: '/v/q.mp3' });
+
+    const quill = { id: 'quill', name: 'Quill', role: 'supporting', color: 'sky', voiceId: 'v_quill', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_quill' } } };
+    writeBookOnDisk([...characters, quill]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'quill', emotions: ['angry'] }] });
+
+    expect(res.status).toBe(200);
+    expect(personaSharesGpuMock).toHaveBeenCalledTimes(1);
+    expect(genSpy).not.toHaveBeenCalled();
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'quill')).toBe(true);
+
+    writeBookOnDisk(characters);
+  });
 });
 
 /* #1981 — cast-design.ts can't use the self-vs-self race shape every other
