@@ -429,11 +429,18 @@ export const persistenceMiddleware: Middleware = (store) => {
             if (gen !== (generation.get(key) ?? 0)) return { slice, ok: true };
             continue;
           }
-          /* Final failure of the LATEST write (#2230). Keep the patch for the
-             book's next flush (#3421) — except a 4xx (the server's answer, so
-             re-sending repeats a refused write) and a rollback handler (the
-             user's draft is already restored for them to save again). */
-          if (!refused && !handler?.rollback) retained.set(key, patch as Record<string, unknown>);
+          /* Final failure of the LATEST write (#2230). The rollback restores a
+             shared, book-agnostic draft, and the retry window (#3421) lets the
+             user open another book first — applying it then would overlay this
+             book's text on that one, so it only runs while this book is open. */
+          const rolledBack =
+            !!handler?.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId;
+          /* Keep the patch for the book's next flush (#3421) — except a 4xx
+             (the server's answer, so re-sending repeats a refused write) and a
+             save that rolled back (the user's draft is restored for them to
+             save again). A save that gave up WITHOUT rolling back has no draft
+             left, so it is kept and re-sent. */
+          if (!refused && !rolledBack) retained.set(key, patch as Record<string, unknown>);
           if (handler) {
             store.dispatch(
               notificationsActions.pushToast({
@@ -445,12 +452,7 @@ export const persistenceMiddleware: Middleware = (store) => {
             /* #2230 — a refused rename must not leave the persisted value claiming
                a title the server rejected; roll the optimistic saved update back
                (and restore the draft so the user's text is preserved for retry). */
-            /* The rollback restores a shared, book-agnostic draft, and the retry
-               window (#3421) lets the user open another book first — applying it
-               then would overlay this book's text on that one. */
-            if (handler.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId) {
-              store.dispatch(handler.rollback(bookId));
-            }
+            if (rolledBack) store.dispatch(handler.rollback!(bookId));
           } else {
             store.dispatch(
               notificationsActions.pushToast({

@@ -758,6 +758,35 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     err.mockRestore();
   });
 
+  it("keeps book A's book-meta save that gave up un-rolled-back after the user left A, and re-sends it on A's next flush (#3421)", async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(1500);
+    store.dispatch(uiSlice.actions.goHome());
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b2',
+        state: { title: 'Book B', author: 'B', series: '', prosodyEnabled: false } as never,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(selectEffectiveMeta(store.getState() as never, 'b2')?.title).toBe('Book B');
+
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    const resent = putBookState.mock.calls.filter(
+      ([id, body]) => id === 'b1' && JSON.stringify(body).includes('Typed for A'),
+    );
+    expect(resent.length).toBeGreaterThan(0);
+    err.mockRestore();
+  });
+
   it('does NOT keep a rolled-back book-meta save for re-send on the next flush (#3421)', async () => {
     putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
