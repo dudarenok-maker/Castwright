@@ -417,8 +417,14 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
      replaces the guess with the real happens-before edge: the mock itself
      resolves it the instant PUT's readJson call reaches the interceptor, so
      the await returns as soon as that is true and no sooner — deterministic
-     regardless of machine load. */
-  it('#1981 — a stale cast PUT does not erase a concurrently /assign-planted voice', async () => {
+     regardless of machine load.
+
+     #3773 — Route-vs-route coverage only: the PUT and /assign both hold
+     `book-op:<bookId>` (#3711), which by itself serialises them, so this
+     stays green with a no-op cast lock; it does NOT prove the cast lock (the
+     "#3773 — cast lock alone" test below does). It pins that the real stack,
+     as wired, keeps the planted voice. */
+  it('#1981 — a stale cast PUT does not erase a concurrently /assign-planted voice (end-to-end through book-op AND the cast lock)', async () => {
     const stateIo = await import('../workspace/state-io.js');
     const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
       '../workspace/state-io.js',
@@ -494,6 +500,110 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     expect((nova.overrideTtsVoices as Record<string, { name: string }> | undefined)?.qwen?.name).toBe(
       `qwen-${RACE_VOICE_UUID}`,
     );
+  });
+
+  /* #3773 — cast-lock-alone proof for the cast PUT. The route-level race above
+     is NOT cast-lock proof: both handlers hold `book-op:<bookId>` (#3711),
+     which serialises them on its own, so it stays green with `withCastLock`
+     replaced by a no-op (confirmed: no-op cast lock green; no-op cast lock AND
+     book-op red). Here the real PUT is parked at its in-lock cast.json read
+     (inside `preserveDesignedVoices`) while the second writer,
+     `persistEmotionVariant` (cast lock, NO book-op), plants an
+     `overrideTtsVoices.qwen` variant on the SAME character. Invariant: the
+     PUT's read+write is one cast-lock hold, so the planted override is either
+     fully before it (restored by the guard) or fully after it — never erased
+     by the PUT's stale snapshot. */
+  it('#3773 — cast lock alone: a stale cast PUT does not erase an override planted by a cast-lock-only writer', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const raceCastPath = castJsonPath(raceBookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let castReads = 0;
+    let signalIntercepted!: () => void;
+    const interceptedSignal = new Promise<void>((resolve) => {
+      signalIntercepted = resolve;
+    });
+    /* The PUT's FIRST cast.json read is the in-lock one (inside
+       `preserveDesignedVoices`): hold its resolution open behind the gate.
+       Every cast.json read is counted, so the test can show the second writer
+       really ran while the PUT was parked. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path === raceCastPath) castReads += 1;
+      if (path !== raceCastPath || intercepted) return actual.readJson(path);
+      intercepted = true;
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      signalIntercepted();
+      await gate;
+      return value;
+    });
+
+    let resPut: request.Response;
+    let second: unknown;
+    let putPromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    let hangTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      putPromise = request(app)
+        .put(`/api/books/${raceBookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({
+          slice: 'cast',
+          patch: {
+            characters: [
+              { id: 'nova', name: 'Nova', role: 'minor', color: '#abc', voiceState: 'generated' },
+            ],
+          },
+        });
+      putPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      await Promise.race([
+        interceptedSignal,
+        new Promise<never>((_, rej) => {
+          hangTimer = setTimeout(
+            () => rej(new Error('HANG: cast PUT never reached its in-lock cast.json read')),
+            8_000,
+          );
+        }),
+      ]);
+      clearTimeout(hangTimer);
+      expect(intercepted).toBe(true);
+      expect(castReads).toBe(1); // only the parked PUT read so far
+
+      secondPromise = persistEmotionVariant(raceBookDir, 'nova', 'angry', 'qwen-v_nova__angry');
+      secondPromise.catch(() => {}); // force dispatch now
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind the PUT's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Premise pin: the second writer really started and read cast.json
+         (persistEmotionVariant's early-out read is lock-free) while the PUT
+         was parked. If it were ever wrapped in book-op it would be blocked
+         behind the PUT's book-op and never get here, and this test would no
+         longer be measuring the cast lock. */
+      expect(castReads).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resPut, second] = await Promise.all([putPromise, secondPromise]);
+    } finally {
+      clearTimeout(hangTimer);
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([putPromise, secondPromise]);
+    }
+    expect(resPut.status).toBe(204);
+    expect(second).toBe('applied');
+
+    const nova = raceCast().characters.find((c) => c.id === 'nova')!;
+    const qwen = (nova.overrideTtsVoices as
+      | { qwen?: { variants?: Record<string, { name: string }> } }
+      | undefined)?.qwen;
+    expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_nova__angry' });
   });
 });
 
