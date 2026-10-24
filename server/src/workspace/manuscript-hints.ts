@@ -153,9 +153,12 @@ type HintsState = {
     that passes (newest first; see MAX_HINTS_ENTRIES). Every check
     must pass (schema; manuscriptId + manuscriptFile; sourceSha256; and per
     position the chapter id, a non-empty uuid equal to state's, and a string
-    body). The uuid sequence is the proof the file was written for exactly the
-    structure state.json holds: a merge, split or reorder changes it, so a file
-    from any other structure cannot match.
+    body). The uuid check proves the file was written for a state.json with the
+    same chapter uuids in the same order -- NOT that the bodies are the same: a
+    split, reorder and merge that moves a passage between chapters returns to
+    the same uuid sequence with different bodies. File-level invalidation covers
+    the rest: reparse, replace-manuscript and an overwrite import all delete the
+    file (or replace it with the bundle's).
 
     The file owns BODIES only. Titles, `excluded` and `titleSynthesized` come
     from state.json. Deliberately NOT re-applying the parser's front-matter

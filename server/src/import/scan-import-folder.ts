@@ -47,6 +47,7 @@ import {
   bookDirByDisplay,
   dotAudiobook,
   ensureWorkspace,
+  manuscriptHintsJsonPath,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
@@ -387,7 +388,8 @@ export async function importPortableBundle(
     /* 'overwrite' into an existing folder, under the claim: re-check the target
        still carries `expectedId` (null = it carried none), else it is a conflict;
        then rename the staged files over the live ones, state.json first, holding
-       state-json(target) as before. Files only on disk are LEFT IN PLACE. */
+       state-json(target) as before. Files only on disk are LEFT IN PLACE, except
+       a local manuscript-hints.json the bundle does not carry (dropped). */
     const commitOverwrite = (
       targetDir: string,
       expectedId: string | null,
@@ -405,6 +407,15 @@ export async function importPortableBundle(
             const dest = join(targetDir, rel);
             await mkdir(dirname(dest), { recursive: true });
             await rename(join(stage, rel), dest);
+          }
+          /* #3703 -- the manuscript on disk is the bundle's now, so a local
+             restructure's hints describe another book's bodies. A bundle that
+             carries a hints file just replaced it above; one that carries none
+             (never restructured, or exported before this) must not leave the
+             local file behind: it can still validate (same uuid sequence, same
+             manuscript bytes) and hand back the pre-restore bodies. */
+          if (!stagedRel.includes(relative(stage, manuscriptHintsJsonPath(stage)))) {
+            await rm(manuscriptHintsJsonPath(targetDir), { force: true });
           }
         });
         /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
