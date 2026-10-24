@@ -88,6 +88,7 @@ import {
   ensureChapterUuids,
   reconcileChapterUuids,
   carryTitleSynthesized,
+  carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
 import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
@@ -1214,15 +1215,27 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         return {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid` or `titleSynthesized`, so a
+          /* srv-35 — no in-app caller sends `chapters` on this slice; the merge
+             guards an API caller sending a (possibly stale) chapters list that
+             doesn't track the server-only `uuid` or `titleSynthesized`, so a
              wholesale replace would strip them. reconcileChapterUuids
-             carries each uuid across by id (and mints for a genuinely-new
-             chapter); carryTitleSynthesized does the same for the
-             app-made-title flag, ignoring whatever the client sent. */
+             carries each uuid across from the stored chapter matching on
+             id + slug (and mints for a genuinely-new chapter);
+             carryTitleSynthesized carries the app-made-title flag by id alone
+             (kept only while the title is unchanged), ignoring whatever the
+             client sent.
+             #3683 — carryServerOwnedChapterFields then takes the render and
+             failure stamps (duration, audio*, generation*) from the locked
+             fresh read for a chapter matched on id + slug: a client value is
+             ignored, and only an explicit `null` clears a generation* field
+             (an absent key keeps disk), so a stale copy can't revert a
+             finalize or a failure. The uuid is not touched here. */
           chapters: patch.chapters
-            ? carryTitleSynthesized(
-                reconcileChapterUuids(patch.chapters, state.chapters),
+            ? carryServerOwnedChapterFields(
+                carryTitleSynthesized(
+                  reconcileChapterUuids(patch.chapters, state.chapters),
+                  state.chapters,
+                ),
                 state.chapters,
               )
             : state.chapters,
