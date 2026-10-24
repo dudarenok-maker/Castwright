@@ -758,6 +758,28 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     err.mockRestore();
   });
 
+  it('does NOT keep a rolled-back book-meta save for re-send on the next flush (#3421)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed for A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(20000);
+
+    /* Retries exhausted with b1 still open: the draft is restored, so the user
+       re-saves it themselves — the give-up must not also keep the patch. */
+    const state = store.getState() as { bookMeta: { draft: { title?: string } | null } };
+    expect(state.bookMeta.draft?.title).toBe('Typed for A');
+    const sent = putBookState.mock.calls.length;
+    expect(sent).toBeGreaterThan(1);
+
+    putBookState.mockResolvedValue(undefined);
+    store.dispatch(flushBookPersistence('b1'));
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(putBookState).toHaveBeenCalledTimes(sent);
+    err.mockRestore();
+  });
+
   it('does NOT toast, roll back, or keep a snapshot on a SUCCESSFUL save', async () => {
     putBookState.mockResolvedValue(undefined);
     const store = makeBookMetaStore();
