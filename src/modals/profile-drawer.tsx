@@ -259,8 +259,6 @@ export function ProfileDrawer({
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
   const { guard: personaGuard, modal: personaGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
-  /* A second instance for the compare modal: it is portaled to body, so its dialog has to be portaled with it to stack above. */
-  const { guard: compareGuard, modal: compareGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const ttsEngine = engineForModelKey(ttsModelKey);
   /* fs-2 — the open book's language, so the preview/calibration default speaks
      the right language (Russian pangram for a Russian book). */
@@ -1497,7 +1495,6 @@ export function ProfileDrawer({
               createPortal(
                 <>
                 <VoiceCompareModal
-                  guard={compareGuard}
                   bookId={bookId}
                   character={character}
                   currentSubject={currentSubject}
@@ -1541,7 +1538,6 @@ export function ProfileDrawer({
                     dispatch(castDesignActions.clear());
                   }}
                 />
-                {compareGuardModal}
                 </>,
                 document.body,
               )}

@@ -15,6 +15,7 @@
    closed drawer does today). */
 
 import { useState } from 'react';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { IconPlay, IconPause, IconSpinner, IconRefresh, IconSparkle, IconCheck } from '../lib/icons';
 import { Avatar } from '../components/primitives';
 import { AbCompareShell } from '../components/ab-compare-shell';
@@ -46,8 +47,6 @@ interface Props {
   initial: { voiceId: string; previewUrl: string; persona: string };
   onApprove: (next: { voiceId: string; persona: string; previewUrl: string; voiceUuid?: string }) => void;
   onClose: () => void;
-  /** #3084 W4 — wraps a persona regeneration (opener-owned: this modal has no store access). Omitted = run at once. */
-  guard?: (proceed: () => void) => void;
 }
 
 export function VoiceCompareModal({
@@ -61,8 +60,9 @@ export function VoiceCompareModal({
   initial,
   onApprove,
   onClose,
-  guard,
 }: Props) {
+  /* #3084 W4 — owned here, not by the opener, so a pending prompt dies with the compare. */
+  const { guard, modal: guardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const playback = useSamplePlayback();
   const [persona, setPersona] = useState(initial.persona);
   const [proposed, setProposed] = useState({ voiceId: initial.voiceId, previewUrl: initial.previewUrl });
@@ -138,8 +138,7 @@ export function VoiceCompareModal({
 
   function regenerate() {
     if (personaBusy) return;
-    if (guard) guard(() => void runRegenerate());
-    else void runRegenerate();
+    guard(() => void runRegenerate());
   }
   async function runRegenerate() {
     setPersonaBusy(true);
@@ -202,6 +201,7 @@ export function VoiceCompareModal({
   }
 
   return (
+    <>
     <AbCompareShell
       title="Audition the new voice"
       subtitle="Compare the current voice with the proposed one, then keep whichever sounds right."
@@ -352,6 +352,8 @@ export function VoiceCompareModal({
         </>
       }
     />
+    {guardModal}
+    </>
   );
 }
 

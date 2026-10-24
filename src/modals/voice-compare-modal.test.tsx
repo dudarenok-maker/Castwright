@@ -10,7 +10,16 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
 import { VoiceCompareModal } from './voice-compare-modal';
+import { uiSlice } from '../store/ui-slice';
+import { librarySlice } from '../store/library-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
+import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
@@ -24,6 +33,11 @@ vi.mock('../lib/use-sample-playback', () => {
   };
   return { useSamplePlayback: () => playback };
 });
+
+vi.mock('../store/queue-thunks', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
+}));
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn(async () => ({ analyzerEvicted: false })),
@@ -45,7 +59,7 @@ const currentSubject = {
 } as unknown as Voice;
 
 function renderModal(overrides?: {
-  guard?: (proceed: () => void) => void;
+  streaming?: boolean;
   onApprove?: () => void;
   onClose?: () => void;
   character?: Character;
@@ -54,7 +68,18 @@ function renderModal(overrides?: {
 }) {
   const onApprove = vi.fn(overrides?.onApprove);
   const onClose = vi.fn(overrides?.onClose);
+  const store = configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      library: librarySlice.reducer,
+      chapters: chaptersSlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
+    },
+  });
+  seedSameCardPersona(store, { streaming: overrides?.streaming ?? false });
   render(
+    <Provider store={store}>
     <VoiceCompareModal
       bookId="b1"
       character={overrides?.character ?? character}
@@ -66,8 +91,8 @@ function renderModal(overrides?: {
       initial={{ voiceId: 'qwen-x-preview', previewUrl: '/audio/initial.mp3', persona: 'initial persona' }}
       onApprove={onApprove}
       onClose={onClose}
-      guard={overrides?.guard}
-    />,
+    />
+    </Provider>,
   );
   return { onApprove, onClose };
 }
@@ -142,13 +167,14 @@ describe('VoiceCompareModal', () => {
     });
   });
 
-  it('Regenerate runs through the opener-owned guard: nothing is generated until the guard proceeds (#3084 W4)', async () => {
-    let proceed: (() => void) | undefined;
-    renderModal({ guard: (p) => { proceed = p; } });
+  it('Regenerate asks before pausing a same-card render: nothing is generated until Pause and design (#3084 W4)', async () => {
+    renderModal({ streaming: true });
     vi.mocked(api.generateVoiceStyle).mockClear();
     fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
     expect(api.generateVoiceStyle).not.toHaveBeenCalled();
-    proceed!();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(api.generateVoiceStyle).toHaveBeenCalledWith('b1', 'x'));
   });
 

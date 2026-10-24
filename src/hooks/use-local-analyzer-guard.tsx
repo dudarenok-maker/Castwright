@@ -33,7 +33,7 @@
    reconcile-driven generation start is intentionally NOT gated; see
    docs/features/archive/32-sticky-analysis.md for the rationale. */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
@@ -127,6 +127,20 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
   };
 
   const close = () => setPending(null);
+
+  /* Escape on the open prompt is Wait. Capture phase + stopPropagation so a host that also listens
+     for Escape on window (the A/B compare shell) does not close underneath the prompt. */
+  const open = pending != null;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setPending(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open]);
 
   const titleFromLibrary = activeBookId
     ? (libraryBooks.find((b) => b.bookId === activeBookId)?.title ?? null)

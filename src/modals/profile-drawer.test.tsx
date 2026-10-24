@@ -2939,14 +2939,7 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
   });
 
   describe('Regenerate inside the compare modal opened from the drawer', () => {
-    async function openCompare() {
-      const store = renderGuarded({
-        ...baseChar,
-        ttsEngine: 'qwen',
-        voiceId: 'v_hal',
-        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
-        voiceStyle: 'a steady adult voice',
-      });
+    function stagePreview(store: ReturnType<typeof renderGuarded>) {
       act(() => {
         store.dispatch(
           castDesignActions.beginSingle({
@@ -2960,7 +2953,19 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
           }),
         );
       });
+    }
+
+    async function openCompare() {
+      const store = renderGuarded({
+        ...baseChar,
+        ttsEngine: 'qwen',
+        voiceId: 'v_hal',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+        voiceStyle: 'a steady adult voice',
+      });
+      stagePreview(store);
       await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+      return store;
     }
 
     it('shows the design dialog stacked above the compare modal; Pause and design halts then generates', async () => {
@@ -2991,6 +2996,35 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
       expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy();
       await Promise.resolve();
       expect(generateVoiceStyle).not.toHaveBeenCalled();
+    });
+
+    it('Escape on the open design dialog is Wait: the dialog closes, the compare stays open, nothing is called', async () => {
+      await openCompare();
+      fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+      expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+      expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy();
+      await Promise.resolve();
+      expect(generateVoiceStyle).not.toHaveBeenCalled();
+      expect(haltActiveGeneration).not.toHaveBeenCalled();
+    });
+
+    it('closing the compare with a design prompt pending leaves no stale prompt when it re-opens', async () => {
+      const store = await openCompare();
+      fireEvent.click(screen.getByTestId('voice-compare-regenerate'));
+      expect(screen.getByText(DESIGN_TITLE)).toBeInTheDocument();
+      /* The shell's own Cancel closes the compare while the prompt is still pending. */
+      fireEvent.click(screen.getByTestId('voice-compare-cancel'));
+      await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
+
+      stagePreview(store);
+      await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+      expect(screen.queryByText(DESIGN_TITLE)).not.toBeInTheDocument();
+      await Promise.resolve();
+      expect(generateVoiceStyle).not.toHaveBeenCalled();
+      expect(haltActiveGeneration).not.toHaveBeenCalled();
     });
   });
 });
