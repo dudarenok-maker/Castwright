@@ -1396,6 +1396,34 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     mw(restoreSupersededSaves('book-1'));
     await mw(flushBookPersistence('book-1'));
     expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([true]);
+  });
+
+  it("(xi-b) a field of a write the second supersede cancelled is owed again on restore (S5)", async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' }); // queued after the park, never sent
+    mw(supersedeBookSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(statePuts()).toHaveLength(1);
+    expect(statePuts()[0][1].patch).toEqual(expect.objectContaining({ title: 'T1', castConfirmed: true }));
+  });
+
+  it('(xi-c) a field a post-park write landed stays stripped even when a second supersede cancels another write carrying it (S5)', async () => {
+    const state: Record<string, unknown> = baseState({ bookMeta: metaOf('T1') });
+    const mw = await keepRenameThenPark(state);
+    mw({ type: 'ui/confirmCast' });
+    await mw(flushBookPersistence('book-1')); // castConfirmed lands
+    mw({ type: 'ui/confirmCast' }); // the same field again, cancelled by wipe 2
+    mw(supersedeBookSaves('book-1'));
+    putBookState.mockClear();
+    mw(restoreSupersededSaves('book-1'));
+    mw(restoreSupersededSaves('book-1'));
+    await mw(flushBookPersistence('book-1'));
+    expect(titlePuts()).toEqual(['T1']);
+    expect(putBookState.mock.calls.map((c) => c[1].patch.castConfirmed)).toEqual([undefined]);
   });
 
   it('(xii) a save that settled is not parked again, nor restored, by a later supersede (S5)', async () => {

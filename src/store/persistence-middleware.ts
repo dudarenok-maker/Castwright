@@ -425,7 +425,10 @@ export const persistenceMiddleware: Middleware = (store) => {
   const sending = new Map<FlushKey, Set<SavedPatch>>();
   /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
      (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
-  const parked = new Map<FlushKey, SavedPatch & { newerFields: Set<string> }>();
+  const parked = new Map<
+    FlushKey,
+    SavedPatch & { newerFields: Set<string>; landedFields: Set<string> }
+  >();
   /* #3421 S4 — wipes of a book still running. The parked saves are shared, so
      only the last wipe to fail gives them back; one that succeeded dropped them.
      Only a wipe's own outcome (a `wipeSettled` drop or a restore) decrements. */
@@ -495,6 +498,9 @@ export const persistenceMiddleware: Middleware = (store) => {
           if (onSuccess && gen === (generation.get(key) ?? 0)) {
             store.dispatch(onSuccess(bookId));
           }
+          /* #3421 — the server has these fields now; a restore must not re-send them. */
+          const parkedHere = parked.get(key);
+          if (parkedHere) for (const field of Object.keys(patch as object)) parkedHere.landedFields.add(field);
           return { slice, ok: true };
         } catch (err) {
           console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
@@ -649,10 +655,22 @@ export const persistenceMiddleware: Middleware = (store) => {
             : []),
         ];
         if (layers.length > 0) {
+          const before = parked.get(key);
+          const newerFields = before?.newerFields ?? new Set<string>();
+          const landedFields = before?.landedFields ?? new Set<string>();
+          /* A write this park cancels was never delivered, so its fields are owed
+             again — unless another post-park write carrying them landed. */
+          for (const l of layers) {
+            if (l === before) continue;
+            for (const field of Object.keys(l.patch)) {
+              if (!landedFields.has(field)) newerFields.delete(field);
+            }
+          }
           parked.set(key, {
             patch: Object.assign({}, ...layers.map((l) => l.patch)),
             onSuccess: [...layers].reverse().find((l) => l.onSuccess)?.onSuccess,
-            newerFields: parked.get(key)?.newerFields ?? new Set<string>(),
+            newerFields,
+            landedFields,
           });
         }
         generation.set(key, (generation.get(key) ?? 0) + 1);
