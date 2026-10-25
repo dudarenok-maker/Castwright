@@ -608,7 +608,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       spy.mockImplementation(actual.readJson);
       await Promise.allSettled([putPromise, secondPromise]);
     }
-    expect(resPut.status).toBe(204);
+    expect(resPut.status).toBe(200);
     expect(second).toBe('applied');
 
     const nova = raceCast().characters.find((c) => c.id === 'nova')!;
