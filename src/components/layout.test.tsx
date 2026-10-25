@@ -2720,6 +2720,25 @@ describe('Layout — empty book-state read after another book resets the slices 
     expect(putsTo('b1')).toEqual([]);
   });
 
+  it("(f) empties the chapters slice too, so Generate/Listen don't list B's chapters under A, with no PUT", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b2',
+        chapters: [{ id: 1, title: 'B-CHAPTER', slug: 'b-chapter' }] as never,
+        completedSlugs: [],
+        characters: [],
+      }),
+    );
+    expect(store.getState().chapters.chapters).toHaveLength(1);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().chapters.chapters).toEqual([]));
+    expect(store.getState().chapters.currentBookId).toBe('b1');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putsTo('b1')).toEqual([]);
+  });
+
   it("(b) an edit after the empty read PUTs to A with A's data only", async () => {
     const store = makeStoreWithScopeAndPersistence();
     seedBookB(store);

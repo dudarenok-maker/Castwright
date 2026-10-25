@@ -918,6 +918,16 @@ export function Layout() {
                 dispatch(castActions.setRenderedFallback({}));
                 dispatch(castActions.setOrphanedCharacterFallbacks({}));
                 dispatch(changeLogActions.hydrateFromBookState(null));
+                /* The chapters slice too: Generate and Listen read it with no
+                   book check, so left alone they'd list B's chapters under A. */
+                dispatch(
+                  chaptersActions.hydrateFromBookState({
+                    bookId,
+                    chapters: [],
+                    completedSlugs: [],
+                    characters: [],
+                  }),
+                );
               }
             }
             return;
