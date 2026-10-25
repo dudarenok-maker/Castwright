@@ -761,7 +761,7 @@ describe('Layout -- the analysis hydrate keeps the include origin (#3774)', () =
     const store = makeStore();
     openAt(store, 'bA');
     renderLayoutAt(store, 'bA');
-    await waitFor(() => expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', subsetOrigin: 'include' }));
+    await waitFor(() => expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', subsetOrigin: 'include', serverConfirmed: true }));
   });
 
   it('a REAL book switch away and back replaces the snapshot with the server\'s, origin kept', async () => {
@@ -804,6 +804,7 @@ describe('Layout -- the analysis hydrate keeps the include origin (#3774)', () =
     const includeSnapshot = (lastTickAt: number) => ({
       bookId: 'bA', manuscriptId: 'mns_bA', phaseId: 0, phaseLabel: 'mirrored', phaseProgress: 0, remainingMs: null,
       lastTickAt, state: 'running' as const, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const,
+      serverConfirmed: true as boolean | undefined,
     });
     const arriveWith = async (snap: ReturnType<typeof includeSnapshot>, serverAnswer: unknown) => {
       bookReads();
@@ -825,6 +826,11 @@ describe('Layout -- the analysis hydrate keeps the include origin (#3774)', () =
     it('clears it when the server reports a paused run on a confirmed book (the cold-boot gate returns early)', async () => {
       const store = await arriveWith(includeSnapshot(Date.now() - 60_000), liveSubset({ state: 'paused' }));
       expect(snapshotOf(store)).toBeNull();
+    });
+
+    it('keeps a quiet include snapshot the server never confirmed (the job has not registered yet)', async () => {
+      const store = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), serverConfirmed: undefined }, null);
+      expect(snapshotOf(store)).toMatchObject({ subsetOrigin: 'include', phaseLabel: 'mirrored' });
     });
 
     it('keeps a fresh include snapshot (the click-to-registration window)', async () => {

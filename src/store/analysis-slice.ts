@@ -115,6 +115,13 @@ export interface AnalysisStreamSnapshot {
       Generate view re-derive that block after a remount. Absent on cold-boot
       snapshots (never treated as an include). */
   subsetOrigin?: 'include' | 'reanalyse';
+  /** #3774 — evidence the server registered this run: a server tick landed on the
+      snapshot, it was rebuilt from the server's own answer (hydrate / restore), or
+      `/busy` reported `analysis` while it was held. Until then a quiet snapshot is
+      only the click-to-registration window (the job registers after two POSTs and
+      two bounded waits), not a dead run, so it is never judged stale. Preserved
+      through ticks like `subsetOrigin`. */
+  serverConfirmed?: boolean;
 }
 
 export interface AnalysisState {
@@ -173,6 +180,7 @@ export const analysisSlice = createSlice({
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      snap.serverConfirmed = true;
       if (snap.state === 'halted' && snap.haltCode === ANALYSIS_STREAM_FAILED) {
         snap.state = 'running';
         snap.haltCode = undefined;
@@ -232,6 +240,16 @@ export const analysisSlice = createSlice({
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
       snap.lastTickAt = action.payload.lastTickAt;
+      snap.serverConfirmed = true;
+    },
+
+    /* #3774 — `/busy` reported an `analysis` job while this book's include
+       snapshot was held: the run's lease is registered, so its quiet time counts
+       from here. */
+    markAnalysisServerConfirmed(state, action: PayloadAction<{ bookId: string }>) {
+      const snap = state.activeStream;
+      if (!snap || snap.bookId !== action.payload.bookId) return;
+      snap.serverConfirmed = true;
     },
 
     /* Flip to halted state with an error code + message. Used for
@@ -339,7 +357,10 @@ export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manus
     STALL_THRESHOLD_MS). A live run is ticked every few seconds, so a copy this
     quiet is a stale mirror (the tab that started it closed or reloaded) — but
     only once the server also reports no live subset run, which is the caller's
-    check. Shared by the layout's per-book hydrate and the Generate view's busy
+    check. Quiet time only counts once the run is known to have registered
+    (`serverConfirmed`): before that the snapshot is the click-to-registration
+    window, in which `/busy` truthfully reports no analysis for a LIVE include.
+    Shared by the layout's per-book hydrate and the Generate view's busy
     poll so the two ends of the same rule cannot drift. */
 export function isStaleIncludeSnapshot(
   held: AnalysisStreamSnapshot | null | undefined,
@@ -352,6 +373,7 @@ export function isStaleIncludeSnapshot(
     held.kind === 'subset' &&
     held.state === 'running' &&
     held.subsetOrigin === 'include' &&
+    held.serverConfirmed === true &&
     now - held.lastTickAt > STALL_THRESHOLD_MS
   );
 }

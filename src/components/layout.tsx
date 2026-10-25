@@ -1071,6 +1071,9 @@ export function Layout() {
                      second tab); without it the Generate view's include
                      job-start block is lost. */
                   subsetOrigin: snap.subsetOrigin,
+                  /* #3774 — rebuilt from the server's own answer, so the run is
+                     registered; its `lastTickAt` is the SERVER's clock. */
+                  serverConfirmed: true,
                 }),
               );
             })

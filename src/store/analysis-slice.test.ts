@@ -7,7 +7,8 @@
    cross-book guard, and idempotency of the terminal transitions. */
 
 import { describe, it, expect } from 'vitest';
-import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { analysisSlice, analysisActions, isStaleIncludeSnapshot, type AnalysisStreamSnapshot } from './analysis-slice';
+import { STALL_THRESHOLD_MS } from './chapters-slice';
 import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 import { analyzerSharesGenerationDevice } from '../lib/analyzer-endpoints';
 
@@ -49,6 +50,28 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(
       analysisSlice.reducer(state, analysisActions.setHalted({ manuscriptId: snap.manuscriptId, code: 'x', message: 'm' })).activeStream,
     ).toMatchObject({ state: 'halted', subsetOrigin: 'include' });
+  });
+
+  it('serverConfirmed: set by a tick, a heartbeat or the busy mark (this book only), kept through pause/halt, and gates isStaleIncludeSnapshot (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    const seeded = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
+    const quiet = snap.lastTickAt + STALL_THRESHOLD_MS + 1;
+    expect(seeded.activeStream?.serverConfirmed).toBeUndefined();
+    expect(isStaleIncludeSnapshot(seeded.activeStream, 'b1', quiet)).toBe(false);
+    const tick = analysisSlice.reducer(
+      seeded,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1 }),
+    );
+    const beat = analysisSlice.reducer(seeded, analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: 'm1', lastTickAt: 1000 }));
+    const mark = analysisSlice.reducer(seeded, analysisActions.markAnalysisServerConfirmed({ bookId: 'b1' }));
+    for (const s of [tick, beat, mark]) {
+      expect(s.activeStream?.serverConfirmed).toBe(true);
+      expect(isStaleIncludeSnapshot(s.activeStream, 'b1', quiet)).toBe(true);
+      expect(analysisSlice.reducer(s, analysisActions.setPaused({ manuscriptId: 'm1' })).activeStream?.serverConfirmed).toBe(true);
+    }
+    expect(
+      analysisSlice.reducer(seeded, analysisActions.markAnalysisServerConfirmed({ bookId: 'other' })).activeStream?.serverConfirmed,
+    ).toBeUndefined();
   });
 
   it('clearActiveStream tears down the snapshot', () => {

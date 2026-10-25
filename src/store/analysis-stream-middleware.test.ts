@@ -1210,7 +1210,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, subsetOrigin: 'include' as const });
     lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
     await settle();
-    expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', subsetOrigin: 'include' });
+    expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', subsetOrigin: 'include', serverConfirmed: true });
 
     const store2 = buildStore();
     store2.dispatch(analysisActions.setActiveStream(baseSnapshot));

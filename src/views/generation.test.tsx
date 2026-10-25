@@ -3036,6 +3036,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
           kind: 'subset',
           subsetChapterIds: [3],
           subsetOrigin: 'include',
+          serverConfirmed: true,
         } as any);
 
       it('a hydrate-shaped include snapshot is cleared once /busy has no analysis job and it has been quiet > 30 s', async () => {
@@ -3089,6 +3090,84 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         } finally {
           vi.useRealTimers();
         }
+      });
+    });
+
+    /* #3774 pass 7 (J') — the include snapshot is created at click time, before the job
+       registers its lease, so `/busy` truthfully reports no `analysis` for a LIVE include
+       until then. Quiet time only counts once the snapshot has server evidence. */
+    describe("J': a live include is never cleared before its job has registered", () => {
+      const withFakeTimers = async (body: () => Promise<void>) => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          await body();
+        } finally {
+          vi.useRealTimers();
+        }
+      };
+
+      it('P1: no registration for 36 s keeps the snapshot (also across a remount); registration + a tick then runs normally', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          const first = renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          first.unmount();
+          renderInclude(store, rows);
+          expect(resume()).toBeDisabled();
+          expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          /* the job registers: /busy reports it, and a phase tick lands */
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ serverConfirmed: true });
+          act(() => {
+            store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, lastTickAt: Date.now() }));
+          });
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS * 2);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        });
+      });
+
+      it('freeze: the clock jumping 60 s during the include POST does not clear the snapshot', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          let landInclude!: () => void;
+          setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+            excluded
+              ? Promise.resolve({ id, title: '', slug: '', excluded })
+              : new Promise((r) => (landInclude = () => r({ id, title: '', slug: '', excluded }))),
+          );
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(includePosts()).toHaveLength(1));
+          vi.setSystemTime(Date.now() + 60_000);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          expect(resume()).toBeDisabled();
+          await act(async () => landInclude());
+        });
+      });
+
+      it('the starting view never clears while its own include request is pending, even after /busy once reported analysis', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          getBookBusySpy.mockResolvedValue([]);
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+          /* another job's lease makes /busy report analysis for a moment, then it ends */
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ serverConfirmed: true });
+          getBookBusySpy.mockResolvedValue([]);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+        });
       });
     });
 

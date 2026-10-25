@@ -465,7 +465,11 @@ export function GenerationView({
      mid-run: the stream that would end it died with the old page) is ended here,
      by the poll: `/busy` reporting no `analysis` job while the include snapshot
      has been quiet for STALL_THRESHOLD_MS means the run's lease is released. A
-     live run always reports `analysis`, so it is never cleared. */
+     registered run always reports `analysis`, so it is never cleared; a run not
+     yet registered reports nothing either, so quiet time only counts once the
+     snapshot has server evidence (`serverConfirmed`: a tick, a server-rebuilt
+     snapshot, or `/busy` having reported `analysis` while it was held), and never
+     while this instance's own include request is pending. */
   const pollForStoreBlock = includeRunInStore;
   useEffect(() => {
     if (!bookId || !(hasIncludeSurface || pollForStoreBlock)) return;
@@ -474,9 +478,14 @@ export function GenerationView({
       try {
         const kinds = await api.getBookBusy(bookId);
         if (!cancelled) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+        /* The run's lease is registered: from here its quiet time counts. */
+        if (!cancelled && kinds.includes('analysis')) {
+          dispatch(analysisActions.markAnalysisServerConfirmed({ bookId }));
+        }
         if (
           !cancelled &&
           !kinds.includes('analysis') &&
+          !subsetRunningRef.current &&
           isStaleIncludeSnapshot(store.getState().analysis.activeStream, bookId, Date.now())
         ) {
           dispatch(analysisActions.clearActiveStream());
