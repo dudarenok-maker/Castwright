@@ -3097,6 +3097,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
        registers its lease, so `/busy` truthfully reports no `analysis` for a LIVE include
        until then. Quiet time only counts once the snapshot has server evidence. */
     describe("J': a live include is never cleared before its job has registered", () => {
+      const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
       const withFakeTimers = async (body: () => Promise<void>) => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
@@ -3167,6 +3168,38 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
           getBookBusySpy.mockResolvedValue([]);
           await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
           expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+        });
+      });
+
+      it('real reload order: the view mounts first, then the hydrate-shaped server snapshot lands; the poll then ends it', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          renderInclude(store, included);
+          expect(resume()).toBeEnabled();
+          act(() => {
+            store.dispatch(
+              analysisActions.setActiveStream({
+                bookId: 'b1',
+                manuscriptId: 'm1',
+                bookTitle: 'the Coalfall Commission',
+                engine: 'local',
+                phaseId: 1,
+                phaseLabel: 'Attribution',
+                phaseProgress: 0.5,
+                remainingMs: null,
+                lastTickAt: Date.now(),
+                state: 'running',
+                kind: 'subset',
+                subsetChapterIds: [3],
+                subsetOrigin: 'include',
+                serverConfirmed: true,
+              } as any),
+            );
+          });
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
         });
       });
     });
