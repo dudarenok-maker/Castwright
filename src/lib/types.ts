@@ -1,5 +1,4 @@
 import type { components } from './api-types';
-import type { AnalysisEngine } from './model-id';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -603,22 +602,7 @@ export interface DroppedQuotesResponse {
     in-flight job means the analyzer didn't survive the restart), so the
     `state` field never contains `'running'` over the wire from this
     endpoint. */
-export interface ActiveAnalysisSummary {
-  bookId: string;
-  bookTitle: string;
-  manuscriptId: string;
-  phaseId: number;
-  phaseLabel: string;
-  phaseProgress: number;
-  state: 'paused' | 'halted';
-  engine?: AnalysisEngine;
-  kind?: 'main' | 'subset';
-  subsetChapterIds?: number[];
-  haltCode?: string;
-  haltReason?: string;
-  lastTickAt: number;
-  writtenAt: number;
-}
+export type ActiveAnalysisSummary = components['schemas']['ActiveAnalysisSummary'];
 
 export interface ActiveAnalysesResponse {
   snapshots: ActiveAnalysisSummary[];

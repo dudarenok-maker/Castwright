@@ -416,6 +416,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/library/active-analyses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Books whose analysis snapshot is paused or halted
+         * @description Walks the workspace and returns one summary per book whose `.audiobook/analysis-state.json`
+         *     resolves to `paused` or `halted` (a stored `running` is coerced to `paused`; there is no
+         *     live-job lookup here), freshest `writtenAt` first (#3787). Books whose cast is confirmed,
+         *     and books with no snapshot or no readable `state.json`, are skipped. Seeds the top-bar
+         *     analysis pill on a cold start.
+         */
+        get: operations["getActiveAnalyses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/library/series-memory": {
         parameters: {
             query?: never;
@@ -4774,6 +4798,40 @@ export interface components {
             writtenAt: number;
         };
         /**
+         * @description One entry of `GET /api/library/active-analyses` (#3787): a persisted analysis snapshot plus the
+         *     book's identity. Unlike `AnalysisState`, `state` is never `running` and `bookId`/`bookTitle` are present.
+         */
+        ActiveAnalysisSummary: {
+            bookId: string;
+            bookTitle: string;
+            manuscriptId: string;
+            phaseId: number;
+            phaseLabel: string;
+            phaseProgress: number;
+            /** @enum {string} */
+            state: "paused" | "halted";
+            /**
+             * @description Absent on snapshots written before the engine was captured.
+             * @enum {string}
+             */
+            engine?: "local" | "openai" | "gemini";
+            /**
+             * @description Absent on snapshots written before the discriminator existed; treat as `main`.
+             * @enum {string}
+             */
+            kind?: "main" | "subset";
+            /** @description Only when `kind` is `subset`. */
+            subsetChapterIds?: number[];
+            /** @description Only when `state` is `halted`. */
+            haltCode?: string;
+            /** @description Only when `state` is `halted`; trimmed to 256 characters. */
+            haltReason?: string;
+            /** @description ms since epoch of the latest tick. */
+            lastTickAt: number;
+            /** @description ms since epoch the snapshot was written. */
+            writtenAt: number;
+        };
+        /**
          * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;
          *     a `warning` never replaces the terminal `result`. Follows the same
          *     `code` + `message` envelope the splice, generation and QA-repair
@@ -8037,6 +8095,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibraryResponse"];
+                };
+            };
+        };
+    };
+    getActiveAnalyses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resumable analyses, possibly empty */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        snapshots: components["schemas"]["ActiveAnalysisSummary"][];
+                    };
+                };
+            };
+            /** @description The workspace scan failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
                 };
             };
         };

@@ -629,6 +629,38 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LibraryResponse' }
 
+  /api/library/active-analyses:
+    get:
+      summary: Books whose analysis snapshot is paused or halted
+      operationId: getActiveAnalyses
+      description: |
+        Walks the workspace and returns one summary per book whose `.audiobook/analysis-state.json`
+        resolves to `paused` or `halted` (a stored `running` is coerced to `paused`; there is no
+        live-job lookup here), freshest `writtenAt` first (#3787). Books whose cast is confirmed,
+        and books with no snapshot or no readable `state.json`, are skipped. Seeds the top-bar
+        analysis pill on a cold start.
+      responses:
+        '200':
+          description: The resumable analyses, possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshots]
+                properties:
+                  snapshots:
+                    type: array
+                    items: { $ref: '#/components/schemas/ActiveAnalysisSummary' }
+        '500':
+          description: The workspace scan failed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
   /api/library/series-memory:
     get:
       summary: Per-series carried-character roster (series memory)
@@ -6760,6 +6792,37 @@ components:
         haltReason:
           type: string
           description: Persisted snapshot only, when `state` is `halted`; trimmed to 256 characters.
+        lastTickAt: { type: integer, description: 'ms since epoch of the latest tick.' }
+        writtenAt: { type: integer, description: 'ms since epoch the snapshot was written.' }
+
+    ActiveAnalysisSummary:
+      type: object
+      description: |
+        One entry of `GET /api/library/active-analyses` (#3787): a persisted analysis snapshot plus the
+        book's identity. Unlike `AnalysisState`, `state` is never `running` and `bookId`/`bookTitle` are present.
+      required: [bookId, bookTitle, manuscriptId, phaseId, phaseLabel, phaseProgress, state, lastTickAt, writtenAt]
+      properties:
+        bookId: { type: string }
+        bookTitle: { type: string }
+        manuscriptId: { type: string }
+        phaseId: { type: integer }
+        phaseLabel: { type: string }
+        phaseProgress: { type: number }
+        state: { type: string, enum: [paused, halted] }
+        engine:
+          type: string
+          enum: [local, openai, gemini]
+          description: Absent on snapshots written before the engine was captured.
+        kind:
+          type: string
+          enum: [main, subset]
+          description: Absent on snapshots written before the discriminator existed; treat as `main`.
+        subsetChapterIds:
+          type: array
+          items: { type: integer }
+          description: Only when `kind` is `subset`.
+        haltCode: { type: string, description: 'Only when `state` is `halted`.' }
+        haltReason: { type: string, description: 'Only when `state` is `halted`; trimmed to 256 characters.' }
         lastTickAt: { type: integer, description: 'ms since epoch of the latest tick.' }
         writtenAt: { type: integer, description: 'ms since epoch the snapshot was written.' }
 

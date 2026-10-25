@@ -3300,7 +3300,8 @@ export function activeAnalysisManuscripts(): string[] {
 }
 
 /** Snapshot the in-flight analyzer's state for the cold-boot
-    discovery endpoint (GET /api/books/:bookId/analysis/state).
+    discovery endpoint (GET /api/books/:bookId/analysis/state — the
+    handler lives in routes/book-state.ts; only this snapshot is built here).
     Returns null when no job is running OR the job's controller has
     been aborted — both cases fall back to disk in the GET handler.
     The synthesised file shape matches what the disk writer produces,
