@@ -336,8 +336,8 @@ describe('rewriteChapterSlugs x applyMerge with an empty chapter (#3524 N2)', ()
       })),
       coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
     } as unknown as BookStateJson;
-    const hints = titles.map((title, i) => ({ id: i + 1, title, body: `body ${i + 1}` }));
-    // Chapter 2 has no sentences (a heading-only "Part One"), so the prune pass removes it.
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: i === 1 ? '' : `body ${i + 1}` }));
+    // Chapter 2 has no sentences (a heading-only "Part One"), so the prune pass removes it (no sentences AND an empty body, #3783).
     const sentences = [1, 3, 4, 5].map((chapterId, i) => ({ id: i + 1, chapterId, characterId: 'narrator', text: `s${chapterId}` }));
     const suffixes = ['mp3', 'segments.json', 'peaks.json', 'lufs.json', 'embeddings.json'];
     const tagOf = (s: string, slug: string) => `${s}:${slug}`;

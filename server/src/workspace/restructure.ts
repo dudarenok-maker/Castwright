@@ -485,25 +485,34 @@ function renumberGenericTitlesInChapters(
   return { chapters: next, renumbered };
 }
 
+/** True when a hint body carries no text: blank, whitespace-only, or just the
+    chapter's own heading (optionally `#`-prefixed) repeated as the only line. */
+function isBodyEmpty(body: string, title: string): boolean {
+  const norm = (x: string) => x.replace(/^[#\s]+/, '').trim().toLowerCase();
+  const heading = norm(title);
+  return body
+    .split(/\r?\n/)
+    .map(norm)
+    .every((line) => line === '' || line === heading);
+}
+
 /* Drop chapters with zero attached sentences, renumber survivors 1..N,
    and propagate the remap / audioOps / hints accordingly.
 
    This is the structural cleanup pass that resolves the user-reported
    "empty rows at the end of the list" symptom — those rows had stale
    parser state from a previous import path or orphaned sentences that
-   were dropped silently by the pre-fix remapSentences. Now that orphan
-   recovery preserves content, empty chapters truly mean "no content";
-   pruning is safe.
+   were dropped silently by the pre-fix remapSentences. Zero sentences alone
+   does NOT mean "no content" (a never-analysed chapter has none), hence the
+   body check below.
 
-   Excluded chapters are not pruned even when empty — preserving the
-   soft-hide invariant. Excluded chapters with sentences attached are
-   kept as well. `keepIds` names chapters the SAME operation just un-excluded
-   (#3774): a never-analysed chapter has zero sentences, so pruning it would
-   delete the chapter the user just included. */
-function pruneEmptyChaptersInResult(
-  result: RestructureResult,
-  keepIds: ReadonlySet<number> = new Set(),
-): {
+   Only a chapter with no manuscript text is pruned (#3783): zero sentences
+   AND an empty body in `result.hints` (see `isBodyEmpty`). A never-analysed
+   chapter has zero sentences but real text, and pruning it would delete that
+   text and renumber its neighbours. A chapter with no hint entry is kept —
+   its text can't be judged, so the rule fails safe. Excluded chapters are
+   not pruned either — preserving the soft-hide invariant. */
+function pruneEmptyChaptersInResult(result: RestructureResult): {
   result: RestructureResult;
   /** pre-prune chapter id → post-prune id; absent = pruned. Identity when nothing pruned. */
   idRemap: Map<number, number> | null;
@@ -520,9 +529,12 @@ function pruneEmptyChaptersInResult(
     sentenceCountByChapter.set(s.chapterId, (sentenceCountByChapter.get(s.chapterId) ?? 0) + 1);
   }
 
-  const pruned = result.state.chapters.filter(
-    (c) => !c.excluded && !keepIds.has(c.id) && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
-  );
+  const hintById = new Map(result.hints.map((h) => [h.id, h]));
+  const pruned = result.state.chapters.filter((c) => {
+    if (c.excluded || (sentenceCountByChapter.get(c.id) ?? 0) !== 0) return false;
+    const hint = hintById.get(c.id);
+    return hint !== undefined && isBodyEmpty(hint.body, c.title);
+  });
   if (pruned.length === 0) return { result, idRemap: null };
 
   const survivors = result.state.chapters.filter((c) => !pruned.includes(c));
@@ -597,11 +609,8 @@ function pruneEmptyChaptersInResult(
    caller, yet its files must follow it. Only chapters flagged
    `titleSynthesized` are renumbered — an explicit title (rename, merge
    `mergedTitle`) clears the flag — so a user-chosen title is never rewritten. */
-function postProcessRestructure(
-  result: RestructureResult,
-  keepIds?: ReadonlySet<number>,
-): RestructureResult {
-  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result, keepIds);
+function postProcessRestructure(result: RestructureResult): RestructureResult {
+  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
   if (titled.renumbered === 0 && idRemap === null) return pruned;
 
@@ -1153,10 +1162,9 @@ export function applyRefreshTitles(
 
    No structural change — ids and slugs are preserved, audio files stay
    on disk, and the sentence remap is identity. The shared
-   postProcessRestructure pipeline still runs so any pre-existing empty
-   chapters / stale generic titles get cleaned up by the same operation,
-   matching the user expectation that "any restructure tidies up the
-   list as a side effect." */
+   postProcessRestructure pipeline still runs so stale generic titles get
+   cleaned up by the same operation. A chapter with no sentences is pruned
+   only if its body text is empty (#3783). */
 export function applyExclude(
   state: BookStateJson,
   hints: readonly ChapterHint[],
@@ -1207,28 +1215,18 @@ export function applyExclude(
     state.chapters.map((c) => c.id),
   );
 
-  /* #3774 -- a chapter this op just un-excluded is never pruned: a
-     never-analysed chapter has no sentences, so the prune would delete the
-     chapter being included. */
-  const justIncluded = new Set(
-    op.excluded ? [] : state.chapters.filter((c) => c.excluded && targetIds.has(c.id)).map((c) => c.id),
-  );
-
-  return postProcessRestructure(
-    {
-      state: {
-        ...state,
-        chapters: newStateChapters,
-        updatedAt: new Date().toISOString(),
-      },
-      hints: newHints,
-      sentences: newSentences,
-      remap,
-      audioOps: [],
-      warnings,
+  return postProcessRestructure({
+    state: {
+      ...state,
+      chapters: newStateChapters,
+      updatedAt: new Date().toISOString(),
     },
-    justIncluded,
-  );
+    hints: newHints,
+    sentences: newSentences,
+    remap,
+    audioOps: [],
+    warnings,
+  });
 }
 
 /* -- rename --------------------------------------------------------- */

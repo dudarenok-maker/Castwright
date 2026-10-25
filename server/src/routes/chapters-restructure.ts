@@ -211,8 +211,8 @@ async function applyRestructure(
      registers its token inside `withBookOp`, so this check cannot race a
      registration. Every `BookJobKind` counts (analysis included); the gate
      claim below stays for the synchronous analysis-start exclusion. A bulk
-     include is NOT exempt: its prune pass drops and renumbers zero-sentence
-     chapters, moving audio. */
+     include is NOT exempt: its prune pass drops a chapter with no sentences
+     and an empty body and renumbers the rest, moving audio. */
   const busyKinds = bookJobKinds(book.bookId);
   if (busyKinds.length > 0) {
     return {
