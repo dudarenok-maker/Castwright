@@ -37,6 +37,7 @@ import { sha256Hex } from '../workspace/manuscript-hints.js';
 import { mintBookId,withBookPathClaim } from '../workspace/book-op-lock.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
+import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -452,6 +453,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         updatedAt: now,
         chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
         language,
+        editEpoch: mintEditEpoch(),
       };
       await writeStateJsonAtomic(stateJsonPath(bookDir), state);
       return bookId;

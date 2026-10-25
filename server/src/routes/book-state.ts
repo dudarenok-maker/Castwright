@@ -33,6 +33,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { mintEditEpoch, sliceRevision } from '../workspace/slice-revision.js';
 import {
   withKeyLock,
   withStateJsonLock,
@@ -385,6 +386,24 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       );
     }
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
+
+    /* Plan 289 (#3784) — per-field revision tokens, computed HERE from the raw
+       reads: below, `cast` is decorated in place (`lines`,
+       `clonedElsewhereInSeries`), `edits` is reassigned by the cache
+       reconciliation, and `state` is wrapped in `stateView`. A token made from
+       any of those would never match what a PUT sees on disk. */
+    /* `state` itself is re-read from disk for the same reason: the lazy
+       migrations above write state.json (e.g. `language: null`) but the
+       in-memory object they leave behind does not carry every normalisation,
+       and PUT compares against what `readBookStateOrThrow` returns. */
+    const rawState = (await readBookStateOrThrow(bookDir).catch(() => null)) ?? state;
+    const revisionSalt = { manuscriptId: rawState.manuscriptId, editEpoch: rawState.editEpoch };
+    const sliceRevisions = {
+      state: sliceRevision('state', rawState as unknown as Record<string, unknown>, revisionSalt),
+      cast: sliceRevision('cast', cast, revisionSalt),
+      manuscript: sliceRevision('manuscript', edits, revisionSalt),
+      changeLog: sliceRevision('changeLog', changeLog, revisionSalt),
+    };
 
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
        with its own `.catch`, not inline in an argument list.
@@ -797,6 +816,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
 
     res.json({
       state: stateView,
+      sliceRevisions,
       cast,
       manuscript,
       manuscriptEdits: edits,
@@ -1578,6 +1598,9 @@ async function applyReparse(
             chapters: newChapters,
             chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
             castConfirmed: false,
+            /* Plan 289 — a wipe: every revision token of the book moves, so a kept
+               or retrying save built before it is refused. */
+            editEpoch: mintEditEpoch(),
             updatedAt: new Date().toISOString(),
           };
         },

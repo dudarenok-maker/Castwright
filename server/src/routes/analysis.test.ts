@@ -9919,6 +9919,18 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     expect(reachedConfirm(r.state, r.after)).toBe(true);
   }, 60_000);
 
+  it.each([true, false])(
+    'plan 289: Start fresh rotates state.json editEpoch (castConfirmed was %s)',
+    async (wasConfirmed) => {
+      const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
+      const book = makeBook('epoch', chapters, { castConfirmed: wasConfirmed, editEpoch: 'ep_before' });
+      const r = await run(book, { fresh: true });
+      expect(r.state.editEpoch).toMatch(/^ep_/);
+      expect(r.state.editEpoch).not.toBe('ep_before');
+    },
+    60_000,
+  );
+
   it('the ETA counts a pending chapter as remaining', async () => {
     const chapters: BookChapter[] = [
       { id: 1, body: WORDED[1] },

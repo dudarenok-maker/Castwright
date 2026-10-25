@@ -162,6 +162,7 @@ import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edg
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { updateStateAtDir } from '../workspace/book-state-update.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
+import { mintEditEpoch } from '../workspace/slice-revision.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
@@ -4816,11 +4817,15 @@ export async function runMainAnalyzerJob(
                the curated lock-contention error; this site is outside the
                persist blocks, so it reaches the job's top-level catch, which
                classifies it (`classifyAnalysisFailure`). */
-            await updateStateAtDir(freshBookDir, (freshState) =>
-              freshState.castConfirmed
-                ? { ...freshState, castConfirmed: false, updatedAt: new Date().toISOString() }
-                : null,
-            );
+            /* Plan 289 — also rotates `editEpoch` (a wipe moves every revision
+               token), so this write is no longer skipped for an unconfirmed
+               book. */
+            await updateStateAtDir(freshBookDir, (freshState) => ({
+              ...freshState,
+              castConfirmed: false,
+              editEpoch: mintEditEpoch(),
+              updatedAt: new Date().toISOString(),
+            }));
           },
         );
       }

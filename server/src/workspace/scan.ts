@@ -259,6 +259,13 @@ export interface BookStateJson {
      Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). */
   prosodyAnnotated?: boolean;
+  /* Plan 289 (#3784) — server-owned salt for the per-field slice revision
+     tokens (`workspace/slice-revision.ts`). Minted by both import paths,
+     rotated by re-parse, replace-manuscript and Start fresh, written by
+     nothing else; never on the PUT /state whitelist. Absent on a legacy book
+     (salts as ''), and no reader may require it. Additive optional field —
+     `CURRENT_STATE_SCHEMA` does NOT bump (plan 27 rename-vs-add policy). */
+  editEpoch?: string;
   /* srv-59 Task 11 — provenance of the analyzer run that produced the
      current cast/sentences. Written at BOTH analysis-completion persist
      sites in server/src/routes/analysis.ts (the main whole-book route and
