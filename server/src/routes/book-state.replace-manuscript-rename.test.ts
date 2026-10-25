@@ -197,7 +197,7 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
     expect(files(newDir).filter((f) => f.startsWith('.manuscript-'))).toEqual([]);
   });
 
-  it('a non-moving PUT during a reparse still returns 204 once the run finishes', async () => {
+  it('a non-moving PUT during a reparse still returns 200 once the run finishes', async () => {
     const put = putQueuedDuringArms({ castConfirmed: true });
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
     expect(res.status).toBe(200);
