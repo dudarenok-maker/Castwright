@@ -1361,6 +1361,30 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
+  it('a second state build in the same window keeps the kept fields it was merged with, and the kept base', async () => {
+    const { disk, store, restore } = setup();
+    const captured = disk.revision('b1', 'state');
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+
+    /* Two book-meta commits inside one debounce window: the second build
+       replaces the queued patch the kept castConfirmed was merged into. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'a' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'b' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await advance(600);
+
+    const last = reqs().at(-1)!;
+    expect(last.patch).toMatchObject({ castConfirmed: true, notes: 'b' });
+    expect(last.baseRevision).toEqual(captured);
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, notes: 'b' });
+    restore();
+  });
+
   it("an older same-key 200 refreshes the newer in-flight sequence's base", async () => {
     const { disk, store, restore } = setup();
     let release!: () => void;

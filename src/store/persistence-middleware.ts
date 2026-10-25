@@ -700,7 +700,11 @@ export const persistenceMiddleware: Middleware = (store) => {
       kept.delete(key);
       carriedKept.set(key, keptHere);
     }
-    pending.set(key, keptHere ? { ...keptHere.patch, ...(built as Record<string, unknown>) } : built);
+    /* A later build of the key in the same window replaces the queued patch
+       (`confirmCast` and `commitDraft` replace each other, #2230), so the kept
+       fields come from `carriedKept`, not only on the build that took them. */
+    const carried = carriedKept.get(key);
+    pending.set(key, carried ? { ...carried.patch, ...(built as Record<string, unknown>) } : built);
     /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
        write; in-flight older flushes keep their captured (lower) generation
        and are therefore gated out of prune/rollback in flush. */
