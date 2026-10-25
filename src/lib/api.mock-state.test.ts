@@ -7,7 +7,14 @@
    file is too late to swap api.* over to the mock branch. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mockGetBookState, mockPutBookState, mockAnalyseManuscript, _resetMockBookStates } from './api';
+import {
+  mockGetBookState,
+  mockPutBookState,
+  mockAnalyseManuscript,
+  mockReparseBook,
+  mockReplaceManuscript,
+  _resetMockBookStates,
+} from './api';
 import type { Character } from './types';
 
 beforeEach(() => {
@@ -109,5 +116,84 @@ describe('mock analyse keeps book state in step with the manuscript id', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('mock book-state revision tokens (plan 289)', () => {
+  it('GET returns sliceRevisions for all four slices, and null for an unknown book', async () => {
+    expect(await mockGetBookState('never-seen')).toBeNull();
+    await mockPutBookState('rev-a', { slice: 'state', patch: { title: 'T' } });
+    const res = await mockGetBookState('rev-a');
+    expect(Object.keys(res!.sliceRevisions!).sort()).toEqual(['cast', 'changeLog', 'manuscript', 'state']);
+    expect(res!.sliceRevisions!.state.title).toEqual(expect.any(String));
+  });
+
+  it('PUT returns the slice revision, equal to the next GET value', async () => {
+    const { revision } = await mockPutBookState('rev-b', { slice: 'state', patch: { title: 'T1' } });
+    const res = await mockGetBookState('rev-b');
+    expect(revision).toEqual(res!.sliceRevisions!.state);
+  });
+
+  it('refuses a stale base with code stale_revision and writes nothing', async () => {
+    await mockPutBookState('rev-c', { slice: 'state', patch: { title: 'T0' } });
+    const base = (await mockGetBookState('rev-c'))!.sliceRevisions!.state;
+    await mockPutBookState('rev-c', { slice: 'state', patch: { title: 'T2' } });
+    const err = await mockPutBookState('rev-c', {
+      slice: 'state',
+      patch: { title: 'T1' },
+      baseRevision: base,
+    }).catch((e: Error & { code?: string }) => e);
+    expect((err as Error).message).toContain('409');
+    expect((err as Error & { code?: string }).code).toBe('stale_revision');
+    expect((await mockGetBookState('rev-c'))!.state.title).toBe('T2');
+  });
+
+  it('accepts a base for a field another writer did not change (disjoint fields)', async () => {
+    await mockPutBookState('rev-d', { slice: 'state', patch: { title: 'T0' } });
+    const base = (await mockGetBookState('rev-d'))!.sliceRevisions!.state;
+    await mockPutBookState('rev-d', { slice: 'state', patch: { title: 'T2' } });
+    await mockPutBookState('rev-d', {
+      slice: 'state',
+      patch: { castConfirmed: true },
+      baseRevision: base,
+    });
+    const res = await mockGetBookState('rev-d');
+    expect(res!.state.castConfirmed).toBe(true);
+    expect(res!.state.title).toBe('T2');
+  });
+
+  it('accepts a no-op retry of an already-landed write at its old base', async () => {
+    await mockPutBookState('rev-e', { slice: 'state', patch: { title: 'T0' } });
+    const base = (await mockGetBookState('rev-e'))!.sliceRevisions!.state;
+    await mockPutBookState('rev-e', { slice: 'state', patch: { title: 'T1' } });
+    const { revision } = await mockPutBookState('rev-e', {
+      slice: 'state',
+      patch: { title: 'T1' },
+      baseRevision: base,
+    });
+    expect(revision).toEqual((await mockGetBookState('rev-e'))!.sliceRevisions!.state);
+  });
+
+  it('treats a missing base as unconditional', async () => {
+    await mockPutBookState('rev-f', { slice: 'state', patch: { title: 'T0' } });
+    await mockPutBookState('rev-f', { slice: 'state', patch: { title: 'T1' } });
+    expect((await mockGetBookState('rev-f'))!.state.title).toBe('T1');
+  });
+
+  it.each([
+    ['reparse', mockReparseBook],
+    ['replace', (id: string) => mockReplaceManuscript(id, new File([''], 'x.txt'))],
+  ])('a mock %s rotates the epoch, so every token moves and an old base is refused', async (_n, wipe) => {
+    await mockPutBookState('rev-g', { slice: 'state', patch: { castConfirmed: false } });
+    const base = (await mockGetBookState('rev-g'))!.sliceRevisions!.state;
+    await wipe('rev-g');
+    const after = (await mockGetBookState('rev-g'))!.sliceRevisions!.state;
+    expect(after.castConfirmed).not.toEqual(base.castConfirmed);
+    const err = await mockPutBookState('rev-g', {
+      slice: 'state',
+      patch: { castConfirmed: true },
+      baseRevision: base,
+    }).catch((e: Error & { code?: string }) => e);
+    expect((err as Error & { code?: string }).code).toBe('stale_revision');
   });
 });

@@ -2687,7 +2687,9 @@ export interface paths {
          *     is hand-modeled in `src/lib/types.ts:BookStateResponse`; the schema here
          *     enumerates the top-level keys and references the component schemas that
          *     exist, keeping `state` (`BookStateJson`) and the loose `Record` maps
-         *     permissive rather than duplicating those large shapes.
+         *     permissive rather than duplicating those large shapes. Plan 289:
+         *     `sliceRevisions` carries the per-field revision tokens a later
+         *     `PUT` echoes back as `baseRevision`.
          */
         get: operations["getBookState"];
         /**
@@ -6674,6 +6676,10 @@ export interface components {
             /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
             resolvedCharacterId?: string;
         };
+        /** @description Plan 289 — field name -> opaque revision token. Clients echo it back unchanged. */
+        SliceRevision: {
+            [key: string]: string;
+        };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
          *     in `src/lib/types.ts:BookStateResponse`; this schema enumerates the
@@ -6707,6 +6713,17 @@ export interface components {
             revisionsError?: string;
             /** @description Slugs of chapters that already have an audio file on disk. */
             completedSlugs: string[];
+            /**
+             * @description Plan 289 — per-field revision tokens of the four `PUT /state`
+             *     slices, computed from the raw files before any decoration. Opaque;
+             *     echo a slice's map back as `baseRevision`.
+             */
+            sliceRevisions?: {
+                state: components["schemas"]["SliceRevision"];
+                cast: components["schemas"]["SliceRevision"];
+                manuscript: components["schemas"]["SliceRevision"];
+                changeLog: components["schemas"]["SliceRevision"];
+            };
             /**
              * @description chapterId → EBU R128 loudness sidecar payload (a `ChapterLoudness`,
              *     or null when the sidecar is missing). Permissive map; the value
@@ -11942,6 +11959,7 @@ export interface operations {
                 "application/json": {
                     /** @enum {string} */
                     slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
+                    baseRevision?: components["schemas"]["SliceRevision"];
                     /**
                      * @description The whole slice payload; shape depends on `slice`.
                      *     For the `state` slice the patch carries ~16 fields
@@ -11986,12 +12004,20 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Slice written */
-            204: {
+            /**
+             * @description Slice written (or a no-op: the write changed nothing). Plan 289:
+             *     `revision` is the slice's per-field tokens after the write, equal to
+             *     the next `GET` value for that slice.
+             */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        revision: components["schemas"]["SliceRevision"];
+                    };
+                };
             };
             /**
              * @description Missing/unknown `slice` or `patch`, a malformed manuscript patch,
@@ -12028,6 +12054,11 @@ export interface operations {
              *     `book_path_taken` (the new Author/Series/Title path already holds a
              *     book), or `book_folder_in_use` (the folder is open in another
              *     program; close it and retry). No body ever carries a path.
+             *
+             *     Plan 289: `stale_revision` — the request carried a `baseRevision`
+             *     and a field the write would change has moved on disk since that
+             *     base. Nothing was written; re-read the book. A request without
+             *     `baseRevision` is never refused this way.
              */
             409: {
                 headers: {
@@ -12037,7 +12068,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "book_busy" | "book_path_taken" | "book_folder_in_use";
+                        code?: "book_busy" | "book_path_taken" | "book_folder_in_use" | "stale_revision";
                     };
                 };
             };

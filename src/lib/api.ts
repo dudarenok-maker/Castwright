@@ -32,6 +32,9 @@ import type {
   BookStateJson,
   ChangeLogEvent,
   PutStateRequest,
+  PutStateResponse,
+  SliceRevision,
+  StateSlice,
   WorkspaceChangeLogResponse,
   UserSettings,
   UserSettingsPatch,
@@ -1316,14 +1319,86 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
 /* Exported so api.mock-state.test.ts can hit the mock pair directly,
    bypassing the USE_MOCKS toggle (which the api module locks at import
    time — flipping the env in a test file is too late). */
+/* Plan 289 — mock revision tokens. Opaque, so no hashing: the token is the
+   book's edit epoch plus the JSON of the field's value. Only the mock's own
+   reparse / replace rotate the epoch (the server's wiping writers); a file
+   that was never written reads as `<absent-file>`. */
+const MOCK_EDIT_EPOCHS = new Map<string, number>();
+const MOCK_REVISION_FIELDS: Record<StateSlice, readonly string[]> = {
+  state: [
+    'castConfirmed',
+    'title',
+    'author',
+    'series',
+    'seriesPosition',
+    'isStandalone',
+    'narratorCredit',
+    'genre',
+    'publicationDate',
+    'description',
+    'notes',
+    'audioFormat',
+    'language',
+    'tags',
+    'prosodyEnabled',
+    'prosodyAnnotated',
+  ],
+  cast: ['characters'],
+  manuscript: ['sentences', 'mergedAwayKeys'],
+  changeLog: ['events'],
+};
+
+function mockSliceContent(
+  state: BookStateResponse,
+  slice: StateSlice,
+): Record<string, unknown> | null {
+  switch (slice) {
+    case 'state':
+      return state.state as unknown as Record<string, unknown>;
+    case 'cast':
+      return state.cast;
+    case 'manuscript':
+      return state.manuscriptEdits as Record<string, unknown> | null;
+    case 'changeLog':
+      return state.changeLog ? { events: state.changeLog } : null;
+  }
+}
+
+function mockSliceRevision(bookId: string, state: BookStateResponse, slice: StateSlice): SliceRevision {
+  const epoch = MOCK_EDIT_EPOCHS.get(bookId) ?? 0;
+  const content = mockSliceContent(state, slice);
+  const out: SliceRevision = {};
+  for (const f of MOCK_REVISION_FIELDS[slice]) {
+    out[f] =
+      content == null
+        ? `${epoch}|<absent-file>`
+        : `${epoch}|${content[f] === undefined ? '<absent-field>' : JSON.stringify(content[f])}`;
+  }
+  return out;
+}
+
+function mockSliceRevisions(bookId: string, state: BookStateResponse): Record<StateSlice, SliceRevision> {
+  return {
+    state: mockSliceRevision(bookId, state, 'state'),
+    cast: mockSliceRevision(bookId, state, 'cast'),
+    manuscript: mockSliceRevision(bookId, state, 'manuscript'),
+    changeLog: mockSliceRevision(bookId, state, 'changeLog'),
+  };
+}
+
 export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
   await wait(60);
   const stored =
     DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)
       ? HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null
       : MOCK_BOOK_STATES.get(bookId) ?? null;
-  const withRevisions =
-    stored && hasMockRevisions(bookId) ? { ...stored, revisions: getMockRevisions(bookId) } : stored;
+  const withRevisions = stored
+    ? {
+        ...stored,
+        ...(hasMockRevisions(bookId) ? { revisions: getMockRevisions(bookId) } : {}),
+        sliceRevisions: mockSliceRevisions(bookId, stored),
+      }
+    : stored;
   /* e2e seam: a spec can prime a book's prosodyAnnotated watermark via
      `page.addInitScript` BEFORE the app boots (mock PUTs never write it), so
      the open-time emotion re-run sees an explicit `false`. Undefined in
@@ -1336,10 +1411,38 @@ export async function mockGetBookState(bookId: string): Promise<BookStateRespons
     : withRevisions;
 }
 
-export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
+export async function mockPutBookState(
+  bookId: string,
+  req: PutStateRequest,
+): Promise<PutStateResponse> {
   await wait(20);
   const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
-  MOCK_BOOK_STATES.set(bookId, applyMockSliceWrite(prev, req));
+  const next = applyMockSliceWrite(prev, req);
+  const slice = req.slice;
+  if (req.baseRevision && MOCK_REVISION_FIELDS[slice]) {
+    /* Same rule as the server's staleFields: a field is stale when the base
+       names it, the base differs from disk, and this write would change it. */
+    const cur = mockSliceRevision(bookId, prev, slice);
+    const after = mockSliceRevision(bookId, next, slice);
+    const stale = Object.keys(after).filter(
+      (f) =>
+        req.baseRevision![f] !== undefined && req.baseRevision![f] !== cur[f] && after[f] !== cur[f],
+    );
+    if (stale.length > 0) {
+      throw Object.assign(
+        new Error(
+          'Book state PUT failed (409): This book was changed elsewhere since your edit was made, so the edit was not saved.',
+        ),
+        { code: 'stale_revision' },
+      );
+    }
+  }
+  MOCK_BOOK_STATES.set(bookId, next);
+  return {
+    revision: MOCK_REVISION_FIELDS[slice]
+      ? mockSliceRevision(bookId, next, slice)
+      : {},
+  };
 }
 
 /** Test-only: drop the in-memory mock-state table and restore the
@@ -1351,6 +1454,7 @@ export async function mockPutBookState(bookId: string, req: PutStateRequest): Pr
  *  to the library response even after a full book-states reset. */
 export function _resetMockBookStates(): void {
   MOCK_BOOK_STATES.clear();
+  MOCK_EDIT_EPOCHS.clear();
   seedDefaultMockBookStates();
   // Coupled reset: sample overlay must clear whenever the state table does.
   _resetMockSample();
@@ -2508,7 +2612,7 @@ async function mockGetDroppedQuotes(_bookId: string): Promise<DroppedQuotesRespo
   return { manuscriptId: 'mock', batches: [] };
 }
 
-async function realPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
+async function realPutBookState(bookId: string, req: PutStateRequest): Promise<PutStateResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -2523,14 +2627,19 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
        fall through to the raw text exactly as before. */
     const body = await res.text();
     let detail = body || res.statusText;
+    let code: string | undefined;
     try {
-      const parsed = JSON.parse(body) as { error?: unknown };
+      const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
       if (typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
+      if (typeof parsed.code === 'string') code = parsed.code;
     } catch {
       /* not JSON — keep the raw body */
     }
-    throw new Error(`Book state PUT failed (${res.status}): ${detail}`);
+    /* Plan 289 — `code` (409 `stale_revision`) lets the persistence layer tell
+       a refused-because-stale save from a transport failure. */
+    throw Object.assign(new Error(`Book state PUT failed (${res.status}): ${detail}`), { code });
   }
+  return (await res.json()) as PutStateResponse;
 }
 
 /* Plan 47 — per-book resume bookmark.
@@ -5392,13 +5501,21 @@ export async function mockLoadSample(_slug: string): Promise<{ bookId: string }>
   return { bookId: SAMPLE_BOOK_ID };
 }
 
-async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
+/* Plan 289 — the server rotates the book's edit epoch in re-parse / replace
+   (and Start fresh); the mock does the same so a stale base is refused after. */
+function rotateMockEditEpoch(bookId: string): void {
+  MOCK_EDIT_EPOCHS.set(bookId, (MOCK_EDIT_EPOCHS.get(bookId) ?? 0) + 1);
+}
+
+export async function mockReparseBook(bookId: string): Promise<ReparseBookResponse> {
   await wait(120);
+  rotateMockEditEpoch(bookId);
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
 
-async function mockReplaceManuscript(_bookId: string, _file: File): Promise<ReparseBookResponse> {
+export async function mockReplaceManuscript(bookId: string, _file: File): Promise<ReparseBookResponse> {
   await wait(120);
+  rotateMockEditEpoch(bookId);
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
 

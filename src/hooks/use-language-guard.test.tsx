@@ -93,7 +93,7 @@ function ReturnHarness() {
 }
 
 beforeEach(() => {
-  vi.mocked(api.putBookState).mockReset().mockResolvedValue(undefined);
+  vi.mocked(api.putBookState).mockReset().mockResolvedValue({ revision: {} });
   vi.mocked(api.getLibrary)
     .mockReset()
     .mockResolvedValue({ authors: [] });
@@ -264,7 +264,7 @@ describe('useLanguageGuard', () => {
     });
 
     // The user should be able to retry by clicking Save again.
-    vi.mocked(api.putBookState).mockResolvedValue(undefined);
+    vi.mocked(api.putBookState).mockResolvedValue({ revision: {} });
     vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 

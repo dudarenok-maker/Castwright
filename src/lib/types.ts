@@ -454,6 +454,11 @@ export interface BookStateResponse {
   revisionsError?: string;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
+  /** Plan 289 — opaque per-field revision tokens of the four PUT /state
+      slices, computed server-side from the raw files. Echoed back as
+      `PutStateRequest.baseRevision`. Optional so an older server (or a
+      hand-built fixture) reads as "no known base" and sends unconditionally. */
+  sliceRevisions?: Record<StateSlice, SliceRevision>;
   /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
       by chapter id. Read once at book-open so the LUFS report card on
       the Listen view doesn't have to fan out one chapter-audio meta
@@ -657,9 +662,21 @@ export interface AnalysisStateResponse {
 
 export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 
+/** Plan 289 — field name -> opaque token. Clients echo it back unchanged. */
+export type SliceRevision = Record<string, string>;
+
 export interface PutStateRequest {
   slice: StateSlice;
   patch: unknown;
+  /** Plan 289 — the revision this patch was built against. Absent = an
+      unconditional write; a carried field the server has since changed is
+      refused with 409 `stale_revision`. */
+  baseRevision?: SliceRevision;
+}
+
+/** Plan 289 — PUT /state success body: the slice's tokens after the write. */
+export interface PutStateResponse {
+  revision: SliceRevision;
 }
 
 /* ── Library (on-disk workspace) ──────────────────────────────────────── */
