@@ -94,16 +94,23 @@ afterAll(() => {
   delete process.env.STAGE2_COVERAGE_RETRIES;
 });
 
-/* A book of its own per case (#3785): every `book-op:<bookId>` waiter in a case is
-   then that case's own, so a straggler from an earlier case's background work
-   cannot be mistaken for the overwrite or the start in `waitWaiters`. */
+/* A book of its own per case (#3785). A finished analysis ends its SSE response
+   before its `runBookJob` 'analysis' lease releases (at `job.settled`), so on a
+   shared bookId the next case's overwrite saw the previous case's lease and was
+   refused with BookBusyError. */
+let startedRuns: Array<Promise<unknown>> = [];
 beforeEach(() => {
+  startedRuns = [];
   title = `${TITLE} ${Math.random().toString(36).slice(2, 8)}`;
   bookId = paths.makeBookId(AUTHOR, SERIES, title);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  /* Let any start a failed case left queued finish while the stubs still exist,
+     then wait for its lease, before the stubs and the book go. */
+  await Promise.allSettled(startedRuns);
+  await vi.waitFor(() => expect(opLock.bookJobKinds(bookId)).toEqual([]));
   for (const k of Object.keys(g)) if (k.startsWith('__ovr_')) delete g[k];
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   opLock.__bookDirIndexForTest().clear();
@@ -236,13 +243,11 @@ async function queuedBehindOverwrite(
   let run!: Promise<request.Response>;
   try {
     await holding;
-    /* Counted from what is already queued on the key, so an unrelated waiter
-       never stands in for the overwrite (#3785). */
-    const queued = fileLock.__keyWaitersForTest(`book-op:${bookId}`);
     overwrite = portable.importPortableBundle(bundle, { onConflict: 'overwrite' });
-    await waitWaiters(queued + 1, release);
+    await waitWaiters(1, release);
     run = start();
-    await waitWaiters(queued + 2, release);
+    startedRuns.push(run);
+    await waitWaiters(2, release);
   } finally {
     release();
   }
