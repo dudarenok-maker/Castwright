@@ -1558,4 +1558,57 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
     restore();
   });
+
+  /* P6-3 (#3784) — X's attempt 0 fails and its retry is held; Y is sent and
+     lands; X's retry then answers 409 against Y's write. */
+  async function staleRetryAfter(store: S, disk: Disk, overtake: () => Promise<void>) {
+    disk.failNext(1, isCast);
+    rename(store, 'Eliza X');
+    await advance(500);
+    let release!: () => void;
+    putBookState.mockImplementationOnce(
+      (id: string, req: never) =>
+        new Promise((resolve, reject) => {
+          release = () => {
+            try {
+              resolve(disk.put(id, req));
+            } catch (e) {
+              reject(e);
+            }
+          };
+        }),
+    );
+    await advance(1000);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'typing' }));
+    await overtake();
+    release();
+    await advance(0);
+  }
+  const draft = (store: S) => (store.getState() as { bookMeta: { draft: { notes?: string } | null } }).bookMeta.draft;
+
+  it('a stale refusal a newer save superseded neither toasts nor forces a re-read', async () => {
+    const { disk, store, restore } = setup();
+    await staleRetryAfter(store, disk, async () => {
+      rename(store, 'Eliza Y');
+      await advance(500);
+    });
+    expect(outcomes(disk)).toEqual(['503', 'ok', '409']);
+    expect(castName(disk)).toBe('Eliza Y');
+    expect(staleToasts(store)).toHaveLength(0);
+    expect(marks(store)).toBeUndefined();
+    expect(draft(store)?.notes).toBe('typing');
+    restore();
+  });
+
+  it('a stale refusal nothing superseded still toasts and forces a re-read', async () => {
+    const { disk, store, restore } = setup();
+    await staleRetryAfter(store, disk, async () => {
+      disk.write('b1', 'cast', { characters: [eliza('Elsewhere')] });
+    });
+    expect(outcomes(disk)).toEqual(['503', '409']);
+    expect(castName(disk)).toBe('Elsewhere');
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(marks(store)).toBe(1);
+    restore();
+  });
 });

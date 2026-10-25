@@ -575,7 +575,9 @@ export const persistenceMiddleware: Middleware = (store) => {
              than disk, so restoring it would show the user neither value. The
              book is marked for a full re-read instead, so the screen shows what
              is on disk (Layout re-reads it now if it is open). The toast names
-             the book, once per book, unless a newer write overtook this one. */
+             the book, once per book. A newer write that overtook this one owns
+             the outcome: no toast, and no re-read, which would discard the
+             draft and re-hydrate over edits the screen already shows (P6-3). */
           if (isStaleRefusal(err)) {
             if (!superseded) {
               const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
@@ -590,8 +592,8 @@ export const persistenceMiddleware: Middleware = (store) => {
                   dedupeKey: `book-persist-stale:${bookId}`,
                 }),
               );
+              store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
             }
-            store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
             return { slice, ok: superseded };
           }
           /* A newer full-slice write for this key owns the outcome (and the
