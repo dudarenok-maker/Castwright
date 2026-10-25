@@ -796,7 +796,11 @@ describe('GET /analysis/state reports the live subset run\'s origin (#3774)', ()
     const run = request(app).post(url).send({ chapterIds: [1], origin: 'include' }).then((r) => r);
     await entered.promise;
     const join = request(app).post(url).send({ chapterIds: [1] }).then((r) => r);
-    await new Promise((r) => setTimeout(r, 50));
+    /* wait on the join itself, not a fixed sleep: the run's own request is subscriber
+       one, so a second means the joiner has attached to the live job */
+    await vi.waitFor(() =>
+      expect(analysisModule.__inFlightJobForTest(s.manuscriptId, 'subset')?.subscribers.size).toBe(2),
+    );
     const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
     release.open();
     await Promise.all([run, join]);
