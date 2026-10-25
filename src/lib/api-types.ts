@@ -8293,6 +8293,17 @@ export interface operations {
                     phase0Model?: string;
                     /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
                     phase1Model?: string;
+                    /**
+                     * @description #3774 — what is starting the run: `include` (the Generate view's Include in
+                     *     book) or `reanalyse` (Retry / Re-analyse; the default when absent or
+                     *     unrecognised). Kept on the job and reported as `subsetOrigin` by
+                     *     `GET /api/books/{bookId}/analysis/state` while the run is live, so a client
+                     *     that rebuilds its snapshot (book switch, reload, second tab) keeps the
+                     *     include-origin job-start block. A request that joins a live run never
+                     *     changes its origin.
+                     * @enum {string}
+                     */
+                    origin?: "include" | "reanalyse";
                 };
             };
         };
