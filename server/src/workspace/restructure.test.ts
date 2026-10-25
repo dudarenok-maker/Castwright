@@ -677,6 +677,32 @@ describe('post-process passes move audio with the slug (#3400)', () => {
     expect(slugs(r.audioOps, 'delete')).toEqual(['02-chapter-2']);
     expect(slugs(r.audioOps, 'rename')).toEqual(['03-chapter-3>02-chapter-2']);
   });
+
+  it('#3774 include: a never-analysed (zero-sentence) chapter the op just included survives the prune — no delete/rename ops, numbering stable', () => {
+    const state = makeState([
+      rendered(1, 'Chapter 1'),
+      { ...rendered(2, 'Chapter 2'), excluded: true },
+      rendered(3, 'Chapter 3'),
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'Chapter 1', body: 'b' },
+      { id: 2, title: 'Chapter 2', body: 'b', excluded: true },
+      { id: 3, title: 'Chapter 3', body: 'b' },
+    ]);
+    // chapter 2 (excluded) has no sentences; chapters 1 and 3 do.
+    const sentences: RestructureSentence[] = [
+      { id: 1, chapterId: 1, characterId: 'n', text: 'a' },
+      { id: 1, chapterId: 3, characterId: 'n', text: 'c' },
+    ];
+    const r = applyExclude(state, hints, sentences, { chapterIds: [2], excluded: false });
+    expect(r.state.chapters.map((c) => [c.id, c.slug, c.excluded])).toEqual([
+      [1, '01-chapter-1', undefined],
+      [2, '02-chapter-2', undefined],
+      [3, '03-chapter-3', undefined],
+    ]);
+    expect(r.hints.map((h) => h.id)).toEqual([1, 2, 3]);
+    expect(r.audioOps).toEqual([]);
+  });
 });
 
 describe('carryMergedAwayKeys (#3400)', () => {

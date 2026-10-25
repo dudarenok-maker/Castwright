@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from 'react-redux';
 import { useOutletContext } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
@@ -30,6 +30,77 @@ import type { TtsLifecycle } from '../lib/use-tts-lifecycle';
    (today: the cross-book Generate title regression test that bypasses
    the Layout wrapper). Inert state, no-op handlers. Real call sites
    always come through Layout → outlet context. */
+/* #3774 — how long an Include rollback waits for the book's job to release its
+   lease (re-trying the refused exclude every poll) before giving up with a toast. */
+const ROLLBACK_SETTLE_POLL_MS = 400;
+const ROLLBACK_SETTLE_TIMEOUT_MS = 20_000;
+/* #3774 — how often the view re-reads which long jobs hold the book. */
+const BOOK_BUSY_REFRESH_MS = 5000;
+
+/* #3774 — books whose include rollback (Cancel / a failed run: the stop, then the
+   re-exclude that waits for the run's lease) is still in flight. The stream
+   middleware flips the snapshot to paused / halted as soon as the run ends, which
+   is BEFORE the rollback settles, so the store alone stops saying "an include is
+   live" while the lease is still held. Module-level (not component state) because
+   the rollback outlives the view instance that started it. */
+const includeRollbackPending = new Set<string>();
+const includeRollbackListeners = new Set<() => void>();
+function setIncludeRollbackPending(bookId: string, pending: boolean): void {
+  if (includeRollbackPending.has(bookId) === pending) return;
+  if (pending) includeRollbackPending.add(bookId);
+  else includeRollbackPending.delete(bookId);
+  includeRollbackListeners.forEach((l) => l());
+}
+/** Test-only: the set is module-level, so a test that ends mid-rollback would
+    otherwise leak a pending book into every later test in the file. */
+export function __resetIncludeRollbackPendingForTests(): void {
+  includeRollbackPending.clear();
+  includeRollbackListeners.forEach((l) => l());
+}
+function useIncludeRollbackPending(bookId: string | null | undefined): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      includeRollbackListeners.add(listener);
+      return () => includeRollbackListeners.delete(listener);
+    },
+    () => !!bookId && includeRollbackPending.has(bookId),
+  );
+}
+
+/* #3774 — `BookJobKind` -> the phrase the Include tooltip names. */
+const BUSY_KIND_LABELS: Record<string, string> = {
+  render: 'rendering audio',
+  scoring: 'scoring',
+  analysis: 'analysing',
+  design: 'designing voices',
+  'script-review': 'reviewing the script',
+  export: 'exporting',
+};
+
+/* Why Include is unavailable while `kinds` hold the book (undefined when idle). */
+function busyIncludeReason(kinds: readonly string[]): string | undefined {
+  if (kinds.length === 0) return undefined;
+  const what = kinds.map((k) => BUSY_KIND_LABELS[k] ?? k).join(', ');
+  return `This book is busy (${what}). Wait for it to finish, then include chapters.`;
+}
+
+/* #3774 — this tab already has a subset run (an include or a re-analyse) going. */
+const INCLUDE_RUN_LIVE_REASON =
+  'Another chapter is being analysed. Wait for it to finish (or cancel it), then include this one.';
+/* #3774 — an include's subset run is live: starting a job now would hold the book
+   and the include's Cancel rollback (re-exclude) would be refused. */
+const JOB_START_BLOCKED_REASON =
+  'A chapter is being included and analysed. Wait for it to finish, or cancel it, before starting generation.';
+/* #3774 — another Include click's busy read is still in flight (nothing is being
+   analysed yet): a second click in that window is a double click or another chapter. */
+const INCLUDE_CHECK_PENDING_REASON =
+  'Another chapter is still being checked. Try again in a moment.';
+/* #3774 — a click-time busy read that has not answered by now counts as failed. */
+const BUSY_READ_TIMEOUT_MS = 8000;
+/* #3774 — the click-time busy read failed. */
+const BUSY_CHECK_FAILED_REASON =
+  'Could not check whether this book is busy. Try again in a moment.';
+
 const INERT_ENGINE_LIFECYCLE = {
   state: 'unreachable' as const,
   onLoad: async () => {},
@@ -58,7 +129,7 @@ import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
+import { analysisActions, isStaleIncludeSnapshot, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectIsOpenBook } from '../store/open-book';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
@@ -353,6 +424,130 @@ export function GenerationView({
      analysis and the user needs phase/progress/throttle/error
      feedback inline. */
   const [subsetByChapter, setSubsetByChapter] = useState<Record<number, SubsetProgress>>({});
+  /* #3774 — the server refuses to take a chapter back out (a Cancel's rollback)
+     while a long job holds the book, so Include is disabled while ANY job does
+     (render, scoring, analysis incl. another chapter's subset run, design,
+     script review, export). The kinds come from `GET /:bookId/busy`; the view
+     re-reads them on mount, every few seconds, and as soon as one of its own
+     subset runs starts or ends. The server still accepts an include during a
+     job: this is a client-side guard. */
+  const [busyKinds, setBusyKinds] = useState<string[]>([]);
+  const subsetRunning = Object.values(subsetByChapter).some(isSubsetRunning);
+  /* #3774 — read at click time by the include gate: a click handler that waited
+     behind the analyzer-guard modal is a stale closure, and a run another row
+     started meanwhile must still refuse it. */
+  const subsetRunningRef = useRef(false);
+  subsetRunningRef.current = subsetRunning;
+  /* #3774 — the include's run outlives this view (only Cancel aborts it), and the
+     view remounts on every navigation, so the block is also read from the store's
+     analysis snapshot (this book, a running include-origin subset run), not just
+     from this instance's `subsetByChapter`. A re-analyse run never blocks. */
+  const includeRunInStore = useAppSelector((s) => {
+    const a = s.analysis.activeStream;
+    return (
+      !!a &&
+      a.bookId === bookId &&
+      a.kind === 'subset' &&
+      a.state === 'running' &&
+      a.subsetOrigin === 'include'
+    );
+  });
+  const includeRollbackInFlight = useIncludeRollbackPending(bookId);
+  const includeRunLive =
+    includeRunInStore ||
+    includeRollbackInFlight ||
+    Object.values(subsetByChapter).some((e) => e.origin === 'include' && isSubsetRunning(e));
+  const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
+  /* Only a row that can show Include / Retry / Accept smaller cast reads these:
+     an excluded chapter, or a chapter with a subset run (error) row. */
+  const hasIncludeSurface = chapters.some((c) => c.excluded) || Object.keys(subsetByChapter).length > 0;
+  /* #3774 — a block that comes from the store alone (a reload or a tab opened
+     mid-run: the stream that would end it died with the old page) is ended here,
+     by the poll: `/busy` reporting no `analysis` job while the include snapshot
+     has been quiet for STALL_THRESHOLD_MS means the run's lease is released. A
+     registered run always reports `analysis`, so it is never cleared; a run not
+     yet registered reports nothing either, so quiet time only counts once the
+     snapshot has server evidence (`serverConfirmed`: a tick, a server-rebuilt
+     snapshot, or `/busy` having reported `analysis` while it was held), and never
+     while this instance's own include request is pending. */
+  const pollForStoreBlock = includeRunInStore;
+  useEffect(() => {
+    if (!bookId || !(hasIncludeSurface || pollForStoreBlock)) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const kinds = await api.getBookBusy(bookId);
+        if (!cancelled) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+        /* The run's lease is registered: from here its quiet time counts. */
+        if (!cancelled && kinds.includes('analysis')) {
+          dispatch(analysisActions.markAnalysisServerConfirmed({ bookId }));
+        }
+        if (
+          !cancelled &&
+          !kinds.includes('analysis') &&
+          !subsetRunningRef.current &&
+          isStaleIncludeSnapshot(store.getState().analysis.activeStream, bookId, Date.now())
+        ) {
+          dispatch(analysisActions.clearActiveStream());
+        }
+      } catch {
+        /* best-effort: a failed read keeps the last known state */
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), BOOK_BUSY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [bookId, subsetRunning, hasIncludeSurface, pollForStoreBlock, dispatch, store]);
+  /* #3774 — Include, Retry and "Accept smaller cast" are unavailable while a job
+     holds the book OR this tab's own subset run is live (the busy read lags a
+     run's start by up to one poll). */
+  const includeBusyReason =
+    busyIncludeReason(busyKinds) ?? (subsetRunning ? INCLUDE_RUN_LIVE_REASON : undefined);
+  /* #3774 — the chapter whose click-time busy read is in flight, so a second
+     Include in that window (another chapter's, or a double click) is caught
+     before the first run has registered anywhere. */
+  const includeGateRef = useRef<number | null>(null);
+  /* #3774 — the include gate, run at click time by every route into the include
+     flow (Include, Retry, Accept smaller cast, the analyzer-guard confirm): the
+     buttons' own disabled state is only as fresh as the last 5 s poll. Resolves
+     to the reason to refuse with, or undefined to go ahead. FAILS CLOSED: if the
+     read errors we cannot tell a busy book from an idle one, and guessing "idle"
+     is what strands a chapter (the rollback is refused, the include sticks); a
+     refused click costs one retry, so the user is told to try again. */
+  async function includeRefusal(chapterId: number): Promise<string | undefined> {
+    if (includeGateRef.current != null) return INCLUDE_CHECK_PENDING_REASON;
+    if (subsetRunningRef.current) return INCLUDE_RUN_LIVE_REASON;
+    includeGateRef.current = chapterId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      /* bounded: a hung read must not hold the gate forever */
+      const kinds = await Promise.race([
+        api.getBookBusy(bookId),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('busy check timed out')), BUSY_READ_TIMEOUT_MS);
+        }),
+      ]);
+      if (mountedRef.current) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+      return busyIncludeReason(kinds);
+    } catch (e) {
+      console.warn('[generation] busy check failed', e);
+      return BUSY_CHECK_FAILED_REASON;
+    } finally {
+      clearTimeout(timer);
+      includeGateRef.current = null;
+    }
+  }
+  /* #3774 — the give-up toast of a rollback must not fire once this view is gone. */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /* Guard for mid-generation TTS eviction. When the selected analyzer is
      local (Ollama) AND a generation stream is alive, clicking Include
@@ -443,6 +638,17 @@ export function GenerationView({
         if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
       } catch (e) {
         console.error('[generation] exclude failed', e);
+        /* #3774 — the server refuses an exclude with a 409 `book_busy` while a
+           job is registered for the book; its curated sentence is the
+           `Error.message` (`realSetChapterExcluded`). Say so rather than
+           leaving the click looking dead. */
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message: e instanceof Error && e.message ? e.message : 'Could not exclude the chapter.',
+            dedupeKey: 'gen-exclude-failed',
+          }),
+        );
       }
       return;
     }
@@ -463,6 +669,20 @@ export function GenerationView({
        on this so the user can re-fire the flow without a state-update
        microtask dance. */
     if (isSubsetRunning(subsetByChapter[chapterId])) return;
+    if (includeGateRef.current === chapterId) return;
+
+    /* #3774 — the one gate every route into the include flow meets, ahead of the
+       include POST: refuse (toast the reason, touch nothing) while a job holds
+       the book or this tab's own subset run is live. */
+    const refusal = await includeRefusal(chapterId);
+    /* #3774 — the view was left during the read: start nothing from a gone view. */
+    if (!mountedRef.current) return;
+    if (refusal) {
+      dispatch(
+        notificationsActions.pushToast({ kind: 'warn', message: refusal, dedupeKey: 'gen-include-busy' }),
+      );
+      return;
+    }
 
     const controller = new AbortController();
     setSubsetByChapter((prev) => ({
@@ -509,6 +729,7 @@ export function GenerationView({
         state: 'running',
         kind: 'subset',
         subsetChapterIds: [chapterId],
+        subsetOrigin: 'include',
       }),
     );
 
@@ -519,6 +740,17 @@ export function GenerationView({
     const wasExcluded =
       store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded === true;
     let includedHere = false;
+    /* #3774 — set when a rollback gave up: the chapter is still included, which the
+       row's gap note must keep saying even when the run's own error follows. */
+    let rollbackGapNote = '';
+    /* #3774 — set once the include POST landed. A failure before it started no
+       job of ours, so the snapshot taken over above is not ours to clear. */
+    let includePosted = false;
+    /* #3774 — set just before the subset request goes out. Cancel's server-side
+       stop is manuscript-wide (it also aborts another chapter's subset run), so
+       it is only sent once THIS include has a request that may have registered a
+       job — never while the include POST is still in flight. */
+    let subsetRequested = false;
     /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
        attributed: no Phase 1 frame) or S14 (the targets were attributed in
        Phase 1). Only S14 finished this chapter's analysis. */
@@ -529,11 +761,16 @@ export function GenerationView({
     let targetFailedMessage = '';
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
+      includePosted = true;
       if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
       includedHere = wasExcluded;
 
+      subsetRequested = !controller.signal.aborted;
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3774 — the server keeps it on the job, so the include's job-start block
+           outlives this view (a book switch, a reload, a second tab). */
+        origin: 'include',
         /* #3435 — set only by the row's "Accept smaller cast". */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call
@@ -649,9 +886,31 @@ export function GenerationView({
          on an included chapter. C1: only an include this click performed is
          rolled back (an excluded-before-click chapter has no audio to lose). */
       if (includedHere) {
-        await rollbackInclude(chapterId).catch((rollbackErr) => {
+        /* #3774 — the block holds until the rollback settles (the snapshot has gone
+           paused / halted by now, but the run's lease is still held). */
+        setIncludeRollbackPending(bookId, true);
+        await rollbackInclude(chapterId, { stopJob: isAbort && subsetRequested }).catch((rollbackErr) => {
           console.warn('[generation] include rollback failed', rollbackErr);
-        });
+          /* #3774 — never leave the chapter included without saying so: a gap
+             note on the row, and a toast naming the chapter (not once the user
+             has left this view or opened another book). */
+          const chapterTitle = store.getState().chapters.chapters.find((c) => c.id === chapterId)?.title;
+          const chapterName = chapterTitle ? `"${chapterTitle}"` : `Chapter ${chapterId}`;
+          const reason =
+            rollbackErr instanceof Error && rollbackErr.message ? ` ${rollbackErr.message}` : '';
+          const message = `Could not take ${chapterName} back out of the book — it is still included, with no analysis.${reason}`;
+          rollbackGapNote = message;
+          if (isOpenBook()) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+          if (mountedRef.current && isOpenBook()) {
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message,
+                dedupeKey: 'gen-include-rollback-failed',
+              }),
+            );
+          }
+        }).finally(() => setIncludeRollbackPending(bookId, false));
       }
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
@@ -681,7 +940,13 @@ export function GenerationView({
          surfaced an error, and the row's own error state inside subsetByChapter
          carries the message for the user. */
       haltOnReasoningOverflow(e);
-      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) {
+        /* #3774 — an include POST that failed (e.g. a 404 or 500) started no
+           job: put back what this click took over, as the refusal branch above
+           does. Once the POST landed the snapshot is this include's own. */
+        if (!includePosted && priorSnapshot) dispatch(analysisActions.setActiveStream(priorSnapshot));
+        else dispatch(analysisActions.clearActiveStream());
+      }
       const message = (e as Error).message || 'Subset analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. Only a chapter that is
@@ -692,7 +957,13 @@ export function GenerationView({
       const stillIncluded =
         store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded !== true;
       if (stillIncluded && !shrink && isOpenBook()) {
-        dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+        /* #3774 — the run's own error must not replace the "still included" note. */
+        dispatch(
+          chaptersActions.setAnalysisGap({
+            chapterId,
+            message: rollbackGapNote ? `${rollbackGapNote} The analysis also failed: ${message}` : message,
+          }),
+        );
       }
       patchSubset(chapterId, { error: message, shrink });
     }
@@ -704,8 +975,28 @@ export function GenerationView({
      stays readable. The server call runs whatever book is open now: it
      names this book, and leaving the chapter included-but-unanalysed on disk
      is the drift the rollback exists to prevent. */
-  async function rollbackInclude(chapterId: number): Promise<void> {
-    await api.setChapterExcluded(bookId, chapterId, true);
+  async function rollbackInclude(chapterId: number, opts: { stopJob?: boolean } = {}): Promise<void> {
+    /* #3774 — the server refuses an exclude (409 `book_busy`) while a job holds
+       the book, and the include's own subset job is sticky: it outlives the
+       aborted fetch and keeps its `analysis` lease until it settles. Include is
+       disabled while any other job holds the book, so this is normally the only
+       job a rollback meets (a job started outside this view after the click can
+       still hold the book, which is why giving up exists): Cancel asks the server
+       to stop it first (only when its request was sent), then re-tries the exclude
+       until the lease is released (the refusal IS the "still running" signal). A
+       failed run's job may still be releasing: same wait, no stop. Giving up
+       throws; the caller says so. */
+    if (opts.stopJob && manuscriptId) await api.pauseAnalysis({ manuscriptId });
+    const deadline = Date.now() + ROLLBACK_SETTLE_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await api.setChapterExcluded(bookId, chapterId, true);
+        break;
+      } catch (e) {
+        if ((e as { code?: string })?.code !== 'book_busy' || Date.now() >= deadline) throw e;
+        await new Promise((resolve) => setTimeout(resolve, ROLLBACK_SETTLE_POLL_MS));
+      }
+    }
     if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
   }
 
@@ -809,6 +1100,7 @@ export function GenerationView({
         state: 'running',
         kind: 'subset',
         subsetChapterIds: [chapterId],
+        subsetOrigin: 'reanalyse',
       }),
     );
     /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
@@ -822,6 +1114,7 @@ export function GenerationView({
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        origin: 'reanalyse',
         /* #3435 — set only by the row's "Accept smaller cast". */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call
@@ -960,6 +1253,7 @@ export function GenerationView({
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
     if (refuseIfRestructuring()) return;
+    if (jobStartBlockedReason) return;
     if (analysisBusy) {
       const msg =
         analysisBusyMessage(store.getState(), bookId) ??
@@ -1360,7 +1654,8 @@ export function GenerationView({
             <button
               type="button"
               onClick={() => dispatch(startGenerationFlow())}
-              disabled={startGenerationPending}
+              disabled={startGenerationPending || includeRunLive}
+              title={jobStartBlockedReason}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
@@ -1371,7 +1666,8 @@ export function GenerationView({
           {allComplete && (
             <button
               onClick={onRegenerateBook}
-              disabled={analysisBusy}
+              disabled={analysisBusy || includeRunLive}
+              title={jobStartBlockedReason}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconRefresh className="w-4 h-4" /> Regenerate
@@ -1379,6 +1675,16 @@ export function GenerationView({
           )}
         </div>
       </div>
+
+      {includeRunLive && (
+        /* #3774 — visible (not title-only) so touch users see why the controls are off. */
+        <p
+          data-testid="generation-job-start-blocked"
+          className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-3 text-sm text-amber-900"
+        >
+          {JOB_START_BLOCKED_REASON}
+        </p>
+      )}
 
       {lastError && (
         <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50/70 px-5 py-4 flex items-start gap-3 fade-in">
@@ -1434,7 +1740,8 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            disabled={analysisBusy}
+            disabled={analysisBusy || includeRunLive}
+            title={jobStartBlockedReason}
             className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
@@ -1557,6 +1864,7 @@ export function GenerationView({
           a log entry. */}
       <div className="mb-6 sm:mb-8">
         <QaReportCard
+          jobStartBlockedReason={jobStartBlockedReason}
           report={qaReport}
           loading={qaLoading}
           error={qaError}
@@ -1597,6 +1905,8 @@ export function GenerationView({
               onToggleExcluded={handleToggleExcluded}
               onIncludeClick={handleIncludeClick}
               mainAnalysisLive={mainAnalysisLive}
+              includeBusyReason={includeBusyReason}
+              jobStartBlockedReason={jobStartBlockedReason}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               onAcceptShrink={handleAcceptShrink}
@@ -1739,6 +2049,10 @@ interface ChapterRowProps {
   /** #3435 — the book's main analysis run is live: Re-analyse and Include are
       disabled ("Pause the analysis first"). */
   mainAnalysisLive: boolean;
+  /** #3774 — why Include is unavailable: a long job holds the book. */
+  includeBusyReason: string | undefined;
+  /** #3774 — why the controls that start a job are off: an include's subset run is live. */
+  jobStartBlockedReason: string | undefined;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   /** #3435 — re-run this chapter's subset with allowStage1Shrink. */
@@ -1783,6 +2097,8 @@ function ChapterRow({
   onToggleExcluded,
   onIncludeClick,
   mainAnalysisLive,
+  includeBusyReason,
+  jobStartBlockedReason,
   onCancelSubset,
   onRetrySubset,
   onAcceptShrink,
@@ -1822,6 +2138,7 @@ function ChapterRow({
         subsetProgress={subsetProgress}
         onIncludeClick={onIncludeClick}
         mainAnalysisLive={mainAnalysisLive}
+        includeBusyReason={includeBusyReason}
         onCancelSubset={onCancelSubset}
         onRetrySubset={onRetrySubset}
         onAcceptShrink={onAcceptShrink}
@@ -2149,7 +2466,9 @@ function ChapterRow({
               e.stopPropagation();
               onRegenerate(chapter);
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-rose-700 hover:text-rose-900 transition-colors"
+            disabled={jobStartBlockedReason != null}
+            title={jobStartBlockedReason}
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-rose-700 hover:text-rose-900 disabled:opacity-40 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
@@ -2233,7 +2552,9 @@ function ChapterRow({
               onRegenerate(chapter);
             }}
             aria-label={chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={jobStartBlockedReason != null}
+            title={jobStartBlockedReason}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconRefresh className="w-3.5 h-3.5" />{' '}
             {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate'}
@@ -2258,9 +2579,13 @@ function ChapterRow({
               }}
               data-testid={`chapter-row-${chapter.id}-generate`}
               aria-label={`Generate chapter ${chapter.id}`}
-              disabled={restructuring}
+              disabled={restructuring || jobStartBlockedReason != null}
               className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-magenta hover:text-magenta/80 disabled:opacity-40 transition-colors"
-              title={restructuring ? RESTRUCTURING_REASON : 'Queue this chapter for synthesis now.'}
+              title={
+                restructuring
+                  ? RESTRUCTURING_REASON
+                  : (jobStartBlockedReason ?? 'Queue this chapter for synthesis now.')
+              }
             >
               <IconPlay className="w-3.5 h-3.5" /> Generate this chapter
             </button>
@@ -2398,7 +2723,8 @@ function ChapterRow({
                         e.stopPropagation();
                         onRegenerateCharacterInChapter(cid, chapter.id);
                       }}
-                      title={`Regenerate ${c.name} in this chapter`}
+                      disabled={jobStartBlockedReason != null}
+                      title={jobStartBlockedReason ?? `Regenerate ${c.name} in this chapter`}
                       aria-label={`Regenerate ${c.name} in this chapter`}
                       className="opacity-100 fine-pointer:opacity-0 fine-pointer:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 fine-pointer:w-7 fine-pointer:h-7 rounded-full hover:bg-ink/6 transition-all"
                     >
@@ -2459,6 +2785,7 @@ function ExcludedChapterRow({
   subsetProgress,
   onIncludeClick,
   mainAnalysisLive,
+  includeBusyReason,
   onCancelSubset,
   onRetrySubset,
   onAcceptShrink,
@@ -2468,6 +2795,7 @@ function ExcludedChapterRow({
   subsetProgress: SubsetProgress | null;
   onIncludeClick: (chapterId: number) => void;
   mainAnalysisLive: boolean;
+  includeBusyReason: string | undefined;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   onAcceptShrink: (chapterId: number) => void;
@@ -2483,6 +2811,15 @@ function ExcludedChapterRow({
   const running = subsetProgress && subsetProgress.error == null && !noticed ? subsetProgress : null;
   const errored = subsetProgress && subsetProgress.error != null ? subsetProgress : null;
   const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
+  /* #3774 — Retry / Accept smaller cast on an include-origin error row re-run the
+     include, so they follow Include's busy reason; a re-analyse retry does not. */
+  const retryBusyReason = errored?.origin === 'include' ? includeBusyReason : undefined;
+  /* #3774 — the reason is rendered as a visible line (a title never shows on a
+     disabled pointer-events-none button, and touch has no hover) under the row
+     variants that offer Include / Retry / Accept smaller cast. */
+  const busyReasonShown =
+    !running && !noticed && (!errored || errored.origin === 'include') ? includeBusyReason : undefined;
+  const busyReasonId = `include-busy-${chapter.id}`;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-ink/3 overflow-hidden">
@@ -2525,6 +2862,11 @@ function ExcludedChapterRow({
           {!running && mainAnalysisLive && (
             <span className="block text-[11px] text-ink/45 mt-0.5">Pause the analysis first</span>
           )}
+          {busyReasonShown && (
+            <span id={busyReasonId} className="block text-[11px] text-ink/60 mt-0.5">
+              {busyReasonShown}
+            </span>
+          )}
         </span>
         {running ? (
           <button
@@ -2541,7 +2883,8 @@ function ExcludedChapterRow({
               <button
                 type="button"
                 onClick={() => onAcceptShrink(chapter.id)}
-                disabled={mainAnalysisLive}
+                disabled={mainAnalysisLive || retryBusyReason != null}
+                aria-describedby={retryBusyReason ? busyReasonId : undefined}
                 title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
                 className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
               >
@@ -2551,7 +2894,8 @@ function ExcludedChapterRow({
             <button
               type="button"
               onClick={() => onRetrySubset(chapter.id)}
-              disabled={mainAnalysisLive}
+              disabled={mainAnalysisLive || retryBusyReason != null}
+              aria-describedby={retryBusyReason ? busyReasonId : undefined}
               title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
               className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
@@ -2569,8 +2913,11 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
-            disabled={mainAnalysisLive || restructuring}
-            title={restructuring ? RESTRUCTURING_REASON : mainAnalysisLive ? 'Pause the analysis first' : undefined}
+            disabled={mainAnalysisLive || restructuring || includeBusyReason != null}
+            aria-describedby={includeBusyReason ? busyReasonId : undefined}
+            title={
+              restructuring ? RESTRUCTURING_REASON : mainAnalysisLive ? 'Pause the analysis first' : undefined
+            }
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             + Include in book

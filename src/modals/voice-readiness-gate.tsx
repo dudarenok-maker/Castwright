@@ -12,6 +12,7 @@
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { uiActions } from '../store/ui-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -22,31 +23,30 @@ import {
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { modelKeyForEngineChoice } from '../lib/tts-models';
-import type { UndesignedCharacterRow } from '../store/voice-readiness-selectors';
+import { designWillGeneratePersona } from '../lib/design-persona';
 
-/* Stable fallback so the closed-gate case (the common one — this modal is a
-   global, always-mounted overlay) doesn't hand useSelector a fresh `[]` on
-   every call: react-redux's dev-mode stability check flags that as "returned
-   a different result" and forces a re-render on every store dispatch (#1285). */
-const NO_UNDESIGNED_CHARACTERS: UndesignedCharacterRow[] = [];
-
+/* The body is its own component so the design guard's pending prompt lives only while the gate is
+   open: this always-mounted shell unmounts it on any close (not just Wait), so a prompt never
+   outlives the gate and reappears when it reopens. */
 export function VoiceReadinessGateModal() {
-  const dispatch = useAppDispatch();
   const gate = useAppSelector((s) => s.ui.voiceReadinessGate);
-  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
-  const designActive = useAppSelector((s) => s.castDesign.active);
-  const undesigned = useAppSelector((s) =>
-    gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
-  );
-  const hasNoFallbackEngine = useAppSelector((s) =>
-    gate ? selectHasNoFallbackEngine(s, gate.bookId) : false,
-  );
-  const fallbackEngineName = useAppSelector((s) =>
-    gate ? selectFallbackEngineName(s, gate.bookId) : 'Kokoro',
-  );
-  const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));
-
   if (!gate) return null;
+  return <VoiceReadinessGateBody gate={gate} />;
+}
+
+function VoiceReadinessGateBody({ gate }: { gate: { bookId: string } }) {
+  const dispatch = useAppDispatch();
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
+  const designActive = useAppSelector((s) => s.castDesign.active);
+  const characters = useAppSelector((s) => s.cast.characters);
+  const undesigned = useAppSelector((s) =>
+    selectUndesignedQwenCharacters(s, gate.bookId),
+  );
+  const hasNoFallbackEngine = useAppSelector((s) => selectHasNoFallbackEngine(s, gate.bookId));
+  const fallbackEngineName = useAppSelector((s) => selectFallbackEngineName(s, gate.bookId));
+  const message = useAppSelector((s) => voiceReadinessGateMessage(s, gate.bookId));
+
   const { bookId } = gate;
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   /* Mirrors cast.tsx's own guard: only one book's bulk design can run at a
@@ -68,19 +68,26 @@ export function VoiceReadinessGateModal() {
       );
       return;
     }
-    if (!designRunningHere) {
-      dispatch(
-        castDesignActions.designAllRequested({
-          bookId,
-          characterIds: undesigned.map((c) => c.id),
-          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
-          scope: 'bases',
-          variantTasks: [],
-        }),
-      );
-    }
-    dispatch(uiActions.changeView('cast'));
-    onClose();
+    const proceed = () => {
+      if (!designRunningHere) {
+        dispatch(
+          castDesignActions.designAllRequested({
+            bookId,
+            characterIds: undesigned.map((c) => c.id),
+            modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+            scope: 'bases',
+            variantTasks: [],
+          }),
+        );
+      }
+      dispatch(uiActions.changeView('cast'));
+      onClose();
+    };
+    /* #3084 W4 — a design that is not already running asks first when its persona engine shares a rendering card
+       AND a voice description is about to be written (the server skips characters that have one);
+       the gate stays mounted while the dialog is open (it renders it). */
+    if (designRunningHere || !designWillGeneratePersona(characters, undesigned.map((c) => c.id))) proceed();
+    else designGuard(proceed);
   };
 
   const onProceedAnyway = () => {
@@ -152,6 +159,8 @@ export function VoiceReadinessGateModal() {
           </div>
         </div>
       </div>
+      {/* After the gate's own overlay (same z-index), so the dialog stacks above it. */}
+      {designGuardModal}
     </>
   );
 }

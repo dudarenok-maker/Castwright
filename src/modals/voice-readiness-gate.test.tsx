@@ -6,16 +6,27 @@
        progress" and skips re-dispatching designAllRequested. */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { VoiceReadinessGateModal } from './voice-readiness-gate';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { librarySlice } from '../store/library-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
+import { haltActiveGeneration } from '../store/queue-thunks';
+import { seedSameCardPersona } from '../test/seed-same-card-persona';
 import type { Character } from '../lib/types';
+
+/* The guard's Confirm dispatches haltActiveGeneration; stub it to a plain action so the test asserts the call. */
+vi.mock('../store/queue-thunks', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../store/queue-thunks')>()),
+  haltActiveGeneration: vi.fn(() => ({ type: 'test/haltActiveGeneration' })),
+}));
 
 afterEach(cleanup);
 
@@ -37,6 +48,9 @@ function makeStore(opts: {
       voices: voicesSlice.reducer,
       library: librarySlice.reducer,
       castDesign: castDesignSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
     },
     preloadedState: {
       ui: {
@@ -229,5 +243,81 @@ describe('VoiceReadinessGateModal', () => {
     ).toBe(false);
     expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
     expect(store.getState().ui.voiceReadinessGate).toBeNull();
+  });
+});
+
+describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
+  const chars = [qwenChar({ id: 'a', name: 'Alice', lines: 5 })];
+
+  it('Design full cast on a same-card endpoint persona engine with a render streaming asks first; the gate stays open until Confirm', async () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+    expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
+    expect(store.getState().ui.stage).not.toMatchObject({ view: 'cast' });
+    /* The design starts once the halt has settled, a microtask later. */
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+    });
+    expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
+    expect(store.getState().ui.voiceReadinessGate).toBeNull();
+    expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
+  });
+
+  it('every undesigned character already has a voice description: no persona is generated, so the design starts at once with no prompt', () => {
+    const store = makeStore({ characters: [qwenChar({ id: 'a', name: 'Alice', lines: 5, voiceStyle: 'a warm alto' })] });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(store.getState().ui.voiceReadinessGate).toBeNull();
+    expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
+  });
+
+  it('one undesigned character without a voice description still asks', () => {
+    const store = makeStore({
+      characters: [
+        qwenChar({ id: 'a', name: 'Alice', lines: 5, voiceStyle: 'a warm alto' }),
+        qwenChar({ id: 'b', name: 'Bram', lines: 4 }),
+      ],
+    });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+  });
+
+  it('Wait leaves the gate open and starts nothing', () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    /* The DESIGN dialog must be the one asking: with design mode off the guard falls back to the analysis
+       dialog (also has a Wait button), and a Wait that only checks "nothing started" passes either way. */
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(store.getState().ui.voiceReadinessGate).not.toBeNull();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+
+  it('a prompt never outlives the gate: closing the gate by another route drops it, and reopening shows no dialog', () => {
+    const store = makeStore({ characters: chars });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+
+    act(() => { store.dispatch(uiActions.closeVoiceReadinessGate()); });
+    act(() => { store.dispatch(uiActions.openVoiceReadinessGate({ bookId: 'b1' })); });
+
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(store.getState().castDesign.active).toBeFalsy();
   });
 });

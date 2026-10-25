@@ -926,6 +926,15 @@ bookStateRouter.get('/:bookId/analysis/state', async (req: Request, res: Respons
   }
 });
 
+/* #3774 — which long jobs (`BookJobKind`) are registered for the book right now.
+   The Generate view disables "Include in book" while any is, so the include's
+   Cancel rollback only ever meets its own subset run. A lock-free read of the
+   in-memory registry (a leaf: nothing here writes, so no book-op); an unknown
+   book is simply not busy. */
+bookStateRouter.get('/:bookId/busy', (req: Request, res: Response) => {
+  res.json({ kinds: bookJobKinds(req.params.bookId) });
+});
+
 bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
@@ -972,9 +981,9 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
   export: 'exporting',
 };
 
-function busySentence(
+export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -985,6 +994,15 @@ function busySentence(
   }
   if (action === 'delete') {
     return `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
+  }
+  /* #3774 — chapter restructure / exclude rewrite or delete chapter audio under
+     a job that may still be writing it (a render finalizing a take to a stale
+     slug, or resurrecting audio that was just excluded). */
+  if (action === 'restructure') {
+    return `This book is busy (${what}). Stop it or wait for it to finish, then change the chapters.`;
+  }
+  if (action === 'exclude') {
+    return `This book is busy (${what}). Stop it or wait for it to finish, then exclude chapters.`;
   }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
@@ -2153,6 +2171,17 @@ bookStateRouter.post(
          state write in the moved folder. */
       const outcome = await withBookOp(req.params.bookId, async (book) => {
         const { bookDir, state } = book;
+
+        /* #3774 — refuse an EXCLUDE while ANY long job is registered for the book,
+           FIRST: excluding deletes the chapter's audio + segments, and a render that
+           is still exporting would write the take back (resurrecting excluded
+           audio). Including deletes nothing, so it is not refused. `runBookJob`
+           registers its token inside `withBookOp`, so this check cannot race a
+           registration. */
+        const kinds = bookJobKinds(book.bookId);
+        if (excluded && kinds.length > 0) {
+          return { status: 409, body: { error: busySentence(kinds, 'exclude'), code: 'book_busy' } };
+        }
 
         const idx = state.chapters.findIndex((c) => c.id === chapterId);
         if (idx === -1) return { status: 404, body: { error: 'Chapter not found.' } };

@@ -111,6 +111,31 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(screen.getByRole('button', { name: /resume scoring/i })).toBeInTheDocument();
   });
 
+  it('disables Resume scoring with the reason visible while a job start is blocked (#3774)', async () => {
+    const resumeSpy = vi.spyOn(api, 'resumeScoring').mockResolvedValue();
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 6, charactersPending: ['ren'] },
+    };
+    render(
+      <QaReportCard
+        report={report}
+        loading={false}
+        error={false}
+        bookTitle="Test"
+        bookId="b1"
+        jobStartBlockedReason="A chapter is being included and analysed."
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /resume scoring/i });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText('A chapter is being included and analysed.')).toBeVisible();
+    expect(btn).toHaveAccessibleDescription('A chapter is being included and analysed.');
+    await userEvent.click(btn);
+    expect(resumeSpy).not.toHaveBeenCalled();
+    resumeSpy.mockRestore();
+  });
+
   it('does NOT show a Resume button when charactersPending is empty, even if some characters are permanently unchecked', () => {
     // Regression for the round-2/round-3 review finding: this fixture must
     // keep charactersChecked < charactersOnRoster (a permanent shortfall,

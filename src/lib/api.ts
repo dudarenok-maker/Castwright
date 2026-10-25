@@ -323,6 +323,10 @@ export interface AnalyseOpts {
       "Accept smaller roster" button; clicking re-fires the request
       with this flag set, which bypasses the gate for that attempt. */
   allowStage1Shrink?: boolean;
+  /** Subset route only (#3774): what is starting the run. The server keeps it on the
+      job and reports it on `GET /analysis/state`, so a client that rebuilds its
+      snapshot keeps the include-origin block. Absent = a re-analyse. */
+  origin?: 'include' | 'reanalyse';
 }
 export interface MatchArgs {
   bookId: string;
@@ -2483,6 +2487,23 @@ async function realGetAnalysisState(bookId: string): Promise<AnalysisStateRespon
 async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
   await wait(20);
   return null;
+}
+
+/* #3774 — which long jobs hold the book right now (`GET /:bookId/busy`). The
+   Generate view disables "Include in book" while any is registered. Mock mode
+   has no job registry, so it is never busy. */
+type BookBusyKinds =
+  ApiPaths['/api/books/{bookId}/busy']['get']['responses']['200']['content']['application/json']['kinds'];
+
+async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/busy`);
+  if (!res.ok)
+    throw new Error(`Book busy fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return ((await res.json()) as { kinds: BookBusyKinds }).kinds;
+}
+
+async function mockGetBookBusy(_bookId: string): Promise<BookBusyKinds> {
+  return [];
 }
 
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
@@ -5539,12 +5560,17 @@ async function realSetChapterExcluded(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Exclude toggle failed (${res.status}).`);
+    /* #3774 — `code` lets a caller tell a `book_busy` refusal (a job holds the
+       book; retry once it settles) from any other failure. */
+    throw Object.assign(new Error(detail || `Exclude toggle failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5896,6 +5922,7 @@ async function realRunAnalysisForChapters(
     onWarning,
     model,
     allowStage1Shrink,
+    origin,
   }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
@@ -5903,7 +5930,7 @@ async function realRunAnalysisForChapters(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapterIds, model, allowStage1Shrink }),
+      body: JSON.stringify({ chapterIds, model, allowStage1Shrink, origin }),
       signal,
     },
   );
@@ -7942,7 +7969,7 @@ async function mockDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
   /* The server's references, labels and grammar (findEndpointReferences in
      server/src/workspace/analyzer-endpoints.ts): the model-id account field
      (defaultAnalysisModel — the phase models are config overrides only, #3084
-     A5), then the three model-id overrides. `configOverrides` is server-side
+     A5), then the four model-id overrides. `configOverrides` is server-side
      only in OpenAPI, so the mock reads it structurally. */
   const names = (v: unknown) => typeof v === 'string' && parseEndpointModelId(v.trim())?.endpointId === id;
   const overrides = (MOCK_USER_SETTINGS as { configOverrides?: Record<string, unknown> }).configOverrides ?? {};
@@ -7950,7 +7977,7 @@ async function mockDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
     ...(['defaultAnalysisModel'] as const)
       .filter((f) => names(MOCK_USER_SETTINGS[f]))
       .map((f) => `Account setting "${f}"`),
-    ...(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine'] as const)
+    ...(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine', 'analyzer.fallback.target'] as const)
       .filter((k) => names(overrides[k]))
       .map((k) => `Advanced setting "${k}"`),
   ];
@@ -10771,6 +10798,7 @@ const real = {
   uploadCover: realUploadCover,
   patchCoverFraming: realPatchCoverFraming,
   getAnalysisState: realGetAnalysisState,
+  getBookBusy: realGetBookBusy,
   getActiveAnalyses: realGetActiveAnalyses,
   getDroppedQuotes: realGetDroppedQuotes,
   importManuscript: realImportManuscript,
@@ -11117,6 +11145,7 @@ const mock = {
   uploadCover: mockUploadCover,
   patchCoverFraming: mockPatchCoverFraming,
   getAnalysisState: mockGetAnalysisState,
+  getBookBusy: mockGetBookBusy,
   getActiveAnalyses: mockGetActiveAnalyses,
   getDroppedQuotes: mockGetDroppedQuotes,
   importManuscript: mockImportManuscript,

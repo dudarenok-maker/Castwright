@@ -929,6 +929,17 @@ paths:
                     type: string,
                     description: 'Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings.',
                   }
+                origin:
+                  type: string
+                  enum: [include, reanalyse]
+                  description: |
+                    #3774 — what is starting the run: `include` (the Generate view's Include in
+                    book) or `reanalyse` (Retry / Re-analyse; the default when absent or
+                    unrecognised). Kept on the job and reported as `subsetOrigin` by
+                    `GET /api/books/{bookId}/analysis/state` while the run is live, so a client
+                    that rebuilds its snapshot (book switch, reload, second tab) keeps the
+                    include-origin job-start block. A request that joins a live run never
+                    changes its origin.
       responses:
         '200':
           description: SSE stream identical in shape to the full-book analysis route.
@@ -1000,19 +1011,41 @@ paths:
                   excluded: { type: boolean }
         '404':
           description: Book or chapter not found
+        '409':
+          description: 'Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason.'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [book_busy] }
 
   /api/books/{bookId}/chapters/{chapterId}/rename:
     post:
       summary: Override a chapter's title with a user-supplied label
       operationId: renameChapter
       description: |
-        Sets `state.chapters[chapterId-1].title` to the supplied value and
-        flips `titleOverridden` to true so subsequent heuristic refresh
-        passes (`refreshChapterTitles` on book-state GET, and the
-        explicit POST `/chapters/refresh-titles`) leave it alone.
-        Writes state.json atomically; holds the per-book write lock.
-        Pure label mutation — does not touch sentence ids, slugs, audio
-        files, or analysis cache.
+        Sets the title of the chapter whose `id` is `chapterId` to the
+        supplied value and flips `titleOverridden` to true so subsequent
+        heuristic refresh passes (`refreshChapterTitles` on book-state GET,
+        and the explicit POST `/chapters/refresh-titles`) leave it alone.
+        The chapter id and every sentence id are unchanged, but the
+        chapter's slug is re-derived from the new title. When the slug
+        changes and the chapter has rendered audio, its audio files (and
+        companion files) are renamed to the new slug, with the chapter title
+        and id in the segments metadata updated to match; the audio itself
+        is not regenerated. The new title is also written into the chapter's
+        manuscript hints.
+
+        Runs through the same restructure path as merge and split, so it
+        writes state.json atomically, rebuilds the analysis cache from
+        manuscript-edits.json, and takes the per-book operation lock, the
+        restructure claim and the per-book state lock. Like them it is
+        refused with 409 while analysis or any other long job is running on
+        the book. Re-sending the current title of an already-overridden
+        chapter changes no title or slug and renames no audio.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
@@ -1047,7 +1080,8 @@ paths:
         '404':
           description: Book or chapter not found
         '409':
-          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.'
+          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } }
 
   /api/books/{bookId}/chapters/merge:
     post:
@@ -1090,7 +1124,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. non-contiguous ids, fewer than 2 ids)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/split:
     post:
@@ -1131,7 +1165,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. split after last sentence)' }
         '404': { description: Book, chapter, or sentence not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/reorder:
     post:
@@ -1165,7 +1199,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/exclude:
     post:
@@ -1173,9 +1207,11 @@ paths:
       operationId: excludeChapters
       description: |
         Sets `Chapter.excluded` on every listed chapter in one atomic
-        restructure pass. Sentence remap is identity; audio files are left
-        on disk. For a single chapter the Generate-view toggle uses
-        `setChapterExcluded` instead.
+        restructure pass. Sentence remap is identity; the pass also prunes
+        zero-sentence chapters and renumbers the rest, so it can move audio
+        files. Refused with `book_busy` in both directions while a long job
+        runs (#3774). For a single chapter the Generate-view toggle uses
+        `setChapterExcluded` instead; only its hiding direction is refused.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -1199,7 +1235,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (missing / empty chapterIds, non-boolean excluded)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/refresh-titles:
     post:
@@ -1232,7 +1268,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '404': { description: Book not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/cover/candidates:
     get:
@@ -1393,6 +1429,33 @@ paths:
         '204': { description: Framing saved }
         '400': { description: Body is missing fields or contains non-numeric values }
         '404': { description: Book not found, or book has no cover pinned }
+
+  /api/books/{bookId}/busy:
+    get:
+      summary: Which long jobs are registered for the book right now
+      operationId: getBookBusy
+      description: |
+        Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+        design, script-review, export) currently registered for the book
+        (#3774). Lock-free read of the in-memory busy registry; an unknown book
+        is simply not busy (`kinds: []`, never a 404). The Generate view
+        disables "Include in book" while any kind is listed.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The registered job kinds, empty when the book is idle
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kinds]
+                properties:
+                  kinds:
+                    type: array
+                    items:
+                      type: string
+                      enum: [render, scoring, analysis, design, script-review, export]
 
   /api/books/{bookId}/listen-progress:
     get:
@@ -5089,6 +5152,19 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
+    RestructureConflictError:
+      type: object
+      description: >-
+        409 body of the chapter-restructure routes (merge, split, reorder,
+        bulk exclude, rename, refresh-titles). `analysis_running`: an analysis
+        job holds the book (or a restructure already claimed it). `book_busy`
+        (#3774): ANY long job (render, analysis, scoring, voice design, script
+        review or export) is registered for the book. `error` is a curated
+        sentence with no filesystem path.
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [analysis_running, book_busy] }
     # --- Cast merge suggestions -------------------------------------
     MergeSuggestion:
       type: object
@@ -5176,8 +5252,7 @@ components:
             language has no sidecar mapping — checked before the stream
             produces any progress) / `lock-contention` (a cast-lock
             acquisition on this backstop's own path timed out — #2260) /
-            `unknown` (defensive catch-all for any other unexpected throw
-            escaping the design loop).
+            any other throw escaping the design loop — a whole-job persona-engine failure included — carries its analysis `FailureCode` (#3084 W4: `auth`, `analyzer-endpoint-missing`, `analyzer-timeout`, …), and `unknown` when the taxonomy recognises nothing. A per-character persona failure does not escape the loop and is reported as `character_failed` instead.
         total: { type: integer }
         done: { type: integer }
         skipped:
@@ -5210,8 +5285,10 @@ components:
           description: character_skipped only — present exactly when the skip is the clone-protection guard; absent for every other skip cause.
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
-          type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+          anyOf:
+            - type: string
+              enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+            - $ref: '#/components/schemas/FailureCode'
           description: |
             error only — machine-readable whole-run abort reason.
             `language_unset` (Task 6, #2246) fires when the book never

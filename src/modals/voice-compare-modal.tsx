@@ -15,6 +15,7 @@
    closed drawer does today). */
 
 import { useState } from 'react';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { IconPlay, IconPause, IconSpinner, IconRefresh, IconSparkle, IconCheck } from '../lib/icons';
 import { Avatar } from '../components/primitives';
 import { AbCompareShell } from '../components/ab-compare-shell';
@@ -60,6 +61,8 @@ export function VoiceCompareModal({
   onApprove,
   onClose,
 }: Props) {
+  /* #3084 W4 — owned here, not by the opener, so a pending prompt dies with the compare. */
+  const { guard, modal: guardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const playback = useSamplePlayback();
   const [persona, setPersona] = useState(initial.persona);
   const [proposed, setProposed] = useState({ voiceId: initial.voiceId, previewUrl: initial.previewUrl });
@@ -133,8 +136,11 @@ export function VoiceCompareModal({
     onClose();
   }
 
-  async function regenerate() {
+  function regenerate() {
     if (personaBusy) return;
+    guard(() => void runRegenerate());
+  }
+  async function runRegenerate() {
     setPersonaBusy(true);
     setError(null);
     try {
@@ -195,6 +201,7 @@ export function VoiceCompareModal({
   }
 
   return (
+    <>
     <AbCompareShell
       title="Audition the new voice"
       subtitle="Compare the current voice with the proposed one, then keep whichever sounds right."
@@ -345,6 +352,8 @@ export function VoiceCompareModal({
         </>
       }
     />
+    {guardModal}
+    </>
   );
 }
 

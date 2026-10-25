@@ -18,7 +18,7 @@ import {
   STALL_THRESHOLD_MS,
 } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions } from '../store/analysis-slice';
+import { analysisActions, isStaleIncludeSnapshot } from '../store/analysis-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import {
   revisionsActions,
@@ -930,12 +930,37 @@ export function Layout() {
           if (res === null) {
             if (revisionsOnly) {
               /* Still confirm the (empty) read so this effect doesn't refetch
-                 on every render. For a full reload, leave every per-book
-                 slice on its in-memory defaults as before — the
-                 library-fallback hydrate below seeds bookMeta from the
-                 library entry. */
+                 on every render. The full-reload branch below resets the
+                 per-book slices when they hold another book (#3624);
+                 there the library-fallback hydrate seeds bookMeta from
+                 the library entry. */
               dispatch(revisionsActions.hydrate({ bookId, state: null, requestSeq }));
               revisionsReadFor.current = bookId;
+            } else {
+              /* #3624 — if the slices still hold ANOTHER book, reset them so
+                 this book starts empty with its own identity stamped (edits
+                 then persist to it, not get dropped by the gate). Read live;
+                 a null identity means an in-flight upload of THIS book, so
+                 leave the slices on their in-memory defaults. Non-persisted
+                 actions only: the reset itself must never PUT (#3376). */
+              const held = store.getState().manuscript.bookId;
+              if (held !== null && held !== bookId) {
+                dispatch(manuscriptActions.resetForBook(bookId));
+                dispatch(castActions.hydrateCharacters([]));
+                dispatch(castActions.setRenderedFallback({}));
+                dispatch(castActions.setOrphanedCharacterFallbacks({}));
+                dispatch(changeLogActions.hydrateFromBookState(null));
+                /* The chapters slice too: Generate and Listen read it with no
+                   book check, so left alone they'd list B's chapters under A. */
+                dispatch(
+                  chaptersActions.hydrateFromBookState({
+                    bookId,
+                    chapters: [],
+                    completedSlugs: [],
+                    characters: [],
+                  }),
+                );
+              }
             }
             return;
           }
@@ -1060,7 +1085,23 @@ export function Layout() {
           api
             .getAnalysisState(bookId)
             .then((snap) => {
-              if (cancelled || !snap) return;
+              if (cancelled) return;
+              /* #3774 — the server reports no live subset run for this book, so an
+                 include-origin snapshot for it is a stale copy to drop: the tab that
+                 started the include closed mid-run and nothing else ever clears the
+                 broadcast mirror, which would keep the Generate view's job-start
+                 controls disabled until a reload. Only a copy that has gone quiet
+                 (a live run's snapshot is ticked every few seconds): a book switch
+                 between the click and the server registering the job must not drop
+                 the include's own fresh snapshot. */
+              if (!(snap?.kind === 'subset' && snap.state === 'running')) {
+                if (
+                  isStaleIncludeSnapshot(store.getState().analysis.activeStream, bookId, Date.now())
+                ) {
+                  dispatch(analysisActions.clearActiveStream());
+                }
+              }
+              if (!snap) return;
               /* Don't resurrect a stale/terminal analysis pill for a book whose
                  cast is already confirmed — a lingering paused/halted snapshot
                  from an aborted or displaced run must not present a clickable
@@ -1088,6 +1129,15 @@ export function Layout() {
                    phase label. */
                   kind: snap.kind,
                   subsetChapterIds: snap.subsetChapterIds,
+                  /* #3774 — the server's record of what started the run. This
+                     hydrate replaces the snapshot on every arrival at a book the
+                     manuscript slice does not hold (a book switch, a reload, a
+                     second tab); without it the Generate view's include
+                     job-start block is lost. */
+                  subsetOrigin: snap.subsetOrigin,
+                  /* #3774 — rebuilt from the server's own answer, so the run is
+                     registered; its `lastTickAt` is the SERVER's clock. */
+                  serverConfirmed: true,
                 }),
               );
             })

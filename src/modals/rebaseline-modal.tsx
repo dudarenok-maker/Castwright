@@ -38,6 +38,8 @@ import {
 import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { designWillGeneratePersona } from '../lib/design-persona';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -82,6 +84,8 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   );
   const voices = useAppSelector((s) => s.voices.voices);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  /* #3084 W4 — the design batch asks once, before it starts, when the persona engine shares a rendering card. */
+  const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const status = useAppSelector((s) => s.rebaseline.status);
   const selectedCharacterIds = useAppSelector((s) => s.rebaseline.selectedCharacterIds);
   const proposals = useAppSelector((s) => s.rebaseline.proposals);
@@ -335,6 +339,13 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
      failures don't abort the run. */
   function runPropose() {
     if (status !== 'setup' || drainingRef.current) return;
+    /* Asks only when a persona will be written: designOne generates one just for a row it designs
+       (no existing Qwen voice) whose seed is empty — see runProposeNow's branches. */
+    const designed = selectedCharacterIds.filter((id) => !charById.get(id)?.overrideTtsVoices?.qwen?.name);
+    if (designWillGeneratePersona(characters, designed)) designGuard(runProposeNow);
+    else runProposeNow();
+  }
+  function runProposeNow() {
     const seeds: Record<string, string> = {};
     for (const id of selectedCharacterIds) {
       const c = charById.get(id);
@@ -708,6 +719,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           </footer>
         </div>
       </div>
+      {designGuardModal}
     </>,
     document.body,
   );

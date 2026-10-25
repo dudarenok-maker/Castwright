@@ -33,10 +33,11 @@
    reconcile-driven generation start is intentionally NOT gated; see
    docs/features/archive/32-sticky-analysis.md for the rationale. */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
+import { notificationsActions } from '../store/notifications-slice';
 import { engineForModelId } from '../lib/models';
 import { analyzerSharesTtsDevice, endpointForModelId, ttsDeviceKeyFor } from '../lib/analyzer-endpoints';
 import type { TtsModelKey } from '../lib/types';
@@ -51,6 +52,10 @@ interface GuardOptions {
   /** #3084 — the model about to be called, when it is not the run's selected model
       (e.g. Settings → Test on one model). Defaults to `ui.selectedModel`. */
   modelId?: string;
+  /** #3084 W4 — 'design' guards a voice-design / persona start instead of an analysis start:
+      the model about to be called is the persona engine (`analyzer.personaGeneration.engine`),
+      and local Ollama never prompts (the server moves it to system RAM while a render runs). */
+  purpose?: 'analyse' | 'design';
 }
 
 interface GuardResult {
@@ -64,22 +69,28 @@ interface GuardResult {
   modal: ReactNode;
 }
 
-export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOptions = {}): GuardResult {
+/* Stable fallback: a fresh `[]` per selector call defeats react-redux's reference check. */
+const NO_BOOKS: never[] = [];
+
+export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 'analyse' }: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
-  const selectedModel = useAppSelector((s) => s.ui.selectedModel);
-  const anyActiveStream = useAppSelector(selectAnyActiveStream);
+  /* Defensive reads — the design-start callsites (cast view, profile drawer) mount this hook, and
+     their tests routinely build stores without the chapters/library slices. Production wires all. */
+  const selectedModel = useAppSelector((s) => s.ui?.selectedModel ?? '');
+  const anyActiveStream = useAppSelector((s) => (s.chapters ? selectAnyActiveStream(s) : false));
   /* A representative generating book for the modal copy (advisory). Stable
      string read so this hook doesn't re-render on every progress tick. */
-  const activeBookId = useAppSelector((s) => Object.keys(s.chapters.activeStreams)[0] ?? null);
-  const libraryBooks = useAppSelector((s) => s.library.books);
+  const activeBookId = useAppSelector((s) => Object.keys(s.chapters?.activeStreams ?? {})[0] ?? null);
+  const libraryBooks = useAppSelector((s) => s.library?.books ?? NO_BOOKS);
   const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   const configValues = useAppSelector((s) => s.config?.values);
   const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null);
+  const personaEngine = useAppSelector((s) => s.config?.values?.['analyzer.personaGeneration.engine']?.effective);
   /* N8 — every live generation, not just the first: two books can generate on two cards, and
      the endpoint has to be compared with each. A joined string keeps the selector's result
      stable across progress ticks (the same reason the book-title selector reads a string). */
   const generatingModelKeysKey = useAppSelector((s) =>
-    Object.values(s.chapters.activeStreams)
+    Object.values(s.chapters?.activeStreams ?? {})
       .map((stream) => stream.modelKey)
       .join('|'),
   );
@@ -87,17 +98,33 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
   /* Stash the proceed callback in state — the modal needs to call it on
      confirm, after dispatching the halt. Null while closed. */
   const [pending, setPending] = useState<(() => void) | null>(null);
+  /* A design's halt is awaited, and it clears activeStreams at once — so for the round trip a
+     second guard() would see no stream and start a design without the wait, then the deferred
+     start would fire as well. `halting` makes guard() ignore calls until the halt settles;
+     `mounted` stops a deferred start whose host is gone. */
+  const halting = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   /* Ollama shares the card with the Voice engine; Gemini is a remote API and safe alongside
      TTS; an OpenAI-compatible endpoint shares when it sits on 'any' or the TTS card (#3084). */
-  const targetModel = modelId ?? selectedModel;
+  const designing = purpose === 'design';
+  const targetModel = designing
+    ? typeof personaEngine === 'string' ? personaEngine : 'gemini'
+    : (modelId ?? selectedModel);
   const engine = engineForModelId(targetModel);
   const endpointGpu = endpointForModelId({ analyzerEndpoints: analyzerEndpoints ?? [] }, targetModel)?.gpu;
   const generatingModelKeys = generatingModelKeysKey.length > 0 ? generatingModelKeysKey.split('|') : [];
   /* Shares if it shares with ANY live generation (N8). With none live the card is unknown, so
      the rule falls back to its fail-closed answer; `anyActiveStream` below still gates. */
   const shares =
-    generatingModelKeys.length === 0
+    !(designing && targetModel === 'local') &&
+    (generatingModelKeys.length === 0
       ? analyzerSharesTtsDevice({ engine, endpointGpu, ttsDeviceKey: undefined })
       : generatingModelKeys.some((key) =>
           analyzerSharesTtsDevice({
@@ -105,9 +132,10 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
             endpointGpu,
             ttsDeviceKey: ttsDeviceKeyFor(key as TtsModelKey, configValues, reportedTtsDevices),
           }),
-        );
+        ));
 
   const guard: GuardResult['guard'] = (proceed) => {
+    if (halting.current) return;
     if (!shares || !anyActiveStream) {
       proceed();
       return;
@@ -116,6 +144,20 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
   };
 
   const close = () => setPending(null);
+
+  /* Escape on the open prompt is Wait. Capture phase + stopPropagation so a host that also listens
+     for Escape on window (the A/B compare shell) does not close underneath the prompt. */
+  const open = pending != null;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setPending(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open]);
 
   const titleFromLibrary = activeBookId
     ? (libraryBooks.find((b) => b.bookId === activeBookId)?.title ?? null)
@@ -127,13 +169,13 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
     <ConfirmDialog
       open={pending != null}
       eyebrow="Generation in progress"
-      title="Pause audio generation to analyse?"
+      title={designing ? 'Pause audio generation to design voices?' : 'Pause audio generation to analyse?'}
       icon={<IconWarning className="w-4 h-4" />}
       body={
         <>
           <p>
-            Local analysis needs the same GPU as the Voice engine, so audio generation for{' '}
-            <b>{resolvedTitle}</b> will pause while this manuscript is analysed.
+            {designing ? 'Voice-persona generation runs on an endpoint that shares the Voice engine’s GPU' : 'Local analysis needs the same GPU as the Voice engine'}, so audio generation for{' '}
+            <b>{resolvedTitle}</b> will pause while {designing ? 'voices are designed' : 'this manuscript is analysed'}.
           </p>
           <p className="mt-3 text-ink/60">
             You can resume generation from the Generate screen afterwards — it picks up where it
@@ -141,7 +183,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
           </p>
         </>
       }
-      confirmLabel="Pause and analyse"
+      confirmLabel={designing ? 'Pause and design' : 'Pause and analyse'}
       cancelLabel="Wait"
       variant="default"
       onConfirm={() => {
@@ -150,10 +192,33 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
            (and POSTs /pause) immediately so the analyzer owns the GPU within
            the chapter, and queue.paused stops the dispatcher from re-draining.
            The user resumes generation from the queue modal afterwards. */
-        void dispatch(haltActiveGeneration());
         const run = pending;
         close();
-        run?.();
+        if (!designing) {
+          void dispatch(haltActiveGeneration());
+          run?.();
+          return;
+        }
+        /* A design shares the render's card, so it starts only after the halt has settled
+           (N2) — and not at all if the halt failed, or it would race the render it asked to stop. */
+        halting.current = true;
+        void (async () => {
+          try {
+            await dispatch(haltActiveGeneration({ awaitRelease: true }));
+          } catch (e) {
+            halting.current = false;
+            console.warn('[guard] halt before design failed', e);
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: "Couldn't pause audio generation, so voice design didn't start. Please try again.",
+              }),
+            );
+            return;
+          }
+          halting.current = false;
+          if (mounted.current) run?.();
+        })();
       }}
       onClose={close}
     />

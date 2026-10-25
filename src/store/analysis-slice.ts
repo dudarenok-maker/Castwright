@@ -20,6 +20,7 @@ import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 import type { AnalysisFailureFix } from '../lib/api';
 import type { AnalysisEngine } from '../lib/model-id';
 import { combineSnapshotGpus } from '../lib/analyzer-endpoints';
+import { STALL_THRESHOLD_MS } from './chapters-slice';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -108,6 +109,19 @@ export interface AnalysisStreamSnapshot {
       retried, captured at job creation. The pill reads `.length`
       for the retry count. */
   subsetChapterIds?: number[];
+  /** #3774 — set only when `kind === 'subset'`: what started the run. An
+      `'include'` run holds the book under a Cancel rollback that a job started
+      alongside it would block; a `'reanalyse'` run needs no such guard. Lets the
+      Generate view re-derive that block after a remount. Absent on cold-boot
+      snapshots (never treated as an include). */
+  subsetOrigin?: 'include' | 'reanalyse';
+  /** #3774 — evidence the server registered this run: a server tick landed on the
+      snapshot, it was rebuilt from the server's own answer (hydrate / restore), or
+      `/busy` reported `analysis` while it was held. Until then a quiet snapshot is
+      only the click-to-registration window (the job registers after two POSTs and
+      two bounded waits), not a dead run, so it is never judged stale. Preserved
+      through ticks like `subsetOrigin`. */
+  serverConfirmed?: boolean;
 }
 
 export interface AnalysisState {
@@ -166,6 +180,7 @@ export const analysisSlice = createSlice({
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      snap.serverConfirmed = true;
       if (snap.state === 'halted' && snap.haltCode === ANALYSIS_STREAM_FAILED) {
         snap.state = 'running';
         snap.haltCode = undefined;
@@ -225,6 +240,16 @@ export const analysisSlice = createSlice({
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
       snap.lastTickAt = action.payload.lastTickAt;
+      snap.serverConfirmed = true;
+    },
+
+    /* #3774 — `/busy` reported an `analysis` job while this book's include
+       snapshot was held: the run's lease is registered, so its quiet time counts
+       from here. */
+    markAnalysisServerConfirmed(state, action: PayloadAction<{ bookId: string }>) {
+      const snap = state.activeStream;
+      if (!snap || snap.bookId !== action.payload.bookId) return;
+      snap.serverConfirmed = true;
     },
 
     /* Flip to halted state with an error code + message. Used for
@@ -325,4 +350,38 @@ export const analysisActions = analysisSlice.actions;
 export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manuscriptId: string | null | undefined): boolean {
   const snap = state.analysis.activeStream;
   return !!snap && !!manuscriptId && snap.manuscriptId === manuscriptId && snap.kind !== 'subset' && snap.state === 'running';
+}
+
+/** #3774 — how long an include snapshot may stay unconfirmed (no tick, no
+    `/busy` `analysis`) before it is treated as a run that never registered.
+    Well past the click-to-registration window, so a live include never trips it. */
+export const UNCONFIRMED_INCLUDE_MAX_MS = 120_000;
+
+/** #3774 — true when the held snapshot is a running include-origin subset run
+    for this book that has gone quiet (no tick for longer than
+    STALL_THRESHOLD_MS). A live run is ticked every few seconds, so a copy this
+    quiet is a stale mirror (the tab that started it closed or reloaded) — but
+    only once the server also reports no live subset run, which is the caller's
+    check. Quiet time only counts once the run is known to have registered
+    (`serverConfirmed`): before that the snapshot is the click-to-registration
+    window, in which `/busy` truthfully reports no analysis for a LIVE include.
+    An UNCONFIRMED snapshot is not held forever, though: nothing but a server
+    event moves `lastTickAt` before confirmation, so it is the click time, and
+    once it is older than UNCONFIRMED_INCLUDE_MAX_MS the run never registered
+    (the clicking tab closed first, leaving another tab's broadcast copy that no
+    stream will ever confirm or end). Shared by the layout's per-book hydrate and the Generate view's busy
+    poll so the two ends of the same rule cannot drift. */
+export function isStaleIncludeSnapshot(
+  held: AnalysisStreamSnapshot | null | undefined,
+  bookId: string,
+  now: number,
+): boolean {
+  return (
+    !!held &&
+    held.bookId === bookId &&
+    held.kind === 'subset' &&
+    held.state === 'running' &&
+    held.subsetOrigin === 'include' &&
+    now - held.lastTickAt > (held.serverConfirmed === true ? STALL_THRESHOLD_MS : UNCONFIRMED_INCLUDE_MAX_MS)
+  );
 }

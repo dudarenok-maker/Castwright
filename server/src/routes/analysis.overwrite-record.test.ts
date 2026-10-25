@@ -11,7 +11,7 @@
    Real analysis router and `importPortableBundle`; a stub analyzer records every
    prompt. Unique manuscript ids per case: server/handoff/cache persists. */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,6 +63,8 @@ let workspaceRoot: string;
 let app: Express;
 let bookId: string;
 let bookDir: string;
+let paths: typeof import('../workspace/paths.js');
+let title: string;
 let opLock: typeof import('../workspace/book-op-lock.js');
 let fileLock: typeof import('../workspace/file-lock.js');
 let portable: typeof import('../import/scan-import-folder.js');
@@ -74,7 +76,7 @@ beforeAll(async () => {
   process.env.STAGE2_COVERAGE_RETRIES = '0';
   /* Sequential imports -- a Promise.all of dynamic imports races vi.mock factories (#2083). */
   const analysisModule = await import('./analysis.js');
-  const paths = await import('../workspace/paths.js');
+  paths = await import('../workspace/paths.js');
   opLock = await import('../workspace/book-op-lock.js');
   fileLock = await import('../workspace/file-lock.js');
   portable = await import('../import/scan-import-folder.js');
@@ -82,8 +84,6 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/manuscripts', analysisModule.analysisRouter);
-  bookId = paths.makeBookId(AUTHOR, SERIES, TITLE);
-  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 }, 120_000);
@@ -94,7 +94,23 @@ afterAll(() => {
   delete process.env.STAGE2_COVERAGE_RETRIES;
 });
 
-afterEach(() => {
+/* A book of its own per case (#3785). A finished analysis ends its SSE response
+   before its `runBookJob` 'analysis' lease releases (at `job.settled`), so on a
+   shared bookId the next case's overwrite saw the previous case's lease and was
+   refused with BookBusyError. */
+let startedRuns: Array<Promise<unknown>> = [];
+beforeEach(() => {
+  startedRuns = [];
+  title = `${TITLE} ${Math.random().toString(36).slice(2, 8)}`;
+  bookId = paths.makeBookId(AUTHOR, SERIES, title);
+  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+});
+
+afterEach(async () => {
+  /* Let any start a failed case left queued finish while the stubs still exist,
+     then wait for its lease, before the stubs and the book go. */
+  await Promise.allSettled(startedRuns);
+  await vi.waitFor(() => expect(opLock.bookJobKinds(bookId)).toEqual([]));
   for (const k of Object.keys(g)) if (k.startsWith('__ovr_')) delete g[k];
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   opLock.__bookDirIndexForTest().clear();
@@ -107,7 +123,7 @@ function stateFor(manuscriptId: string): Record<string, unknown> {
   return {
     bookId,
     manuscriptId,
-    title: TITLE,
+    title,
     author: AUTHOR,
     series: SERIES,
     seriesPosition: 1,
@@ -230,6 +246,7 @@ async function queuedBehindOverwrite(
     overwrite = portable.importPortableBundle(bundle, { onConflict: 'overwrite' });
     await waitWaiters(1, release);
     run = start();
+    startedRuns.push(run);
     await waitWaiters(2, release);
   } finally {
     release();

@@ -2952,6 +2952,9 @@ export interface AnalysisJob {
       `analysis-state.json` (`subsetChapterIds`) so the cold-boot
       rehydrated AnalysisPill can show "Retrying N chapters" copy. */
   subsetChapterIds?: number[];
+  /** Set only on `kind === 'subset'` jobs: what started the run (#3774). Reported
+      by `snapshotInFlightAnalysis`; a request that joins the job never changes it. */
+  subsetOrigin?: 'include' | 'reanalyse';
   /** Path to the book directory the analyzer is writing into. Set
       from the manuscript record at job creation, used by the
       cold-boot rehydration writes (`writeAnalysisState` / `deleteAnalysisState`).
@@ -3338,6 +3341,7 @@ export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFil
     engine: job.engine,
     kind: job.kind,
     subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
+    subsetOrigin: job.kind === 'subset' ? (job.subsetOrigin ?? 'reanalyse') : undefined,
     lastTickAt: job.lastDiskWriteAt || Date.now(),
     writtenAt: Date.now(),
   };
@@ -7783,8 +7787,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     phase0Model?: unknown;
     phase1Model?: unknown;
     allowStage1Shrink?: unknown;
+    origin?: unknown;
   };
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  /* #3774 — what is starting this run; anything but 'include' is a re-analyse. */
+  const requestedOrigin: 'include' | 'reanalyse' = body?.origin === 'include' ? 'include' : 'reanalyse';
   const requestedChapterCount = Array.isArray(body?.chapterIds) ? body.chapterIds.length : 0;
   console.log(
     `[analysis-subset] request received manuscript=${JSON.stringify(manuscriptId)} ` +
@@ -8076,6 +8083,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     manuscriptId,
     kind: 'subset',
     subsetChapterIds: leasedToRun.map((t) => t.id),
+    subsetOrigin: requestedOrigin,
     bookDir: lease?.bookDir ?? leased.bookDir ?? null,
     engine: selection.engine,
     fallbackSwitch,

@@ -6,12 +6,19 @@ import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../../handoff/protocol.js';
 import type { StageCall } from '../types.js';
-import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError } from '../errors.js';
-import { mapFinish, withThinkEvidence } from './finish.js';
-import { parseAndValidate, persistResponse, summariseDetail } from './parse.js';
+import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../errors.js';
+import { hasReasoningEvidence, mapFinish, withThinkEvidence } from './finish.js';
+import { parseAndValidate, persistResponse, stripThink, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
 import type { ValidationRetryPolicy } from './retry-policy.js';
-import type { ChatMessage, ChatTransport, StructuredOutputMode, StructuredOutputRequest } from './transport.js';
+import type {
+  ChatMessage,
+  ChatTransport,
+  FreeTextInput,
+  StructuredOutputMode,
+  StructuredOutputRequest,
+  TransportResult,
+} from './transport.js';
 
 export interface StageSpec<T> {
   manuscriptId: string;
@@ -166,6 +173,54 @@ export class StageRunner {
     }
     await persistResponse(spec.manuscriptId, spec.key, text);
     return attempt.value;
+  }
+
+  /** #3084 W4 — one unstructured, single-attempt call (persona generation, spec §10).
+      No schema, no validation retry, no chunking, and NO engine output cap: free text gets the
+      model's default length, as the persona calls had before they ran through a transport.
+      Wave 5 adds the engine's reasoning level and custom payload to this request.
+      Returns the answer text with a leading <think> block removed. An empty string is returned
+      as-is for the caller to judge; a blocked response and a length stop that produced only
+      reasoning throw, so neither failure is collapsed into an empty answer. */
+  async runFreeText(input: FreeTextInput): Promise<string> {
+    /* Master contract: the runner awaits prepare(signal) before it reads settings (the Gemini transport
+       warms its model catalog there; P26 bounds it, and the caller's abort releases it). This is the
+       same inline call wave 2 put in the private `send`: `await this.transport.prepare?.(call.signal);`
+       followed by `const settings = this.settings();`. Free text reads no settings in wave 4; wave 5
+       (Task 5.1) adds `const settings = this.settings();` directly after this line. */
+    await this.transport.prepare?.(input.signal);
+    const system = input.system ?? '';
+    const sent = await this.transport.send({
+      system,
+      messages: [{ role: 'user', content: input.prompt }],
+      structuredOutput: { mode: 'off' },
+      temperature: input.temperature,
+      maxOutputTokens: undefined,
+      /* The persona limiter estimate from voice-style.ts:219 at 6c3a0a49 (its Gemini branch's `const estTokens`): ~chars/4 plus a flat margin. */
+      estimatedInputTokens: Math.ceil((system.length + input.prompt.length) / 4) + 200,
+      signal: input.signal,
+      call: {},
+      /* The persona ceiling is the one free-text field EVERY transport reads (owner decision 4.3-B1). */
+      freeText: {
+        ...input.ollama,
+        ...(input.absoluteMaxMs !== undefined ? { absoluteMaxMs: input.absoluteMaxMs } : {}),
+      },
+    });
+    const think = stripThink(sent.text);
+    const answer: TransportResult = think.unterminated
+      ? { ...sent, text: '', reasoningSeen: true }
+      : { ...sent, text: think.text };
+    if (answer.finish === 'blocked') {
+      /* Gemini reports an empty STOP reply (or none at all) through the same 'blocked' finish as a real
+         filter; that is an empty persona, not a block, so the caller's empty-persona guard words it. */
+      const real = answer.blockReason && answer.blockReason !== 'FINISH_REASON_UNSPECIFIED' && answer.blockReason !== 'STOP';
+      if (!real) return '';
+      throw new GeminiContentBlockedError(this.transport.model, answer.blockReason, { transport: this.transport.kind });
+    }
+    if (answer.finish === 'length' && answer.text.trim() === '' && hasReasoningEvidence(answer)) {
+      throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true });
+    }
+    return answer.text;
   }
 
   /* The GRAMMAR schema (may differ from the validation schema) as draft-07

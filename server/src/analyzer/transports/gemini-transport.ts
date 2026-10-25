@@ -25,6 +25,7 @@ import {
   type RetryClassifier,
 } from '../runner/transport-retry.js';
 
+import { PERSONA_ABSOLUTE_MAX_MS } from '../runner/transport.js';
 import type { ChatTransport, StructuredOutputRequest, TransportRequest, TransportResult } from '../runner/transport.js';
 import type { StageChunkInfo } from '../types.js';
 
@@ -223,12 +224,21 @@ export class GeminiTransport implements ChatTransport {
     /* #3084 P27 — decided once per request from the static id rule, never the
        live catalog, so a model's request shape and its reasoning evidence never
        change between requests. */
-    const includeThoughts = geminiModelThinks(this.model);
+    /* #3084 W4 (P27, A3) — one flag for the wire and the evidence gate. A free-text (persona) request asks
+       for no thought summaries, so its thoughtsTokenCount is not reasoning evidence either. Stage requests
+       keep wave 2's id rule. */
+    const includeThoughts = !req.freeText && geminiModelThinks(this.model);
     const config: Record<string, unknown> = {
-      systemInstruction: req.system,
-      temperature: req.temperature,
+      /* #3084 W4 — a free-text request omits what the pre-transport persona call never sent
+         (it was a bare generateContent({ model, contents })). Stage requests are unchanged. */
+      ...(req.freeText && req.system === '' ? {} : { systemInstruction: req.system }),
+      ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
+      /* Wave 2's thought summaries (P19) go on stage requests only. A persona request keeps today's
+         shape; wave 5 (Task 5.3) adds a thinkingConfig to it only for a non-default reasoning level. */
       ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
-      maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
+      ...(req.freeText && req.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS }),
     };
     Object.assign(config, geminiStructuredConfig(req.structuredOutput));
 
@@ -237,7 +247,10 @@ export class GeminiTransport implements ChatTransport {
     /* #3084 P5 — every Gemini request is bounded by an absolute ceiling, created
        here inside the per-attempt call, which runs AFTER the limiter was
        acquired, so queue time is not charged. */
-    const requestCeilingMs = this.requestCeilingMs ?? configValue<number>('analyzer.gemini.requestCeilingMs');
+    const baseCeilingMs = this.requestCeilingMs ?? configValue<number>('analyzer.gemini.requestCeilingMs');
+    const requestCeilingMs = req.freeText
+      ? Math.min(baseCeilingMs, req.freeText.absoluteMaxMs ?? PERSONA_ABSOLUTE_MAX_MS)
+      : baseCeilingMs;
     const ceiling = AbortSignal.timeout(requestCeilingMs);
     const requestStartedAt = Date.now();
     /* #3084 P5 — measured for the per-attempt timing line (on-box tuning). */
@@ -284,6 +297,10 @@ export class GeminiTransport implements ChatTransport {
       if (combined.aborted) onAbort();
       else combined.addEventListener('abort', onAbort, { once: true });
     });
+    /* The race below only starts after generateContentStream resolves; when that call itself rejects first (the
+       ceiling firing on a never-answering endpoint), nothing awaits this promise, and its rejection would surface
+       as an unhandled rejection. Marking it handled does not change what the race observes. */
+    abortPromise.catch(() => {});
     const releaseAbortListener = () => {
       if (onAbort) combined.removeEventListener('abort', onAbort);
     };

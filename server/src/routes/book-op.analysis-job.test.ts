@@ -731,3 +731,102 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
   });
 });
+
+/* #3774 H' — the SERVER reports a live subset run's origin on GET /analysis/state, so a book
+   switch, a reload or a second tab (each of which rebuilds the client snapshot from this
+   answer) keeps the include-origin job-start block. */
+describe('GET /analysis/state reports the live subset run\'s origin (#3774)', () => {
+  async function stateWhileSubsetRuns(label: string, body: Record<string, unknown>) {
+    const s = await seedBook(label);
+    const entered = gate();
+    const release = gate();
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          entered.open();
+          await release.promise;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const run = request(app)
+      .post(`/api/manuscripts/${s.manuscriptId}/analysis/chapters`)
+      .send({ chapterIds: [1], ...body })
+      .then((r) => r);
+    await entered.promise;
+    const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
+    release.open();
+    await run;
+    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    return state;
+  }
+
+  it('origin include on the start POST -> state answers subsetOrigin include', async () => {
+    const state = await stateWhileSubsetRuns('origin-include', { origin: 'include' });
+    expect(state.status).toBe(200);
+    expect(state.body).toMatchObject({ state: 'running', kind: 'subset', subsetChapterIds: [1], subsetOrigin: 'include' });
+  });
+
+  it('no origin on the start POST -> state answers subsetOrigin reanalyse (backward compatible default)', async () => {
+    const state = await stateWhileSubsetRuns('origin-default', {});
+    expect(state.body).toMatchObject({ state: 'running', kind: 'subset', subsetOrigin: 'reanalyse' });
+  });
+
+  it('an unknown origin value is treated as reanalyse, never as include', async () => {
+    const state = await stateWhileSubsetRuns('origin-junk', { origin: 'banana' });
+    expect(state.body.subsetOrigin).toBe('reanalyse');
+  });
+
+  it('a subscribe POST that joins the live run does not change its origin', async () => {
+    const s = await seedBook('origin-join');
+    const entered = gate();
+    const release = gate();
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          entered.open();
+          await release.promise;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const url = `/api/manuscripts/${s.manuscriptId}/analysis/chapters`;
+    const run = request(app).post(url).send({ chapterIds: [1], origin: 'include' }).then((r) => r);
+    await entered.promise;
+    const join = request(app).post(url).send({ chapterIds: [1] }).then((r) => r);
+    /* wait on the join itself, not a fixed sleep: the run's own request is subscriber
+       one, so a second means the joiner has attached to the live job */
+    await vi.waitFor(() =>
+      expect(analysisModule.__inFlightJobForTest(s.manuscriptId, 'subset')?.subscribers.size).toBe(2),
+    );
+    const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
+    release.open();
+    await Promise.all([run, join]);
+    expect(state.body.subsetOrigin).toBe('include');
+  });
+
+  it('a live main run carries no subsetOrigin', async () => {
+    const s = await seedBook('origin-main');
+    const entered = gate();
+    const release = gate();
+    g.__baj_phase0_selection = selectionFor(
+      stubAnalyzer({
+        runStage1Chapter: async () => {
+          entered.open();
+          await release.promise;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+    );
+    g.__baj_phase1_selection = selectionFor(stubAnalyzer({}));
+    const run = request(app).post(`/api/manuscripts/${s.manuscriptId}/analysis`).send({}).then((r) => r);
+    await entered.promise;
+    const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
+    release.open();
+    await run;
+    expect(state.body.kind).toBe('main');
+    expect(state.body.subsetOrigin).toBeUndefined();
+  });
+});

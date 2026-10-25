@@ -56,6 +56,7 @@ const restorePreviousUnrecordedMock = vi.fn();
 const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
+const getAnalysisStateMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -81,7 +82,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
-      getAnalysisState: vi.fn(async () => null),
+      getAnalysisState: (...args: unknown[]) => getAnalysisStateMock(...args),
       /* Workspace-wide cold-boot scan. Layout's mount
          effect calls this; return empty so no pill seeds. */
       getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
@@ -220,6 +221,7 @@ import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
+import { analysisActions } from '../store/analysis-slice';
 import { RevisionOpFailure } from '../lib/revision-op-failure';
 import { bookMetaActions } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
@@ -334,6 +336,8 @@ function makeStoreWithScopeAndPersistence() {
 }
 
 beforeEach(() => {
+  getAnalysisStateMock.mockReset();
+  getAnalysisStateMock.mockResolvedValue(null);
   getBookStateMock.mockReset();
   pollRevisionsMock.mockReset();
   pollRevisionsMock.mockResolvedValue({ pending: [], drift: [] });
@@ -754,6 +758,112 @@ describe('Layout — revisions hydrate (plan 286)', () => {
     const pill = screen.queryByTestId('status-pill');
     if (pill && !screen.queryByTestId('status-popover-revisions')) fireEvent.click(pill);
     expect(screen.queryByText(/revisions? pending/)).toBeNull();
+  });
+});
+
+/* #3774 H' -- the include origin lives on the SERVER (the include's start POST
+   carries it; GET /analysis/state reports it for the live run), because the client
+   snapshot is rebuilt from that answer on every arrival at a book the manuscript
+   slice does not hold: a book switch, a reload, a second tab. The block on the
+   Generate view's job-start controls reads `subsetOrigin === 'include'` off that
+   snapshot (generation.test.tsx pins the view side). */
+describe('Layout -- the analysis hydrate keeps the include origin (#3774)', () => {
+  const liveSubset = (over: Record<string, unknown> = {}) => ({
+    manuscriptId: 'mns_bA', phaseId: 1, phaseLabel: 'server label', phaseProgress: 0.4, state: 'running',
+    kind: 'subset', subsetChapterIds: [3], subsetOrigin: 'include', lastTickAt: Date.now(), ...over,
+  });
+  const snapshotOf = (store: ReturnType<typeof makeStore>) => store.getState().analysis.activeStream;
+  const bookReads = () => getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, revState(id, null, 0, [])));
+
+  it('a fresh hydrate (a reload, a second tab) copies the server\'s subsetOrigin into the snapshot', async () => {
+    bookReads();
+    getAnalysisStateMock.mockResolvedValue(liveSubset());
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', subsetOrigin: 'include', serverConfirmed: true }));
+  });
+
+  it('a REAL book switch away and back replaces the snapshot with the server\'s, origin kept', async () => {
+    bookReads();
+    getAnalysisStateMock.mockImplementation(async (id: string) => (id === 'bA' ? liveSubset() : null));
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.subsetOrigin).toBe('include'));
+    /* what the Generate view's own include start left in the slot */
+    act(() => {
+      store.dispatch(analysisActions.setActiveStream({
+        bookId: 'bA', manuscriptId: 'mns_bA', phaseId: 0, phaseLabel: 'client label', phaseProgress: 0, remainingMs: null,
+        lastTickAt: Date.now(), state: 'running', kind: 'subset', subsetChapterIds: [3], subsetOrigin: 'include',
+      }));
+    });
+    openAt(store, 'bB');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('bB')); // bB's full load landed: the slice no longer holds bA
+    expect(snapshotOf(store)?.phaseLabel).toBe('client label'); // bB has no analysis, so the slot is untouched
+    openAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.phaseLabel).toBe('server label')); // replaced by the hydrate
+    expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', state: 'running', subsetOrigin: 'include' });
+  });
+
+  it('a server answer for a re-analyse run carries subsetOrigin reanalyse', async () => {
+    bookReads();
+    getAnalysisStateMock.mockResolvedValue(liveSubset({ subsetOrigin: 'reanalyse' }));
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.subsetOrigin).toBe('reanalyse'));
+  });
+
+  /* Second-tab wedge: the tab that started the include closed mid-run, so nothing ever clears
+     the other tab's broadcast copy. A hydrate that finds NO live subset run clears it -- but
+     only a copy that has gone quiet (a live run's snapshot is ticked every few seconds), so a
+     book switch in the window between the click and the server registering the job cannot
+     drop the include's own fresh snapshot. */
+  describe('a hydrate that reports no live subset run', () => {
+    const includeSnapshot = (lastTickAt: number) => ({
+      bookId: 'bA', manuscriptId: 'mns_bA', phaseId: 0, phaseLabel: 'mirrored', phaseProgress: 0, remainingMs: null,
+      lastTickAt, state: 'running' as const, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const,
+      serverConfirmed: true as boolean | undefined,
+    });
+    const arriveWith = async (snap: ReturnType<typeof includeSnapshot>, serverAnswer: unknown) => {
+      bookReads();
+      getAnalysisStateMock.mockResolvedValue(serverAnswer);
+      const store = makeStore();
+      store.dispatch(analysisActions.setActiveStream(snap));
+      openAt(store, 'bA');
+      renderLayoutAt(store, 'bA');
+      await waitFor(() => expect(getAnalysisStateMock).toHaveBeenCalledWith('bA'));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      return store;
+    };
+
+    it('clears a stale (quiet) include snapshot for this book when the server has nothing', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now() - 60_000), null);
+      expect(snapshotOf(store)).toBeNull();
+    });
+
+    it('clears it when the server reports a paused run on a confirmed book (the cold-boot gate returns early)', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now() - 60_000), liveSubset({ state: 'paused' }));
+      expect(snapshotOf(store)).toBeNull();
+    });
+
+    it('keeps a quiet include snapshot the server never confirmed (the job has not registered yet)', async () => {
+      const store = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), serverConfirmed: undefined }, null);
+      expect(snapshotOf(store)).toMatchObject({ subsetOrigin: 'include', phaseLabel: 'mirrored' });
+    });
+
+    it('keeps a fresh include snapshot (the click-to-registration window)', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now()), null);
+      expect(snapshotOf(store)).toMatchObject({ subsetOrigin: 'include', phaseLabel: 'mirrored' });
+    });
+
+    it('never touches another book\'s snapshot or a non-include one', async () => {
+      const other = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), bookId: 'bZ' }, null);
+      expect(snapshotOf(other)).toMatchObject({ bookId: 'bZ' });
+      const reanalyse = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), subsetOrigin: 'reanalyse' as never }, null);
+      expect(snapshotOf(reanalyse)).toMatchObject({ subsetOrigin: 'reanalyse' });
+    });
   });
 });
 
@@ -3024,6 +3134,139 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {
+  /* Opening A when the server has no saved state resolves null. The slices
+     still hold B, and #3748's gate would drop every edit made there for good,
+     so the empty read resets them and stamps A's identity. */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  function seedBookB(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' } as never,
+        sentences: [{ id: 1, chapterId: 1, text: 'B-ONLY' }] as never,
+      }),
+    );
+    store.dispatch(
+      castSlice.actions.hydrateCharacters([{ id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' }]),
+    );
+    store.dispatch(
+      changeLogSlice.actions.hydrateFromBookState([
+        { id: 1, ts: 'now', date: 'today', type: 'cast', title: 'b-ev', note: '', actor: 'you' },
+      ] as never),
+    );
+  }
+
+  const putsTo = (bookId: string, slice?: string) =>
+    putBookStateMock.mock.calls.filter(
+      ([id, req]) => id === bookId && (slice === undefined || (req as { slice: string }).slice === slice),
+    );
+
+  async function openEmptyA(store: ReturnType<typeof makeStoreWithScopeAndPersistence>, status = 'cast_pending') {
+    getBookStateMock.mockResolvedValue(null);
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes><Route path="*" element={<Layout />} /></Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    act(() => {
+      store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status } });
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+  }
+
+  it('(a)+(d) resets the slices to A with its identity stamped, and the reset itself never PUTs', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('b1'));
+    expect(store.getState().manuscript.sentences).toEqual([]);
+    expect(store.getState().cast.characters).toEqual([]);
+    expect(store.getState().changeLog.events).toEqual([]);
+    // Past the 500 ms persistence debounce: a persisted reset would have PUT by now.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putsTo('b1')).toEqual([]);
+  });
+
+  it("(f) empties the chapters slice too, so Generate/Listen don't list B's chapters under A, with no PUT", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b2',
+        chapters: [{ id: 1, title: 'B-CHAPTER', slug: 'b-chapter' }] as never,
+        completedSlugs: [],
+        characters: [],
+      }),
+    );
+    expect(store.getState().chapters.chapters).toHaveLength(1);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().chapters.chapters).toEqual([]));
+    expect(store.getState().chapters.currentBookId).toBe('b1');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putsTo('b1')).toEqual([]);
+  });
+
+  it("(b) an edit after the empty read PUTs to A with A's data only", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('b1'));
+    act(() => {
+      store.dispatch(castSlice.actions.setCharacters([{ id: 'a-new', name: 'New', role: '', color: 'peach' }] as never));
+      store.dispatch(
+        changeLogSlice.actions.appendLogEvent({
+          id: 2, ts: 'now', date: 'today', type: 'cast', title: 'a-ev', note: '', actor: 'you',
+        } as never),
+      );
+    });
+    await waitFor(() => {
+      const castPuts = putsTo('b1', 'cast');
+      expect(castPuts).toHaveLength(1);
+      const patch = (castPuts[0][1] as { patch: { characters: Array<{ id: string }> } }).patch;
+      expect(patch.characters.map((c) => c.id)).toEqual(['a-new']);
+    });
+    await waitFor(() => expect(putsTo('b1', 'changeLog')).toHaveLength(1));
+    const all = JSON.stringify(putBookStateMock.mock.calls.filter(([id]) => id === 'b1'));
+    for (const leak of ['b-hero', 'b-ev', 'B-ONLY']) expect(all).not.toContain(leak);
+  });
+
+  it('(c) does not reset when no other book is held (fresh upload mid-analysis)', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({
+        manuscriptId: 'm-up', title: 'Fresh', format: 'plaintext', wordCount: 3, sourceText: 'abc',
+      } as never),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'up-hero', name: 'Hero', role: '', color: 'peach' }]));
+    await openEmptyA(store, 'analysing');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.getState().manuscript).toMatchObject({ manuscriptId: 'm-up', sourceText: 'abc', bookId: null });
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['up-hero']);
+  });
+
+  it('(e) does not reset when the slices already hold the book being opened', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' } as never,
+        sentences: [{ id: 1, chapterId: 1, text: 'A-ONLY' }] as never,
+      }),
+    );
+    /* Cast left empty on purpose: a confirm-stage book with no cast is not
+       "ready", so the full load runs (and reads null) even though the
+       slices already hold A. */
+    await openEmptyA(store);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.getState().manuscript.bookId).toBe('b1');
+    expect(store.getState().manuscript.sentences.map((s) => s.text)).toEqual(['A-ONLY']);
   });
 });
 

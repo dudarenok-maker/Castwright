@@ -656,6 +656,11 @@ describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
     expect(r.detail).toContain('reason=thinking-idle');
   });
 
+  it('keeps an Ollama ceiling at analyzer-timeout, the code the design pre-pass halt reads', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTimeoutError('ollama', 'qwen3.5:9b', 600_000, 'ceiling'), 'Ollama (qwen3.5:9b)');
+    expect(r.code).toBe('analyzer-timeout');
+  });
+
   it('is matched by name in the signature scan and never reads as unreachable', () => {
     expect(classifyAnalysisError(new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 1, 'ceiling')).code).toBe(
       'analyzer-timeout',

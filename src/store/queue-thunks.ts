@@ -171,13 +171,28 @@ export function reorderQueue(desiredOrder: string[]) {
           the GPU.
     Replaces the old `chaptersActions.setPaused(true)` single-signal path
     (plan 102 Should #5 removed `chapters.paused`). The user resumes via the
-    queue modal's Resume control after the analysis completes. */
-export function haltActiveGeneration() {
-  return async (dispatch: AppDispatch): Promise<void> => {
+    queue modal's Resume control after the analysis completes.
+
+    `awaitRelease` (#3084 W4 — a voice design that shares the render's card) makes the returned
+    promise settle only once the server has acknowledged the pause of every book that was
+    rendering, and reject if the queue pause fails — so the design starts after the abort has
+    been signalled, not in the same tick. Without it the halt is fire-and-forget and a failed
+    queue pause only warns. The server's pause route aborts the job and answers at once, so
+    this is the abort being acknowledged, not the sidecar's in-flight synth having ended. */
+export function haltActiveGeneration({ awaitRelease = false }: { awaitRelease?: boolean } = {}) {
+  return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
+    const renderingBookIds = awaitRelease
+      ? [...new Set(Object.values(getState().chapters.activeStreams).map((s) => s.bookId))]
+      : [];
     dispatch(chaptersActions.requestStreamHalt());
-    await dispatch(setQueuePaused(true)).catch((e: unknown) => {
-      console.warn('[queue] haltActiveGeneration: pause failed', e);
-    });
+    const paused = dispatch(setQueuePaused(true));
+    if (!awaitRelease) {
+      await paused.catch((e: unknown) => {
+        console.warn('[queue] haltActiveGeneration: pause failed', e);
+      });
+      return;
+    }
+    await Promise.all([paused, ...renderingBookIds.map((bookId) => api.pauseGeneration({ bookId }))]);
   };
 }
 

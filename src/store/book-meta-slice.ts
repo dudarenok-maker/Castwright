@@ -180,7 +180,12 @@ export const bookMetaSlice = createSlice({
        last value the server accepted, and restore the user's typed `draft` so
        the editor keeps their text with the Save/Cancel affordances + the error
        toast (esp. important for a transient network failure, where the content
-       was never actually refused). Snapshot is always cleared. */
+       was never actually refused). Snapshot is always cleared.
+
+       #3754 / #3784 — dispatched only while the failing book is the open one:
+       the draft is global, so restoring it on another book would carry this
+       book's text there. A save that fails after its book was left is not
+       rolled back at all; it is kept and re-sent on the book's next flush. */
     rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string }>) => {
       const { bookId } = a.payload;
       const pending = s.lastCommitted?.[bookId];
