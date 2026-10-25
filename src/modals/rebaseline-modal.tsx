@@ -39,6 +39,7 @@ import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { designWillGeneratePersona } from '../lib/design-persona';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -338,7 +339,11 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
      failures don't abort the run. */
   function runPropose() {
     if (status !== 'setup' || drainingRef.current) return;
-    designGuard(runProposeNow);
+    /* Asks only when a persona will be written: designOne generates one just for a row it designs
+       (no existing Qwen voice) whose seed is empty — see runProposeNow's branches. */
+    const designed = selectedCharacterIds.filter((id) => !charById.get(id)?.overrideTtsVoices?.qwen?.name);
+    if (designWillGeneratePersona(characters, designed)) designGuard(runProposeNow);
+    else runProposeNow();
   }
   function runProposeNow() {
     const seeds: Record<string, string> = {};

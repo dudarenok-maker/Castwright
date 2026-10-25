@@ -933,6 +933,50 @@ describe('RebaselineModal — design guard (#3084 W4)', () => {
     expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
   });
 
+  it('Propose where every selected character already has a persona generates none, so it designs at once with no prompt', async () => {
+    const withPersonas = [
+      char('narrator', 'Narrator', 500),
+      { ...char('maerin', 'Maerin', 80), voiceStyle: 'a hand-tuned persona' } as Character,
+      { ...char('marlow', 'Marlow', 60), voiceStyle: 'another persona' } as Character,
+      char('bystander', 'Bystander', 1),
+    ];
+    const store = makeStore(withPersonas, VOICES);
+    seedSameCardPersona(store);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    await waitFor(() => expect(designQwenVoice).toHaveBeenCalledTimes(2));
+    expect(generateVoiceStyle).not.toHaveBeenCalled();
+  });
+
+  it('Propose with one selected character missing a persona still asks', async () => {
+    const onePersonaMissing = [
+      char('narrator', 'Narrator', 500),
+      { ...char('maerin', 'Maerin', 80), voiceStyle: 'a hand-tuned persona' } as Character,
+      char('marlow', 'Marlow', 60),
+      char('bystander', 'Bystander', 1),
+    ];
+    const store = makeStore(onePersonaMissing, VOICES);
+    seedSameCardPersona(store);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    expect(screen.getByText(TITLE)).toBeInTheDocument();
+    expect(designQwenVoice).not.toHaveBeenCalled();
+  });
+
   it('Wait leaves the modal in setup and designs nothing', async () => {
     const store = makeStore(CHARACTERS, VOICES);
     seedSameCardPersona(store);

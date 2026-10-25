@@ -39,6 +39,7 @@ import type {
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
+import { designWillGeneratePersona } from '../lib/design-persona';
 import { voicesActions } from '../store/voices-slice';
 import { castActions, selectCastTierByCharacterId } from '../store/cast-slice';
 import type { OrphanedCharacterFallback } from '../store/cast-slice';
@@ -1022,9 +1023,8 @@ export function CastView({
      generates a persona, and only for a character with an empty `voiceStyle`. A 'variants' run
      builds no base task, and a base run over characters that all have a persona makes no persona
      call, so neither has anything to pause the render for. */
-  const designWillGeneratePersona = (scope: CastDesignScope) =>
-    scope !== 'variants' &&
-    characters.some((c) => needsVoiceIds.includes(c.id) && !(c.voiceStyle ?? '').trim());
+  const designWillGeneratePersonaFor = (scope: CastDesignScope) =>
+    scope !== 'variants' && designWillGeneratePersona(characters, needsVoiceIds);
 
   const startDesign = (scope: CastDesignScope) => {
     setScopeOpen(false);
@@ -1409,7 +1409,7 @@ export function CastView({
                       variantBlockedChars={variantWork.blockedChars}
                       onPick={(scope) => {
                         setScopeOpen(false);
-                        if (designWillGeneratePersona(scope)) designGuard(() => startDesign(scope));
+                        if (designWillGeneratePersonaFor(scope)) designGuard(() => startDesign(scope));
                         else startDesign(scope);
                       }}
                       onClose={() => setScopeOpen(false)}

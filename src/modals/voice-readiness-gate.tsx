@@ -23,6 +23,7 @@ import {
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { modelKeyForEngineChoice } from '../lib/tts-models';
+import { designWillGeneratePersona } from '../lib/design-persona';
 
 /* The body is its own component so the design guard's pending prompt lives only while the gate is
    open: this always-mounted shell unmounts it on any close (not just Wait), so a prompt never
@@ -38,6 +39,7 @@ function VoiceReadinessGateBody({ gate }: { gate: { bookId: string } }) {
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const designActive = useAppSelector((s) => s.castDesign.active);
+  const characters = useAppSelector((s) => s.cast.characters);
   const undesigned = useAppSelector((s) =>
     selectUndesignedQwenCharacters(s, gate.bookId),
   );
@@ -81,9 +83,10 @@ function VoiceReadinessGateBody({ gate }: { gate: { bookId: string } }) {
       dispatch(uiActions.changeView('cast'));
       onClose();
     };
-    /* #3084 W4 — a design that is not already running asks first when its persona engine shares a rendering card;
+    /* #3084 W4 — a design that is not already running asks first when its persona engine shares a rendering card
+       AND a voice description is about to be written (the server skips characters that have one);
        the gate stays mounted while the dialog is open (it renders it). */
-    if (designRunningHere) proceed();
+    if (designRunningHere || !designWillGeneratePersona(characters, undesigned.map((c) => c.id))) proceed();
     else designGuard(proceed);
   };
 

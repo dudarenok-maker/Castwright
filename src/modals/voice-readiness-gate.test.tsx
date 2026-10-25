@@ -267,6 +267,31 @@ describe('VoiceReadinessGateModal — design guard (#3084 W4)', () => {
     expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
   });
 
+  it('every undesigned character already has a voice description: no persona is generated, so the design starts at once with no prompt', () => {
+    const store = makeStore({ characters: [qwenChar({ id: 'a', name: 'Alice', lines: 5, voiceStyle: 'a warm alto' })] });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(store.getState().ui.voiceReadinessGate).toBeNull();
+    expect(store.getState().ui.stage).toMatchObject({ view: 'cast' });
+  });
+
+  it('one undesigned character without a voice description still asks', () => {
+    const store = makeStore({
+      characters: [
+        qwenChar({ id: 'a', name: 'Alice', lines: 5, voiceStyle: 'a warm alto' }),
+        qwenChar({ id: 'b', name: 'Bram', lines: 4 }),
+      ],
+    });
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceReadinessGateModal /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
+  });
+
   it('Wait leaves the gate open and starts nothing', () => {
     const store = makeStore({ characters: chars });
     seedSameCardPersona(store);

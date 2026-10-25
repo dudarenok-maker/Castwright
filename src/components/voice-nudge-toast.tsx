@@ -12,10 +12,12 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { IconWarning, IconClose } from '../lib/icons';
 import { notificationsActions, type Toast } from '../store/notifications-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { designWillGeneratePersona } from '../lib/design-persona';
 
 export function VoiceNudgeToast({ toast }: { toast: Toast }) {
   const dispatch = useAppDispatch();
   const designRunning = useAppSelector((s) => s.castDesign.active?.state === 'running');
+  const characters = useAppSelector((s) => s.cast?.characters);
   /* #3084 W4 — asks first when the persona engine shares a rendering card; the toast is sticky, so it renders the dialog. */
   const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const nudge = toast.nudge!;
@@ -26,8 +28,8 @@ export function VoiceNudgeToast({ toast }: { toast: Toast }) {
       ? `${count} new characters need voices`
       : `New character «${nudge.names[0]}» needs a voice`;
 
-  const onDesign = () =>
-    designGuard(() => {
+  const onDesign = () => {
+    const proceed = () => {
       dispatch(
         castDesignActions.designAllRequested({
           bookId: nudge.bookId,
@@ -37,7 +39,11 @@ export function VoiceNudgeToast({ toast }: { toast: Toast }) {
         }),
       );
       dispatch(notificationsActions.dismissToast(toast.id));
-    });
+    };
+    /* Asks only when a voice description is about to be written (the server skips a character that has one). */
+    if (designWillGeneratePersona(characters, nudge.characterIds)) designGuard(proceed);
+    else proceed();
+  };
 
   return (
     <div className="flex flex-col gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3 shadow-card min-w-[280px] max-w-[360px] fade-in text-ink">

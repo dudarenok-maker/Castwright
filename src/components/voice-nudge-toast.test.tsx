@@ -5,6 +5,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { VoiceNudgeToast } from './voice-nudge-toast';
 import { notificationsSlice, type Toast } from '../store/notifications-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
+import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
 import { configSlice } from '../store/config-slice';
@@ -25,10 +26,11 @@ const recorder = () => (next: (a: unknown) => unknown) => (a: unknown) => {
   return next(a);
 };
 
-const makeStore = (designRunning: boolean) => {
+const makeStore = (designRunning: boolean, roster: { id: string; voiceStyle?: string }[] = []) => {
   recorded.length = 0;
   return configureStore({
     reducer: {
+      cast: castSlice.reducer,
       notifications: notificationsSlice.reducer,
       castDesign: castDesignSlice.reducer,
       chapters: chaptersSlice.reducer,
@@ -36,6 +38,7 @@ const makeStore = (designRunning: boolean) => {
       config: configSlice.reducer,
     },
     preloadedState: {
+      cast: { ...castSlice.getInitialState(), characters: roster as never },
       notifications: { toasts: [] },
       castDesign: { active: designRunning ? ({ state: 'running', bookId: 'b1' } as never) : null },
     },
@@ -99,6 +102,25 @@ describe('VoiceNudgeToast — design guard (#3084 W4)', () => {
     expect(haltActiveGeneration).toHaveBeenCalledTimes(1);
     expect(recorded.some((a) => a.type === 'castDesign/designAllRequested')).toBe(true);
     expect(recorded.some((a) => a.type === 'notifications/dismissToast')).toBe(true);
+  });
+
+  it('every nudged character already has a voice description: no persona is generated, so it designs at once with no prompt', () => {
+    const store = makeStore(false, [{ id: 'mara', voiceStyle: 'a dry contralto' }]);
+    seedSameCardPersona(store);
+    render(<Provider store={store}><VoiceNudgeToast toast={toast} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: /design now/i }));
+    expect(screen.queryByText('Pause audio generation to design voices?')).not.toBeInTheDocument();
+    expect(haltActiveGeneration).not.toHaveBeenCalled();
+    expect(recorded.some((a) => a.type === 'castDesign/designAllRequested')).toBe(true);
+  });
+
+  it('one nudged character without a voice description still asks', () => {
+    const store = makeStore(false, [{ id: 'mara', voiceStyle: 'a dry contralto' }, { id: 'tom', voiceStyle: '' }]);
+    seedSameCardPersona(store);
+    const plural: Toast = { ...toast, nudge: { ...toast.nudge!, characterIds: ['mara', 'tom'], names: ['Mara', 'Tom'] } };
+    render(<Provider store={store}><VoiceNudgeToast toast={plural} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: /design all/i }));
+    expect(screen.getByText('Pause audio generation to design voices?')).toBeInTheDocument();
   });
 
   it('Wait leaves the toast and starts nothing', () => {
