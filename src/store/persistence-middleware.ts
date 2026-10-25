@@ -324,7 +324,7 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
    a toast. A given-up save is kept and re-sent first by the book's next
    flush (#3421), so this promise also covers that re-send, and a chapter
    restructure waits for it. It is let go (`dropRetainedSaves`) once the book's
-   slices are re-read from disk or wiped. Plan 286 — revisions
+   slices are re-read in full, or the book is deleted. Plan 286 — revisions
    no longer persists from the client, so the write-then-re-read hazard this
    describes now applies only to the other slices.
    Not a reducer action: no slice handles it. */
@@ -359,44 +359,15 @@ const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
 
 /* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
-   that book's slices are re-read from disk or wiped (Layout's full hydrate, a
-   re-parse, a manuscript replace, a delete): the user has seen the failure and
-   the revert, so a kept save landing later would contradict what they see (or
-   re-send a pre-reparse roster). Touches only the kept and parked (superseded)
-   saves — a newer edit already queued for the book is untouched. Only a wipe's
-   own success passes `{ wipeSettled: true }`, which also ends that wipe's
-   pending count (see `restoreSupersededSaves`); Layout's re-read drops plain,
-   since it never started a wipe and must not settle one. Not a reducer action. */
+   that book's slices are re-read in full (Layout's full hydrate: the user has
+   seen the failure and the revert, so a kept save landing later would
+   contradict what they see) and when the book is deleted (hygiene: nothing is
+   left for a gone book). A re-parse or a manuscript replace drops nothing:
+   it rotates the book's edit epoch, so the server refuses every kept save
+   (plan 289, D8b). Touches only the kept saves — a newer edit already queued
+   for the book is untouched. Not a reducer action. */
 const DROP_RETAINED = 'persistence/dropRetained';
-export const dropRetainedSaves = (bookId: string, opts?: { wipeSettled?: boolean }) => ({
-  type: DROP_RETAINED,
-  payload: bookId,
-  wipeSettled: opts?.wipeSettled === true,
-});
-
-/* #3421 — cancel everything of `bookId` that has not landed yet, ahead of a
-   destructive server call (re-parse, manuscript replace, delete): its kept
-   saves, its debounced writes, and any send-and-retry sequence already running
-   (which would otherwise PUT the pre-wipe roster into the wiped book seconds
-   later). Unlike `dropRetainedSaves` it bumps the generation, so a running
-   sequence reads as superseded: it ends quietly, with no toast, exactly as when
-   a newer write overtakes it. What it cancels is PARKED, not discarded: the
-   call may fail and leave the book untouched, so the handler either lets go of
-   the parked saves on success (`dropRetainedSaves`) or gives them back with
-   `restoreSupersededSaves`. Layout's re-read must NOT use this — it would
-   cancel a newer edit. Not a reducer action. */
-const SUPERSEDE_BOOK = 'persistence/supersedeBook';
-export const supersedeBookSaves = (bookId: string) => ({ type: SUPERSEDE_BOOK, payload: bookId });
-
-/* #3421 — the wipe call failed: move what `supersedeBookSaves` parked back into
-   the kept saves, minus the fields a write made since the park carried, so the
-   book's next flush re-sends only what is still owed.
-   Not a reducer action. */
-const RESTORE_SUPERSEDED = 'persistence/restoreSuperseded';
-export const restoreSupersededSaves = (bookId: string) => ({
-  type: RESTORE_SUPERSEDED,
-  payload: bookId,
-});
+export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
 
 /* Plan 289 (D6) — a re-sent save carries the revision it was built against, so
    the server can refuse it if the book changed since. The middleware learns
@@ -441,7 +412,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
   /* #3421 — saves given up on after their retries, kept until the next flush of
      their book re-sends them first, or until that book's slices are re-read
-     from disk or wiped (`dropRetainedSaves`). A newer edit for the same key
+     in full or it is deleted (`dropRetainedSaves`). A newer edit for the same key
      merges over the kept patch when it is queued.
      Plan 289 — each record carries the revision its write was built against
      (`base`), which every re-send of it sends, and the success handler (D8a),
@@ -474,37 +445,6 @@ export const persistenceMiddleware: Middleware = (store) => {
      patches were built after it and already include it. */
   type Sequence = { gen: number; base?: SliceRevision; refreshable: boolean };
   const sequences = new Map<FlushKey, Set<Sequence>>();
-  /* #3421 — the generation the kept save's write was made at. */
-  const retainedGen = new Map<FlushKey, number>();
-  /* #3421 — a send-and-retry sequence's captured patch (and success handler)
-     while it runs, so `supersedeBookSaves` can park what it is still sending. */
-  type SavedPatch = {
-    patch: Record<string, unknown>;
-    onSuccess?: PersistFailureHandler['onSuccess'];
-    /* The `generation` its write was made at; orders the layers of a park. */
-    gen?: number;
-    /* Plan 289 — the revision it was built against (see `kept`); a running
-       sequence's lives on its `seq`, which a landed older write can refresh. */
-    base?: SliceRevision;
-    seq?: Sequence;
-  };
-  const sending = new Map<FlushKey, Set<SavedPatch>>();
-  /* #3421 — what `supersedeBookSaves` cancelled, until the wipe call resolves
-     (`dropRetainedSaves`) or fails (`restoreSupersededSaves`). */
-  const parked = new Map<
-    FlushKey,
-    SavedPatch & { newerFields: Set<string>; landedFields: Set<string> }
-  >();
-  /* #3421 S4 — wipes of a book still running. The parked saves are shared, so
-     only the last wipe to fail gives them back; one that succeeded dropped them.
-     Only a wipe's own outcome (a `wipeSettled` drop or a restore) decrements. */
-  const pendingWipes = new Map<string, number>();
-  const endWipe = (bookId: string) => {
-    const left = Math.max(0, (pendingWipes.get(bookId) ?? 0) - 1);
-    if (left > 0) pendingWipes.set(bookId, left);
-    else pendingWipes.delete(bookId);
-    return left;
-  };
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -593,9 +533,6 @@ export const persistenceMiddleware: Middleware = (store) => {
           if (onSuccess && gen === (generation.get(key) ?? 0)) {
             store.dispatch(onSuccess(bookId));
           }
-          /* #3421 — the server has these fields now; a restore must not re-send them. */
-          const parkedHere = parked.get(key);
-          if (parkedHere) for (const field of Object.keys(patch as object)) parkedHere.landedFields.add(field);
           return { slice, ok: true };
         } catch (err) {
           console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
@@ -647,7 +584,6 @@ export const persistenceMiddleware: Middleware = (store) => {
              left, so it is kept and re-sent. */
           if (!refused && !rolledBack) {
             kept.set(key, { patch: patch as Record<string, unknown>, base: seq.base, onSuccess });
-            retainedGen.set(key, gen);
           }
           if (handler) {
             const bookTitle = refused
@@ -682,10 +618,6 @@ export const persistenceMiddleware: Middleware = (store) => {
         }
       }
     };
-    const mine: SavedPatch = { patch: patch as Record<string, unknown>, onSuccess, gen, seq };
-    const mineSet = sending.get(key) ?? new Set<SavedPatch>();
-    mineSet.add(mine);
-    sending.set(key, mineSet);
     const settled = attemptSend();
     const set = inFlight.get(key) ?? new Set<Promise<{ slice: StateSlice; ok: boolean }>>();
     set.add(settled);
@@ -693,8 +625,6 @@ export const persistenceMiddleware: Middleware = (store) => {
     void settled.then(() => {
       seqs.delete(seq);
       if (seqs.size === 0 && sequences.get(key) === seqs) sequences.delete(key);
-      mineSet.delete(mine);
-      if (mineSet.size === 0 && sending.get(key) === mineSet) sending.delete(key);
       set.delete(settled);
       if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
     });
@@ -702,7 +632,7 @@ export const persistenceMiddleware: Middleware = (store) => {
 
   return (next) => (action) => {
     const result = next(action);
-    const a = action as { type?: string; payload?: unknown; wipeSettled?: boolean };
+    const a = action as { type?: string; payload?: unknown };
     const type = a?.type;
     if (!type) return result;
 
@@ -735,119 +665,8 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
-      if (a.wipeSettled === true) endWipe(a.payload);
       for (const key of Array.from(kept.keys())) {
-        if (key.startsWith(`${a.payload}:`)) {
-          kept.delete(key);
-          retainedGen.delete(key);
-        }
-      }
-      for (const key of Array.from(parked.keys())) {
-        if (key.startsWith(`${a.payload}:`)) parked.delete(key);
-      }
-      return result;
-    }
-
-    if (type === RESTORE_SUPERSEDED && typeof a.payload === 'string') {
-      if (endWipe(a.payload) > 0) return result;
-      for (const [key, saved] of Array.from(parked)) {
-        if (!key.startsWith(`${a.payload}:`)) continue;
-        parked.delete(key);
-        /* A write made after the park (book reopened, edited, flushed) carried
-           its own value for every field it built and has gone out or is going
-           out; putting the parked value back would re-send over it. Only the
-           fields it did not carry are still owed (the `state` slice's
-           confirmCast and commitDraft patch different fields of one key). */
-        const owed = Object.fromEntries(
-          Object.entries(saved.patch).filter(([field]) => !saved.newerFields.has(field)),
-        );
-        if (Object.keys(owed).length === 0) continue;
-        const newer = kept.get(key);
-        /* Plan 289 — the older base of the two, so the server still refuses the
-           parked fields if the book changed since they were made. */
-        kept.set(key, {
-          patch: { ...owed, ...newer?.patch },
-          base: saved.base ?? newer?.base,
-          onSuccess: newer?.onSuccess ?? saved.onSuccess,
-        });
-      }
-      return result;
-    }
-
-    if (type === SUPERSEDE_BOOK && typeof a.payload === 'string') {
-      pendingWipes.set(a.payload, (pendingWipes.get(a.payload) ?? 0) + 1);
-      const prefix = `${a.payload}:`;
-      for (const key of new Set([
-        ...generation.keys(),
-        ...inFlight.keys(),
-        ...pending.keys(),
-        ...kept.keys(),
-        ...sending.keys(),
-      ])) {
-        if (!key.startsWith(prefix)) continue;
-        /* Oldest first, newest on top: the kept and running saves ordered by the
-           generation their writes were made at (a hung older PUT can still be
-           running when a newer one was given up on and kept), then the queued
-           one. A second supersede before the first resolves merges under what
-           the first already parked. */
-        const keptHere = kept.get(key);
-        const made = [
-          ...(keptHere
-            ? [
-                {
-                  patch: keptHere.patch,
-                  onSuccess: keptHere.onSuccess,
-                  gen: retainedGen.get(key) ?? generation.get(key) ?? 0,
-                  base: keptHere.base,
-                },
-              ]
-            : []),
-          ...(sending.get(key) ?? []),
-        ].sort((x, y) => (x.gen ?? 0) - (y.gen ?? 0));
-        const queuedKept = carriedKept.get(key);
-        const layers: SavedPatch[] = [
-          ...(parked.has(key) ? [parked.get(key)!] : []),
-          ...made,
-          ...(pending.has(key)
-            ? [
-                {
-                  patch: pending.get(key) as Record<string, unknown>,
-                  onSuccess: toastPending.get(key)?.onSuccess,
-                  base: queuedKept ? queuedKept.base : known.get(key),
-                },
-              ]
-            : []),
-        ];
-        if (layers.length > 0) {
-          const before = parked.get(key);
-          const newerFields = before?.newerFields ?? new Set<string>();
-          const landedFields = before?.landedFields ?? new Set<string>();
-          /* A write this park cancels was never delivered, so its fields are owed
-             again — unless another post-park write carrying them landed. */
-          for (const l of layers) {
-            if (l === before) continue;
-            for (const field of Object.keys(l.patch)) {
-              if (!landedFields.has(field)) newerFields.delete(field);
-            }
-          }
-          parked.set(key, {
-            patch: Object.assign({}, ...layers.map((l) => l.patch)),
-            onSuccess: [...layers].reverse().find((l) => l.onSuccess)?.onSuccess,
-            /* Plan 289 — the oldest layer's base guards every field merged here. */
-            base: layers.map((l) => l.seq?.base ?? l.base).find((b) => b !== undefined),
-            newerFields,
-            landedFields,
-          });
-        }
-        generation.set(key, (generation.get(key) ?? 0) + 1);
-        const timer = timers.get(key);
-        if (timer) clearTimeout(timer);
-        timers.delete(key);
-        pending.delete(key);
-        toastPending.delete(key);
-        carriedKept.delete(key);
-        kept.delete(key);
-        retainedGen.delete(key);
+        if (key.startsWith(`${a.payload}:`)) kept.delete(key);
       }
       return result;
     }
@@ -874,9 +693,6 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     const key = flushKey(bookId, rule.slice);
     const built = rule.build(after, bookId);
-    /* #3421 — a write made after a park supersedes the parked fields it carries. */
-    const parkedHere = parked.get(key);
-    if (parkedHere) for (const field of Object.keys(built as object)) parkedHere.newerFields.add(field);
     /* #3421 — a save given up on is re-sent with this one: the newer fields win.
        Plan 289 (D6) — the send carries the kept base (`carriedKept`). */
     const keptHere = kept.get(key);

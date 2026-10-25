@@ -5387,17 +5387,12 @@ async function realDeleteBook(bookId: string): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
   if (!res.ok) {
     let detail = '';
-    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string; code?: string };
-      detail = body.error ?? '';
-      code = body.code;
+      detail = ((await res.json()) as { error?: string }).error ?? '';
     } catch {
       /* not json */
     }
-    /* `code` (openapi 409 enum) lets the caller tell `book_partly_deleted` — the
-       book IS gone — from a refusal that left it intact. */
-    throw Object.assign(new Error(detail || `Delete failed (${res.status}).`), { code });
+    throw new Error(detail || `Delete failed (${res.status}).`);
   }
 }
 
