@@ -185,6 +185,46 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     await expectKeptAndResent(store);
   });
 
+  /* P6-1 — a 4xx is final: nothing is kept, so after the book was left `saved`
+     must stop claiming the refused title (reverted), without the draft being
+     restored into a closed book or another one. */
+  const refusedAfterLeaving = async (leave: (store: Store) => void) => {
+    const store = makeStore();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      putBookState.mockRejectedValue(
+        new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'),
+      );
+      openBook(store, 'B');
+      typeDraftOnB(store);
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+      leave(store);
+      await store.dispatch(flushBookPersistence('B') as never);
+      /* A 4xx is not retried. */
+      expect(putsTo('B')).toHaveLength(1);
+    } finally {
+      putBookState.mockReset();
+      putBookState.mockImplementation(async () => {});
+      errSpy.mockRestore();
+    }
+    return store;
+  };
+
+  it('(g) a 4xx refusal for B that arrives on the library reverts saved, restores no draft', async () => {
+    const store = await refusedAfterLeaving((s) => s.dispatch(uiActions.goHome()));
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    expect(store.getState().bookMeta.lastCommitted?.B).toBeUndefined();
+    expect(store.getState().bookMeta.draft).toBeNull();
+  });
+
+  it("(h) a 4xx refusal for B that arrives inside book A reverts B's saved and leaves A untouched", async () => {
+    const store = await refusedAfterLeaving((s) => openBook(s, 'A'));
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    expect(store.getState().bookMeta.lastCommitted?.B).toBeUndefined();
+    expect(store.getState().bookMeta.draft).toBeNull();
+    expect(store.getState().bookMeta.saved.A?.title).toBe('A title');
+  });
+
   it('(d) control: a view change within the same book keeps the draft', () => {
     const store = makeStore();
     openBook(store, 'B');

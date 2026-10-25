@@ -64,8 +64,10 @@ interface PersistFailureHandler {
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
       optimistic local update. It only runs while the failing book is the
       open one (see the flush's final failure), so it may restore the shared
-      draft. Returns the action to dispatch. */
-  rollback?: (bookId: string) => { type: string };
+      draft; `restoreDraft` is false for a 4xx refusal that arrives after the
+      book was left, which reverts without touching the draft. Returns the
+      action to dispatch. */
+  rollback?: (bookId: string, restoreDraft: boolean) => { type: string };
   /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
       snapshot now that its optimistically-written value is confirmed on disk,
       so the next commit snapshots a fresh baseline. Returns the action. */
@@ -103,7 +105,7 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
         : `Book details couldn't be saved: ${sentence}`;
     },
     dedupeKey: 'book-meta-persist-failed',
-    rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
+    rollback: (bookId, restoreDraft) => bookMetaActions.rollbackCommitDraft({ bookId, restoreDraft }),
     onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
   },
 };
@@ -604,8 +606,8 @@ export const persistenceMiddleware: Middleware = (store) => {
              shared, book-agnostic draft, and the retry window (#3421) lets the
              user open another book first — applying it then would overlay this
              book's text on that one, so it only runs while this book is open. */
-          const rolledBack =
-            !!handler?.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId;
+          const bookOpen = bookIdFromState(store.getState() as PersistableRootState) === bookId;
+          const rolledBack = !!handler?.rollback && bookOpen;
           /* Keep the patch for the book's next flush (#3421) — except a 4xx
              (the server's answer, so re-sending repeats a refused write) and
              the fields a rollback restores (the user's draft is restored for
@@ -638,7 +640,10 @@ export const persistenceMiddleware: Middleware = (store) => {
             /* #2230 — a refused rename must not leave the persisted value claiming
                a title the server rejected; roll the optimistic saved update back
                (and restore the draft so the user's text is preserved for retry). */
-            if (rolledBack) store.dispatch(handler.rollback!(bookId));
+            /* A 4xx is final, so even after the book was left `saved` must stop
+               claiming the refused value: reverted, without the draft. */
+            if (rolledBack) store.dispatch(handler.rollback!(bookId, true));
+            else if (refused && handler.rollback) store.dispatch(handler.rollback(bookId, false));
           } else if (!refused) {
             /* Only a save that was retried and given up on (network / 5xx) gets
                the generic toast; a 4xx is the server's deliberate refusal, which

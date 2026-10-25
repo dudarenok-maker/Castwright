@@ -182,16 +182,19 @@ export const bookMetaSlice = createSlice({
        toast (esp. important for a transient network failure, where the content
        was never actually refused). Snapshot is always cleared.
 
-       #3754 / #3784 — dispatched only while the failing book is the open one:
-       the draft is global, so restoring it on another book would carry this
-       book's text there. A save that fails after its book was left is not
-       rolled back at all; it is kept and re-sent on the book's next flush. */
-    rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string }>) => {
-      const { bookId } = a.payload;
+       #3754 / #3784 — the draft is global, so it is restored only while the
+       failing book is the open one (`restoreDraft`, default true): restoring
+       it on another book would carry this book's text there. A 4xx refusal
+       that arrives after the book was left still reverts `saved` (nothing is
+       kept for a refused write) but passes `restoreDraft: false`. A retryable
+       failure after leaving is not rolled back at all; it is kept and re-sent
+       on the book's next flush. */
+    rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string; restoreDraft?: boolean }>) => {
+      const { bookId, restoreDraft = true } = a.payload;
       const pending = s.lastCommitted?.[bookId];
       if (pending) {
         s.saved[bookId] = pending.saved;
-        s.draft = { ...pending.draft };
+        if (restoreDraft) s.draft = { ...pending.draft };
       }
       if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
