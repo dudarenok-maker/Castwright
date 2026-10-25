@@ -9157,7 +9157,7 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisState"];
                 };
             };
-            /** @description Book not found, book has no manuscript, or no rehydratable analysis state */
+            /** @description Book not found, book has no manuscript, or no rehydratable analysis state (a corrupt or unreadable snapshot reads as absent) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -9168,7 +9168,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description The snapshot could not be read */
+            /** @description Locating the book failed (workspace scan error); the body carries a curated message */
             500: {
                 headers: {
                     [name: string]: unknown;

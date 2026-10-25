@@ -1508,7 +1508,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AnalysisState' }
         '404':
-          description: Book not found, book has no manuscript, or no rehydratable analysis state
+          description: Book not found, book has no manuscript, or no rehydratable analysis state (a corrupt or unreadable snapshot reads as absent)
           content:
             application/json:
               schema:
@@ -1517,7 +1517,7 @@ paths:
                 properties:
                   error: { type: string }
         '500':
-          description: The snapshot could not be read
+          description: Locating the book failed (workspace scan error); the body carries a curated message
           content:
             application/json:
               schema:
