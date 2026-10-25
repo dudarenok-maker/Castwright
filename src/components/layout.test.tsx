@@ -2772,6 +2772,139 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
   });
 });
 
+describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {
+  /* Opening A when the server has no saved state resolves null. The slices
+     still hold B, and #3748's gate would drop every edit made there for good,
+     so the empty read resets them and stamps A's identity. */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  function seedBookB(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' } as never,
+        sentences: [{ id: 1, chapterId: 1, text: 'B-ONLY' }] as never,
+      }),
+    );
+    store.dispatch(
+      castSlice.actions.hydrateCharacters([{ id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' }]),
+    );
+    store.dispatch(
+      changeLogSlice.actions.hydrateFromBookState([
+        { id: 1, ts: 'now', date: 'today', type: 'cast', title: 'b-ev', note: '', actor: 'you' },
+      ] as never),
+    );
+  }
+
+  const putsTo = (bookId: string, slice?: string) =>
+    putBookStateMock.mock.calls.filter(
+      ([id, req]) => id === bookId && (slice === undefined || (req as { slice: string }).slice === slice),
+    );
+
+  async function openEmptyA(store: ReturnType<typeof makeStoreWithScopeAndPersistence>, status = 'cast_pending') {
+    getBookStateMock.mockResolvedValue(null);
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes><Route path="*" element={<Layout />} /></Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    act(() => {
+      store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status } });
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+  }
+
+  it('(a)+(d) resets the slices to A with its identity stamped, and the reset itself never PUTs', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('b1'));
+    expect(store.getState().manuscript.sentences).toEqual([]);
+    expect(store.getState().cast.characters).toEqual([]);
+    expect(store.getState().changeLog.events).toEqual([]);
+    // Past the 500 ms persistence debounce: a persisted reset would have PUT by now.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putsTo('b1')).toEqual([]);
+  });
+
+  it("(f) empties the chapters slice too, so Generate/Listen don't list B's chapters under A, with no PUT", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b2',
+        chapters: [{ id: 1, title: 'B-CHAPTER', slug: 'b-chapter' }] as never,
+        completedSlugs: [],
+        characters: [],
+      }),
+    );
+    expect(store.getState().chapters.chapters).toHaveLength(1);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().chapters.chapters).toEqual([]));
+    expect(store.getState().chapters.currentBookId).toBe('b1');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putsTo('b1')).toEqual([]);
+  });
+
+  it("(b) an edit after the empty read PUTs to A with A's data only", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookB(store);
+    await openEmptyA(store);
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('b1'));
+    act(() => {
+      store.dispatch(castSlice.actions.setCharacters([{ id: 'a-new', name: 'New', role: '', color: 'peach' }] as never));
+      store.dispatch(
+        changeLogSlice.actions.appendLogEvent({
+          id: 2, ts: 'now', date: 'today', type: 'cast', title: 'a-ev', note: '', actor: 'you',
+        } as never),
+      );
+    });
+    await waitFor(() => {
+      const castPuts = putsTo('b1', 'cast');
+      expect(castPuts).toHaveLength(1);
+      const patch = (castPuts[0][1] as { patch: { characters: Array<{ id: string }> } }).patch;
+      expect(patch.characters.map((c) => c.id)).toEqual(['a-new']);
+    });
+    await waitFor(() => expect(putsTo('b1', 'changeLog')).toHaveLength(1));
+    const all = JSON.stringify(putBookStateMock.mock.calls.filter(([id]) => id === 'b1'));
+    for (const leak of ['b-hero', 'b-ev', 'B-ONLY']) expect(all).not.toContain(leak);
+  });
+
+  it('(c) does not reset when no other book is held (fresh upload mid-analysis)', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({
+        manuscriptId: 'm-up', title: 'Fresh', format: 'plaintext', wordCount: 3, sourceText: 'abc',
+      } as never),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'up-hero', name: 'Hero', role: '', color: 'peach' }]));
+    await openEmptyA(store, 'analysing');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.getState().manuscript).toMatchObject({ manuscriptId: 'm-up', sourceText: 'abc', bookId: null });
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['up-hero']);
+  });
+
+  it('(e) does not reset when the slices already hold the book being opened', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' } as never,
+        sentences: [{ id: 1, chapterId: 1, text: 'A-ONLY' }] as never,
+      }),
+    );
+    /* Cast left empty on purpose: a confirm-stage book with no cast is not
+       "ready", so the full load runs (and reads null) even though the
+       slices already hold A. */
+    await openEmptyA(store);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.getState().manuscript.bookId).toBe('b1');
+    expect(store.getState().manuscript.sentences.map((s) => s.text)).toEqual(['A-ONLY']);
+  });
+});
+
 describe('Layout — config hydration on mount (#3084 P13)', () => {
   it('loads the config slice without Advanced Settings being opened, so the GPU guards know the TTS card', async () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce({

@@ -5,9 +5,12 @@
    (book, slice) pair has its own debounce window so an edit to cast doesn't
    delay a write to the manuscript, and one book's write never cancels another's.
    Leaving a book sends its queued writes at once (#3395 pass 4, S3).
+   Opening a different book also clears any unsaved book-meta draft (#3754,
+   #3624) so it cannot fold into the wrong book's save.
 
    Skipped when no bookId is in scope (library browsing, fresh upload
-   before confirm). Under VITE_USE_MOCKS, PUTs still flow — the mock api
+   before confirm), and when the slices hold a different book than the stage
+   (the window after openBook, before hydrate — #3624). Under VITE_USE_MOCKS, PUTs still flow — the mock api
    keeps an in-memory state map (MOCK_BOOK_STATES in src/lib/api.ts) so
    the round-trip works for design fixtures and jsdom tests. */
 
@@ -53,8 +56,9 @@ interface PersistFailureHandler {
   message: (err: unknown) => string;
   dedupeKey: string;
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
-      optimistic local update. Returns the action to dispatch. */
-  rollback?: (bookId: string) => { type: string };
+      optimistic local update. `stillOpen` is whether the failing book is still
+      the last-open one (#3754). Returns the action to dispatch. */
+  rollback?: (bookId: string, stillOpen: boolean) => { type: string };
   /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
       snapshot now that its optimistically-written value is confirmed on disk,
       so the next commit snapshots a fresh baseline. Returns the action. */
@@ -83,7 +87,8 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
       return `Book details couldn't be saved: ${sentence}`;
     },
     dedupeKey: 'book-meta-persist-failed',
-    rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
+    rollback: (bookId, stillOpen) =>
+      bookMetaActions.rollbackCommitDraft({ bookId, restoreDraft: stillOpen }),
     onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
   },
 };
@@ -268,6 +273,17 @@ const PERSIST_RULES: Record<
 
 };
 
+/* Rules whose patch is keyed by the book itself, not by the loaded slices.
+   `bookMeta.saved` is a Record<bookId, …> and commitDraft's build indexes it
+   with the stage's book, so it can never carry another book's content. Gating
+   it would drop a correct edit and leave the optimistic `saved[A]` /
+   `lastCommitted` snapshot (#2230) claiming a save that never happened. */
+const BOOK_KEYED_RULES = new Set(['bookMeta/commitDraft']);
+
+/* Persisted action types, exported for tests only so a regression suite can
+   loop over every rule (including ones added later). */
+export const PERSISTED_ACTION_TYPES = Object.keys(PERSIST_RULES);
+
 function bookIdFromState(s: PersistableRootState): string | null {
   const stage = s.ui.stage as { bookId?: string };
   return stage.bookId ?? null;
@@ -326,6 +342,12 @@ export const persistenceMiddleware: Middleware = (store) => {
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
 
+  /* #3754 / #3624 — the last NON-NULL book the stage named, for the metadata
+     draft clear in the handler below. Unlike `lastBookId` (S3), a trip to the
+     library never nulls this, so B -> home -> B still reads as the same book
+     and keeps the user's unsaved draft. */
+  let lastOpenBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
+
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce. */
   const flushBookNow = (bookId: string) => {
@@ -383,8 +405,12 @@ export const persistenceMiddleware: Middleware = (store) => {
           );
           /* #2230 — a refused rename must not leave the persisted value claiming
              a title the server rejected; roll the optimistic saved update back
-             (and restore the draft so the user's text is preserved for retry). */
-          if (handler.rollback) store.dispatch(handler.rollback(bookId));
+             (and restore the draft so the user's text is preserved for retry —
+             unless the user has since opened a different book, #3754: the
+             draft was already cleared for that switch and must stay clear). */
+          if (handler.rollback) {
+            store.dispatch(handler.rollback(bookId, bookId === lastOpenBookId));
+          }
         }
       });
   };
@@ -405,6 +431,26 @@ export const persistenceMiddleware: Middleware = (store) => {
       lastBookId = bookId;
     }
 
+    /* #3754 / #3624 — the unsaved Listen-view metadata draft belongs to the
+       book it was typed on. Opening a DIFFERENT book clears it: the draft is
+       global (not keyed per book), so left alone it would fold into the
+       newly-opened book's `saved` on the next commitDraft — and the #3748
+       gate deliberately exempts commitDraft (its build reads the per-book
+       `saved[stageBookId]`), so nothing else stops that. It clears only on a
+       switch to a different book, not when leaving for the library or
+       returning to the same one (B -> home -> B keeps the user's typing), and
+       it cannot use `lastBookId` because S3 above nulls that on the library —
+       hence the separate `lastOpenBookId`, which only ever holds a book. */
+    if (
+      bookId !== null &&
+      lastOpenBookId !== null &&
+      bookId !== lastOpenBookId &&
+      Object.keys(after.bookMeta?.draft ?? {}).length > 0
+    ) {
+      store.dispatch(bookMetaActions.cancelDraft());
+    }
+    if (bookId !== null) lastOpenBookId = bookId;
+
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
       flushBookNow(target);
@@ -418,6 +464,21 @@ export const persistenceMiddleware: Middleware = (store) => {
     const rule = PERSIST_RULES[type];
     if (!rule) return result;
     if (!bookId) return result;
+
+    /* #3624 — the patch is built from the slices as they are RIGHT NOW, but
+       the target comes from the stage. Between `openBook(A)` and A's hydrate
+       the stage says A while cast / manuscript / changeLog still hold B, so an
+       edit here would write B's content into A's files. `manuscript.bookId` is
+       the loaded-book identity (cast and changeLog hydrate in the same tick, so
+       it stands in for them — same proxy as preview-thunks, #3594). Drop the
+       write silently. A null identity records no other book, so it persists. */
+    const held = after.manuscript?.bookId ?? null;
+    if (held !== null && held !== bookId && !BOOK_KEYED_RULES.has(type)) {
+      console.warn(
+        `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,
+      );
+      return result;
+    }
 
     const key = flushKey(bookId, rule.slice);
     pending.set(key, rule.build(after, bookId));

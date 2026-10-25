@@ -898,12 +898,37 @@ export function Layout() {
           if (res === null) {
             if (revisionsOnly) {
               /* Still confirm the (empty) read so this effect doesn't refetch
-                 on every render. For a full reload, leave every per-book
-                 slice on its in-memory defaults as before — the
-                 library-fallback hydrate below seeds bookMeta from the
-                 library entry. */
+                 on every render. The full-reload branch below resets the
+                 per-book slices when they hold another book (#3624);
+                 there the library-fallback hydrate seeds bookMeta from
+                 the library entry. */
               dispatch(revisionsActions.hydrate({ bookId, state: null, requestSeq }));
               revisionsReadFor.current = bookId;
+            } else {
+              /* #3624 — if the slices still hold ANOTHER book, reset them so
+                 this book starts empty with its own identity stamped (edits
+                 then persist to it, not get dropped by the gate). Read live;
+                 a null identity means an in-flight upload of THIS book, so
+                 leave the slices on their in-memory defaults. Non-persisted
+                 actions only: the reset itself must never PUT (#3376). */
+              const held = store.getState().manuscript.bookId;
+              if (held !== null && held !== bookId) {
+                dispatch(manuscriptActions.resetForBook(bookId));
+                dispatch(castActions.hydrateCharacters([]));
+                dispatch(castActions.setRenderedFallback({}));
+                dispatch(castActions.setOrphanedCharacterFallbacks({}));
+                dispatch(changeLogActions.hydrateFromBookState(null));
+                /* The chapters slice too: Generate and Listen read it with no
+                   book check, so left alone they'd list B's chapters under A. */
+                dispatch(
+                  chaptersActions.hydrateFromBookState({
+                    bookId,
+                    chapters: [],
+                    completedSlugs: [],
+                    characters: [],
+                  }),
+                );
+              }
             }
             return;
           }
