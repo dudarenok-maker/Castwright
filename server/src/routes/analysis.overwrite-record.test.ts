@@ -11,7 +11,7 @@
    Real analysis router and `importPortableBundle`; a stub analyzer records every
    prompt. Unique manuscript ids per case: server/handoff/cache persists. */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,6 +63,8 @@ let workspaceRoot: string;
 let app: Express;
 let bookId: string;
 let bookDir: string;
+let paths: typeof import('../workspace/paths.js');
+let title: string;
 let opLock: typeof import('../workspace/book-op-lock.js');
 let fileLock: typeof import('../workspace/file-lock.js');
 let portable: typeof import('../import/scan-import-folder.js');
@@ -74,7 +76,7 @@ beforeAll(async () => {
   process.env.STAGE2_COVERAGE_RETRIES = '0';
   /* Sequential imports -- a Promise.all of dynamic imports races vi.mock factories (#2083). */
   const analysisModule = await import('./analysis.js');
-  const paths = await import('../workspace/paths.js');
+  paths = await import('../workspace/paths.js');
   opLock = await import('../workspace/book-op-lock.js');
   fileLock = await import('../workspace/file-lock.js');
   portable = await import('../import/scan-import-folder.js');
@@ -82,8 +84,6 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/manuscripts', analysisModule.analysisRouter);
-  bookId = paths.makeBookId(AUTHOR, SERIES, TITLE);
-  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 }, 120_000);
@@ -92,6 +92,15 @@ afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
   delete process.env.STAGE2_COVERAGE_RETRIES;
+});
+
+/* A book of its own per case (#3785): every `book-op:<bookId>` waiter in a case is
+   then that case's own, so a straggler from an earlier case's background work
+   cannot be mistaken for the overwrite or the start in `waitWaiters`. */
+beforeEach(() => {
+  title = `${TITLE} ${Math.random().toString(36).slice(2, 8)}`;
+  bookId = paths.makeBookId(AUTHOR, SERIES, title);
+  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
 });
 
 afterEach(() => {
@@ -107,7 +116,7 @@ function stateFor(manuscriptId: string): Record<string, unknown> {
   return {
     bookId,
     manuscriptId,
-    title: TITLE,
+    title,
     author: AUTHOR,
     series: SERIES,
     seriesPosition: 1,
@@ -227,10 +236,13 @@ async function queuedBehindOverwrite(
   let run!: Promise<request.Response>;
   try {
     await holding;
+    /* Counted from what is already queued on the key, so an unrelated waiter
+       never stands in for the overwrite (#3785). */
+    const queued = fileLock.__keyWaitersForTest(`book-op:${bookId}`);
     overwrite = portable.importPortableBundle(bundle, { onConflict: 'overwrite' });
-    await waitWaiters(1, release);
+    await waitWaiters(queued + 1, release);
     run = start();
-    await waitWaiters(2, release);
+    await waitWaiters(queued + 2, release);
   } finally {
     release();
   }
