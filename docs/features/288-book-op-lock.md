@@ -110,8 +110,8 @@ or a walk that found exactly one folder and read every other one. A caller's `hi
 pass 1). **(coordinator call)**
 
 A live `ManuscriptRecord` is healed only when `rec.bookId === bookId` **(coordinator call)**. Twin books can
-share a `manuscriptId`: a bundle imported under the `rename` strategy keeps the bundle's `manuscriptId`
-(`scan-import-folder.ts:233`).
+share a `manuscriptId`: twins that predate #3823 (a bundle import now mints a fresh id whenever another
+book carries the bundle's), or a hand-copied folder.
 
 #### Sanctioned movers
 
