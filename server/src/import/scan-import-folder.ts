@@ -38,7 +38,8 @@
    an orphan `.staging/<nonce>` which the startup sweep removes after an hour. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { nanoid } from 'nanoid';
 import { dirname, join, relative } from 'node:path';
 import { fromBuffer as yauzlFromBuffer, type ZipFile, type Entry } from 'yauzl';
 import {
@@ -341,12 +342,36 @@ export async function importPortableBundle(
        stateRaw verbatim, so the decided bookId / title actually land on disk. A
        bundle state.json with no `language` lands as an explicit `language: null`
        (key present); a bundle that carries a language round-trips unchanged. */
-    const writeStagedState = (bookId: string, title: string): Promise<void> =>
+    const writeStagedState = (
+      bookId: string,
+      title: string,
+      manuscriptId: string | undefined = state.manuscriptId,
+    ): Promise<void> =>
       writeFile(
         stateJsonPath(stage),
-        JSON.stringify({ ...state, title, bookId, language: state.language ?? null }, null, 2),
+        JSON.stringify(
+          { ...state, title, bookId, manuscriptId, language: state.language ?? null },
+          null,
+          2,
+        ),
         'utf8',
       );
+
+    /* #3823 -- a renamed copy is a second book, so it gets its own manuscriptId
+       (one in-memory ManuscriptRecord per id: a shared id lets restructuring one
+       twin rewrite the hints the other reads). The staged hints entries are
+       keyed by the id they were written under, so re-key them to the fresh one or
+       the copy's own hints stop validating (`manuscriptId` mismatch -> re-parse).
+       Analysis state / edits / the analyzer cache are not in a bundle. */
+    const rekeyStagedHints = async (manuscriptId: string): Promise<void> => {
+      const hintsPath = manuscriptHintsJsonPath(stage);
+      if (!existsSync(hintsPath)) return;
+      const file = JSON.parse(await readFile(hintsPath, 'utf8')) as {
+        entries?: Array<{ manuscriptId?: string }>;
+      };
+      for (const entry of file.entries ?? []) entry.manuscriptId = manuscriptId;
+      await writeFile(hintsPath, JSON.stringify(file, null, 2), 'utf8');
+    };
 
     /* The id a NEW book gets: the bundle's own when nothing in the workspace
        carries it, else a minted one (never two books with one id). Called under
@@ -372,7 +397,12 @@ export async function importPortableBundle(
           renamedTo = bookDir;
         }
         const bookId = await idForNewBook(title, renamedTo === undefined);
-        await writeStagedState(bookId, title);
+        const manuscriptId =
+          renamedTo !== undefined && state.manuscriptId ? 'mns_' + nanoid(10) : state.manuscriptId;
+        if (manuscriptId && manuscriptId !== state.manuscriptId) {
+          await rekeyStagedHints(manuscriptId);
+        }
+        await writeStagedState(bookId, title, manuscriptId);
         await mkdir(dirname(bookDir), { recursive: true });
         /* Placed under the target's state-json lock too (#3625: every bundle
            promotion holds it), so no state.json writer of that path interleaves. */

@@ -799,6 +799,102 @@ describe('importPortableBundle', () => {
         rmSync(target, { recursive: true, force: true });
       }
     });
+
+    /* #3823 -- a renamed copy is a second book: it must not share the source's
+       manuscriptId (one in-memory ManuscriptRecord per id), and its own hints
+       must be re-keyed to the fresh id so they still validate. */
+    describe("a 'rename' import mints a fresh manuscriptId (#3823)", () => {
+      const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
+      const readState = (dir: string) => JSON.parse(readFileSync(stateJsonPath(dir), 'utf8'));
+      const readHints = (dir: string) =>
+        JSON.parse(readFileSync(manuscriptHintsJsonPath(dir), 'utf8'));
+      async function bundleWithHints(state: BookStateJson): Promise<Buffer> {
+        const sourceDir = writeSourceBook(state, manuscript);
+        await writeManuscriptHints(
+          sourceDir,
+          composeHintsFile(
+            buildHintsEntry({
+              manuscriptId: state.manuscriptId!,
+              manuscriptFile: state.manuscriptFile,
+              sourceSha256: sha256Hex(manuscript),
+              hints: [
+                { id: 1, body: 'restructured A' },
+                { id: 2, body: 'restructured B' },
+              ],
+              stateChapters: state.chapters,
+            }),
+            null,
+            state,
+            sha256Hex(manuscript),
+          ),
+        );
+        return (await buildPortableBundle(sourceDir, state)).buffer;
+      }
+
+      it('two renamed copies get distinct ids; the source twin is untouched', async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const original = targetDirFor(state);
+        rmSync(original, { recursive: true, force: true });
+        const copies: string[] = [];
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          const originalHintsBytes = readFileSync(manuscriptHintsJsonPath(original));
+          for (let i = 0; i < 2; i++) {
+            const r = await importPortableBundle(bundle); // default rename
+            copies.push(r.targetPath);
+          }
+          const ids = [original, ...copies].map((d) => readState(d).manuscriptId);
+          expect(ids[0]).toBe(state.manuscriptId);
+          expect(new Set(ids).size).toBe(3);
+          /* "restructuring" a copy rewrites only that copy's hints file. */
+          await writeManuscriptHints(copies[0]!, { schema: 1, entries: [] });
+          expect(Buffer.compare(readFileSync(manuscriptHintsJsonPath(original)), originalHintsBytes)).toBe(0);
+          expect(readHints(copies[1]!).entries.length).toBe(1);
+        } finally {
+          for (const d of [original, ...copies]) rmSync(d, { recursive: true, force: true });
+        }
+      });
+
+      it("the copy's persisted hints re-key to its fresh id and still validate", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const original = targetDirFor(state);
+        rmSync(original, { recursive: true, force: true });
+        let copy = '';
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          copy = (await importPortableBundle(bundle)).targetPath;
+          const copyState = readState(copy);
+          expect(copyState.manuscriptId).not.toBe(state.manuscriptId);
+          const file = readHints(copy);
+          expect(file.entries.every((e: { manuscriptId: string }) => e.manuscriptId === copyState.manuscriptId)).toBe(true);
+          const res = hintsFromPersisted(file, copyState, sha256Hex(readFileSync(join(copy, 'manuscript.txt'))));
+          expect(res.ok).toBe(true);
+          if (res.ok) expect(res.hints.map((h) => h.body)).toEqual(['restructured A', 'restructured B']);
+          /* the source twin's own hints still carry the source id */
+          expect(readHints(original).entries[0].manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(original, { recursive: true, force: true });
+          if (copy) rmSync(copy, { recursive: true, force: true });
+        }
+      });
+
+      it("'overwrite' keeps the bundle's manuscriptId", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const target = targetDirFor(state);
+        rmSync(target, { recursive: true, force: true });
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          expect(readState(target).manuscriptId).toBe(state.manuscriptId);
+          expect(readHints(target).entries[0].manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+    });
   });
 
   it("imports a bundle whose state.json has no language as language:null (key present)", async () => {
