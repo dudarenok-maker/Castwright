@@ -782,8 +782,9 @@ export interface paths {
          * Soft-hide or un-hide a set of chapters
          * @description Sets `Chapter.excluded` on every listed chapter in one atomic
          *     restructure pass. Sentence remap is identity; the pass also prunes
-         *     zero-sentence chapters and renumbers the rest, so it can move audio
-         *     files. Refused with `book_busy` in both directions while a long job
+         *     a non-excluded chapter that has zero sentences AND an empty manuscript
+         *     body (#3783) and renumbers the rest, so it can move audio files. A
+         *     zero-sentence chapter that still has text is kept. Refused with `book_busy` in both directions while a long job
          *     runs (#3774). For a single chapter the Generate-view toggle uses
          *     `setChapterExcluded` instead; only its hiding direction is refused.
          */
