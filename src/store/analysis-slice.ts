@@ -352,6 +352,11 @@ export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manus
   return !!snap && !!manuscriptId && snap.manuscriptId === manuscriptId && snap.kind !== 'subset' && snap.state === 'running';
 }
 
+/** #3774 — how long an include snapshot may stay unconfirmed (no tick, no
+    `/busy` `analysis`) before it is treated as a run that never registered.
+    Well past the click-to-registration window, so a live include never trips it. */
+export const UNCONFIRMED_INCLUDE_MAX_MS = 120_000;
+
 /** #3774 — true when the held snapshot is a running include-origin subset run
     for this book that has gone quiet (no tick for longer than
     STALL_THRESHOLD_MS). A live run is ticked every few seconds, so a copy this
@@ -360,7 +365,11 @@ export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manus
     check. Quiet time only counts once the run is known to have registered
     (`serverConfirmed`): before that the snapshot is the click-to-registration
     window, in which `/busy` truthfully reports no analysis for a LIVE include.
-    Shared by the layout's per-book hydrate and the Generate view's busy
+    An UNCONFIRMED snapshot is not held forever, though: nothing but a server
+    event moves `lastTickAt` before confirmation, so it is the click time, and
+    once it is older than UNCONFIRMED_INCLUDE_MAX_MS the run never registered
+    (the clicking tab closed first, leaving another tab's broadcast copy that no
+    stream will ever confirm or end). Shared by the layout's per-book hydrate and the Generate view's busy
     poll so the two ends of the same rule cannot drift. */
 export function isStaleIncludeSnapshot(
   held: AnalysisStreamSnapshot | null | undefined,
@@ -373,7 +382,6 @@ export function isStaleIncludeSnapshot(
     held.kind === 'subset' &&
     held.state === 'running' &&
     held.subsetOrigin === 'include' &&
-    held.serverConfirmed === true &&
-    now - held.lastTickAt > STALL_THRESHOLD_MS
+    now - held.lastTickAt > (held.serverConfirmed === true ? STALL_THRESHOLD_MS : UNCONFIRMED_INCLUDE_MAX_MS)
   );
 }

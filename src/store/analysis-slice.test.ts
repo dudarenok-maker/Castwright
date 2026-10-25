@@ -7,7 +7,13 @@
    cross-book guard, and idempotency of the terminal transitions. */
 
 import { describe, it, expect } from 'vitest';
-import { analysisSlice, analysisActions, isStaleIncludeSnapshot, type AnalysisStreamSnapshot } from './analysis-slice';
+import {
+  analysisSlice,
+  analysisActions,
+  isStaleIncludeSnapshot,
+  UNCONFIRMED_INCLUDE_MAX_MS,
+  type AnalysisStreamSnapshot,
+} from './analysis-slice';
 import { STALL_THRESHOLD_MS } from './chapters-slice';
 import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 import { analyzerSharesGenerationDevice } from '../lib/analyzer-endpoints';
@@ -72,6 +78,18 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(
       analysisSlice.reducer(seeded, analysisActions.markAnalysisServerConfirmed({ bookId: 'other' })).activeStream?.serverConfirmed,
     ).toBeUndefined();
+  });
+
+  it('an UNCONFIRMED include snapshot is stale only once it is older than UNCONFIRMED_INCLUDE_MAX_MS; a confirmed one keeps the 30 s rule (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    expect(UNCONFIRMED_INCLUDE_MAX_MS).toBe(120_000);
+    expect(isStaleIncludeSnapshot(snap, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS)).toBe(false);
+    expect(isStaleIncludeSnapshot(snap, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(true);
+    const confirmed = { ...snap, serverConfirmed: true };
+    expect(isStaleIncludeSnapshot(confirmed, 'b1', snap.lastTickAt + STALL_THRESHOLD_MS)).toBe(false);
+    expect(isStaleIncludeSnapshot(confirmed, 'b1', snap.lastTickAt + STALL_THRESHOLD_MS + 1)).toBe(true);
+    expect(isStaleIncludeSnapshot({ ...snap, state: 'paused' }, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(false);
+    expect(isStaleIncludeSnapshot(snap, 'other', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(false);
   });
 
   it('clearActiveStream tears down the snapshot', () => {

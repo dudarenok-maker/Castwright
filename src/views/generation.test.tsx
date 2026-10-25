@@ -3171,6 +3171,60 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         });
       });
 
+      /* the clicking tab closed before the job registered: this tab holds only the broadcast
+         copy, which no stream will ever confirm or end — the 2-minute rule clears it */
+      it('an unconfirmed include snapshot with no analysis job on /busy is kept at 119 s and cleared past 120 s', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(
+              analysisActions.setActiveStream({
+                bookId: 'b1',
+                manuscriptId: 'm1',
+                bookTitle: 'the Coalfall Commission',
+                engine: 'local',
+                phaseId: 1,
+                phaseLabel: 'Attribution',
+                phaseProgress: 0,
+                remainingMs: null,
+                lastTickAt: Date.now(),
+                state: 'running',
+                kind: 'subset',
+                subsetChapterIds: [3],
+                subsetOrigin: 'include',
+              } as any),
+            );
+          });
+          renderInclude(store, included);
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(119_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(7_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
+        });
+      });
+
+      it('the starting view never clears its unconfirmed snapshot while its own include request is pending, even past 120 s', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          let landInclude!: () => void;
+          setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+            excluded
+              ? Promise.resolve({ id, title: '', slug: '', excluded })
+              : new Promise((r) => (landInclude = () => r({ id, title: '', slug: '', excluded }))),
+          );
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(includePosts()).toHaveLength(1));
+          await vi.advanceTimersByTimeAsync(121_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          expect(resume()).toBeDisabled();
+          await act(async () => landInclude());
+        });
+      });
+
       it('real reload order: the view mounts first, then the hydrate-shaped server snapshot lands; the poll then ends it', async () => {
         await withFakeTimers(async () => {
           const store = makeIncludeStore({ chapters: included, withMiddleware: true });
