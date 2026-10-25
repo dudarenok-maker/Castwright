@@ -2850,6 +2850,171 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     });
   });
 
+  /* #3774 pass 4 — the job-start block is tied to the RUN (the store's analysis
+     snapshot), not to the view instance: the include outlives the view, which
+     remounts on every navigation. */
+  describe('#3774 pass 4 — the include block outlives the view; the gate is bounded and pinned', () => {
+    const ch4Excluded: Chapter = { ...ch3Excluded, id: 4, title: 'Chapter 4' };
+    const rows = [chapter1, chapter2, ch3Excluded];
+    const includePosts = () => setChapterExcludedSpy.mock.calls.filter((c) => c[2] === false);
+    const resume = () => screen.getByTestId('generation-view-resume');
+
+    it('H: a remount while the include run is live keeps Resume disabled with the banner', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(resume()).toBeDisabled();
+      first.unmount();
+      /* the run is still live in the store; a fresh instance has no local state */
+      expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+    });
+
+    it('H: a remount while a RE-ANALYSE run is live does not block Resume', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const first = renderInclude(store, rows);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      first.unmount();
+      expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
+      renderInclude(store, rows);
+      expect(resume()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('H: leaving the view during the click-time busy read starts nothing', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const view = renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      view.unmount();
+      await act(async () => {
+        release([]);
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(includePosts()).toHaveLength(0);
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    });
+
+    it('I: Resume scoring on the QA card is disabled with the reason while an include run is live', async () => {
+      getQaReportSpy.mockResolvedValue({
+        ...MOCK_QA_REPORT,
+        voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 6, charactersPending: ['narrator'] },
+      });
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      expect(await screen.findByRole('button', { name: /resume scoring/i })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      const btn = screen.getByRole('button', { name: /resume scoring/i });
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAccessibleDescription(/being included and analysed/i);
+    });
+
+    it('a double click on one chapter does nothing the second time (no wrong-reason toast, one include)', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      const include = screen.getByRole('button', { name: /\+ Include in book/i });
+      fireEvent.click(include);
+      fireEvent.click(include);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+      await act(async () => {
+        release([]);
+      });
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(includePosts()).toHaveLength(1);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
+    it('another chapter Include while a read is in flight says so (not "being analysed")', async () => {
+      const both = [chapter1, chapter2, ch3Excluded, ch4Excluded];
+      const store = makeIncludeStore({ chapters: both });
+      renderInclude(store, both);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>(() => {}));
+      const includes = screen.getAllByRole('button', { name: /\+ Include in book/i });
+      fireEvent.click(includes[0]);
+      fireEvent.click(includes[1]);
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      const msg = store.getState().notifications.toasts[0].message;
+      expect(msg).toMatch(/still being checked/i);
+      expect(msg).not.toMatch(/being analysed/i);
+    });
+
+    it('the click-time gate refuses when a run started elsewhere while the analyzer-guard modal was open', async () => {
+      const store = makeIncludeStore({
+        chapters: rows,
+        selectedModel: 'qwen3.5:4b',
+        activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
+      });
+      renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await screen.findByText(/Pause audio generation to analyse\?/i);
+      /* while it is open, a re-analyse of chapter 1 starts */
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /Pause and analyse/i }));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ message: expect.stringMatching(/being analysed/i) }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(0);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('a hung click-time busy read fails closed after a bounded wait and does not wedge the next click', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderInclude(store, rows);
+        await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+        getBookBusySpy.mockReturnValueOnce(new Promise<string[]>(() => {}));
+        fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+        expect(store.getState().notifications.toasts).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(9000);
+        await waitFor(() =>
+          expect(store.getState().notifications.toasts).toEqual([
+            expect.objectContaining({ message: expect.stringMatching(/could not check/i) }),
+          ]),
+        );
+        expect(includePosts()).toHaveLength(0);
+        /* the gate is free again: the next click goes through */
+        fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+        await waitFor(() => expect(includePosts()).toHaveLength(1));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('the busy poll runs only when some row can show an include-flow button', async () => {
+      const noExcluded = [chapter1, chapter2];
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const { unmount } = renderInclude(makeIncludeStore({ chapters: noExcluded }), noExcluded);
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(getBookBusySpy).not.toHaveBeenCalled();
+        unmount();
+        renderInclude(makeIncludeStore({ chapters: rows }), rows);
+        await vi.advanceTimersByTimeAsync(6_000);
+        expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   /* #3435 decision A — the server refuses a subset run while a main analysis
      run is live for the book, so the controls that start one are disabled
      until it is paused. */

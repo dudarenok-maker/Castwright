@@ -34,6 +34,12 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(state.activeStream).toEqual(baseSnapshot);
   });
 
+  it('setActiveStream keeps the origin of a subset run so a remounted view can tell an include from a re-analyse (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    const state = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
+    expect(state.activeStream?.subsetOrigin).toBe('include');
+  });
+
   it('clearActiveStream tears down the snapshot', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
     const s2 = analysisSlice.reducer(s1, analysisActions.clearActiveStream());

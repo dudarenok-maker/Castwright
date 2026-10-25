@@ -108,6 +108,12 @@ export interface AnalysisStreamSnapshot {
       retried, captured at job creation. The pill reads `.length`
       for the retry count. */
   subsetChapterIds?: number[];
+  /** #3774 — set only when `kind === 'subset'`: what started the run. An
+      `'include'` run holds the book under a Cancel rollback that a job started
+      alongside it would block; a `'reanalyse'` run needs no such guard. Lets the
+      Generate view re-derive that block after a remount. Absent on cold-boot
+      snapshots (never treated as an include). */
+  subsetOrigin?: 'include' | 'reanalyse';
 }
 
 export interface AnalysisState {

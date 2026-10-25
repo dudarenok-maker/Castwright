@@ -61,6 +61,12 @@ const INCLUDE_RUN_LIVE_REASON =
    and the include's Cancel rollback (re-exclude) would be refused. */
 const JOB_START_BLOCKED_REASON =
   'A chapter is being included and analysed. Wait for it to finish, or cancel it, before starting generation.';
+/* #3774 — another Include click's busy read is still in flight (nothing is being
+   analysed yet): a second click in that window is a double click or another chapter. */
+const INCLUDE_CHECK_PENDING_REASON =
+  'Another chapter is still being checked. Try again in a moment.';
+/* #3774 — a click-time busy read that has not answered by now counts as failed. */
+const BUSY_READ_TIMEOUT_MS = 8000;
 /* #3774 — the click-time busy read failed. */
 const BUSY_CHECK_FAILED_REASON =
   'Could not check whether this book is busy. Try again in a moment.';
@@ -397,12 +403,34 @@ export function GenerationView({
      job: this is a client-side guard. */
   const [busyKinds, setBusyKinds] = useState<string[]>([]);
   const subsetRunning = Object.values(subsetByChapter).some(isSubsetRunning);
-  const includeRunLive = Object.values(subsetByChapter).some(
-    (e) => e.origin === 'include' && isSubsetRunning(e),
-  );
+  /* #3774 — read at click time by the include gate: a click handler that waited
+     behind the analyzer-guard modal is a stale closure, and a run another row
+     started meanwhile must still refuse it. */
+  const subsetRunningRef = useRef(false);
+  subsetRunningRef.current = subsetRunning;
+  /* #3774 — the include's run outlives this view (only Cancel aborts it), and the
+     view remounts on every navigation, so the block is also read from the store's
+     analysis snapshot (this book, a running include-origin subset run), not just
+     from this instance's `subsetByChapter`. A re-analyse run never blocks. */
+  const includeRunInStore = useAppSelector((s) => {
+    const a = s.analysis.activeStream;
+    return (
+      !!a &&
+      a.bookId === bookId &&
+      a.kind === 'subset' &&
+      a.state === 'running' &&
+      a.subsetOrigin === 'include'
+    );
+  });
+  const includeRunLive =
+    includeRunInStore ||
+    Object.values(subsetByChapter).some((e) => e.origin === 'include' && isSubsetRunning(e));
   const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
+  /* Only a row that can show Include / Retry / Accept smaller cast reads these:
+     an excluded chapter, or a chapter with a subset run (error) row. */
+  const hasIncludeSurface = chapters.some((c) => c.excluded) || Object.keys(subsetByChapter).length > 0;
   useEffect(() => {
-    if (!bookId) return;
+    if (!bookId || !hasIncludeSurface) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -418,7 +446,7 @@ export function GenerationView({
       cancelled = true;
       clearInterval(id);
     };
-  }, [bookId, subsetRunning]);
+  }, [bookId, subsetRunning, hasIncludeSurface]);
   /* #3774 — Include, Retry and "Accept smaller cast" are unavailable while a job
      holds the book OR this tab's own subset run is live (the busy read lags a
      run's start by up to one poll). */
@@ -436,16 +464,25 @@ export function GenerationView({
      is what strands a chapter (the rollback is refused, the include sticks); a
      refused click costs one retry, so the user is told to try again. */
   async function includeRefusal(chapterId: number): Promise<string | undefined> {
-    if (includeGateRef.current != null || subsetRunning) return INCLUDE_RUN_LIVE_REASON;
+    if (includeGateRef.current != null) return INCLUDE_CHECK_PENDING_REASON;
+    if (subsetRunningRef.current) return INCLUDE_RUN_LIVE_REASON;
     includeGateRef.current = chapterId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const kinds = await api.getBookBusy(bookId);
+      /* bounded: a hung read must not hold the gate forever */
+      const kinds = await Promise.race([
+        api.getBookBusy(bookId),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('busy check timed out')), BUSY_READ_TIMEOUT_MS);
+        }),
+      ]);
       if (mountedRef.current) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
       return busyIncludeReason(kinds);
     } catch (e) {
       console.warn('[generation] busy check failed', e);
       return BUSY_CHECK_FAILED_REASON;
     } finally {
+      clearTimeout(timer);
       includeGateRef.current = null;
     }
   }
@@ -584,12 +621,12 @@ export function GenerationView({
        include POST: refuse (toast the reason, touch nothing) while a job holds
        the book or this tab's own subset run is live. */
     const refusal = await includeRefusal(chapterId);
+    /* #3774 — the view was left during the read: start nothing from a gone view. */
+    if (!mountedRef.current) return;
     if (refusal) {
-      if (mountedRef.current) {
-        dispatch(
-          notificationsActions.pushToast({ kind: 'warn', message: refusal, dedupeKey: 'gen-include-busy' }),
-        );
-      }
+      dispatch(
+        notificationsActions.pushToast({ kind: 'warn', message: refusal, dedupeKey: 'gen-include-busy' }),
+      );
       return;
     }
 
@@ -638,6 +675,7 @@ export function GenerationView({
         state: 'running',
         kind: 'subset',
         subsetChapterIds: [chapterId],
+        subsetOrigin: 'include',
       }),
     );
 
@@ -881,11 +919,13 @@ export function GenerationView({
     /* #3774 — the server refuses an exclude (409 `book_busy`) while a job holds
        the book, and the include's own subset job is sticky: it outlives the
        aborted fetch and keeps its `analysis` lease until it settles. Include is
-       disabled while any other job holds the book, so this is the only job a
-       rollback meets: Cancel asks the server to stop it first (only when its
-       request was sent), then re-tries the exclude until the lease is released
-       (the refusal IS the "still running" signal). A failed run's job may still
-       be releasing: same wait, no stop. Giving up throws; the caller says so. */
+       disabled while any other job holds the book, so this is normally the only
+       job a rollback meets (a job started outside this view after the click can
+       still hold the book, which is why giving up exists): Cancel asks the server
+       to stop it first (only when its request was sent), then re-tries the exclude
+       until the lease is released (the refusal IS the "still running" signal). A
+       failed run's job may still be releasing: same wait, no stop. Giving up
+       throws; the caller says so. */
     if (opts.stopJob && manuscriptId) await api.pauseAnalysis({ manuscriptId });
     const deadline = Date.now() + ROLLBACK_SETTLE_TIMEOUT_MS;
     for (;;) {
@@ -1000,6 +1040,7 @@ export function GenerationView({
         state: 'running',
         kind: 'subset',
         subsetChapterIds: [chapterId],
+        subsetOrigin: 'reanalyse',
       }),
     );
     /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
@@ -1762,6 +1803,7 @@ export function GenerationView({
           a log entry. */}
       <div className="mb-6 sm:mb-8">
         <QaReportCard
+          jobStartBlockedReason={jobStartBlockedReason}
           report={qaReport}
           loading={qaLoading}
           error={qaError}
@@ -2708,7 +2750,7 @@ function ExcludedChapterRow({
   const running = subsetProgress && subsetProgress.error == null && !noticed ? subsetProgress : null;
   const errored = subsetProgress && subsetProgress.error != null ? subsetProgress : null;
   const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
-  /* #3774 â€” Retry / Accept smaller cast on an include-origin error row re-run the
+  /* #3774 — Retry / Accept smaller cast on an include-origin error row re-run the
      include, so they follow Include's busy reason; a re-analyse retry does not. */
   const retryBusyReason = errored?.origin === 'include' ? includeBusyReason : undefined;
   /* #3774 — the reason is rendered as a visible line (a title never shows on a
