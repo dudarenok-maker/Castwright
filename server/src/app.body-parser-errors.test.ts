@@ -81,6 +81,33 @@ describe('body-parser client errors (#3793)', () => {
     expect(loggedAsUnhandled()).toBe(false);
   });
 
+  it('a corrupt brotli body is 400, not 500', async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'br')
+      .serialize(raw)
+      .send(Buffer.from('garbage garbage garbage'));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Request body could not be decoded.' });
+    expect(loggedAsUnhandled()).toBe(false);
+  });
+
+  it('a truncated brotli body is 400, not 500', async () => {
+    const full = zlib.brotliCompressSync(
+      Buffer.from(JSON.stringify({ code: 'x', label: 'hello world hello world' })),
+    );
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'br')
+      .serialize(raw)
+      .send(full.subarray(0, full.length - 4));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Request body could not be decoded.' });
+    expect(loggedAsUnhandled()).toBe(false);
+  });
+
   it('an unsupported charset is 415, not 500', async () => {
     const res = await request(app)
       .post('/api/devices')

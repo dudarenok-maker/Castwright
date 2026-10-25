@@ -23,7 +23,10 @@ import type { Request, Response, NextFunction } from 'express';
    threw with `expose: true` stays a 500 exactly as before. A failed gzip/deflate
    decode is the one class with no `type` — body-parser re-wraps the raw zlib
    error with status 400 and it keeps zlib's `code` (`Z_DATA_ERROR`,
-   `Z_BUF_ERROR`) — so that is matched by `code` instead. */
+   `Z_BUF_ERROR`) — so that is matched by `code` instead. A corrupt brotli body
+   is the same shape with Node's brotli format codes (`ERR__ERROR_FORMAT_*`);
+   a truncated one surfaces as `Z_BUF_ERROR`. The decoder's non-format codes
+   (alloc/unreachable) are server-side faults and stay 500. */
 const BODY_PARSER_CLIENT_ERRORS: Record<string, string> = {
   'entity.parse.failed': 'Malformed JSON request body.',
   'entity.too.large': 'Request body too large.',
@@ -47,7 +50,7 @@ function bodyParserClientError(err: unknown): { status: number; message: string 
   if (typeof e.type === 'string' && Object.hasOwn(BODY_PARSER_CLIENT_ERRORS, e.type)) {
     return { status, message: BODY_PARSER_CLIENT_ERRORS[e.type] };
   }
-  if (typeof e.code === 'string' && e.code.startsWith('Z_')) {
+  if (typeof e.code === 'string' && (e.code.startsWith('Z_') || e.code.startsWith('ERR__ERROR_FORMAT_'))) {
     return { status, message: BODY_DECODE_FAILED };
   }
   return null;
