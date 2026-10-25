@@ -538,8 +538,11 @@ export const persistenceMiddleware: Middleware = (store) => {
          re-sent (and deleted) the later entries of this book. */
       if (!kept.has(key)) continue;
       kept.delete(key);
-      carriedKept.set(key, save);
-      if (!pending.has(key)) pending.set(key, save.patch);
+      /* A queued patch of the key is newer: merged over the kept one, as at
+         every other merge site. */
+      const queuedCarry = carriedKept.get(key);
+      carriedKept.set(key, queuedCarry ? mergeSaves(save, queuedCarry) : save);
+      pending.set(key, { ...save.patch, ...(pending.get(key) as Record<string, unknown> | undefined) });
       const timer = timers.get(key);
       if (timer) clearTimeout(timer);
       flush(bookId, key.slice(bookId.length + 1) as StateSlice);
