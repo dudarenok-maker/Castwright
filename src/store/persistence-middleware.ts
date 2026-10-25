@@ -596,7 +596,11 @@ export const persistenceMiddleware: Middleware = (store) => {
       const save: KeptSave = {
         patch: rest,
         base: seq.base,
-        onSuccess: own.length > 0 ? onSuccess : carried?.onSuccess,
+        /* Only a save carrying the book-meta fields keeps the handler: the one
+           `onSuccess` (`commitDraftSucceeded`) prunes `lastCommitted`, which a
+           rollback has already cleared, and a newer build's own handler wins
+           at every merge site (M16, 6e936845). */
+        onSuccess: own.length > 0 ? onSuccess : undefined,
       };
       const queued = pending.get(key) as Record<string, unknown> | undefined;
       if (!queued) {
