@@ -43,7 +43,7 @@ Decisions with more than one defensible outcome that the owner has a stake in ar
   A conditional write is **stale** if any field it carries meets three conditions: its base token is present, the base differs from the current token, and the server's *post-merge* value for the field (D5 no-op rule) differs from its current value. A stale write is refused whole.
 - **(b) One token per file.** Then a direct client write such as a prosody flag (`layout.tsx` ~`:1422`/`:1459`), the language guard, or Start fresh's `castConfirmed` reset refuses a kept rename that shares no field with it.
 - **(c) Per character for `cast`.** This option is offered, not recommended. A single `characters` token means a background `cast.json` writer refuses any concurrent retry of a roster edit. That writer can be an analysis interim snapshot, a voice-library assign, or a design job, none of which has a mirror persist. Per-character tokens would narrow that to edits of the same character, at the cost of a per-character compare in the cast pipeline. How often this collision happens is unmeasured.
-- **Why (a):** the issue's "disjoint fields don't refuse each other" holds for `state` at no client cost, because the client echoes the map back opaquely. Inside the middleware, `confirmCast` and `commitDraft` share one key but **replace** each other's pending patch last-wins (`persistence-middleware.ts` ~`:737`, comment ~`:745-754`). They only merge with a *kept* patch. So overlapping sequences with disjoint fields happen in-process too, and per-field tokens matter there as well.
+- **Why (a):** the issue's "disjoint fields don't refuse each other" holds for `state` at no client cost, because the client echoes the map back opaquely. Inside the middleware, `confirmCast` and `commitDraft` share one key but **replace** each other's pending patch last-wins at plan time; 6c002345 later made them merge (see Ship notes). So overlapping sequences with disjoint fields happen in-process too, and per-field tokens matter there as well.
 
 ### D2 — What a 409 `stale_revision` means to the client — OD2
 
@@ -104,7 +104,7 @@ The orders `book-op → book → state-json` and `book-op → cast` are unchange
 
 The `book.state` resolved under `book-op` is not enough. Import, re-parse and replace hold `book-op`, but **Start fresh is a long analysis job that does not**. Start fresh rotates the epoch inside the `updateStateAtDir` write it already makes.
 
-The **analysis `changeLog.json` append is unlocked** (`analysis.ts` ~`:528`) and races the slice PUT. That race exists today and is not widened here. It is reported separately.
+The **analysis `changeLog.json` append is unlocked** (`analysis.ts` ~`:528`) and races the slice PUT. That race predated this plan; it is fixed in this PR (79fecfca, Ship notes).
 
 ### D4 — Where the revision lives — OD4
 
@@ -389,7 +389,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 
 ## Out of scope
 
-- The unlocked analysis append to `changeLog.json` (`analysis.ts` ~`:528`), which races the slice PUT. It predates this plan, needs a lock decision, and is reported separately.
+- ~~The unlocked analysis append to `changeLog.json`~~: fixed in this PR after all (79fecfca); see Ship notes.
 - Conditional live first attempts, and endpoints returning tokens (D6(b)).
 - A conflict-choice UI (D2(b)).
 - Cross-tab sync beyond `broadcast-middleware.ts`.
