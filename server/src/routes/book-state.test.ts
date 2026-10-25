@@ -142,6 +142,46 @@ describe('book-state router — changeLog slice', () => {
       .send({ slice: 'changeLog' });
     expect(res.status).toBe(400);
   });
+
+  it('PUT slice=changeLog waits for the book lock (#3784) — an analysis append in flight is not overwritten', async () => {
+    /* The analysis carried-forward append takes `withBookLock` around its
+       read -> write; the PUT must queue behind it. Hold the lock here as the
+       appender would, fire the PUT, and prove it has not touched the file
+       while the lock is held. */
+    const { withBookLock } = await import('../workspace/book-lock.js');
+    const logPath = join(bookDir, '.audiobook', 'change-log.json');
+    writeFileSync(logPath, JSON.stringify({ events: [{ id: 1, title: 'analysis append' }] }));
+    const before = readFileSync(logPath, 'utf8');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = withBookLock(bookId, async () => {
+      held();
+      await gate;
+    });
+    await holding;
+
+    let settled = false;
+    const put = request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'changeLog', patch: { events: [{ id: 99, title: 'queued PUT' }] } })
+      .then((r) => {
+        settled = true;
+        return r;
+      });
+    // Let the request run to its lock wait (several macrotask turns).
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(settled).toBe(false);
+    expect(readFileSync(logPath, 'utf8')).toBe(before);
+
+    release();
+    await holder;
+    const res = await put;
+    expect(res.status).toBeLessThan(300);
+    expect(JSON.parse(readFileSync(logPath, 'utf8')).events[0].title).toBe('queued PUT');
+  });
 });
 
 describe('book-state router — manuscript slice validation (#1356 mock-fixture-leak fix)', () => {

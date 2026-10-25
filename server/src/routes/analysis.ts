@@ -126,6 +126,7 @@ import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restruc
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { withBookLock } from '../workspace/book-lock.js';
 import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
@@ -520,33 +521,42 @@ export async function reconcileRejectEdgesOnDisk(
    dropped (a transient analyzer miss), leave a change-log breadcrumb so the
    rescue is visible. Mirrors the change-log write pattern in book-state.ts.
    Best-effort: a log failure must never disturb the persist. */
-async function logCarriedForwardCharacters(
+export async function logCarriedForwardCharacters(
+  bookId: string | undefined,
   bookDir: string,
   dropped: Array<{ id: string; name?: string }>,
 ): Promise<void> {
   if (!dropped.length) return;
   try {
-    const logPath = changeLogJsonPath(bookDir);
-    const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
-    const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
-    const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
-    const names = dropped.map((d) => d.name || d.id).join(', ');
-    const noun = dropped.length === 1 ? 'character' : 'characters';
-    await writeJsonAtomic(logPath, {
-      events: [
-        {
-          id: nextId,
-          at: new Date().toISOString(),
-          ts: 'Just now',
-          date: 'today',
-          type: 'reparse',
-          title: 'Preserved designed voices across re-analysis',
-          note: `Re-analysis omitted ${dropped.length} voiced ${noun} (${names}); carried their designed/reused voices forward.`,
-          actor: 'system',
-        },
-        ...prior,
-      ],
-    });
+    /* #3784 — the read -> write of change-log.json is one `book`-locked span,
+       shared with the slice PUT and the reparse append. No cast lock is held
+       here (order `cast` -> `book`), and `book` is re-entrant. */
+    const append = async (): Promise<void> => {
+      const logPath = changeLogJsonPath(bookDir);
+      const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+      const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+      const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+      const names = dropped.map((d) => d.name || d.id).join(', ');
+      const noun = dropped.length === 1 ? 'character' : 'characters';
+      await writeJsonAtomic(logPath, {
+        events: [
+          {
+            id: nextId,
+            at: new Date().toISOString(),
+            ts: 'Just now',
+            date: 'today',
+            type: 'reparse',
+            title: 'Preserved designed voices across re-analysis',
+            note: `Re-analysis omitted ${dropped.length} voiced ${noun} (${names}); carried their designed/reused voices forward.`,
+            actor: 'system',
+          },
+          ...prior,
+        ],
+      });
+    };
+    /* A record with no bookId (legacy) has no lock key; append unlocked as before. */
+    if (bookId) await withBookLock(bookId, append);
+    else await append();
   } catch (logErr) {
     console.warn('[analysis] carried-forward change-log write failed', logErr);
   }
@@ -7457,6 +7467,7 @@ export async function runMainAnalyzerJob(
             }
           }
           await logCarriedForwardCharacters(
+            record.bookId ?? undefined,
             writeDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
           );
@@ -9551,6 +9562,7 @@ export async function runSubsetAnalyzerJob(
             }
           }
           await logCarriedForwardCharacters(
+            record.bookId ?? undefined,
             writeDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),
           );

@@ -1182,19 +1182,22 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           },
         };
       case 'changeLog': {
-        /* Plan 289 — under the book-op this handler already holds; no lock of its
-           own (the analysis append is unlocked and predates this). */
-        const salt = await readRevisionSalt(bookDir, book.state);
-        assertRevisionFresh(
-          'changeLog',
-          baseRevision,
-          carriedFields(CHANGELOG_REVISION_FIELDS, body.patch),
-          await readJson<Record<string, unknown>>(changeLogJsonPath(bookDir)),
-          body.patch,
-          salt,
-        );
-        await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
-        revision = sliceRevision('changeLog', body.patch as Record<string, unknown>, salt);
+        /* Plan 289 — the revision check and the write are one `book`-locked
+           read -> write, shared with the analysis carried-forward append and
+           the reparse append (#3784; order book-op -> book). */
+        await withBookLock(book.bookId, async () => {
+          const salt = await readRevisionSalt(bookDir, book.state);
+          assertRevisionFresh(
+            'changeLog',
+            baseRevision,
+            carriedFields(CHANGELOG_REVISION_FIELDS, body.patch),
+            await readJson<Record<string, unknown>>(changeLogJsonPath(bookDir)),
+            body.patch,
+            salt,
+          );
+          await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
+          revision = sliceRevision('changeLog', body.patch as Record<string, unknown>, salt);
+        });
         break;
       }
       case 'state': {
@@ -1648,22 +1651,26 @@ async function applyReparse(
   ]);
 
   if (preservedEditCount > 0) {
-    const logPath = changeLogJsonPath(bookDir);
-    const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
-    const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
-    const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
-    const noun = preservedEditCount === 1 ? 'edit' : 'edits';
-    const newEntry = {
-      id: nextId,
-      at: new Date().toISOString(),
-      ts: 'Just now',
-      date: 'today',
-      type: opts.changeLogType,
-      title: opts.changeLogTitle,
-      note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
-      actor: 'system',
-    };
-    await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+    /* #3784 — the change-log append is a `book`-locked read -> write, shared
+       with the slice PUT and the analysis carried-forward append. */
+    await withBookLock(state.bookId, async () => {
+      const logPath = changeLogJsonPath(bookDir);
+      const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+      const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+      const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+      const noun = preservedEditCount === 1 ? 'edit' : 'edits';
+      const newEntry = {
+        id: nextId,
+        at: new Date().toISOString(),
+        ts: 'Just now',
+        date: 'today',
+        type: opts.changeLogType,
+        title: opts.changeLogTitle,
+        note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
+        actor: 'system',
+      };
+      await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+    });
   }
 
   /* #3400 pass 8 — the `state.json` write is its OWN book-locked step, taken
