@@ -18,7 +18,7 @@ import {
   STALL_THRESHOLD_MS,
 } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions } from '../store/analysis-slice';
+import { analysisActions, isStaleIncludeSnapshot } from '../store/analysis-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import {
   revisionsActions,
@@ -1031,14 +1031,8 @@ export function Layout() {
                  between the click and the server registering the job must not drop
                  the include's own fresh snapshot. */
               if (!(snap?.kind === 'subset' && snap.state === 'running')) {
-                const held = store.getState().analysis.activeStream;
                 if (
-                  held &&
-                  held.bookId === bookId &&
-                  held.kind === 'subset' &&
-                  held.state === 'running' &&
-                  held.subsetOrigin === 'include' &&
-                  Date.now() - held.lastTickAt > STALL_THRESHOLD_MS
+                  isStaleIncludeSnapshot(store.getState().analysis.activeStream, bookId, Date.now())
                 ) {
                   dispatch(analysisActions.clearActiveStream());
                 }

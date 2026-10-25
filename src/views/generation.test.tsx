@@ -5,7 +5,7 @@ import { render, screen, fireEvent, within, waitFor, act } from '@testing-librar
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
-import { chaptersSlice } from '../store/chapters-slice';
+import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
@@ -2984,6 +2984,83 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    /* #3774 pass 6 (J) — after a reload (or a tab opened mid-run) the layout's
+       hydrate rebuilds an include-origin snapshot but the stream that would end
+       it died with the old page. The Generate view's busy poll ends it: no
+       `analysis` job on `/busy` AND the snapshot quiet > STALL_THRESHOLD_MS. */
+    describe('J: a store-only include block ends with the run', () => {
+      const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
+      const hydrated = (lastTickAt: number) =>
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          bookTitle: 'the Coalfall Commission',
+          engine: 'local',
+          phaseId: 'attribution',
+          phaseLabel: 'Attribution',
+          phaseProgress: 0.5,
+          remainingMs: null,
+          lastTickAt,
+          state: 'running',
+          kind: 'subset',
+          subsetChapterIds: [3],
+          subsetOrigin: 'include',
+        } as any);
+
+      it('a hydrate-shaped include snapshot is cleared once /busy has no analysis job and it has been quiet > 30 s', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          expect(resume()).toBeDisabled();
+          expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
+          expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a live run (/busy reports analysis) is never cleared, however quiet its snapshot', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS * 3);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a fresh snapshot (< 30 s quiet) is not cleared even when /busy has no analysis job yet', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS - 10_000);
+          expect(getBookBusySpy).toHaveBeenCalled();
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
 
     it('I: Resume scoring on the QA card is disabled with the reason while an include run is live', async () => {

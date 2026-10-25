@@ -20,6 +20,7 @@ import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 import type { AnalysisFailureFix } from '../lib/api';
 import type { AnalysisEngine } from '../lib/model-id';
 import { combineSnapshotGpus } from '../lib/analyzer-endpoints';
+import { STALL_THRESHOLD_MS } from './chapters-slice';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -331,4 +332,26 @@ export const analysisActions = analysisSlice.actions;
 export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manuscriptId: string | null | undefined): boolean {
   const snap = state.analysis.activeStream;
   return !!snap && !!manuscriptId && snap.manuscriptId === manuscriptId && snap.kind !== 'subset' && snap.state === 'running';
+}
+
+/** #3774 — true when the held snapshot is a running include-origin subset run
+    for this book that has gone quiet (no tick for longer than
+    STALL_THRESHOLD_MS). A live run is ticked every few seconds, so a copy this
+    quiet is a stale mirror (the tab that started it closed or reloaded) — but
+    only once the server also reports no live subset run, which is the caller's
+    check. Shared by the layout's per-book hydrate and the Generate view's busy
+    poll so the two ends of the same rule cannot drift. */
+export function isStaleIncludeSnapshot(
+  held: AnalysisStreamSnapshot | null | undefined,
+  bookId: string,
+  now: number,
+): boolean {
+  return (
+    !!held &&
+    held.bookId === bookId &&
+    held.kind === 'subset' &&
+    held.state === 'running' &&
+    held.subsetOrigin === 'include' &&
+    now - held.lastTickAt > STALL_THRESHOLD_MS
+  );
 }

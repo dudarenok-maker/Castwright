@@ -123,7 +123,7 @@ import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
+import { analysisActions, isStaleIncludeSnapshot, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectIsOpenBook } from '../store/open-book';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
@@ -455,13 +455,26 @@ export function GenerationView({
   /* Only a row that can show Include / Retry / Accept smaller cast reads these:
      an excluded chapter, or a chapter with a subset run (error) row. */
   const hasIncludeSurface = chapters.some((c) => c.excluded) || Object.keys(subsetByChapter).length > 0;
+  /* #3774 — a block that comes from the store alone (a reload or a tab opened
+     mid-run: the stream that would end it died with the old page) is ended here,
+     by the poll: `/busy` reporting no `analysis` job while the include snapshot
+     has been quiet for STALL_THRESHOLD_MS means the run's lease is released. A
+     live run always reports `analysis`, so it is never cleared. */
+  const pollForStoreBlock = includeRunInStore;
   useEffect(() => {
-    if (!bookId || !hasIncludeSurface) return;
+    if (!bookId || !(hasIncludeSurface || pollForStoreBlock)) return;
     let cancelled = false;
     const load = async () => {
       try {
         const kinds = await api.getBookBusy(bookId);
         if (!cancelled) setBusyKinds((prev) => (prev.join() === kinds.join() ? prev : [...kinds]));
+        if (
+          !cancelled &&
+          !kinds.includes('analysis') &&
+          isStaleIncludeSnapshot(store.getState().analysis.activeStream, bookId, Date.now())
+        ) {
+          dispatch(analysisActions.clearActiveStream());
+        }
       } catch {
         /* best-effort: a failed read keeps the last known state */
       }
@@ -472,7 +485,7 @@ export function GenerationView({
       cancelled = true;
       clearInterval(id);
     };
-  }, [bookId, subsetRunning, hasIncludeSurface]);
+  }, [bookId, subsetRunning, hasIncludeSurface, pollForStoreBlock, dispatch, store]);
   /* #3774 — Include, Retry and "Accept smaller cast" are unavailable while a job
      holds the book OR this tab's own subset run is live (the busy read lags a
      run's start by up to one poll). */
