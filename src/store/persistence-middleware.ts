@@ -465,9 +465,47 @@ export const persistenceMiddleware: Middleware = (store) => {
   let clock = 0;
   /* Plan 289 (D6) — every running send-and-retry sequence's generation and
      base. An older sequence's 200 replaces the base of the newer ones, whose
-     patches were built after it and already include it. */
-  type Sequence = { gen: number; base?: SliceRevision; refreshable: boolean };
+     patches were built after it and already include it.
+     P6-4 (#3784) — `covered` holds the fields of every build of the key made
+     since the sequence started. The `state` slice is partial, so a newer
+     build supersedes only the fields it carries; the rest of a superseded
+     sequence's patch is left behind for a later send (`leaveBehind`). Every
+     other slice builds its whole content, so a newer build covers it all. */
+  type Sequence = { gen: number; base?: SliceRevision; refreshable: boolean; covered: Set<string> };
   const sequences = new Map<FlushKey, Set<Sequence>>();
+
+  /* P6-4 — a kept save's base is read for its own fields: each field is checked
+     against the revision it was built against. Two saves of a key combine with
+     `newer`'s values winning; the send's other fields are checked against the
+     key's last-known revision (`sendBase`). */
+  const mergeSaves = (older: KeptSave | undefined, newer: KeptSave): KeptSave => {
+    if (!older) return newer;
+    const base: SliceRevision = {};
+    for (const [save, skip] of [
+      [older, newer.patch],
+      [newer, {}],
+    ] as const) {
+      for (const f of Object.keys(save.patch)) {
+        const token = save.base?.[f];
+        if (!(f in skip) && token !== undefined) base[f] = token;
+      }
+    }
+    return {
+      patch: { ...older.patch, ...newer.patch },
+      base: Object.keys(base).length > 0 ? base : undefined,
+      onSuccess: newer.onSuccess ?? older.onSuccess,
+    };
+  };
+  const sendBase = (carried: KeptSave, latest: SliceRevision | undefined): SliceRevision | undefined => {
+    if (!carried.base) return undefined;
+    const base: SliceRevision = { ...latest };
+    for (const f of Object.keys(carried.patch)) {
+      const token = carried.base[f];
+      if (token !== undefined) base[f] = token;
+      else delete base[f];
+    }
+    return base;
+  };
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -528,11 +566,49 @@ export const persistenceMiddleware: Middleware = (store) => {
        key's last-known revision. Only a re-send carries it: every retry, and
        a send carrying a kept save even on its first attempt. A plain first
        attempt is a live edit built from the current screen, sent
-       unconditionally as before. */
-    const seq: Sequence = { gen, base: carried ? carried.base : known.get(key), refreshable: !carried };
+       unconditionally as before. The kept base applies to the kept fields;
+       the live fields merged with them are checked against the last-known
+       revision (P6-4). */
+    const seq: Sequence = {
+      gen,
+      base: carried ? sendBase(carried, known.get(key)) : known.get(key),
+      refreshable: !carried,
+      covered: new Set<string>(),
+    };
     const seqs = sequences.get(key) ?? new Set<Sequence>();
     seqs.add(seq);
     sequences.set(key, seqs);
+    /* P6-4 — the fields of this patch no newer build of the key carries. */
+    const uncovered = () =>
+      Object.fromEntries(Object.entries(patch as Record<string, unknown>).filter(([f]) => !seq.covered.has(f)));
+    /* P6-4 — a superseded sequence's uncovered fields are not superseded: they
+       ride the newer send if it is still queued, else they are kept for the
+       book's next flush, with the base they were sent with either way, so the
+       server refuses them if the book moved on. The book-meta handler goes
+       with them when they include its fields. */
+    const leaveBehind = () => {
+      const rest = uncovered();
+      if (Object.keys(rest).length === 0) return;
+      const own = Object.keys(rest).filter((f) => ownFields?.has(f));
+      const save: KeptSave = {
+        patch: rest,
+        base: seq.base,
+        onSuccess: own.length > 0 ? onSuccess : carried?.onSuccess,
+      };
+      const queued = pending.get(key) as Record<string, unknown> | undefined;
+      if (!queued) {
+        kept.set(key, mergeSaves(kept.get(key), save));
+        return;
+      }
+      pending.set(key, { ...queued, ...rest });
+      carriedKept.set(key, mergeSaves(carriedKept.get(key), save));
+      if (handler && own.length > 0) {
+        if (!toastPending.has(key)) toastPending.set(key, handler);
+        const fields = rollbackFields.get(key) ?? new Set<string>();
+        for (const f of own) fields.add(f);
+        rollbackFields.set(key, fields);
+      }
+    };
     const attemptSend = async (): Promise<{ slice: StateSlice; ok: boolean }> => {
       /* #3421 — a failed PUT is re-sent with the patch captured above, never
          one rebuilt from the store: by the time it fails the stage may name
@@ -568,7 +644,10 @@ export const persistenceMiddleware: Middleware = (store) => {
         } catch (err) {
           console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
           const refused = PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err));
+          /* P6-4 — superseded only when the newer builds carry every field of
+             this patch; on the partial `state` slice they may not. */
           const superseded = gen !== (generation.get(key) ?? 0);
+          const overtaken = superseded && Object.keys(uncovered()).length === 0;
           /* Plan 289 (D2) — the book changed since this save was made, so the
              server refused it and wrote nothing. It is not kept or re-sent
              (it is a 4xx), and not rolled back: the rollback baseline is older
@@ -579,7 +658,7 @@ export const persistenceMiddleware: Middleware = (store) => {
              the outcome: no toast, and no re-read, which would discard the
              draft and re-hydrate over edits the screen already shows (P6-3). */
           if (isStaleRefusal(err)) {
-            if (!superseded) {
+            if (!overtaken) {
               const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
               store.dispatch(
                 notificationsActions.pushToast({
@@ -594,14 +673,21 @@ export const persistenceMiddleware: Middleware = (store) => {
               );
               store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
             }
-            return { slice, ok: superseded };
+            return { slice, ok: overtaken };
           }
-          /* A newer full-slice write for this key owns the outcome (and the
-             user's current draft); don't re-send the stale patch over it. */
-          if (superseded) return { slice, ok: true };
+          /* A newer write for this key owns the outcome (and the user's
+             current draft); don't re-send the stale patch over it. The fields
+             it does not carry are left behind (P6-4). */
+          if (superseded) {
+            if (!refused) leaveBehind();
+            return { slice, ok: true };
+          }
           if (!refused && attempt < FLUSH_RETRY_DELAYS_MS.length) {
             await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[attempt]));
-            if (gen !== (generation.get(key) ?? 0)) return { slice, ok: true };
+            if (gen !== (generation.get(key) ?? 0)) {
+              leaveBehind();
+              return { slice, ok: true };
+            }
             continue;
           }
           /* Final failure of the LATEST write (#2230). The rollback restores a
@@ -618,14 +704,18 @@ export const persistenceMiddleware: Middleware = (store) => {
              keeps its other fields (#3784), with the base they were sent with
              and the carried kept save's success handler: the screen still
              shows them, and the server refuses them if the book moved on. */
+          /* A field an older superseded send left behind (P6-4) is kept with it. */
           if (!refused && !rolledBack) {
-            kept.set(key, { patch: patch as Record<string, unknown>, base: seq.base, onSuccess });
+            kept.set(
+              key,
+              mergeSaves(kept.get(key), { patch: patch as Record<string, unknown>, base: seq.base, onSuccess }),
+            );
           } else if (!refused) {
             const rest = Object.fromEntries(
               Object.entries(patch as Record<string, unknown>).filter(([f]) => !ownFields?.has(f)),
             );
             if (Object.keys(rest).length > 0) {
-              kept.set(key, { patch: rest, base: seq.base, onSuccess: carried?.onSuccess });
+              kept.set(key, mergeSaves(kept.get(key), { patch: rest, base: seq.base, onSuccess: carried?.onSuccess }));
             }
           }
           if (handler) {
@@ -795,6 +885,11 @@ export const persistenceMiddleware: Middleware = (store) => {
        write; in-flight older flushes keep their captured (lower) generation
        and are therefore gated out of prune/rollback in flush. */
     generation.set(key, (generation.get(key) ?? 0) + 1);
+    /* P6-4 — the running sequences of the key are superseded only in the
+       fields this build carries. */
+    for (const s of sequences.get(key) ?? []) {
+      for (const f of Object.keys(built as Record<string, unknown>)) s.covered.add(f);
+    }
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
     /* #3784 — a `confirmCast` merged after a `commitDraft` keeps the book-meta
        handler: the send still carries the book-meta fields, so its failure

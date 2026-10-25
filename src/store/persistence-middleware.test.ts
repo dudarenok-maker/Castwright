@@ -1611,4 +1611,178 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(marks(store)).toBe(1);
     restore();
   });
+
+  /* P6-4 (#3784) — the `state` slice is partial: a newer send of the key
+     supersedes only the fields it carries. A kept castConfirmed rides a
+     commit whose send fails; a title commit then lands inside its backoff. */
+  const commit = (store: S, field: 'title' | 'notes', value: string) => {
+    store.dispatch(bookMetaActions.setDraftField({ field, value }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+  };
+  async function supersedeKeptConfirm(store: S, disk: Disk) {
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+    disk.failNext(1, isState);
+    commit(store, 'notes', 'a');
+    await advance(600);
+    commit(store, 'title', 'T');
+    await advance(2000);
+    expect(outcomes(disk).slice(-2)).toEqual(['503', 'ok']);
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T', notes: 'a' });
+  }
+  const failToasts = (store: S) =>
+    (store.getState() as { notifications: { toasts: unknown[] } }).notifications.toasts.length;
+
+  it('a superseded state send keeps a carried kept field the newer send did not carry', async () => {
+    const { disk, store, restore } = setup();
+    await supersedeKeptConfirm(store, disk);
+    const toasts = failToasts(store);
+    const flushed = store.dispatch(flushBookPersistence('b1'));
+    expect(flushed).not.toBeNull();
+    await advance(0);
+    expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    expect(failToasts(store)).toBe(toasts);
+    restore();
+  });
+
+  it("a later edit that takes the left-behind field is not refused for the user's own landed save", async () => {
+    const { disk, store, restore } = setup();
+    await supersedeKeptConfirm(store, disk);
+    commit(store, 'title', 'T2');
+    await advance(600);
+    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'T2' });
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T2' });
+    expect(staleToasts(store)).toHaveLength(0);
+    restore();
+  });
+
+  it('a left-behind field is refused once the book changed elsewhere: toast and re-read', async () => {
+    const { disk, store, restore } = setup();
+    await supersedeKeptConfirm(store, disk);
+    disk.reparse('b1');
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
+    expect(outcomes(disk).at(-1)).toBe('409');
+    expect(disk.books.get('b1')!.state.castConfirmed).toBe(false);
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(marks(store)).toBe(1);
+    restore();
+  });
+
+  it('a newer save given up on after leaving the book keeps the field an older send left behind', async () => {
+    const { disk, store, restore } = setup();
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+    /* The carried send fails once; the title commit, sent as the user leaves,
+       fails all four attempts. */
+    disk.failNext(5, isState);
+    commit(store, 'notes', 'a');
+    await advance(600);
+    commit(store, 'title', 'T');
+    store.dispatch(uiSlice.actions.goHome());
+    await advance(8000);
+    expect(outcomes(disk).slice(-5)).toEqual(['503', '503', '503', '503', '503']);
+
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    restore();
+  });
+
+  it('a stale refusal of a field the newer send did not carry still toasts and re-reads', async () => {
+    const { disk, store, restore } = setup();
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+    let release!: () => void;
+    putBookState.mockImplementationOnce(
+      (id: string, req: never) =>
+        new Promise((resolve, reject) => {
+          release = () => {
+            try {
+              resolve(disk.put(id, req));
+            } catch (e) {
+              reject(e);
+            }
+          };
+        }),
+    );
+    commit(store, 'notes', 'a');
+    await advance(600);
+    disk.reparse('b1');
+    commit(store, 'title', 'T');
+    release();
+    await advance(600);
+    expect(outcomes(disk)).toEqual(['503', '503', '503', '503', '409', 'ok']);
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: false, title: 'T' });
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(marks(store)).toBe(1);
+    restore();
+  });
+
+  it('book-meta fields that ride a queued confirmCast keep their refusal toast and rollback', async () => {
+    const { store, restore } = setup();
+    let fail!: () => void;
+    putBookState.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error('Book state PUT failed (503): Service Unavailable'));
+        }),
+    );
+    putBookState.mockImplementationOnce(() =>
+      Promise.reject(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.')),
+    );
+    commit(store, 'title', 'Collides');
+    await advance(600);
+    store.dispatch({ type: 'ui/confirmCast' });
+    fail();
+    await advance(600);
+    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'Collides' });
+    const state = store.getState() as {
+      bookMeta: { saved: { b1: { title: string } }; draft: { title?: string } | null };
+      notifications: { toasts: { dedupeKey?: string }[] };
+    };
+    expect(state.notifications.toasts.map((t) => t.dedupeKey)).toContain('book-meta-persist-failed');
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(state.bookMeta.draft?.title).toBe('Collides');
+    restore();
+  });
+
+  it('a superseded state send whose newer edit is still queued rides along with it', async () => {
+    const { disk, store, restore } = setup();
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+    /* The carried send's 503 arrives after the title commit was queued. */
+    let fail!: () => void;
+    putBookState.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error('Book state PUT failed (503): Service Unavailable'));
+        }),
+    );
+    commit(store, 'notes', 'a');
+    await advance(600);
+    commit(store, 'title', 'T');
+    fail();
+    await advance(600);
+    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+    restore();
+  });
 });
