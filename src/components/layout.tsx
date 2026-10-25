@@ -898,10 +898,10 @@ export function Layout() {
           if (res === null) {
             if (revisionsOnly) {
               /* Still confirm the (empty) read so this effect doesn't refetch
-                 on every render. For a full reload, leave every per-book
-                 slice on its in-memory defaults as before — the
-                 library-fallback hydrate below seeds bookMeta from the
-                 library entry. */
+                 on every render. The full-reload branch below resets the
+                 per-book slices when they hold another book (#3624);
+                 there the library-fallback hydrate seeds bookMeta from
+                 the library entry. */
               dispatch(revisionsActions.hydrate({ bookId, state: null, requestSeq }));
               revisionsReadFor.current = bookId;
             } else {
