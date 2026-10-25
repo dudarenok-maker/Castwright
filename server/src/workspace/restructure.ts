@@ -873,6 +873,7 @@ export function applySplit(
   sentences: readonly RestructureSentence[],
   op: SplitOp,
 ): RestructureResult {
+  assertHintsPairWithState(state, hints);
   const sortedHints = sortById(hints);
   const sortedHintsIds = sortedHints.map((h) => h.id);
   const targetIdx = sortedHintsIds.indexOf(op.chapterId);

@@ -360,6 +360,17 @@ describe('merge/reorder refuse when hints do not pair with state.json (#3791)', 
     expect(snapshotDisk()).toEqual(before);
   });
 
+  it('split: equal counts but mismatched ids answers 409, nothing written', async () => {
+    seedStateWithChapterIds([1, 2, 4]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 2, afterSentenceId: 1 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+
   it('reorder: equal counts but mismatched ids answers 409, nothing written', async () => {
     seedStateWithChapterIds([1, 2, 4]);
     const before = snapshotDisk();
