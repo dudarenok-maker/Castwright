@@ -787,16 +787,11 @@ test('#3271: a --steps run is left alone (the deliberate narrow developer/hook f
 
 
 // check-audit.test.mjs reads audit-waivers.json (the committed-waivers
-// validity test) and BOTH lockfiles (the braces/micromatch/fast-glob waiver
-// premise pin) as TEXT at RUNTIME - no module-graph edge. Without these
-// extraFiles entries, a waivers-only or server-lockfile-only diff leaves
-// test:hooks [cached] locally and skips its CI leg (computeScopes derives from
-// the same STEPS[] entry). A root package-lock.json diff already trips
-// computeShared, but is pinned here too so the entry cannot be dropped.
-for (const f of ['audit-waivers.json', 'package-lock.json', 'server/package-lock.json']) {
-  test(`stepTouchedByDiff + computeScopes: a ${f}-only diff puts test:hooks in scope (check-audit.test.mjs reads it at runtime)`, () => {
-    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [f]), true);
-    assert.equal(computeScopes([f]).step_test_hooks, true);
-  });
-}
+// validity test) as TEXT at RUNTIME - no module-graph edge. Without this
+// extraFiles entry, a waivers-only diff leaves test:hooks [cached] locally and
+// skips its CI leg (computeScopes derives from the same STEPS[] entry).
+test('stepTouchedByDiff + computeScopes: an audit-waivers.json-only diff puts test:hooks in scope (check-audit.test.mjs reads it at runtime)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['audit-waivers.json']), true);
+  assert.equal(computeScopes(['audit-waivers.json']).step_test_hooks, true);
+});
 
