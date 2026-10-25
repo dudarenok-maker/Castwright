@@ -30,12 +30,13 @@ let makeBookIdFn: typeof import('../workspace/paths.js').makeBookId;
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-precondition-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ bookStateRouter }, { voiceOverrideLinkedRouter }, { importRouter }, { chaptersRestructureRouter }] =
+  const [{ bookStateRouter }, { voiceOverrideLinkedRouter }, { importRouter }, { chaptersRestructureRouter }, { backupRouter }] =
     await Promise.all([
       import('./book-state.js'),
       import('./voice-override-linked.js'),
       import('./import.js'),
       import('./chapters-restructure.js'),
+      import('./backup.js'),
     ]);
   runBookJobFn = (await import('../workspace/book-jobs.js')).runBookJob;
   importPortableBundleFn = (await import('../import/scan-import-folder.js')).importPortableBundle;
@@ -45,6 +46,7 @@ beforeAll(async () => {
   app.use('/api/books', bookStateRouter);
   app.use('/api/books', voiceOverrideLinkedRouter);
   app.use('/api/books', chaptersRestructureRouter);
+  app.use('/api/books', backupRouter);
   app.use('/api', importRouter);
 });
 
@@ -399,5 +401,29 @@ describe('PUT /:bookId/state — baseRevision precondition', () => {
     expect(moved.body.revision).toEqual(
       sliceRevision('state', readJsonFile(join(dirFor(`${b.title} Moved`), '.audiobook', 'state.json')), salt),
     );
+  });
+});
+
+describe('backup restore — editEpoch (P6-2 b)', () => {
+  it('a restore mints a fresh editEpoch, so a save based on a pre-rotation read is refused' , async () => {
+    const b = seed('Restore');
+    const readState = () => readJsonFile(b.ab('state.json'));
+    const base = await getRevs(b.bookId); // read under ep_seed
+    const snap = await request(app).post(`/api/books/${b.bookId}/backups/now`);
+    expect(snap.status).toBe(200);
+    // a re-parse rotates the epoch (written directly: the rotation is what matters here)
+    writeFileSync(b.ab('state.json'), JSON.stringify({ ...readState(), editEpoch: 'ep_rotated' }));
+    const preRestoreEpoch = readState().editEpoch;
+    const restored = await request(app).post(`/api/books/${b.bookId}/backups/restore`).send({ backupFile: snap.body.file });
+    expect(restored.status).toBe(200);
+    const after = readState();
+    expect(after.editEpoch).not.toBe('ep_seed');
+    expect(after.editEpoch).not.toBe(preRestoreEpoch);
+    expect(typeof after.editEpoch).toBe('string');
+    const before = readState();
+    const res = await put(b.bookId, 'state', { castConfirmed: true }, base.state);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('stale_revision');
+    expect(readState()).toEqual(before);
   });
 });

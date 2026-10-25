@@ -23,6 +23,7 @@ import { withLocatedBook } from './book-state-update.js';
 import { writeJsonAtomic } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { withStateJsonLock } from './file-lock.js';
+import { mintEditEpoch } from './slice-revision.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
@@ -248,6 +249,10 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
       await writeStateJsonAtomic(stateJsonPath(bookDir), {
         ...parsed,
         language: parsed.language ?? null,
+        /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
+           own epoch must not come back, or a save based on a read taken under
+           it would pass the revision check against rewound state. */
+        editEpoch: mintEditEpoch(),
       });
     });
   });
