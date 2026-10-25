@@ -1,4 +1,4 @@
-import type { components } from './api-types';
+import type { components, paths as ApiPaths } from './api-types';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -583,12 +583,6 @@ export interface DroppedQuotesResponse {
   batches: DroppedQuotesBatch[];
 }
 
-/* Cold-boot rehydration payload for the AnalysisPill across browser
-   reload + server restart. Matches the on-disk
-   .audiobook/analysis-state.json shape one-for-one (the server
-   returns it verbatim once the running→paused coercion has been
-   applied). See docs/features/archive/32-sticky-analysis.md "Cold-boot
-   rehydration". */
 /** Wire shape for `GET /api/library/active-analyses` — every book in the
     workspace whose `.audiobook/analysis-state.json` snapshot resolves to
     `paused` or `halted`, sorted by `writtenAt` DESC (freshest first).
@@ -604,11 +598,15 @@ export interface DroppedQuotesResponse {
     endpoint. */
 export type ActiveAnalysisSummary = components['schemas']['ActiveAnalysisSummary'];
 
-export interface ActiveAnalysesResponse {
-  snapshots: ActiveAnalysisSummary[];
-}
+export type ActiveAnalysesResponse =
+  ApiPaths['/api/library/active-analyses']['get']['responses']['200']['content']['application/json'];
 
-/* GET /api/books/:bookId/analysis/state — generated from openapi.yaml (#3787). */
+/* Cold-boot rehydration payload for the AnalysisPill across browser reload + server
+   restart (`GET /api/books/:bookId/analysis/state`, generated from openapi.yaml, #3787).
+   Either the live in-flight job's snapshot (`running`, may carry the live-only
+   `subsetOrigin`) or the persisted .audiobook/analysis-state.json with a stored
+   `running` coerced to `paused`. See docs/features/archive/32-sticky-analysis.md
+   "Cold-boot rehydration". */
 export type AnalysisStateResponse = components['schemas']['AnalysisState'];
 
 export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';

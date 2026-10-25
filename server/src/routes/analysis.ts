@@ -3304,8 +3304,9 @@ export function activeAnalysisManuscripts(): string[] {
     handler lives in routes/book-state.ts; only this snapshot is built here).
     Returns null when no job is running OR the job's controller has
     been aborted — both cases fall back to disk in the GET handler.
-    The synthesised file shape matches what the disk writer produces,
-    so the discovery endpoint can return either source unchanged.
+    The synthesised snapshot mirrors the disk shape, plus the live-only
+    `subsetOrigin` the disk writer never writes; the discovery endpoint
+    returns either source.
 
     Plan 32 D1: subset retries win over main when both are live for the
     same manuscript, because the subset's progress reflects the more
