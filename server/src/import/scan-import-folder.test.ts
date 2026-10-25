@@ -1054,6 +1054,110 @@ describe('importPortableBundle', () => {
           rmSync(target, { recursive: true, force: true });
         }
       });
+
+      /* An overwrite whose target already carries the bundle's id adds no carrier,
+         so it keeps the id whatever else is on disk -- a pre-existing twin or an
+         unreadable sibling (minting would orphan the book's id-keyed ledger /
+         analyzer cache). */
+      it("an own-bundle overwrite keeps the target's id despite a pre-existing twin", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const target = targetDirFor(state);
+        const twin = join(BOOKS_ROOT, state.author, state.series, 'Pre Existing Twin');
+        rmSync(target, { recursive: true, force: true });
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          mkdirSync(dotAudiobook(twin), { recursive: true });
+          writeFileSync(
+            stateJsonPath(twin),
+            JSON.stringify({ ...state, bookId: 'demo__standalones__pre-existing-twin' }, null, 2),
+          );
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          expect(readState(target).manuscriptId).toBe(state.manuscriptId);
+          expect(readHints(target).entries[0].manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(twin, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
+      it("an own-bundle overwrite keeps the target's id despite an unreadable sibling state.json", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const target = targetDirFor(state);
+        const odd = join(BOOKS_ROOT, state.author, state.series, 'Unreadable Overwrite Sibling');
+        rmSync(target, { recursive: true, force: true });
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          mkdirSync(dotAudiobook(odd), { recursive: true });
+          mkdirSync(stateJsonPath(odd)); // EISDIR on read
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          expect(readState(target).manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(odd, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
+      /* NTFS / default APFS: the bundle's title differs from the folder's only in
+         case, yet `existsSync` finds it. It is still the same book, so the id is kept. */
+      it(
+        'a case-mismatched own-bundle overwrite keeps the id (case-insensitive filesystem only)',
+        async (ctx) => {
+          const probe = join(tmpRoot, 'CaseProbeDir');
+          mkdirSync(probe, { recursive: true });
+          const caseInsensitiveFs = existsSync(join(tmpRoot, 'caseprobedir'));
+          rmSync(probe, { recursive: true, force: true });
+          if (!caseInsensitiveFs) ctx.skip('case-sensitive filesystem: a case-only title is a different folder');
+          const state = { ...hintsState(), title: 'Rv Case Twin', bookId: 'demo__standalones__rv-case-twin' };
+          const bundle = await bundleWithHints(state);
+          const existing = targetDirFor(state, 'rv case twin');
+          rmSync(existing, { recursive: true, force: true });
+          try {
+            mkdirSync(dotAudiobook(existing), { recursive: true });
+            writeFileSync(stateJsonPath(existing), JSON.stringify(state, null, 2));
+            writeFileSync(join(existing, 'manuscript.txt'), manuscript);
+            await importPortableBundle(bundle, { onConflict: 'overwrite' });
+            expect(readState(existing).manuscriptId).toBe(state.manuscriptId);
+          } finally {
+            rmSync(existing, { recursive: true, force: true });
+          }
+        },
+      );
+
+      /* The overwrite path must also drop an unreadable bundle hints file from its
+         staged list: left in, `bundleHasHints` stays true and the rename of the
+         deleted file throws ENOENT (a raw absolute path) after state.json is live,
+         leaving the stale local hints beside it. */
+      it('an overwrite with a malformed bundle hints file imports and drops the stale local hints', async () => {
+        const state = hintsState();
+        const sourceDir = writeSourceBook(state, manuscript);
+        writeFileSync(manuscriptHintsJsonPath(sourceDir), '{');
+        const bundle = (await buildPortableBundle(sourceDir, state)).buffer;
+        const target = targetDirFor(state);
+        const holder = join(BOOKS_ROOT, state.author, state.series, 'Malformed Hints Holder');
+        rmSync(target, { recursive: true, force: true });
+        try {
+          mkdirSync(dotAudiobook(holder), { recursive: true });
+          writeFileSync(
+            stateJsonPath(holder),
+            JSON.stringify({ ...state, bookId: 'demo__standalones__malformed-hints-holder' }, null, 2),
+          );
+          mkdirSync(dotAudiobook(target), { recursive: true });
+          writeFileSync(
+            stateJsonPath(target),
+            JSON.stringify({ ...state, bookId: 'demo__standalones__own', manuscriptId: 'mns_ownA' }, null, 2),
+          );
+          writeFileSync(join(target, 'manuscript.txt'), manuscript);
+          writeFileSync(manuscriptHintsJsonPath(target), '{"stale":true}');
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          expect(readState(target).manuscriptId).not.toBe(state.manuscriptId);
+          expect(existsSync(manuscriptHintsJsonPath(target))).toBe(false);
+        } finally {
+          rmSync(holder, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
     });
   });
 

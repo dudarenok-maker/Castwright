@@ -458,13 +458,17 @@ export async function importPortableBundle(
         if (!existsSync(targetDir) || (live?.bookId ?? null) !== expectedId) {
           throw new BundleConflictError(targetDir);
         }
-        /* The target folder is left out of the walk: its own ids are not "taken"
-           against the bundle replacing it (keyed by folder -- its state may carry no
-           bookId). A book OTHER than the target carrying the bundle's manuscriptId
-           still forces a fresh one (#3823). */
-        const ids = await takenBookIds(targetDir);
+        /* #3823 -- mint a fresh manuscriptId only when this write would ADD a
+           carrier of an id another book holds. A target that already carries the
+           bundle's id keeps it, whatever twins or unreadable siblings exist (it
+           adds no carrier, and its id-keyed ledger / analyzer cache stay attached);
+           pre-existing twins are not repaired here. */
+        const ids = await takenBookIds();
         const bookId = expectedId ?? idForNewBook(ids, baseTitle, true);
-        const manuscriptId = await freshManuscriptId(ids);
+        const manuscriptId =
+          state.manuscriptId && live?.manuscriptId === state.manuscriptId
+            ? state.manuscriptId
+            : await freshManuscriptId(ids);
         await writeStagedState(bookId, baseTitle, manuscriptId);
         /* #3703 -- the manuscript on disk is becoming the bundle's, so a local
            restructure's hints describe another book's bodies and can still
@@ -494,12 +498,12 @@ export async function importPortableBundle(
           });
         } finally {
           /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
-             warm ManuscriptRecord for either id is now another book's text: drop
-             both, and the next reader (a restructure, an analysis start)
-             re-hydrates from disk. In a `finally`: an overwrite that fails part-way
+             warm ManuscriptRecord for the old id or the id now written is stale: drop
+             both (a minted id's other carrier is untouched), and the next reader
+             (a restructure, an analysis start) re-hydrates from disk. In a `finally`: an overwrite that fails part-way
              has still replaced some files, so the warm record is stale either way. */
           if (live?.manuscriptId) removeManuscript(live.manuscriptId);
-          if (state.manuscriptId) removeManuscript(state.manuscriptId);
+          if (manuscriptId) removeManuscript(manuscriptId);
         }
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });

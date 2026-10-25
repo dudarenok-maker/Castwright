@@ -35,7 +35,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
   LOCK_ACQUISITION_TIMEOUT_CODE,
   LOCK_CONTENTION_REQUEST_ERROR,
@@ -649,15 +649,11 @@ export interface TakenIds {
   uncertain: boolean;
 }
 
-/** `exceptDir` leaves one folder out of the walk -- the overwrite target, whose
- *  own ids must not count against the bundle that is replacing it (identified by
- *  folder, not id: its state may carry no bookId or not be readable). */
-export async function takenBookIds(exceptDir?: string): Promise<TakenIds> {
+export async function takenBookIds(): Promise<TakenIds> {
   const taken = new Set<string>();
   const takenManuscriptIds = new Set<string>();
   let uncertain = false;
   for (const dir of walkBookDirs()) {
-    if (exceptDir !== undefined && resolve(dir) === resolve(exceptDir)) continue;
     let raw: BookStateJson | null;
     try {
       raw = await readBookStateOrThrow(dir);
