@@ -188,7 +188,7 @@ describe('POST /generation is a registered render job (#3711)', () => {
     expect(parseTicks(res.text).some((t) => t.type === 'chapter_complete')).toBe(true);
     expect(bookJobKinds(bookId)).toEqual([]);
 
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(bookDir)).toBe(false);
   });
@@ -200,7 +200,7 @@ describe('POST /generation is a registered render job (#3711)', () => {
     const res = await generate();
     expect(parseTicks(res.text).some((t) => t.type === 'chapter_failed')).toBe(true);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('a render callback that THROWS outside the per-chapter handler still deregisters the job and ends the stream with idle', async () => {
@@ -218,14 +218,14 @@ describe('POST /generation is a registered render job (#3711)', () => {
     expect(ticks.map((t) => t.type)).toContain('idle'); // the subscribers were ended
     expect(isGenerationActive(bookId)).toBe(false); // the in-flight map entry was removed
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('releases the registration on an early return (no target chapters)', async () => {
     const res = await generate({ chapterIds: [99], force: true });
     expect(parseTicks(res.text).map((t) => t.type)).toContain('idle');
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('answers a start for a deleted book with the SSE chapter_failed frame, registering nothing', async () => {
@@ -265,6 +265,6 @@ describe('POST /generation is a registered render job (#3711)', () => {
     scoring.open();
     await __awaitScoringSettled(bookId);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 });

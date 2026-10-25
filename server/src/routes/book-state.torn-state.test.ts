@@ -113,7 +113,7 @@ describe('a torn state.json is recovered and healed by the in-lock re-read (#362
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { notes: 'hello' } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(readState().notes).toBe('hello');
   });
 

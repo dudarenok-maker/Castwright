@@ -297,7 +297,7 @@ function expectLandedInNewFolder(
   routeStatus = 200,
 ): void {
   expect(r.routeRes.status).toBe(routeStatus);
-  expect(r.renameRes.status).toBe(204);
+  expect(r.renameRes.status).toBe(200);
   expect(existsSync(book.bookDir)).toBe(false);
 }
 

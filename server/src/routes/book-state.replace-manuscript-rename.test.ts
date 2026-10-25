@@ -172,7 +172,7 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
     expect(res.status).toBe(200);
     const r = await rename();
-    expect(r.status).toBe(204);
+    expect(r.status).toBe(200);
     expect(existsSync(oldDir)).toBe(false);
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.title).toBe(NEW_TITLE);
@@ -188,7 +188,7 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
       .attach('file', UPLOAD, 'revised.md');
     expect(res.status).toBe(200);
     const r = await rename();
-    expect(r.status).toBe(204);
+    expect(r.status).toBe(200);
     expect(existsSync(oldDir)).toBe(false);
     const state = JSON.parse(readFileSync(join(newDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.title).toBe(NEW_TITLE);
@@ -201,7 +201,7 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
     const put = putQueuedDuringArms({ castConfirmed: true });
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
     expect(res.status).toBe(200);
-    expect((await put()).status).toBe(204);
+    expect((await put()).status).toBe(200);
     const state = JSON.parse(readFileSync(join(oldDir, '.audiobook', 'state.json'), 'utf8'));
     /* the PUT ran after the reparse, so its castConfirmed lands last */
     expect(state.castConfirmed).toBe(true);
@@ -217,7 +217,7 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
     const r = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'state', patch: { title: NEW_TITLE } });
-    expect(r.status).toBe(204);
+    expect(r.status).toBe(200);
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(oldDir)).toBe(false);
   });

@@ -115,7 +115,7 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
 
     /* PUT actually wrote the file. */
     const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
@@ -147,12 +147,12 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
     let res = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences: first } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     res = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences: second } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const get = await request(app).get(`/api/books/${bookId}/state`);
     expect(get.body.manuscriptEdits.sentences).toEqual(second);
@@ -186,7 +186,7 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
 
     const get = await request(app).get(`/api/books/${bookId}/state`);
     expect(get.status).toBe(200);

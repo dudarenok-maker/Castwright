@@ -195,7 +195,7 @@ describe('#3711 -- manuscript import mints a unique bookId', () => {
     const first = await importBook('Twin');
     expect(first.status).toBe(201);
     const renamed = await rename(first.bookId, 'Twin Renamed');
-    expect(renamed.status).toBe(204);
+    expect(renamed.status).toBe(200);
 
     const second = await importBook('Twin');
     expect(second.status).toBe(201);
@@ -256,7 +256,7 @@ describe('#3711 -- sample load detects "already loaded" by bookId anywhere on di
     expect(loaded.body).toMatchObject({ bookId: TOUR_ID, alreadyLoaded: false });
 
     const renamed = await rename(TOUR_ID, 'My Renamed Sample');
-    expect(renamed.status).toBe(204);
+    expect(renamed.status).toBe(200);
 
     const again = await request(app).post(`/api/samples/${SLUG}/load`);
     expect(again.status).toBe(200);
@@ -441,7 +441,7 @@ describe('#3711 -- backgroundFetchCover writes under book-op, into the folder th
     const { backgroundFetchCover } = await import('../cover/store.js');
     const done = backgroundFetchCover(oldDir, 'Cover Book', AUTHOR, created.bookId);
     const renamed = await rename(created.bookId, 'Cover Book Renamed'); // the fetch is still "in flight"
-    expect(renamed.status).toBe(204);
+    expect(renamed.status).toBe(200);
     finishSearch();
     await done;
     vi.unstubAllGlobals();

@@ -67,6 +67,25 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+/** Thrown from inside a slice's locked span when a conditional write carries a
+ *  stale field. The route maps it to 409 `stale_revision`; nothing was written. */
+export class StaleRevisionError extends Error {
+  constructor(public readonly fields: string[]) {
+    super('stale_revision');
+    this.name = 'StaleRevisionError';
+  }
+}
+
+/** A client-echoed base: a flat map of string tokens. */
+export function isSliceRevision(v: unknown): v is SliceRevision {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    !Array.isArray(v) &&
+    Object.values(v as Record<string, unknown>).every((t) => typeof t === 'string')
+  );
+}
+
 /** A fresh edit epoch. Server-owned: `state.json.editEpoch`. */
 export function mintEditEpoch(): string {
   return `ep_${randomBytes(8).toString('base64url').slice(0, 10)}`;

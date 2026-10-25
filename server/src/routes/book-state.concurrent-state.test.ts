@@ -129,7 +129,7 @@ describe('PUT /:bookId/state folder rename vs a toggle on the new path (#3700)',
       const put = await request(app)
         .put(`/api/books/${bookId}/state`)
         .send({ slice: 'state', patch: { title: 'Renamed Book' } });
-      expect(put.status).toBe(204);
+      expect(put.status).toBe(200);
       expect(toggleP, 'toggle never fired -- the rename path was not exercised').toBeDefined();
       await toggleP;
 

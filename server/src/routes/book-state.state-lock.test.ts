@@ -233,7 +233,7 @@ describe('PUT /:bookId/state (slice state) waits on the state lock', () => {
     expect(readFileSync(statePath, 'utf8')).toBe(before);
     release();
     const [res] = await Promise.all([p, held]);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(readState().notes).toBe('locked note');
   });
 

@@ -219,7 +219,7 @@ describe('#3711 task 6 -- two-book routes: a rename of the OTHER book queued beh
       'Link Target Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(target.bookDir)).toBe(false); // the old folder was not recreated
     expect(castOf(r.newDir).find((c) => c.id === 'bob')?.aliases).toContain('Alice');
   });
@@ -237,7 +237,7 @@ describe('#3711 task 6 -- two-book routes: a rename of the OTHER book queued beh
       'Pair Other Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(other.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'bob')?.notLinkedTo).toEqual([
       { bookId: source.bookId, characterId: 'alice' },
@@ -262,7 +262,7 @@ describe('#3711 task 6 -- two-book routes: a rename of the OTHER book queued beh
       'Override Target Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(target.bookDir)).toBe(false);
     expect((castOf(r.newDir).find((c) => c.id === 'bob') as { description?: string }).description).toBe(
       'A long and rich description.',
@@ -290,7 +290,7 @@ describe('#3711 task 6 -- series loops: one book-op per sibling, resolved inside
       'Patch Sibling Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(sibling.bookDir)).toBe(false);
     expect(castOf(source.bookDir).find((c) => c.id === 'alice')?.gender).toBe('female');
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.gender).toBe('female');
@@ -310,7 +310,7 @@ describe('#3711 task 6 -- series loops: one book-op per sibling, resolved inside
     );
     expect(r.routeRes.body).toMatchObject({ failed: [] });
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(mate.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen?.name).toBe('Linked Voice');
   });
@@ -328,7 +328,7 @@ describe('#3711 task 6 -- the cross-book walker (PUT /voices/:voiceId/override)'
     /* The walker writes A, then takes B's book-op and parks on B's cast lock. */
     const r = await renameBehind(b, castGate(b.bookDir), () => seriesOverride(a.bookId), 'Walk B Renamed');
     expect(r.routeRes.status).toBe(204);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(b.bookDir)).toBe(false); // the old folder was not recreated
     expect(castOf(a.bookDir).find((c) => c.id === 'bob')?.overrideTtsVoices?.qwen?.name).toBe('qwen-walk');
     expect(castOf(r.newDir).find((c) => c.id === 'bob')?.overrideTtsVoices?.qwen?.name).toBe('qwen-walk');
@@ -354,7 +354,7 @@ describe('#3711 task 6 -- the cross-book walker (PUT /voices/:voiceId/override)'
     await waitUntil(() => waiters(key) >= 2, 'the walker to queue on book-op behind the rename');
     release();
     const [renameRes, walkRes] = await Promise.all([renameP, walkP]);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(walkRes.status).toBe(204); // A was updated
     const movedDir = paths.bookDirByDisplay(AUTHOR, 'Another Saga', b.title);
     expect(existsSync(b.bookDir)).toBe(false);
@@ -403,7 +403,7 @@ describe('#3711 task 6 -- voice-library DELETE and assign: library-voice -> book
     );
     expect(r.routeRes.status).toBe(200);
     expect(r.routeRes.body).toEqual({ deleted: true });
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen).toBeUndefined();
   });
@@ -419,7 +419,7 @@ describe('#3711 task 6 -- voice-library DELETE and assign: library-voice -> book
       'Lib Assign Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen?.libraryUuid).toBe(uuid);
   });
@@ -434,7 +434,7 @@ describe('#3711 task 6 -- voice-library DELETE and assign: library-voice -> book
       'Lib Unassign Renamed',
     );
     expect(r.routeRes.status).toBe(200);
-    expect(r.renameRes.status).toBe(204);
+    expect(r.renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen).toBeUndefined();
   });

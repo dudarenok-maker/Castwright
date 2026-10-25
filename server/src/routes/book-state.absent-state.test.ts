@@ -402,7 +402,7 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
       deleteRes = Promise.resolve(request(app).delete(`/api/books/${bookId}`));
       while (bookOpWaiters(`book-op:${bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
     });
-    expect((await renameRes).status).toBe(204);
+    expect((await renameRes).status).toBe(200);
     expect((await deleteRes).status).toBe(204);
     expect(existsSync(movedDir())).toBe(false);
     expect(existsSync(bookDir)).toBe(false);

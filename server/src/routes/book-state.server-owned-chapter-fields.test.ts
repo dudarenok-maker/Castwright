@@ -111,7 +111,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     writeState(withOverlay(seedChapters(), 1, STAMP));
 
     const res = await putChapters(staleChapters);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const ch = readChapters();
     const c1 = ch.find((c) => c.id === 1)!;
@@ -129,7 +129,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     const res = await putChapters(
       withOverlay(seedChapters(), 1, { ...FAILURE, generationError: 'client reason' }),
     );
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const c1 = readChapters().find((c) => c.id === 1)!;
     expect(c1.generationState).toBe('failed');
@@ -141,7 +141,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     writeState(withOverlay(seedChapters(), 1, FAILURE));
 
     const res = await putChapters(staleChapters);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const c1 = readChapters().find((c) => c.id === 1)!;
     expect(c1.generationState).toBe('failed');
@@ -160,7 +160,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
         generationRemediation: null,
       }),
     );
-    expect(cleared.status).toBe(204);
+    expect(cleared.status).toBe(200);
     const c1 = readChapters().find((c) => c.id === 1)!;
     for (const key of Object.keys(FAILURE)) {
       expect(key in c1, `${key} should be dropped, not written`).toBe(false);
@@ -168,7 +168,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
 
     writeState(withOverlay(seedChapters(), 1, FAILURE));
     const mixed = await putChapters(withOverlay(seedChapters(), 1, { generationState: null }));
-    expect(mixed.status).toBe(204);
+    expect(mixed.status).toBe(200);
     const m1 = readChapters().find((c) => c.id === 1)!;
     expect('generationState' in m1).toBe(false);
     expect(m1.generationError).toBe('server reason');
@@ -185,7 +185,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
         uuid: 'client-uuid',
       }),
     );
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const c1 = readChapters().find((c) => c.id === 1)!;
     expect('audioModelKey' in c1).toBe(false);
@@ -202,7 +202,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     );
 
     const res = await putChapters(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const ch = readChapters();
     const c2 = ch.find((c) => c.id === 2)!;
@@ -217,7 +217,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     const newDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'Moved Owned Book');
 
     const res = await putChapters(staleChapters, { title: 'Moved Owned Book' });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const c1 = readChapters(newDir).find((c) => c.id === 1)!;
     expect(c1.duration).toBe(STAMP.duration);
@@ -237,7 +237,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
       { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
       { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
     ]);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const ch = readChapters();
     const one = ch.find((c) => c.title === 'One')!;
@@ -262,7 +262,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
       { id: 3, title: 'Three', slug: '03-three', uuid: 'u-3' },
       { id: 4, title: 'Four', slug: '04-four', uuid: 'u-4' },
     ]);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const ch = readChapters();
     expect(new Set(ch.map((c) => c.uuid)).size).toBe(ch.length);

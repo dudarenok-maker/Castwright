@@ -119,7 +119,7 @@ describe('cast-id-history survival', () => {
       .set('Content-Type', 'application/json')
       .send({ slice: 'cast', patch: newCast });
 
-    expect(putRes.status).toBe(204);
+    expect(putRes.status).toBe(200);
 
     // Assert the PUT actually changed cast.json: the new character is present, the old is gone
     const castPath = castJsonPath(bookDir);

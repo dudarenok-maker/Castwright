@@ -232,7 +232,7 @@ describe('(b) a walk that hit a read error is not authoritative', () => {
     const during = await request(app)
       .put(`/api/books/${BOOK_ID}/state`)
       .send({ slice: 'state', patch: { castConfirmed: false } });
-    expect(during.status).toBe(204);
+    expect(during.status).toBe(200);
     expect(bookOp.__bookDirIndexForTest().has(BOOK_ID)).toBe(false);
     expect(bookOp.__duplicateBookIdsForTest().has(BOOK_ID)).toBe(false);
     faulted.clear();
@@ -240,7 +240,7 @@ describe('(b) a walk that hit a read error is not authoritative', () => {
     const put = await request(app)
       .put(`/api/books/${BOOK_ID}/state`)
       .send({ slice: 'state', patch: { castConfirmed: true } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     expect(readState(twin1).castConfirmed).toBe(true);
     expect(readState(twin2).castConfirmed).toBe(false);
     const get = await request(app).get(`/api/books/${BOOK_ID}/state`);

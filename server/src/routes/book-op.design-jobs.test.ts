@@ -237,7 +237,7 @@ describe('cast/design (bulk) is a registered design job (#3711)', () => {
     const res = await run;
     expect(parseSse(res.text).some((e) => e.type === 'character_designed')).toBe(true);
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
     expect(existsSync(newDir)).toBe(true);
   });
 
@@ -248,14 +248,14 @@ describe('cast/design (bulk) is a registered design job (#3711)', () => {
       .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
     expect(parseSse(res.text).find((e) => e.type === 'idle')?.failures).toHaveLength(1);
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('releases the registration on an early return (a bare subscribe probe with nothing running)', async () => {
     const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({});
     expect(parseSse(res.text).some((e) => e.type === 'idle')).toBe(true);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('a start for a deleted book answers 404 and registers nothing', async () => {
@@ -284,7 +284,7 @@ describe('design-voice (qwen REST) is a registered design job (#3711)', () => {
     const res = await run;
     expect(res.status).toBe(200);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('releases the registration on an early return (unknown character -> 404)', async () => {
@@ -312,7 +312,7 @@ describe('design-voice/stream (single) is a registered design job (#3711)', () =
     const res = await run;
     expect(parseSse(res.text).some((e) => e.type === 'designed')).toBe(true);
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 });
 
