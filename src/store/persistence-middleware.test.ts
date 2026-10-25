@@ -911,34 +911,38 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(state.bookMeta.lastCommitted?.['b1']).toBeUndefined();
   });
 
-  it('does NOT attribute a ui/confirmCast failure to book-meta when it replaces the state write in the same window', async () => {
-    /* #2230 — ui/confirmCast and bookMeta/commitDraft share the `state` slice.
-       If a confirmCast lands in the same debounce window it REPLACES the pending
-       write, so the failure concerns the cast-confirm, not the superseded
-       rename: the stale book-meta handler must be dropped (no book-meta toast,
-       no book-meta rollback). */
+  it('a ui/confirmCast in the same window combines with the book-meta commits, and a refusal rolls back every committed field', async () => {
+    /* #3784 (owner decision) — ui/confirmCast and bookMeta/commitDraft share
+       the `state` slice and combine in one send, newest value per field, so the
+       book-meta handler still owns the send's failure. The rollback baseline
+       covers both commits: a refusal restores title AND author, and gives the
+       user both typed values back. (Replaces #2230's "confirmCast replaces the
+       pending write" test.) */
     putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): cast refused'));
     const store = makeBookMetaStore();
     store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Book' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
-    /* A different `state`-slice write lands in the same debounce window. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     store.dispatch({ type: 'ui/confirmCast' } as never);
     await vi.runAllTimersAsync();
 
-    /* The pending write that flushed (and failed) was the cast-confirm. */
-    expect(putBookState).toHaveBeenCalledWith('b1', {
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1]).toMatchObject({
       slice: 'state',
-      patch: { castConfirmed: true },
+      patch: { title: 'Renamed Book', author: 'New Author', castConfirmed: true },
     });
 
     const state = store.getState() as {
       notifications: { toasts: { dedupeKey?: string }[] };
-      bookMeta: { draft: { title?: string } | null };
+      bookMeta: {
+        saved: Record<string, { title: string; author: string }>;
+        draft: { title?: string; author?: string } | null;
+      };
     };
-    /* No book-meta failure toast for an op that wasn't book-meta… */
-    expect(state.notifications.toasts.some((t) => t.dedupeKey === 'book-meta-persist-failed')).toBe(false);
-    /* …and no rollback: commitDraft nulled the draft and nothing restored it. */
-    expect(state.bookMeta.draft).toBeNull();
+    expect(state.notifications.toasts.some((t) => t.dedupeKey === 'book-meta-persist-failed')).toBe(true);
+    expect(state.bookMeta.saved.b1).toMatchObject({ title: 'The Northern Star', author: 'Marin Vale' });
+    expect(state.bookMeta.draft).toEqual({ title: 'Renamed Book', author: 'New Author' });
   });
 
   it('does NOT let an older in-flight save prune/roll back over a newer one (#2230 race)', async () => {
@@ -1382,6 +1386,53 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(last.baseRevision).toEqual(captured);
     expect(outcomes(disk).at(-1)).toBe('ok');
     expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, notes: 'b' });
+    restore();
+  });
+
+  /* #3784 (owner decision) — queued `state` edits combine, newest value per
+     field, instead of the later build replacing the queued patch. */
+  it('two queued state edits with no kept save combine into one send, and its success prunes the rollback baseline', async () => {
+    const { disk, store, restore } = setup();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'X' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(600);
+
+    expect(reqs()).toHaveLength(1);
+    expect(reqs()[0].patch).toMatchObject({ title: 'X', author: 'Marin Vale', castConfirmed: true });
+    expect(reqs()[0].baseRevision).toBeUndefined();
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'X', castConfirmed: true });
+    /* The book-meta edit's own success handler still ran. */
+    expect(
+      (store.getState() as { bookMeta: { lastCommitted?: Record<string, unknown> } }).bookMeta.lastCommitted?.b1,
+    ).toBeUndefined();
+    restore();
+  });
+
+  it('a confirmCast after a commit that carried a kept title sends the newer title, with the kept base', async () => {
+    const { disk, store, restore } = setup();
+    const captured = disk.revision('b1', 'state');
+    /* Keep T1: its save is given up on after the user left the book. */
+    disk.failNext(4, isState);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch(uiSlice.actions.goHome());
+    await advance(8000);
+    expect(outcomes(disk)).toEqual(['503', '503', '503', '503']);
+
+    /* Back on the book: the user commits T2, and confirmCast follows in the same window. */
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(600);
+
+    expect(reqs()).toHaveLength(5);
+    const last = reqs().at(-1)!;
+    expect(last.patch).toMatchObject({ title: 'T2', author: 'Marin Vale', castConfirmed: true });
+    expect(last.baseRevision).toEqual(captured);
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T2', castConfirmed: true });
     restore();
   });
 

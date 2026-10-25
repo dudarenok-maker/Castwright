@@ -428,7 +428,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Plan 289 (D6) — the kept save a queued patch carries (re-sent as it is, or
      merged into a newer build), so that send carries the kept base: without
      it, the merge would carry the kept fields past the server's check. Taken
-     by the key's next `flush`; a later build of the key that replaces the
+     by the key's next `flush`; a later build of the key that merges over the
      queued patch keeps it, since that build is made from a screen that still
      shows the kept edit. */
   const carriedKept = new Map<FlushKey, KeptSave>();
@@ -700,29 +700,25 @@ export const persistenceMiddleware: Middleware = (store) => {
       kept.delete(key);
       carriedKept.set(key, keptHere);
     }
-    /* A later build of the key in the same window replaces the queued patch
-       (`confirmCast` and `commitDraft` replace each other, #2230), so the kept
-       fields come from `carriedKept`, not only on the build that took them. */
-    const carried = carriedKept.get(key);
-    pending.set(key, carried ? { ...carried.patch, ...(built as Record<string, unknown>) } : built);
+    /* #3784 — a later build of the key in the same window merges over the
+       queued patch, newest value per field: `confirmCast` and `commitDraft`
+       combine. Every other slice builds its whole content, so the merge is a
+       replace there. A kept patch is merged in by the build that takes it;
+       later builds find its fields in the queued patch. */
+    pending.set(key, {
+      ...keptHere?.patch,
+      ...(pending.get(key) as Record<string, unknown> | undefined),
+      ...(built as Record<string, unknown>),
+    });
     /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
        write; in-flight older flushes keep their captured (lower) generation
        and are therefore gated out of prune/rollback in flush. */
     generation.set(key, (generation.get(key) ?? 0) + 1);
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
-    if (failHandler) {
-      toastPending.set(key, failHandler);
-    } else if (rule.slice === 'state' && type !== 'bookMeta/commitDraft') {
-      /* #2230 — the `state` slice is shared by ui/confirmCast and
-         bookMeta/commitDraft (PERSIST_RULES above). When a non-bookMeta `state`
-         write (confirmCast) lands in the same debounce window it REPLACES the
-         pending patch, so a later failure concerns THAT write, not the
-         superseded book-meta rename. Drop the stale handler so we neither toast
-         nor roll back book-meta for an op that isn't book-meta. (Manuscript's
-         ride-along semantics are intentionally left untouched — only the shared
-         `state` slice has the cross-action mismatch.) */
-      toastPending.delete(key);
-    }
+    /* #3784 — a `confirmCast` merged after a `commitDraft` keeps the book-meta
+       handler: the send still carries the book-meta fields, so its failure
+       rolls them back and its success prunes their rollback baseline. */
+    if (failHandler) toastPending.set(key, failHandler);
     const prev = timers.get(key);
     if (prev) clearTimeout(prev);
     timers.set(
