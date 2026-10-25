@@ -517,6 +517,18 @@ export async function reconcileRejectEdgesOnDisk(
   }
 }
 
+/* #3784 — the analysis writes of manuscript-edits.json (the terminal persists
+   and Start fresh's delete) take the `book` lock the slice PUT holds across its
+   manuscript revision check + write. Callers hold no `cast` lock at those
+   points, and `book` is re-entrant. A record with no bookId (legacy) has no
+   lock key and runs unlocked as before. */
+function withOptionalBookLock<T>(
+  bookId: string | null | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return bookId ? withBookLock(bookId, fn) : fn();
+}
+
 /* srv-13 — when the merge re-adds voiced/reused characters the fresh roster
    dropped (a transient analyzer miss), leave a change-log breadcrumb so the
    rescue is visible. Mirrors the change-log write pattern in book-state.ts.
@@ -4805,10 +4817,13 @@ export async function runMainAnalyzerJob(
                  reports a guaranteed false conflict on every fresh run. */
               castBase?.markDeleted();
             });
-            {
+            /* #3784 — `book`-locked (after the cast lock above is released), so
+               a slice PUT that passed its manuscript check cannot recreate the
+               pre-wipe file after this delete. */
+            await withOptionalBookLock(recordRef.bookId, async () => {
               const editsPath = manuscriptEditsJsonPath(freshBookDir);
               await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
-            }
+            });
             /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
                meaningless; drop the merge journal + dedup suggestions too. */
             await clearCastMerges(freshBookDir);
@@ -6681,6 +6696,7 @@ export async function runMainAnalyzerJob(
               }
               return running;
             },
+            recordRef.bookId ?? undefined,
           );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
@@ -7234,9 +7250,14 @@ export async function runMainAnalyzerJob(
          re-keyed onto `writeDir` (R3 — no ordering bet). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
-          sentences: reconciled.sentences,
-        });
+        /* #3784 — `book`-locked, so the slice PUT's manuscript check + write
+           cannot straddle it. Nothing is held here (the cast lock is taken per
+           write below, after this). */
+        await withOptionalBookLock(record.bookId, () =>
+          writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
+            sentences: reconciled.sentences,
+          }),
+        );
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
            a journal failure must never fail the analysis persist. */
         try {
@@ -9084,6 +9105,7 @@ export async function runSubsetAnalyzerJob(
               }
               return running;
             },
+            record.bookId ?? undefined,
           );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll subset manuscript-edits.json', persistErr);
@@ -9406,9 +9428,12 @@ export async function runSubsetAnalyzerJob(
          this run's top-level catch -> endJob halted (C1/C3). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
-          sentences: subsetReconciled.sentences,
-        });
+        /* #3784 — `book`-locked, as in the main job's persist. */
+        await withOptionalBookLock(record.bookId, () =>
+          writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
+            sentences: subsetReconciled.sentences,
+          }),
+        );
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
            a journal failure must never fail the analysis persist. */
         try {
