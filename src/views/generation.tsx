@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from 'react-redux';
 import { useOutletContext } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
@@ -36,6 +36,30 @@ const ROLLBACK_SETTLE_POLL_MS = 400;
 const ROLLBACK_SETTLE_TIMEOUT_MS = 20_000;
 /* #3774 — how often the view re-reads which long jobs hold the book. */
 const BOOK_BUSY_REFRESH_MS = 5000;
+
+/* #3774 — books whose include rollback (Cancel / a failed run: the stop, then the
+   re-exclude that waits for the run's lease) is still in flight. The stream
+   middleware flips the snapshot to paused / halted as soon as the run ends, which
+   is BEFORE the rollback settles, so the store alone stops saying "an include is
+   live" while the lease is still held. Module-level (not component state) because
+   the rollback outlives the view instance that started it. */
+const includeRollbackPending = new Set<string>();
+const includeRollbackListeners = new Set<() => void>();
+function setIncludeRollbackPending(bookId: string, pending: boolean): void {
+  if (includeRollbackPending.has(bookId) === pending) return;
+  if (pending) includeRollbackPending.add(bookId);
+  else includeRollbackPending.delete(bookId);
+  includeRollbackListeners.forEach((l) => l());
+}
+function useIncludeRollbackPending(bookId: string | null | undefined): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      includeRollbackListeners.add(listener);
+      return () => includeRollbackListeners.delete(listener);
+    },
+    () => !!bookId && includeRollbackPending.has(bookId),
+  );
+}
 
 /* #3774 — `BookJobKind` -> the phrase the Include tooltip names. */
 const BUSY_KIND_LABELS: Record<string, string> = {
@@ -422,8 +446,10 @@ export function GenerationView({
       a.subsetOrigin === 'include'
     );
   });
+  const includeRollbackInFlight = useIncludeRollbackPending(bookId);
   const includeRunLive =
     includeRunInStore ||
+    includeRollbackInFlight ||
     Object.values(subsetByChapter).some((e) => e.origin === 'include' && isSubsetRunning(e));
   const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
   /* Only a row that can show Include / Retry / Accept smaller cast reads these:
@@ -714,6 +740,9 @@ export function GenerationView({
       subsetRequested = !controller.signal.aborted;
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3774 — the server keeps it on the job, so the include's job-start block
+           outlives this view (a book switch, a reload, a second tab). */
+        origin: 'include',
         /* #3435 — set only by the row's "Accept smaller cast". */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call
@@ -829,6 +858,9 @@ export function GenerationView({
          on an included chapter. C1: only an include this click performed is
          rolled back (an excluded-before-click chapter has no audio to lose). */
       if (includedHere) {
+        /* #3774 — the block holds until the rollback settles (the snapshot has gone
+           paused / halted by now, but the run's lease is still held). */
+        setIncludeRollbackPending(bookId, true);
         await rollbackInclude(chapterId, { stopJob: isAbort && subsetRequested }).catch((rollbackErr) => {
           console.warn('[generation] include rollback failed', rollbackErr);
           /* #3774 — never leave the chapter included without saying so: a gap
@@ -850,7 +882,7 @@ export function GenerationView({
               }),
             );
           }
-        });
+        }).finally(() => setIncludeRollbackPending(bookId, false));
       }
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
@@ -1054,6 +1086,7 @@ export function GenerationView({
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        origin: 'reanalyse',
         /* #3435 — set only by the row's "Accept smaller cast". */
         allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call

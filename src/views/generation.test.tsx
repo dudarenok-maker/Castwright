@@ -2902,6 +2902,90 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
     });
 
+    it('H\': the include start POST carries origin include, a re-analyse start carries reanalyse', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(runAnalysisForChaptersSpy.mock.calls[0][2]).toMatchObject({ origin: 'include' });
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      runAnalysisForChaptersSpy.mockClear();
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(runAnalysisForChaptersSpy.mock.calls[0][2]).toMatchObject({ origin: 'reanalyse' });
+    });
+
+    it('H\': a remount after Cancel, while the rollback still waits for the lease, keeps the block until the rollback ends', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      let finishRollback!: () => void;
+      setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+        excluded
+          ? new Promise((r) => (finishRollback = () => r({ id, title: '', slug: '', excluded: true })))
+          : Promise.resolve({ id, title: '', slug: '', excluded: false }),
+      );
+      runAnalysisForChaptersSpy.mockImplementation(
+        (_m: string, _c: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_, reject) =>
+            opts.signal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })),
+            ),
+          ),
+      );
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, true)); // the rollback is waiting
+      /* what the stream middleware does when the server's stop lands: the snapshot is no longer 'running' */
+      act(() => {
+        store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
+      });
+      first.unmount();
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+      await act(async () => finishRollback());
+      await waitFor(() => expect(resume()).toBeEnabled());
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('the busy poll keeps running while a started include has no excluded chapter left (the subset row alone is the include surface)', async () => {
+      const oneExcluded = [chapter1, chapter2, ch3Excluded];
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore({ chapters: oneExcluded });
+        const view = renderInclude(store, oneExcluded);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+        /* the include landed: no chapter is excluded any more, only the subset row remains */
+        const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
+        expect(store.getState().chapters.chapters.some((c) => c.excluded)).toBe(false);
+        view.rerender(
+          <Provider store={store}>
+            <HostedGenerationView
+              chapters={included}
+              characters={characters}
+              paused
+              title="the Coalfall Commission"
+              bookId="b1"
+              modelKey="coqui-xtts-v2"
+              onRegenerate={() => {}}
+              onRegenerateBook={() => {}}
+              onRegenerateCharacterInChapter={() => {}}
+              onPreview={() => {}}
+            />
+          </Provider>,
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        const settled = getBookBusySpy.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(settled + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('I: Resume scoring on the QA card is disabled with the reason while an include run is live', async () => {
       getQaReportSpy.mockResolvedValue({
         ...MOCK_QA_REPORT,
