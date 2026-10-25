@@ -33,7 +33,7 @@
    reconcile-driven generation start is intentionally NOT gated; see
    docs/features/archive/32-sticky-analysis.md for the rationale. */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
@@ -98,6 +98,18 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
   /* Stash the proceed callback in state — the modal needs to call it on
      confirm, after dispatching the halt. Null while closed. */
   const [pending, setPending] = useState<(() => void) | null>(null);
+  /* A design's halt is awaited, and it clears activeStreams at once — so for the round trip a
+     second guard() would see no stream and start a design without the wait, then the deferred
+     start would fire as well. `halting` makes guard() ignore calls until the halt settles;
+     `mounted` stops a deferred start whose host is gone. */
+  const halting = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   /* Ollama shares the card with the Voice engine; Gemini is a remote API and safe alongside
      TTS; an OpenAI-compatible endpoint shares when it sits on 'any' or the TTS card (#3084). */
@@ -123,6 +135,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
         ));
 
   const guard: GuardResult['guard'] = (proceed) => {
+    if (halting.current) return;
     if (!shares || !anyActiveStream) {
       proceed();
       return;
@@ -188,10 +201,12 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
         }
         /* A design shares the render's card, so it starts only after the halt has settled
            (N2) — and not at all if the halt failed, or it would race the render it asked to stop. */
+        halting.current = true;
         void (async () => {
           try {
             await dispatch(haltActiveGeneration({ awaitRelease: true }));
           } catch (e) {
+            halting.current = false;
             console.warn('[guard] halt before design failed', e);
             dispatch(
               notificationsActions.pushToast({
@@ -201,7 +216,8 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId, purpose = 
             );
             return;
           }
-          run?.();
+          halting.current = false;
+          if (mounted.current) run?.();
         })();
       }}
       onClose={close}

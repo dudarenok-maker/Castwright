@@ -377,6 +377,51 @@ describe('useLocalAnalyzerGuard — purpose "design" (persona engine)', () => {
       expect(store.getState().notifications.toasts.some((t) => t.kind === 'error' && /didn.t start/.test(t.message))).toBe(true);
     });
 
+    /* Faithful to production: the halt's requestStreamHalt clears activeStreams synchronously
+       (generation-stream-runner close()), so for the whole awaited round trip no stream is live
+       and a naive guard() would run proceed at once. Only the POSTs stay pending. */
+    const clearingHalt = (hold: { release: () => void }) =>
+      (() => (dispatch: (a: unknown) => void) => {
+        dispatch(chaptersSlice.actions.clearActiveStream(liveSnapshot.streamKey));
+        return new Promise<void>((r) => { hold.release = r; });
+      }) as never;
+
+    it('ignores a second trigger while the halt is pending: proceed runs exactly once, after it settles', async () => {
+      const hold = { release: () => {} };
+      vi.mocked(haltActiveGeneration).mockImplementationOnce(clearingHalt(hold));
+      const proceed = vi.fn();
+      renderDesign(designStore(), proceed);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+      });
+      expect(proceed).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+      expect(screen.queryByText(TITLE)).not.toBeInTheDocument();
+      expect(proceed).not.toHaveBeenCalled();
+
+      await act(async () => hold.release());
+      expect(proceed).toHaveBeenCalledTimes(1);
+
+      /* The pause is over: a later trigger behaves normally again. */
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+      expect(proceed).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not proceed when the host unmounts during the halt', async () => {
+      const hold = { release: () => {} };
+      vi.mocked(haltActiveGeneration).mockImplementationOnce(clearingHalt(hold));
+      const proceed = vi.fn();
+      const view = render(<Provider store={designStore()}><Harness onProceed={proceed} purpose="design" /></Provider>);
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Pause and design' }));
+      });
+      view.unmount();
+      await act(async () => hold.release());
+      expect(proceed).not.toHaveBeenCalled();
+    });
+
     it('leaves the analysis purpose as it was: a plain halt, proceed in the same tick', () => {
       vi.mocked(haltActiveGeneration).mockImplementationOnce((() => () => new Promise<void>(() => {})) as never);
       const proceed = vi.fn();
