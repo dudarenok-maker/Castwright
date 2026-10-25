@@ -73,7 +73,7 @@ Content moves a token automatically. **No content writer changes**: a writer mov
 Hence `state.json.editEpoch`. It is a random id with these properties:
 
 - **minted** by every import path: `POST /api/import` (`import.ts` ~`:376`), and the portable-bundle import. The bundle import (`scan-import-folder.ts` ~`:335-348`) currently keeps the bundle's own `state.json`, `manuscriptId` included, so it must **overwrite** the epoch rather than keep the bundle's.
-- **rotated** inside each writer's existing `state.json` write by re-parse, replace-manuscript and Start fresh.
+- **rotated** inside each writer's existing `state.json` write by re-parse, replace-manuscript, Start fresh and backup restore (`auto-backup.ts` `restoreBackup`, which writes the snapshot's whole `state.json` and so would otherwise bring the snapshot's old epoch back).
 - **not touched by any other writer.** Every token is salted with it, so a wipe invalidates every kept or retrying save of the book.
 
 | Writer | Effect |
@@ -83,7 +83,7 @@ Hence `state.json.editEpoch`. It is a random id with these properties:
 | Chapter restructure | Moves `sentences`; `state` tokens are unchanged (`chapters` is excluded). |
 | Re-parse, replace, Start fresh | Rotate `editEpoch`, so **every** token moves. |
 | Delete then re-import, by either import path | New epoch, so every token moves. That covers N8, including a base on an absent file and a bundle carrying the old `manuscriptId`. |
-| Snapshot restore (`POST /backups/restore`) | Moves the fields it changes. It does not rotate the epoch (ABA residual, D4). |
+| Snapshot restore (`POST /backups/restore`) | Mints a fresh epoch (69f188c7), so every token moves. Without it the snapshot's old epoch returned and a kept save could replay onto a restored book (ABA, D4). |
 | Analysis persist, cover writers, prosody flags | Move exactly the fields they change. |
 
 `editEpoch` is server-owned. It is not on the PUT whitelist, and `buildNext` carries it through `...state`. A legacy book has no `editEpoch`, so it salts with the empty string, and the first wipe or import mints one. **No migration.**
@@ -238,7 +238,7 @@ The issue asks that each pass-5 shape has a test that is red without the precond
 1. A `PUT /state` with `baseRevision` writes nothing and answers 409 `stale_revision` if any carried field is stale (D1/D5). Without a base, today's behaviour applies.
 2. Staleness compares the server's post-merge, post-transform value. A no-op field is never stale.
 3. The check reads the same fresh content the write derives from, inside the slice's innermost span. The moving branch refuses before `renameWithRetry`.
-4. Tokens are made only by `slice-revision.ts`, salted with `manuscriptId` and `editEpoch`. Only import (both paths), re-parse, replace and Start fresh write `editEpoch`.
+4. Tokens are made only by `slice-revision.ts`, salted with `manuscriptId` and `editEpoch`. Only import (both paths), re-parse, replace, Start fresh and backup restore write `editEpoch`; each mints or rotates it (`mintEditEpoch`), and none carries a stored one back.
 5. A plain attempt 0 carries no base. A retry, a replay, and a live build with a merged kept patch carry the base of the write they re-send (D6).
 6. A stale refusal is never kept, never re-sent and never rolled back. It toasts and marks the book for a full read (D2/D7).
 7. Revisions-only reads neither update `known` nor drop kept saves.
@@ -400,7 +400,7 @@ Ships with PR #3775 (branch `fix/frontend-3421-flush-retry`); closes #3421, #375
 
 ### What was built
 
-- **Server:** `server/src/workspace/slice-revision.ts` (pure tokens and `staleFields`); `state.json.editEpoch`, minted by both import paths and rotated by re-parse, replace and Start fresh; `GET /state` returns `sliceRevisions`; `PUT /state` takes an optional `baseRevision`, checks it inside each slice's existing lock span, answers `200 { revision }` and refuses a stale field with 409 `stale_revision` (fixed, path-free sentence). No new lock class.
+- **Server:** `server/src/workspace/slice-revision.ts` (pure tokens and `staleFields`); `state.json.editEpoch`, minted by both import paths and rotated by re-parse, replace, Start fresh and backup restore; `GET /state` returns `sliceRevisions`; `PUT /state` takes an optional `baseRevision`, checks it inside each slice's existing lock span, answers `200 { revision }` and refuses a stale field with 409 `stale_revision` (fixed, path-free sentence). No new lock class.
 - **Contract:** `openapi.yaml`, `src/lib/api-types.ts`, the hand-modelled `BookStateResponse` / `PutStateRequest`, `realPutBookState` / `mockPutBookState` parity.
 - **Client:** a `known` map and a `kept` record (`{ patch, base, onSuccess? }`) in `persistence-middleware.ts`; conditional re-sends; a stale refusal toasts, is not kept and not rolled back, and marks the book for a full re-read (set by the middleware, `onEditBook` and the language guard). The park/restore machinery (`parked`, `sending`, `pendingWipes`, `retainedGen`, `supersedeBookSaves`, `restoreSupersededSaves`, `wipeSettled`) was deleted in 8b9e64f3.
 
@@ -412,7 +412,7 @@ Ships with PR #3775 (branch `fix/frontend-3421-flush-retry`); closes #3421, #375
 - **The older-200 refresh skips kept-carrying sequences.** D6's refresh of an in-flight sequence's base from an older same-key 200 does not touch a sequence whose patch has a kept patch merged in, which carries the kept base on purpose.
 - **N6 and N7 are route-level tests** (`src/routes/index.test.tsx`), not middleware-level, because the sequences span the Library handlers and their wipe RPCs. Red at 5ec7178c, per the accepted acceptance adjustment.
 - **`sliceRevisions` is optional in the TS `BookStateResponse`.**
-- **The mock has no Start-fresh epoch rotation.** Its re-parse, replace and import do rotate it.
+- **The mock has no Start-fresh epoch rotation.** Only its re-parse and replace rotate it (`rotateMockEditEpoch`, `api.ts`); its import does not.
 - **The changeLog lock (79fecfca).** The plan listed the unlocked analysis `changeLog.json` append under Out of scope. It is now fixed in this PR: the analysis carried-forward append and the re-parse append take the per-book `book` lock around their read -> write, and the slice PUT's changeLog check and write takes the same lock, so an append cannot land between the PUT's read and write. The lock order is unchanged.
 - **Merged kept fields (f559c156, found in passing).** `confirmCast` and `commitDraft` replace each other's queued `state` patch, so a second `state` build in the same debounce window dropped the kept fields while the kept base still rode along. Every build now merges the kept patch the queued send carries, newer fields winning.
 
@@ -425,6 +425,18 @@ OD1–OD6 were all accepted as recommended (comment on #3784). Three more follow
 3. **A book-meta save that finally fails after the user left the book is kept and re-sent,** not rolled back, whether the user is on the Library or in another book (f8871b1a, the merge of #3782 into this branch). The revision check refuses it if the book changed meanwhile. #3782's guarantees stay (a draft is never shown in another book; opening a different book clears the draft); its test (e) assertion on `saved.B` flipped to match.
 
 The acceptance adjustment (N6 and N7 count as proved when red at 5ec7178c) was also confirmed by the owner.
+
+### Review pass 6 fixes (PR #3775, all #3784)
+
+- **P6-1, 41b3290a:** a 4xx that refuses a book-details save after the user left the book reverts `saved` (draft not restored), as `main` did.
+- **P6-2b, 69f188c7:** backup restore mints a fresh `editEpoch`, so a restored snapshot cannot bring an old epoch back (Invariant 4).
+- **P6-2a / P6-5, 06e376f1:** a full re-read is marked after any direct state write that may have landed, including Account's Restore from backup, `onEditBook` and the language guard when the response is lost.
+- **P6-3, 0cfd1010:** a stale refusal that a newer save superseded no longer forces a full re-read of the open book.
+- **P6-4, d193a1f4:** a superseded `state` save's uncovered fields (and a carried kept save) are kept, not dropped.
+- **06b48f76:** the uncovered fields of a superseded, refused `state` save are rolled back.
+- **5c6cb6a1:** a kept save is merged under a queued one on resend.
+- **6e936845:** the unobservable `onSuccess` pass-through is removed (M16); the matching `leaveBehind` fallback went in this round's follow-up.
+- **P6-6, cfb9c94a:** the slice PUT's `manuscript-edits.json` check-then-write takes the `book` lock. It is atomic only against writers that hold `book`: Start fresh's `rm`, the analysis persist and the interim edits rolls do not, and can still land between the check and the write (the window matches `main`'s last-writer-wins).
 
 ### Not owed
 
