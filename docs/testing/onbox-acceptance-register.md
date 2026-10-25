@@ -736,7 +736,18 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-17 (#3084 W3d, task 3d.10), 65 → 68.** Rows **A115**
+> **Last change: 2026-10-24 (#3084 W4, #3777), 68 → 68.** Row **A109** rewritten
+> against the merged wave 4: the run must set Persona generation engine to the same-card
+> endpoint's model, and observes the persona requests reaching the endpoint before
+> VoiceDesign loads, W3d's eviction unloading it, and the "Pause audio generation to design
+> voices?" guard's **Pause and design** acknowledging the render's abort before the first
+> persona request (an in-flight sidecar synth is not awaited, so criterion 3 records whether
+> its tail overlapped; criteria 1, 3 and 5 reworded to say so). Criterion 3 now runs on its own
+> fresh book whose characters have no voice description, because the book that steps 1-2
+> design has none left to prompt for. The "cannot be run until wave 4 merges" sentence is dropped. Run sheet §10 added. No row added or removed;
+> `next-id` unchanged. Row is owed; not run here.
+>
+> **Prior change: 2026-10-17 (#3084 W3d, task 3d.10), 65 → 68.** Rows **A115**
 > (long silent prefill completes on an endpoint), **A116** (same-card eviction of
 > an endpoint for a Qwen load) and **A117** (fallback to a smaller context leaves
 > room to answer) added, and row **A113** extended with the real-chapter
@@ -5886,31 +5897,50 @@ timeout tolerance tuning.
 
 ### A109 · A same-card OpenAI-compatible endpoint yields its card to Qwen VoiceDesign after the analyzer pre-pass ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), design [`docs/superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md`](../superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md)) · **single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on that same card, Qwen VoiceDesign**
 
-Minted by the design PR, not by shipped code — **this row is owed against wave 4 of the
-plan and cannot be run until wave 4 merges.** It is recorded now because the design
-originally asserted an existing row already covered this hardware consequence, and no
-such row exists; the alternative was leaving the claim unproven and unrecorded.
+Minted by the design PR against a design rather than shipped code; wave 4 (#3777, persona
+generation through the analyzer transports) ships the pre-pass, so the row is
+rewritten to exercise it. The run MUST set Advanced Settings → Persona generation engine to the
+same-card endpoint's model (`openai:<endpointId>::<model>`, the endpoint's `gpu` on the card
+Qwen targets). The default persona engine is `gemini`, so a run that leaves it alone never
+touches the endpoint and proves nothing about this row.
 
-Wave 4 adds a pre-pass that orders the analyzer's endpoint call ahead of a Qwen
-VoiceDesign load when both target the same GPU. Everything else in that wave is provable
-in automation — selection, the free-text wire shape per transport, the Ollama bound and
-slot release, the limiter estimate, key-origin and missing-endpoint refusals, endpoint
-wiring over a real HTTP server, the same-card rule, and the pre-pass ordering and errors.
-The one consequence automation cannot reach is the real VRAM handover: a third-party
-server's model must actually release the card so a 1.7B VoiceDesign load succeeds on it.
+Wave 4 orders a same-card persona engine's calls ahead of a Qwen VoiceDesign load, and asks
+before designing over a streaming render. Everything else in that wave is provable in
+automation: selection, the free-text wire shape per transport, the Ollama bound and slot
+release, the limiter estimate, key-origin and missing-endpoint refusals, endpoint wiring over a
+real HTTP server, the same-card rule, the pre-pass ordering and errors, and each design entry
+point's prompt. The consequences automation cannot reach are the real VRAM handover (a
+third-party server's model must actually release the card so a 1.7B VoiceDesign load succeeds
+on it) and how a real render's pause lines up with the first persona requests (the pause is
+acknowledged first, but an in-flight sidecar synth is not awaited).
 
 *Criteria:*
-1. With an OpenAI-compatible server resident on the single 8 GB card and an analysis
-   configured against it, trigger a cast design that needs Qwen VoiceDesign. The
-   pre-pass runs, the endpoint's model yields the card, and VoiceDesign loads and
+1. With a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on
+   the single 8 GB card, Persona generation engine set to that endpoint's model, and no render
+   streaming and VoiceDesign NOT resident at the start (idle past `QWEN_DESIGN_IDLE_TTL`,
+   default 120 s, so the design produces a load line to order against), start Design full cast
+   on a book whose characters have no voice description.
+   The endpoint's server log shows the persona requests arriving **before** VoiceDesign loads.
+2. W3d's eviction unloads the endpoint's model before VoiceDesign loads (the unload request or
+   model-unload line in the server log, then the VoiceDesign load), and VoiceDesign loads and
    designs without an OOM.
-2. The reverse order is also safe: with VoiceDesign resident, an analysis against the
-   same-card endpoint does not OOM and does not silently fall back to another engine.
-3. Neither path leaves the card stranded — after both complete, a subsequent chapter
-   render on that card succeeds.
+3. With a chapter render streaming on that card, start Design full cast on a fresh book whose
+   characters have no voice description (not the book criteria 1-2 designed: Design full cast
+   is disabled there, and a book whose characters have voice descriptions never prompts).
+   Castwright shows "Pause audio generation to design voices?". Choosing **Pause and design** acknowledges the
+   render's abort before the first persona request: the pause route aborts and answers at once,
+   and the design starts only after that answer. It does not wait for an in-flight sidecar
+   synth, so the run RECORDS whether the last synth's tail overlapped the first persona
+   requests, and whether that caused an OOM.
+4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
+   against the same-card endpoint. It does not OOM and does not silently fall back to another
+   engine.
+5. Neither path leaves the card stranded: after both complete (the design and the
+   reverse-order analysis), a subsequent chapter render on that card succeeds.
 
-*Cost:* medium — needs a real third-party server installed and pinned to the same card,
-plus one cast design and one chapter render. No golden-audio comparison.
+*Cost:* medium — needs a real third-party server installed and pinned to the same card, plus
+one cast design, one design over a streaming render, and one chapter render. No golden-audio
+comparison. Run sheet: [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §10.
 
 ### A110 · Model-tier-aware cold ASR admission seed ([#3347](https://github.com/dudarenok-maker/Castwright/issues/3347), PR [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357)) · **single GPU card, `ASR_DEVICE=cuda`, `ASR_MODEL=large-v3` (or another non-`tiny`/`base`/`small` tag), a squeezable card (able to be driven down to ~500-900 MB free)**
 

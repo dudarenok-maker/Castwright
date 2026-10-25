@@ -10,7 +10,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ApiError, type GoogleGenAI } from '@google/genai';
-import { OllamaAnalyzer, generatePersonaViaOllama } from './ollama.js';
+import { OllamaAnalyzer } from './ollama.js';
 import { GeminiTransport } from './transports/gemini-transport.js';
 import { AnalyzerHttpError } from './errors.js';
 import { classifyAnalysisFailure } from '../routes/failure-taxonomy.js';
@@ -126,15 +126,13 @@ describe('Ollama persona call redaction (#3084 P22, A8)', () => {
     });
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    /* generatePersonaViaOllama reads its URL via getResolvedOllamaUrl (A3 —
-       config/ollama-resolved.ts), which resolves through the config
-       resolver; `ollamaUrl` is not a settings field any more, so seed the
-       saved Advanced Settings override instead (#3084 A3 re-pin). */
-    _setUserSettingsCacheForTest({ geminiApiKey: SECRET, configOverrides: { 'analyzer.ollama.url': url } });
-    /* The OLLAMA_URL env outranks the saved override; unset it so the override under test wins
-       even when the suite runs with the live-Ollama guard (OLLAMA_URL=http://127.0.0.1:1). */
-    vi.stubEnv('OLLAMA_URL', undefined);
-    const err = await generatePersonaViaOllama('Describe the voice.', 'qwen3.5:4b').then(() => null, (e: unknown) => e);
+    /* #3084 W4 — the persona call is now OllamaAnalyzer's runner free-text path (Task 4.2), which
+       carries 3b's redaction. The URL goes straight into the analyzer. */
+    _setUserSettingsCacheForTest({ geminiApiKey: SECRET });
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:4b' }).runner
+      .runFreeText({ prompt: 'Describe the voice.', ollama: { onCpu: true } })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
     expect((err as Error).message).toBe(
       `Ollama ${url} returned 500 Internal Server Error: {"error":"persona runner failed for key [redacted]"}`,
     );

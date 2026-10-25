@@ -31,6 +31,16 @@ export function fallbackTargetSaveError(value: string, saved: { endpointIds: rea
   return null;
 }
 
+/** A save-time refusal for the persona engine, or null (#3084 W4; mirrors fallbackTargetSaveError).
+    `local` and `gemini` always save: a missing Gemini key stays a run-time error for personas. */
+export function personaEngineSaveError(value: string, saved: { endpointIds: readonly string[] }): string | null {
+  const parsed = parseEndpointModelId(value);
+  if (parsed && !saved.endpointIds.includes(parsed.endpointId)) {
+    return `analyzer.personaGeneration.engine: no analyzer endpoint "${parsed.endpointId}" is saved. Add it in Model Manager → Analyzer endpoints, or pick another engine.`;
+  }
+  return null;
+}
+
 /** The Advanced Settings value for this knob. resolveAll() builds values from resolveKnob, which
     knows nothing of the legacy step, so routes/config.ts swaps this knob's entry for this one. */
 export function fallbackTargetValueState(base: KnobValueState): KnobValueState {

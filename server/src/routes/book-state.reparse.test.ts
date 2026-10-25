@@ -56,6 +56,14 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   return { ...real, resetRevisions: vi.fn(real.resetRevisions) };
 });
 
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 const CACHE_DIR = join(SERVER_ROOT, 'handoff', 'cache');
@@ -809,7 +817,13 @@ describe('GET handler — tolerates state.json without analysisProvenance (srv-5
    interception is deterministically add-alias's read, not reparse's own
    `existingCast` read for the reuse-carryover snapshot — which is, since
    #2099, itself in-lock and directly related (it's the read half of the
-   same locked block whose delete half this describe exercises). */
+   same locked block whose delete half this describe exercises).
+
+   #3773 — Route-vs-route coverage only: reparse and add-alias both hold
+   `book-op:<bookId>` (#3711), which serialises them on its own, so this stays
+   green with a no-op cast lock; it does NOT prove the cast lock (the "#3773"
+   describe below does). It pins that the real stack, as wired, never
+   resurrects cast.json. */
 describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concurrent cast writer', () => {
   const RACE_AUTHOR = 'Reparse Race Author';
   const RACE_SERIES = 'Standalones';
@@ -823,7 +837,7 @@ describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concur
     raceBookDir = join(workspaceRoot, 'books', RACE_AUTHOR, RACE_SERIES, RACE_TITLE);
   });
 
-  it('an add-alias write does not resurrect cast.json after a concurrent reparse delete', async () => {
+  it('an add-alias write does not resurrect cast.json after a concurrent reparse delete (end-to-end through book-op AND the cast lock)', async () => {
     mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
     writeFileSync(join(raceBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
     writeFileSync(
@@ -951,7 +965,10 @@ describe("reparse handler — #2099 gap A: concurrent cast-aliases write during 
     gapaBookDir = join(workspaceRoot, 'books', GAPA_AUTHOR, GAPA_SERIES, GAPA_TITLE);
   });
 
-  it("an add-alias write is serialised behind reparse's own (now locked) cast read, not silently vaporised", async () => {
+  /* #3773 — Route-vs-route coverage only (book-op serialises these two on its
+     own; green with a no-op cast lock). The cast-lock proof for this same
+     parked-reparse shape is the "#3773" describe below. */
+  it("an add-alias write is serialised behind reparse's own (now locked) cast read, not silently vaporised (end-to-end through book-op AND the cast lock)", async () => {
     mkdirSync(join(gapaBookDir, '.audiobook'), { recursive: true });
     writeFileSync(join(gapaBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
     writeFileSync(
@@ -1068,6 +1085,170 @@ describe("reparse handler — #2099 gap A: concurrent cast-aliases write during 
     // acquisition, finds the cast reparse just deleted, and refuses with
     // 409 instead of reporting a success it can't back up.
     expect(resRacer!.status).toBe(409);
+  });
+});
+
+/* #3773 — cast-lock-alone proof for reparse's cast.json read+delete. The two
+   route-vs-route races above (Task 11, gap A) are NOT cast-lock proof: reparse
+   and add-alias both hold `book-op:<bookId>` (#3711), which serialises them on
+   its own, so both stay green with `withCastLock` replaced by a no-op
+   (confirmed: no-op cast lock green; no-op cast lock AND book-op red). The
+   reparse delete is inline in `applyReparse` (no extractable helper to drive
+   below book-op), so the real REPARSE is the parked side — fired first and
+   held at its in-lock `existingCast` read — and the second writer is
+   `persistEmotionVariant` (cast lock, NO book-op) called directly.
+
+   This is defense-in-depth, not a reproducible production race:
+   `persistEmotionVariant` only runs inside a `runBookJob`, and reparse answers
+   409 `book_busy` while a job is registered, so book-op plus book-jobs already
+   exclude the interleaving. Nor is the writer's 'notFound' a refusal — both
+   production callers (`qwen-voice.ts`, `cast-design.ts`) report it as success.
+
+   Invariant proved: reparse's read+snapshot+delete is ONE cast-lock hold, so a
+   concurrent cast-lock writer either completes before it (and lands in the
+   carryover snapshot) or queues behind it, re-reads inside its own lock, sees
+   the deleted cast and answers 'notFound' — it is never told 'applied' and
+   then silently erased by the stale-snapshot delete. */
+describe('reparse handler — #3773: cast lock alone serialises the cast.json read+delete', () => {
+  const LOCK_AUTHOR = 'Reparse Lock Author';
+  const LOCK_SERIES = 'Standalones';
+  const LOCK_TITLE = 'Reparse Lock Book';
+  let lockBookId: string;
+  let lockBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    lockBookId = makeBookId(LOCK_AUTHOR, LOCK_SERIES, LOCK_TITLE);
+    lockBookDir = join(workspaceRoot, 'books', LOCK_AUTHOR, LOCK_SERIES, LOCK_TITLE);
+  });
+
+  it('#3773 — cast lock alone: a cast-lock-only writer lands in the snapshot or sees the deleted cast, never applied-then-erased, around a parked reparse delete', async () => {
+    mkdirSync(join(lockBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(lockBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(lockBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: lockBookId,
+        manuscriptId: 'm_reparse_lock',
+        title: LOCK_TITLE,
+        author: LOCK_AUTHOR,
+        series: LOCK_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const castPath = join(lockBookDir, '.audiobook', 'cast.json');
+    const carryoverPath = join(lockBookDir, '.audiobook', 'cast-reuse-carryover.json');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+      }),
+    );
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const lockCastPath = castJsonPath(lockBookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === lockBookDir).length;
+    const entriesBefore = castLockEntries();
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let castReads = 0;
+    let signalIntercepted!: () => void;
+    const interceptedSignal = new Promise<void>((resolve) => {
+      signalIntercepted = resolve;
+    });
+    /* Reparse's FIRST cast.json read is its in-lock `existingCast` read (same
+       premise as the gap A describe above): hold its resolution behind the
+       gate. Every cast.json read is counted so the test can show reparse was the
+       only reader when it parked. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path === lockCastPath) castReads += 1;
+      if (path !== lockCastPath || intercepted) return actual.readJson(path);
+      intercepted = true;
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      signalIntercepted();
+      await gate;
+      return value;
+    });
+
+    let resReparse: request.Response;
+    let second: unknown;
+    let reparsePromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    let hangTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      reparsePromise = request(app).post(`/api/books/${lockBookId}/reparse`);
+      reparsePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      await Promise.race([
+        interceptedSignal,
+        new Promise<never>((_, rej) => {
+          hangTimer = setTimeout(
+            () => rej(new Error('HANG: reparse never reached its in-lock cast.json read')),
+            8_000,
+          );
+        }),
+      ]);
+      clearTimeout(hangTimer);
+      expect(intercepted).toBe(true);
+      expect(castReads).toBe(1); // only the parked reparse read so far
+
+      secondPromise = persistEmotionVariant(lockBookDir, 'nova', 'angry', 'qwen-v_nova__angry');
+      secondPromise.catch(() => {}); // force dispatch now
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind reparse's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Premise pin: reparse's entry plus the second writer's own means the
+         second writer reached the cast lock while reparse was parked inside
+         it. A book-op span before the lock leaves this at 1 — a read count
+         cannot show that (the writer's lock-free early-out read comes
+         first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resReparse, second] = await Promise.all([reparsePromise, secondPromise]);
+    } finally {
+      clearTimeout(hangTimer);
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([reparsePromise, secondPromise]);
+    }
+    expect(resReparse.status).toBe(200);
+
+    // Partition (outcome), computed unconditionally and asserted BEFORE the
+    // mechanism: a writer told 'applied' must have left its variant somewhere
+    // observable. Under a no-op lock it is 'applied' and then erased — the
+    // stale `existingCast` snapshot never held it and the delete removes the
+    // file it was written into.
+    const hasVariant = (path: string): boolean =>
+      existsSync(path) &&
+      (
+        (JSON.parse(readFileSync(path, 'utf8')).characters ?? []) as Array<{
+          overrideTtsVoices?: { qwen?: { variants?: Record<string, unknown> } };
+        }>
+      ).some((c) => c.overrideTtsVoices?.qwen?.variants?.angry !== undefined);
+    const survived = hasVariant(carryoverPath) || hasVariant(castPath);
+    expect(second === 'applied' && !survived).toBe(false);
+
+    // Mechanism: the writer queued behind reparse's lock, re-read inside its
+    // own acquisition, and found the cast reparse just deleted ('notFound').
+    expect(second).toBe('notFound');
+    expect(existsSync(castPath)).toBe(false);
   });
 });
 

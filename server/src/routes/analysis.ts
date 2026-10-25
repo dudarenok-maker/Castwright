@@ -4492,8 +4492,12 @@ export async function runMainAnalyzerJob(
       throw e;
     }
     /* #938 Layer A — resolve the byline author + strip title-page/e-library
-       boilerplate from each chapter body BEFORE the model sees it. In-memory only
-       (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+       boilerplate from each chapter body BEFORE the model sees it. Mutates the
+       cached record's hints in place; the analysis run itself never writes them
+       to disk, but a later restructure persists whatever bodies the record holds
+       to manuscript-hints.json (#3703), stripped ones included. Harmless: the
+       strip is idempotent, so a hydrate that returns stripped bodies and a re-run
+       over them change nothing. */
     const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
     for (const ch of record.chapterHints) {
       ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
@@ -8190,8 +8194,12 @@ export async function runSubsetAnalyzerJob(
       throw e;
     }
     /* #938 Layer A — resolve the byline author + strip title-page/e-library
-       boilerplate from each chapter body BEFORE the model sees it. In-memory only
-       (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+       boilerplate from each chapter body BEFORE the model sees it. Mutates the
+       cached record's hints in place; the analysis run itself never writes them
+       to disk, but a later restructure persists whatever bodies the record holds
+       to manuscript-hints.json (#3703), stripped ones included. Harmless: the
+       strip is idempotent, so a hydrate that returns stripped bodies and a re-run
+       over them change nothing. */
     const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
     for (const ch of record.chapterHints) {
       ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
@@ -8355,9 +8363,11 @@ export async function runSubsetAnalyzerJob(
     /* #3435 S0 — the main route's M0/M1, book-wide. */
     if (applyAnalysisLoadRules(cache, record.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
     /* #3435 hint snapshot — the chapter hints as they stood at load. The
-       exclude toggle replaces `record.chapterHints` live (book-state.ts), so
-       the cast gate, coverage, the roll, the stitch and the result gate (S14)
-       read this copy: one run judges one chapter set. */
+       exclude toggle replaces the whole cached record via `putManuscript`
+       (book-state.ts) and leaves the object `record` points at alone, but a
+       store re-read mid-run would see the new record, so the cast gate,
+       coverage, the roll, the stitch and the result gate (S14) read this copy:
+       one run judges one chapter set. */
     const hints = record.chapterHints.map((h) => ({ ...h }));
     /* #3435 O2 — read at load: a book past Confirm (cast confirmed, or an
        authoritative persist since the cache was last cleared) always passes

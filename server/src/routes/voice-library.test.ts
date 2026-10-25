@@ -94,6 +94,108 @@ vi.mock('../tts/mp3.js', async (orig) => {
    depending on test order. Asserting on real file-existence effects (as the
    rest of this DELETE describe already does) sidesteps it entirely. */
 
+/* #3773 — cast-lock-alone proofs. DELETE /:voiceUuid/assign
+   takes `book-op:<bookId>` BEFORE `withCastLock`, so two ROUTE calls race-for-
+   race are serialised by book-op alone and the route-vs-route test stays
+   green with `withCastLock` replaced by a no-op (confirmed: no-op cast lock
+   green; no-op cast lock AND book-op red). The helper below parks the REAL
+   route at its in-lock cast.json read and drives the second writer BELOW
+   book-op — `persistEmotionVariant` takes the cast lock and no book-op — so
+   only the cast lock separates the two. `vi.mock`s are hoisted passthroughs:
+   `readJson` so the route's own read (bound at module load) can be parked,
+   `withKeyLock` so the test can pin that the second writer took no book-op. */
+const { lockKeyLog } = vi.hoisted(() => ({
+  lockKeyLog: { on: false, keys: [] as string[] },
+}));
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return {
+    ...actual,
+    withKeyLock: ((key: string, ...rest: unknown[]) => {
+      if (lockKeyLog.on) lockKeyLog.keys.push(key);
+      return (actual.withKeyLock as (...a: unknown[]) => unknown)(key, ...rest);
+    }) as typeof actual.withKeyLock,
+  };
+});
+
+async function raceRouteAgainstCastLockOnlyWriter(opts: {
+  castPath: string;
+  startRoute: () => request.Test;
+  startSecondWriter: () => Promise<unknown>;
+}): Promise<{ resRoute: request.Response; second: unknown; windowKeys: string[] }> {
+  const stateIo = await import('../workspace/state-io.js');
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
+  );
+  let released!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    released = resolve;
+  });
+  let intercepted = false;
+  let signalRead!: () => void;
+  const readReached = new Promise<void>((resolve) => {
+    signalRead = resolve;
+  });
+  /* The handler's FIRST cast.json read is the in-lock one (no upfront
+     lock-free read): hold its resolution open behind the gate. */
+  const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+    if (path !== opts.castPath || intercepted) return actual.readJson(path);
+    intercepted = true;
+    signalRead();
+    const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+    await gate;
+    return value;
+  });
+
+  let resRoute: request.Response;
+  let second: unknown;
+  let windowKeys: string[] = [];
+  let routePromise: request.Test | undefined;
+  let secondPromise: Promise<unknown> | undefined;
+  try {
+    routePromise = opts.startRoute();
+    routePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+    let reachTimer!: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([
+        readReached,
+        new Promise<never>((_, rej) => {
+          reachTimer = setTimeout(
+            () => rej(new Error('HANG: the route never reached its in-lock cast.json read')),
+            8_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(reachTimer);
+    }
+    expect(intercepted).toBe(true);
+
+    lockKeyLog.keys = [];
+    lockKeyLog.on = true;
+    secondPromise = opts.startSecondWriter();
+    secondPromise.catch(() => {}); // force dispatch now (see above)
+    // Generous head start: completes fully when unlocked (the bug window)
+    // or queues behind the route's still-held lock when locked.
+    await new Promise((r) => setTimeout(r, 50));
+    lockKeyLog.on = false;
+    windowKeys = [...lockKeyLog.keys];
+
+    released();
+    [resRoute, second] = await Promise.all([routePromise, secondPromise]);
+  } finally {
+    lockKeyLog.on = false;
+    released(); // idempotent — a throw above still releases the held read
+    spy.mockImplementation(actual.readJson);
+    await Promise.allSettled([routePromise, secondPromise]);
+  }
+  return { resRoute, second, windowKeys };
+}
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
@@ -2378,11 +2480,16 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
   });
 
   /* #1981 — two concurrent DELETE /assign calls for DIFFERENT characters in
-     the SAME book race that book's cast.json. Unlocked, both requests'
-     readJson resolve before either writeJsonAtomic lands, so the later
-     write replays a `characters` snapshot taken before the earlier write
-     happened and silently un-clears the earlier one's slot. */
-  it('#1981 — keeps both unassigns when two DELETE /assign calls for one book overlap', async () => {
+     the SAME book race that book's cast.json. With NO serialisation, both
+     requests' readJson would resolve before either writeJsonAtomic lands, so
+     the later write would replay a `characters` snapshot taken before the
+     earlier write happened and silently un-clear the earlier one's slot.
+     Since #3711 BOTH handlers take `book-op:<bookId>` before `withCastLock`,
+     so this route-level test is serialised by book-op alone and stays green
+     with a no-op cast lock (#3773, confirmed: no-op cast lock green; no-op
+     cast lock AND book-op red) — it pins the real stack as wired, NOT the
+     cast lock. The '#3773 — cast lock alone' test below proves the lock. */
+  it('#1981 — keeps both unassigns when two DELETE /assign calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
     const bookDir = writeBookOnDisk(
       dir,
       'Della Renwick',
@@ -2427,6 +2534,61 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
     const bob = cast.characters.find((c) => c.id === 'char-bob')!;
     expect(alice.overrideTtsVoices?.coqui).toBeUndefined();
     expect(bob.overrideTtsVoices?.coqui).toBeUndefined();
+  });
+
+  it('#3773 — cast lock alone: a DELETE /assign and a cast-lock-only writer on a different character both survive', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-lock-alone',
+      [
+        {
+          id: 'char-alice',
+          name: 'Alice',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-race-a', libraryUuid: 'race-a', provenance: 'cloned' },
+          },
+        },
+        { id: 'char-bob', name: 'Bob' },
+      ],
+    );
+
+    const { resRoute, second, windowKeys } = await raceRouteAgainstCastLockOnlyWriter({
+      castPath: castPathFor(bookDir),
+      startRoute: () =>
+        request(app)
+          .delete('/api/voice-library/race-a/assign')
+          .query({ bookId: 'book-unassign-lock-alone', characterId: 'char-alice' }),
+      startSecondWriter: () =>
+        qwenVoice.persistEmotionVariant(bookDir, 'char-bob', 'angry', 'qwen-v_char-bob__angry'),
+    });
+    /* Premise pin: while the route was parked, the second writer queued on
+       the cast lock only — it took no `book-op:` key. If someone later wraps
+       it in book-op the two serialise on that again and this test decays. */
+    expect(windowKeys.filter((k) => k.startsWith('book-op:'))).toEqual([]);
+    expect(resRoute.status).toBe(200);
+    expect(resRoute.body).toEqual({ cleared: ['coqui'] });
+    expect(second).toBe('applied');
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{
+        id: string;
+        overrideTtsVoices?: Record<string, unknown> & {
+          qwen?: { variants?: Record<string, { name: string }> };
+        };
+      }>;
+    };
+    const alice = cast.characters.find((c) => c.id === 'char-alice')!;
+    const bob = cast.characters.find((c) => c.id === 'char-bob')!;
+    /* the route's own mutation survived the second writer's write ... */
+    expect(alice.overrideTtsVoices?.coqui).toBeUndefined();
+    /* ... and the second writer's own mutation survived the route's write —
+       the lost-update this test pins. */
+    expect(bob.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_char-bob__angry',
+    });
   });
 });
 

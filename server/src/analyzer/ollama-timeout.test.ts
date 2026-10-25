@@ -27,11 +27,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
 import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
-import {
-  OllamaAnalyzer,
-  LocalUnreachableError,
-  generatePersonaViaOllama,
-} from './ollama.js';
+import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerTimeoutError } from './errors.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
 /* protocol.ts resolves the handoff dirs relative to its own __dirname
    (server/src/handoff/), so HANDOFF_ROOT is server/handoff/. */
@@ -146,8 +144,8 @@ describe('OllamaAnalyzer fetch timeout', () => {
     expect(result.characters.map((c) => c.id)).toContain('narrator');
   });
 
-  it('REGRESSION: generatePersonaViaOllama stays bounded — the dispatcher must not make it hang forever', async () => {
-    /* This call site passes NO caller signal (voice-style.ts hands it only
+  it('REGRESSION: the Ollama free-text (persona) call stays bounded — the dispatcher must not make it hang forever', async () => {
+    /* This call site passes NO caller signal (voice-style.ts hands the runner only
        { onCpu, keepAlive }), so undici's hidden 300s cap was the ONLY thing
        stopping it. ANALYZER_DISPATCHER removes that, and the analyzer slot it
        holds is released only in a `finally` AFTER the await — so an unbounded
@@ -155,62 +153,59 @@ describe('OllamaAnalyzer fetch timeout', () => {
        later analyzer call. PERSONA_ABSOLUTE_MAX_MS is the replacement bound;
        absoluteMaxMs proves it FIRES without waiting out ten minutes.
 
-       OLLAMA_URL is pointed at the local slow server: generatePersonaViaOllama
-       resolves its own URL, and without this the call would go to the real
-       daemon on :11434. */
+       The URL goes straight into OllamaAnalyzer (voice-style.ts resolves it from
+       settings in production), so the call cannot reach the real daemon on :11434. */
     const url = await startSlowOllama(5_000);
-    const prevUrl = process.env.OLLAMA_URL;
-    process.env.OLLAMA_URL = url;
-    try {
-      const err = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', {
-        onCpu: true,
-        absoluteMaxMs: 250,
-      }).then(
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', ollama: { onCpu: true, absoluteMaxMs: 250 } })
+      .then(
         () => null,
         (e: Error) => e,
       );
 
-      expect(err, 'the call must terminate, not hang').not.toBeNull();
-      /* Terminated by the budget, NOT by undici inventing a failure — and
-         crucially not swallowed into LocalUnreachableError, which would
-         reroute a healthy local daemon to the cloud. */
-      expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    expect(err, 'the call must terminate, not hang').not.toBeNull();
+    /* Terminated by the budget, NOT by undici inventing a failure — and
+       crucially not swallowed into LocalUnreachableError, which would
+       reroute a healthy local daemon to the cloud. */
+    expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    /* The design pre-pass halts on AnalyzerTimeoutError; a bare TimeoutError DOMException matched
+       nothing there, so every character waited out the ceiling and failed as 'unknown'. */
+    expect(err).toBeInstanceOf(AnalyzerTimeoutError);
+    expect((err as AnalyzerTimeoutError).reason).toBe('ceiling');
+    expect((err as AnalyzerTimeoutError).transport).toBe('ollama');
+    expect(err).not.toBeInstanceOf(AnalysisAbortedError);
 
-      /* The ACTUAL harm this guards: the slot is taken before the await and
-         released only in the `finally`, so a hang would leak a token from the
-         bounded analyzer semaphore and silently starve every later analyzer
-         call.
+    /* The ACTUAL harm this guards: the slot is taken before the await and
+       released only in the `finally`, so a hang would leak a token from the
+       bounded analyzer semaphore and silently starve every later analyzer
+       call.
 
-         This MUST run at capacity 1. At the shipped default of 2 the check is
-         a placebo: only one token is ever outstanding, so `1 < 2` grants
-         immediately and deleting releaseSlot() still passes. acquireAnalyzerSlot
-         calls syncAnalyzerConcurrency() on every acquire, so setting the env
-         resizes the semaphore live with no module reset. And the token this
-         probe takes must be handed back, or the next test in this file queues
-         forever at capacity 1. */
-      const prevK = process.env.ANALYZER_OLLAMA_CONCURRENCY;
-      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
-      let timer: NodeJS.Timeout | undefined;
-      try {
-        const outcome = await Promise.race([
-          acquireAnalyzerSlot('qwen3.5:9b', true).then((rel) => ({ rel })),
-          new Promise<{ rel: null }>((r) => {
-            timer = setTimeout(() => r({ rel: null }), 5_000);
-          }),
-        ]);
-        expect(
-          outcome.rel,
-          'the analyzer slot must be released on the timeout path (capacity 1)',
-        ).not.toBeNull();
-        outcome.rel?.();
-      } finally {
-        clearTimeout(timer);
-        if (prevK === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
-        else process.env.ANALYZER_OLLAMA_CONCURRENCY = prevK;
-      }
+       This MUST run at capacity 1. At the shipped default of 2 the check is
+       a placebo: only one token is ever outstanding, so `1 < 2` grants
+       immediately and deleting releaseSlot() still passes. acquireAnalyzerSlot
+       calls syncAnalyzerConcurrency() on every acquire, so setting the env
+       resizes the semaphore live with no module reset. And the token this
+       probe takes must be handed back, or the next test in this file queues
+       forever at capacity 1. */
+    const prevK = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        acquireAnalyzerSlot('qwen3.5:9b', true).then((rel) => ({ rel })),
+        new Promise<{ rel: null }>((r) => {
+          timer = setTimeout(() => r({ rel: null }), 5_000);
+        }),
+      ]);
+      expect(
+        outcome.rel,
+        'the analyzer slot must be released on the timeout path (capacity 1)',
+      ).not.toBeNull();
+      outcome.rel?.();
     } finally {
-      if (prevUrl === undefined) delete process.env.OLLAMA_URL;
-      else process.env.OLLAMA_URL = prevUrl;
+      clearTimeout(timer);
+      if (prevK === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      else process.env.ANALYZER_OLLAMA_CONCURRENCY = prevK;
     }
   });
 
@@ -234,5 +229,100 @@ describe('OllamaAnalyzer fetch timeout', () => {
        reason to fail over to the cloud. */
     expect(err).not.toBeInstanceOf(LocalUnreachableError);
     expect((err as Error | null)?.name).toMatch(/Abort/i);
+  });
+
+  it('a caller abort before the first byte of the free-text (persona) call is AnalysisAbortedError, not an unreachable daemon', async () => {
+    /* #3084 W4 — the design job's signal now reaches this call. The fetch signal is
+       AbortSignal.any([budget, req.signal]), so a pause aborts it before the first byte, and
+       classifyConnectError would read that AbortError as LocalUnreachableError: a paused design
+       job reported as a down daemon. The 5 s header delay keeps the abort before the first byte. */
+    const url = await startSlowOllama(5_000);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', signal: ac.signal, ollama: { onCpu: true } })
+      .then(
+        () => null,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalysisAbortedError);
+    expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    expect(err).not.toBeInstanceOf(AnalyzerTimeoutError);
+  });
+
+  /* Headers go out at once, then the body stalls: the budget (or a caller abort) fires DURING
+     response.json(), whose `.catch(() => ({}))` used to turn that into '' and so into the
+     empty-persona error instead of the typed stop. */
+  function startStalledBodyOllama(): Promise<string> {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"message":{"content":"par');
+    });
+    return new Promise((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const addr = server!.address();
+        resolve(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`);
+      });
+    });
+  }
+
+  it('a budget that fires while the free-text (persona) body is being read is AnalyzerTimeoutError, not an empty persona', async () => {
+    const url = await startStalledBodyOllama();
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', ollama: { onCpu: true, absoluteMaxMs: 250 } })
+      .then(
+        (v) => v,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalyzerTimeoutError);
+    expect((err as AnalyzerTimeoutError).reason).toBe('ceiling');
+  });
+
+  it('a caller abort while the free-text (persona) body is being read is AnalysisAbortedError', async () => {
+    const url = await startStalledBodyOllama();
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', signal: ac.signal, ollama: { onCpu: true } })
+      .then(
+        (v) => v,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalysisAbortedError);
+  });
+
+  it('a non-OK free-text (persona) body is redacted against the known analyzer secrets before the error is built (P22)', async () => {
+    const SECRET = 'AIzaSy-persona-echo-secret-1';
+    const savedEnvKey = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    _setUserSettingsCacheForTest({ geminiApiKey: SECRET });
+    server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: `runner failed for key ${SECRET}` }));
+      });
+    });
+    const url = await new Promise<string>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const addr = server!.address();
+        resolve(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`);
+      });
+    });
+    try {
+      const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+        .runFreeText({ prompt: 'PROMPT', ollama: { onCpu: true } })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(AnalyzerHttpError);
+      expect((err as InstanceType<typeof AnalyzerHttpError>).bodyExcerpt).toBe('{"error":"runner failed for key [redacted]"}');
+      expect(`${(err as Error).message}\n${(err as Error).stack ?? ''}`).not.toContain(SECRET);
+    } finally {
+      _resetUserSettingsCache();
+      if (savedEnvKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = savedEnvKey;
+    }
   });
 });

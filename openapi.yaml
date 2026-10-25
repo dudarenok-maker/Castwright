@@ -4088,6 +4088,27 @@ paths:
                     `manuscript`, and `changeLog` slices with entirely
                     different payloads. A `revisions` slice is always
                     refused (plan 286) regardless of `patch`.
+                    #3683 — for the `state` slice, `chapters` REPLACES the
+                    stored list: a stored chapter missing from the payload is
+                    gone. Each incoming chapter is matched to a stored chapter
+                    by `id` AND `slug` together. On a match, the stored `uuid`
+                    (a client `uuid` is ignored when the stored chapter has
+                    one, else kept if unique) and the server-owned fields (`duration`,
+                    `audioRenderedAt`, `audioModelKey`, `audioEngines`,
+                    `audioQa`, `generationState`, `generationError`,
+                    `generationErrorCode`, `generationRemediation`) come from
+                    the stored copy and a client value for them is ignored.
+                    There is one exception: an explicit `null` for
+                    `generationState` / `generationError` /
+                    `generationErrorCode` / `generationRemediation` clears
+                    that field, while an omitted key keeps the stored value.
+                    An incoming chapter with no match (a new chapter, or an
+                    `id`/`slug` that changed, e.g. a copy taken before a
+                    restructure) carries no server-owned fields over and its
+                    client values for them are dropped; its client `uuid` is
+                    kept only if no stored chapter and no earlier chapter
+                    in the payload holds it, otherwise a fresh one is minted. Output
+                    `uuid`s are always unique.
                     #2246 Task 9 — BCP-47 `language` field on the `state`
                     slice: string | null. `null` is "stated absence" (a
                     book whose language the user has not set), distinct
@@ -4207,7 +4228,9 @@ paths:
             manuscript changed while it was being prepared; retry), `book_moved`
             (the book was moved outside the app while it was being re-parsed;
             an in-app rename waits for the re-parse instead; reload and retry),
-            or absent (the manuscript file is missing on disk).
+            `book_busy` (a long job — render, analysis, scoring, voice design,
+            script review or export — holds the book; stop it or wait for it
+            to finish), or absent (the manuscript file is missing on disk).
           content:
             application/json:
               schema:
@@ -4217,7 +4240,7 @@ paths:
                   error: { type: string }
                   code:
                     type: string
-                    enum: [manuscript_changed, book_moved]
+                    enum: [manuscript_changed, book_moved, book_busy]
         '500':
           description: |
             Re-parse failed (including the book's state file being unreadable
@@ -4268,7 +4291,10 @@ paths:
           description: |
             Refused (nothing was written). `code` is `book_moved` (the book was
             moved outside the app while it was being re-parsed; an in-app
-            rename waits for the replace instead; reload and retry).
+            rename waits for the replace instead; reload and retry), or
+            `book_busy` (a long job — render, analysis, scoring, voice design,
+            script review or export — holds the book; stop it or wait for it
+            to finish).
           content:
             application/json:
               schema:
@@ -4278,7 +4304,7 @@ paths:
                   error: { type: string }
                   code:
                     type: string
-                    enum: [book_moved]
+                    enum: [book_moved, book_busy]
         '500':
           description: |
             Parsing or replacing failed (including the book's state file being
@@ -5131,8 +5157,7 @@ components:
             language has no sidecar mapping — checked before the stream
             produces any progress) / `lock-contention` (a cast-lock
             acquisition on this backstop's own path timed out — #2260) /
-            `unknown` (defensive catch-all for any other unexpected throw
-            escaping the design loop).
+            any other throw escaping the design loop — a whole-job persona-engine failure included — carries its analysis `FailureCode` (#3084 W4: `auth`, `analyzer-endpoint-missing`, `analyzer-timeout`, …), and `unknown` when the taxonomy recognises nothing. A per-character persona failure does not escape the loop and is reported as `character_failed` instead.
         total: { type: integer }
         done: { type: integer }
         skipped:
@@ -5165,8 +5190,10 @@ components:
           description: character_skipped only — present exactly when the skip is the clone-protection guard; absent for every other skip cause.
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
-          type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+          anyOf:
+            - type: string
+              enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+            - $ref: '#/components/schemas/FailureCode'
           description: |
             error only — machine-readable whole-run abort reason.
             `language_unset` (Task 6, #2246) fires when the book never

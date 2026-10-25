@@ -7,6 +7,8 @@
 > Implementation plan: [`docs/superpowers/plans/2026-09-11-openai-compatible-analyzer.md`](../superpowers/plans/2026-09-11-openai-compatible-analyzer.md)
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
+>
+> Register row: A109 (§10 below, rewritten by #3777; the id is unchanged).
 
 ---
 
@@ -313,5 +315,42 @@ Run by / date / SHA:
     "busy; not unloading" line for B. B's run ends while the admission polls → B unloaded within
     the same admission; or, if it gave up first, the failure names B as busy for the whole wait.
     Timestamps of A's POST / B's run end / B's POST: ___ Result:
+
+Run by / date / SHA:
+
+## 10. Persona generation on a same-card endpoint — register row A109
+
+**Hardware:** a single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or
+LM Studio) holding a model on that same card (the endpoint's `gpu` = the card Qwen targets),
+Qwen VoiceDesign. Two books whose characters have no voice description (a fresh import each;
+steps 1-2 design every character of the first, and step 3 needs a second one that is still
+undesigned), and a third book with a chapter you can render.
+
+**Preconditions.** Advanced Settings → Persona generation engine MUST be set to the endpoint's
+model (`openai:<endpointId>::<model>`). The default is `gemini`; left alone, the run never
+touches the endpoint and proves nothing. Follow the endpoint's server log.
+
+1. No render streaming, and VoiceDesign NOT resident at the start (idle past `QWEN_DESIGN_IDLE_TTL`,
+   default 120 s, so there is a load line to order against). Start Design full cast. The
+   endpoint's server log shows the persona requests arriving before VoiceDesign loads. First persona request at ___, VoiceDesign load at ___.
+   Result:
+2. W3d's eviction unloads the endpoint's model before VoiceDesign loads, and VoiceDesign loads and
+   designs without an OOM. Unload line at ___, VoiceDesign load at ___. Result:
+3. With a chapter render streaming on that card, open the SECOND undesigned book (not the one
+   steps 1-2 designed: Design full cast is disabled there, and a book whose characters have a
+   voice description never prompts) and start Design full cast. "Pause audio generation
+   to design voices?" shows. Choose **Pause and design**: the render's abort is acknowledged
+   before the first persona request (the pause route aborts and answers at once; the design
+   starts only after that answer). It does not wait for an in-flight sidecar synth, so record
+   whether the last synth's tail overlapped the first persona requests, and whether that caused
+   an OOM. Pause acknowledged at ___ (the browser devtools Network panel: the response to
+   `POST /api/books/<bookId>/generation/pause` and to `POST /api/queue/pause`; the server logs
+   nothing for the pause route), last synth ended at ___, first persona request at ___.
+   Overlap: yes / no. OOM: yes / no. Result:
+4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
+   against the same-card endpoint. It does not OOM and does not silently fall back to another
+   engine. Result:
+5. After both complete (the design and the reverse-order analysis in step 4), a chapter render
+   on that card succeeds. Result:
 
 Run by / date / SHA:

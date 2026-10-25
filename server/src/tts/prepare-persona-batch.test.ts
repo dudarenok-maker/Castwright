@@ -2,19 +2,19 @@
    (resolvePersonaGpuPlan) live in the same module, we cannot stub it out of
    the module itself. Instead we control its transitive dependencies so the
    real call stack runs, but hits mocked infrastructure:
-   - resolvePersonaEngine   via vi.mock('../analyzer/voice-style.js')
+   - personaSharesGpu       via vi.mock('../analyzer/voice-style.js')  (#3084 W4)
    - resolvePersonaGpuPlan  via generation.js / design-lock.js mocks
 */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 /* --- top-level mocks -------------------------------------------------------- */
 
-/* resolvePersonaEngine is the outermost gate; mock the whole module so each
-   test can flip the engine without re-importing. */
-const mockResolvePersonaEngine = vi.fn<() => 'local' | 'gemini'>();
+/* personaSharesGpu is the outermost gate (local Ollama, or an endpoint on the Qwen card);
+   mock it so each test can flip it without re-importing. */
+const mockPersonaSharesGpu = vi.fn<() => boolean>();
 vi.mock('../analyzer/voice-style.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/voice-style.js')>();
-  return { ...actual, resolvePersonaEngine: mockResolvePersonaEngine };
+  return { ...actual, personaSharesGpu: mockPersonaSharesGpu };
 });
 
 /* generation and design-lock mocks for resolvePersonaGpuPlan's busy check */
@@ -36,30 +36,30 @@ vi.mock('./design-lock.js', async (importOriginal) => {
 describe('preparePersonaBatch', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('local engine, idle → GPU args with the resident persona keepAlive window', async () => {
+  it('persona shares the GPU (local, or a same-card endpoint), idle → GPU args with the resident persona keepAlive window', async () => {
     const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
     const gen = await import('../routes/generation.js');
 
-    mockResolvePersonaEngine.mockReturnValue('local');
+    mockPersonaSharesGpu.mockReturnValue(true);
     vi.mocked(gen.activeGenerationBooks).mockReturnValue([]);
 
     expect(await preparePersonaBatch('/a')).toEqual({ onCpu: false, keepAlive: 300 });
   });
 
-  it('local engine, render active → CPU args', async () => {
+  it('persona shares the GPU, render active → CPU args', async () => {
     const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
     const gen = await import('../routes/generation.js');
 
-    mockResolvePersonaEngine.mockReturnValue('local');
+    mockPersonaSharesGpu.mockReturnValue(true);
     vi.mocked(gen.activeGenerationBooks).mockReturnValue(['book-1']); // render active → CPU
 
     expect(await preparePersonaBatch('/a')).toEqual({ onCpu: true, keepAlive: 0 });
   });
 
-  it('gemini engine → off-GPU args', async () => {
+  it('persona does not share the GPU (gemini, or an endpoint on no card / another card) → off-GPU args', async () => {
     const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
 
-    mockResolvePersonaEngine.mockReturnValue('gemini');
+    mockPersonaSharesGpu.mockReturnValue(false);
 
     expect(await preparePersonaBatch('/a')).toEqual({ onCpu: false, keepAlive: 0 });
   });
