@@ -21,6 +21,8 @@ import { ZipFile } from 'yazl';
    below race deterministically: the FIRST mkdir of `slowMkdir.path` stalls. A
    pass-through for every other call. */
 const slowMkdir = vi.hoisted(() => ({ path: null as string | null, ms: 250 }));
+/* #3703 -- fails the FIRST rename whose destination is `path` with EBUSY. */
+const failRename = vi.hoisted(() => ({ path: null as string | null }));
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
@@ -32,10 +34,29 @@ vi.mock('node:fs/promises', async () => {
       }
       return (actual.mkdir as (...a: unknown[]) => Promise<unknown>)(p, ...rest);
     }) as typeof actual.mkdir,
+    rename: (async (from: string, to: string) => {
+      if (failRename.path !== null && to === failRename.path) {
+        failRename.path = null;
+        throw Object.assign(new Error('EBUSY: injected'), { code: 'EBUSY' });
+      }
+      return actual.rename(from, to);
+    }) as typeof actual.rename,
   };
 });
 import sharp from 'sharp';
-import { audioDir, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
+import {
+  audioDir,
+  dotAudiobook,
+  manuscriptHintsJsonPath,
+  stateJsonPath,
+} from '../workspace/paths.js';
+import {
+  buildHintsEntry,
+  composeHintsFile,
+  hintsFromPersisted,
+  sha256Hex,
+  writeManuscriptHints,
+} from '../workspace/manuscript-hints.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { __stateJsonWaitersForTest, withStateJsonLock } from '../workspace/file-lock.js';
 
@@ -502,6 +523,282 @@ describe('importPortableBundle', () => {
     } finally {
       rmSync(importedTarget, { recursive: true, force: true });
     }
+  });
+
+  describe('manuscript-hints.json (#3703)', () => {
+    const hintsState = () =>
+      fixtureState({
+        title: 'Hints Round Trip',
+        bookId: 'demo__standalones__hints-round-trip',
+        language: 'en',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', uuid: 'u-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', uuid: 'u-2' },
+        ],
+      });
+
+    function writeSourceBook(state: BookStateJson, manuscript: Buffer): string {
+      const sourceDir = join(tmpRoot, 'hints-source-book');
+      mkdirSync(audioDir(sourceDir), { recursive: true });
+      mkdirSync(dotAudiobook(sourceDir), { recursive: true });
+      writeFileSync(stateJsonPath(sourceDir), JSON.stringify(state, null, 2));
+      writeFileSync(join(sourceDir, 'manuscript.txt'), manuscript);
+      return sourceDir;
+    }
+
+    it('round-trip carries .audiobook/manuscript-hints.json byte-identical', async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
+      const sourceDir = writeSourceBook(state, manuscript);
+      const persisted = composeHintsFile(buildHintsEntry({
+        manuscriptId: state.manuscriptId!,
+        manuscriptFile: state.manuscriptFile,
+        sourceSha256: sha256Hex(manuscript),
+        hints: [
+          { id: 1, body: 'merged body A' },
+          { id: 2, body: 'merged body B' },
+        ],
+        stateChapters: state.chapters,
+      }), null, state, sha256Hex(manuscript));
+      await writeManuscriptHints(sourceDir, persisted);
+
+      const built = await buildPortableBundle(sourceDir, state);
+      const importedTarget = targetDirFor(state);
+      rmSync(importedTarget, { recursive: true, force: true });
+      try {
+        await importPortableBundle(built.buffer, { onConflict: 'fail' });
+        expect(
+          Buffer.compare(
+            readFileSync(manuscriptHintsJsonPath(importedTarget)),
+            readFileSync(manuscriptHintsJsonPath(sourceDir)),
+          ),
+        ).toBe(0);
+      } finally {
+        rmSync(importedTarget, { recursive: true, force: true });
+      }
+    });
+
+    it('the imported file is still valid for the imported state.json and manuscript', async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
+      const sourceDir = writeSourceBook(state, manuscript);
+      await writeManuscriptHints(
+        sourceDir,
+        composeHintsFile(buildHintsEntry({
+          manuscriptId: state.manuscriptId!,
+          manuscriptFile: state.manuscriptFile,
+          sourceSha256: sha256Hex(manuscript),
+          hints: [
+            { id: 1, body: 'not what a fresh parse gives A' },
+            { id: 2, body: 'not what a fresh parse gives B' },
+          ],
+          stateChapters: state.chapters,
+        }), null, state, sha256Hex(manuscript)),
+      );
+
+      const built = await buildPortableBundle(sourceDir, state);
+      const importedTarget = targetDirFor(state);
+      rmSync(importedTarget, { recursive: true, force: true });
+      try {
+        await importPortableBundle(built.buffer, { onConflict: 'fail' });
+        /* findBookByManuscriptId needs the workspace scan cache, which this
+           harness does not populate, so validate the imported files with the
+           same check getOrHydrateManuscript runs. */
+        const importedState = JSON.parse(readFileSync(stateJsonPath(importedTarget), 'utf8'));
+        const importedManuscript = readFileSync(join(importedTarget, 'manuscript.txt'));
+        const file = JSON.parse(readFileSync(manuscriptHintsJsonPath(importedTarget), 'utf8'));
+        const res = hintsFromPersisted(file, importedState, sha256Hex(importedManuscript));
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+          expect(res.hints.map((h) => h.body)).toEqual([
+            'not what a fresh parse gives A',
+            'not what a fresh parse gives B',
+          ]);
+        }
+      } finally {
+        rmSync(importedTarget, { recursive: true, force: true });
+      }
+    });
+
+    it('a book without the file stays without it', async () => {
+      const state = hintsState();
+      const sourceDir = writeSourceBook(state, Buffer.from('chapter one\nchapter two\n', 'utf8'));
+      const built = await buildPortableBundle(sourceDir, state);
+      expect(built.entries).not.toContain('manuscript-hints.json');
+      const importedTarget = targetDirFor(state);
+      rmSync(importedTarget, { recursive: true, force: true });
+      try {
+        await importPortableBundle(built.buffer, { onConflict: 'fail' });
+        expect(existsSync(manuscriptHintsJsonPath(importedTarget))).toBe(false);
+      } finally {
+        rmSync(importedTarget, { recursive: true, force: true });
+      }
+    });
+
+    /* Review pass 2: a restructure that moves a passage between chapters (split ->
+       reorder [1,3,2] -> merge [2,3]) lands on the SAME uuid sequence with
+       different bodies, and the manuscript file is never edited, so its sha still
+       matches. Only the file-level drop on an overwrite import protects the
+       restored book. */
+    it("'overwrite' with a bundle that carries no hints drops the local manuscript-hints.json", async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from(
+        '# Alpha\n\nAlpha first. Alpha second.\n\n# Beta\n\nBeta first. Beta second.\n',
+        'utf8',
+      );
+      const sourceDir = writeSourceBook(state, manuscript);
+      const built = await buildPortableBundle(sourceDir, state);
+      expect(built.entries).not.toContain('manuscript-hints.json');
+
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      mkdirSync(audioDir(target), { recursive: true });
+      mkdirSync(dotAudiobook(target), { recursive: true });
+      writeFileSync(stateJsonPath(target), JSON.stringify(state, null, 2));
+      writeFileSync(join(target, 'manuscript.txt'), manuscript);
+      const { getOrHydrateManuscript, removeManuscript } = await import('../store/manuscripts.js');
+      try {
+        removeManuscript(state.manuscriptId!);
+        const original = (await getOrHydrateManuscript(state.manuscriptId!))!.chapterHints.map(
+          (h) => h.body,
+        );
+        removeManuscript(state.manuscriptId!);
+
+        /* The local restructure: same uuids, same manuscript sha, moved bodies. */
+        const moved = ['Alpha first.', 'Beta first. Beta second. Alpha second.'];
+        await writeManuscriptHints(
+          target,
+          composeHintsFile(
+            buildHintsEntry({
+              manuscriptId: state.manuscriptId!,
+              manuscriptFile: state.manuscriptFile,
+              sourceSha256: sha256Hex(manuscript),
+              hints: moved.map((body, i) => ({ id: i + 1, body })),
+              stateChapters: state.chapters,
+            }),
+            null,
+            state,
+            sha256Hex(manuscript),
+          ),
+        );
+        const hydratedMoved = (await getOrHydrateManuscript(state.manuscriptId!))!.chapterHints.map(
+          (h) => h.body,
+        );
+        expect(hydratedMoved).toEqual(moved); // the stale file is live before the import
+        removeManuscript(state.manuscriptId!);
+
+        await importPortableBundle(built.buffer, { onConflict: 'overwrite' });
+
+        expect(existsSync(manuscriptHintsJsonPath(target))).toBe(false);
+        const restored = (await getOrHydrateManuscript(state.manuscriptId!))!.chapterHints.map(
+          (h) => h.body,
+        );
+        expect(restored).toEqual(original);
+        expect(restored).not.toEqual(moved);
+      } finally {
+        removeManuscript(state.manuscriptId!);
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+
+    /* Review pass 3: the hints file must go the moment the bundle's state.json
+       is live, not after the whole rename loop -- a later rename failing (EBUSY on
+       the manuscript) otherwise leaves the local file beside the restored state. */
+    it("'overwrite' that fails after state.json still drops the local manuscript-hints.json", async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from(
+        '# Alpha\n\nAlpha first. Alpha second.\n\n# Beta\n\nBeta first. Beta second.\n',
+        'utf8',
+      );
+      const sourceDir = writeSourceBook(state, manuscript);
+      const built = await buildPortableBundle(sourceDir, state);
+      expect(built.entries).not.toContain('manuscript-hints.json');
+
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      mkdirSync(audioDir(target), { recursive: true });
+      mkdirSync(dotAudiobook(target), { recursive: true });
+      writeFileSync(stateJsonPath(target), JSON.stringify(state, null, 2));
+      writeFileSync(join(target, 'manuscript.txt'), manuscript);
+      const { getOrHydrateManuscript, removeManuscript } = await import('../store/manuscripts.js');
+      try {
+        const moved = ['Alpha first.', 'Beta first. Beta second. Alpha second.'];
+        await writeManuscriptHints(
+          target,
+          composeHintsFile(
+            buildHintsEntry({
+              manuscriptId: state.manuscriptId!,
+              manuscriptFile: state.manuscriptFile,
+              sourceSha256: sha256Hex(manuscript),
+              hints: moved.map((body, i) => ({ id: i + 1, body })),
+              stateChapters: state.chapters,
+            }),
+            null,
+            state,
+            sha256Hex(manuscript),
+          ),
+        );
+        removeManuscript(state.manuscriptId!);
+
+        failRename.path = join(target, 'manuscript.txt');
+        await expect(importPortableBundle(built.buffer, { onConflict: 'overwrite' })).rejects.toThrow(
+          /EBUSY/,
+        );
+        failRename.path = null;
+
+        expect(existsSync(manuscriptHintsJsonPath(target))).toBe(false);
+        /* A restart: nothing warm, hydrate from disk. */
+        removeManuscript(state.manuscriptId!);
+        const hydrated = (await getOrHydrateManuscript(state.manuscriptId!))!.chapterHints.map(
+          (h) => h.body,
+        );
+        expect(hydrated).not.toEqual(moved);
+      } finally {
+        failRename.path = null;
+        removeManuscript(state.manuscriptId!);
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+
+    it("'overwrite' with a bundle that carries hints replaces the local file with the bundle's", async () => {
+      const state = hintsState();
+      const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
+      const sourceDir = writeSourceBook(state, manuscript);
+      const entryFor = (bodies: string[]) =>
+        composeHintsFile(
+          buildHintsEntry({
+            manuscriptId: state.manuscriptId!,
+            manuscriptFile: state.manuscriptFile,
+            sourceSha256: sha256Hex(manuscript),
+            hints: bodies.map((body, i) => ({ id: i + 1, body })),
+            stateChapters: state.chapters,
+          }),
+          null,
+          state,
+          sha256Hex(manuscript),
+        );
+      await writeManuscriptHints(sourceDir, entryFor(['bundle A', 'bundle B']));
+      const built = await buildPortableBundle(sourceDir, state);
+
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      mkdirSync(audioDir(target), { recursive: true });
+      mkdirSync(dotAudiobook(target), { recursive: true });
+      writeFileSync(stateJsonPath(target), JSON.stringify(state, null, 2));
+      writeFileSync(join(target, 'manuscript.txt'), manuscript);
+      await writeManuscriptHints(target, entryFor(['local A', 'local B']));
+      try {
+        await importPortableBundle(built.buffer, { onConflict: 'overwrite' });
+        expect(
+          Buffer.compare(
+            readFileSync(manuscriptHintsJsonPath(target)),
+            readFileSync(manuscriptHintsJsonPath(sourceDir)),
+          ),
+        ).toBe(0);
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
   });
 
   it("imports a bundle whose state.json has no language as language:null (key present)", async () => {

@@ -11951,6 +11951,27 @@ export interface operations {
                      *     `manuscript`, and `changeLog` slices with entirely
                      *     different payloads. A `revisions` slice is always
                      *     refused (plan 286) regardless of `patch`.
+                     *     #3683 — for the `state` slice, `chapters` REPLACES the
+                     *     stored list: a stored chapter missing from the payload is
+                     *     gone. Each incoming chapter is matched to a stored chapter
+                     *     by `id` AND `slug` together. On a match, the stored `uuid`
+                     *     (a client `uuid` is ignored when the stored chapter has
+                     *     one, else kept if unique) and the server-owned fields (`duration`,
+                     *     `audioRenderedAt`, `audioModelKey`, `audioEngines`,
+                     *     `audioQa`, `generationState`, `generationError`,
+                     *     `generationErrorCode`, `generationRemediation`) come from
+                     *     the stored copy and a client value for them is ignored.
+                     *     There is one exception: an explicit `null` for
+                     *     `generationState` / `generationError` /
+                     *     `generationErrorCode` / `generationRemediation` clears
+                     *     that field, while an omitted key keeps the stored value.
+                     *     An incoming chapter with no match (a new chapter, or an
+                     *     `id`/`slug` that changed, e.g. a copy taken before a
+                     *     restructure) carries no server-owned fields over and its
+                     *     client values for them are dropped; its client `uuid` is
+                     *     kept only if no stored chapter and no earlier chapter
+                     *     in the payload holds it, otherwise a fresh one is minted. Output
+                     *     `uuid`s are always unique.
                      *     #2246 Task 9 — BCP-47 `language` field on the `state`
                      *     slice: string | null. `null` is "stated absence" (a
                      *     book whose language the user has not set), distinct
@@ -12105,7 +12126,9 @@ export interface operations {
              *     manuscript changed while it was being prepared; retry), `book_moved`
              *     (the book was moved outside the app while it was being re-parsed;
              *     an in-app rename waits for the re-parse instead; reload and retry),
-             *     or absent (the manuscript file is missing on disk).
+             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     script review or export — holds the book; stop it or wait for it
+             *     to finish), or absent (the manuscript file is missing on disk).
              */
             409: {
                 headers: {
@@ -12115,7 +12138,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "manuscript_changed" | "book_moved";
+                        code?: "manuscript_changed" | "book_moved" | "book_busy";
                     };
                 };
             };
@@ -12179,7 +12202,10 @@ export interface operations {
             /**
              * @description Refused (nothing was written). `code` is `book_moved` (the book was
              *     moved outside the app while it was being re-parsed; an in-app
-             *     rename waits for the replace instead; reload and retry).
+             *     rename waits for the replace instead; reload and retry), or
+             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     script review or export — holds the book; stop it or wait for it
+             *     to finish).
              */
             409: {
                 headers: {
@@ -12189,7 +12215,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "book_moved";
+                        code?: "book_moved" | "book_busy";
                     };
                 };
             };

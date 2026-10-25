@@ -1214,6 +1214,10 @@ describe('#1981 — promote-voice races /assign for a different character', () =
     });
     let callsForCastPath = 0;
     let interceptedSecondRead = false;
+    let signalSecondRead!: () => void;
+    const secondReadReached = new Promise<void>((resolve) => {
+      signalSecondRead = resolve;
+    });
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
       callsForCastPath += 1;
@@ -1222,6 +1226,7 @@ describe('#1981 — promote-voice races /assign for a different character', () =
          #2 is the fresh, in-lock read the teardown write is based on. */
       if (callsForCastPath === 2) {
         interceptedSecondRead = true;
+        signalSecondRead();
         const value = await actual.readJson(path); // real bytes, now — happens-before assign's write
         await gate; // hold the RESOLUTION open until released below
         return value;
@@ -1237,8 +1242,22 @@ describe('#1981 — promote-voice races /assign for a different character', () =
         .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
       promotePromise.catch(() => {}); // supertest is lazy — force real dispatch now
       // Let promote-voice run its file-rename dance and reach (and get stuck
-      // behind) its second, intercepted read.
-      await new Promise((r) => setTimeout(r, 50));
+      // behind) its second, intercepted read. Order-based, not a fixed sleep:
+      // the 8 s race is a hang detector only, never an assertion about speed.
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          secondReadReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: promote-voice never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
       expect(interceptedSecondRead).toBe(true);
 
       const assignPromise = request(app)
@@ -1519,41 +1538,35 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
      call (#2127 bounds it with EVICT_FETCH_TIMEOUT_MS, but even that bounded
      wait shouldn't pin the lock) — the same defect class promote-voice's own
      "Narrow by design" comment (above, on its withCastLock call) already
-     fixes for its teardown. Proves the fix the same way voice-style.test.ts's
-     own #1981 lock-narrowing races do (`/generate-all no longer holds the
-     book lock across the whole batch`, `/generate no longer holds the book
-     lock across the LLM call`): delay the sidecar call artificially and
-     assert a concurrent cast write on the SAME book (add-alias) lands
-     quickly rather than waiting for it.
-
-     Re-review (2026-08) found the original fixed 50ms warm-up sleep could
-     lie: the evict actually starts at ~20ms, a ~2.5x margin, and with the
-     defect reintroduced plus the warm-up shrunk to 0ms, 1 of 6 runs still
-     passed — a silent false green under load (this box regularly runs
-     several concurrent worktree batteries). Replaced with a deferred that
-     the evict's own `mockImplementation` resolves the instant it's invoked,
-     so the concurrent add-alias fires exactly when the evict has genuinely
-     started — no guessed margin, no flake window. */
-  it('C1 — releases the cast lock before the sidecar evict, so a concurrent add-alias on the same book lands quickly', async () => {
+     fixes for its teardown. Proves the fix with an order-based proof, the way
+     voice-style.test.ts's #1981 lock-narrowing races do: the mocked evict
+     signals on entry and then parks on a gate only the test releases, a
+     concurrent cast-lock acquisition on the SAME book runs while the evict is
+     parked, and the test records whether it had landed by the time the evict
+     resumed. No milliseconds are asserted, so box load cannot flip it (the
+     earlier `elapsed < 200` budget went red under 250 ms of extra lock
+     latency). The 8 s race is a hang detector only: under the pre-fix shape
+     the lock acquisition queues behind the parked evict and fails loudly
+     there instead of hanging. */
+  it('C1 — releases the cast lock before the sidecar evict, so a concurrent cast-lock acquisition on the same book lands while the evict is still pending', async () => {
     seedVariants();
-    const EVICT_DELAY_MS = 300;
-    /* #2127 composition check — this test's whole point is a DELAYED but
-       SUCCESSFUL evict (the lock-release timing), not one that gets aborted
-       by the new EVICT_FETCH_TIMEOUT_MS bound. Assert the artificial delay
-       stays well under it; the mocked `fetch` below doesn't honor the real
-       AbortSignal anyway (it ignores `init` entirely), so this is a guard
-       against the two constants drifting into each other, not a behavioural
-       dependency. */
-    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
-    expect(EVICT_DELAY_MS).toBeLessThan(EVICT_FETCH_TIMEOUT_MS);
-    let resolveEvictStarted: () => void;
-    const evictStarted = new Promise<void>((resolve) => {
-      resolveEvictStarted = resolve;
+    let releaseEvict!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseEvict = r;
     });
+    let evictStarted!: () => void;
+    const entered = new Promise<void>((r) => {
+      evictStarted = r;
+    });
+    /* Witness: set once the cast-lock acquisition has completed, read by the
+       evict the moment it resumes from the gate. */
+    let lockLanded = false;
+    let lockLandedWhenEvictResumed: boolean | undefined;
     fetchMock.mockImplementation(async (url: unknown) => {
       if (String(url).endsWith('/qwen/evict-voice')) {
-        resolveEvictStarted();
-        await new Promise((r) => setTimeout(r, EVICT_DELAY_MS));
+        evictStarted();
+        await gate;
+        lockLandedWhenEvictResumed = lockLanded;
       }
       return { ok: true };
     });
@@ -1563,30 +1576,56 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     );
     deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
 
-    // Deterministic warm-up: wait for the evict fetch to actually have been
-    // invoked (whether the lock is still held at that point, pre-fix, or
-    // already released, post-fix) rather than guessing a fixed delay is
-    // enough for the DELETE handler to get there.
-    await evictStarted;
+    try {
+      // Wait until the evict fetch has actually been invoked, bounded so a
+      // route that never gets there fails loudly instead of hanging.
+      let enteredTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          entered,
+          new Promise<never>((_, rej) => {
+            enteredTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: route never reached the sidecar evict')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(enteredTimer);
+      }
 
-    /* #3711 — the route now holds the book's BOOK-OP lock across the (bounded)
-       evict, so a concurrent add-alias HTTP request would queue on book-op by
-       design. The invariant this test pins is about the CAST lock, so acquire
-       that directly: under the pre-fix shape (evict inside the cast lock) the
-       acquisition could not start until the evict resolved. */
-    const { withCastLock } = await import('../workspace/cast-lock.js');
-    const start = Date.now();
-    await withCastLock(join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK), async () => {});
-    const elapsed = Date.now() - start;
-
-    /* Under the pre-fix shape the evict ran INSIDE the lock, so the cast lock
-       couldn't even be acquired until the evict resolved —
-       >= EVICT_DELAY_MS. Generous headroom under that while staying well
-       above the few ms a genuinely-unlocked add-alias takes. */
-    expect(elapsed).toBeLessThan(EVICT_DELAY_MS - 100);
+      /* #3711 — the route now holds the book's BOOK-OP lock across the (bounded)
+         evict, so a concurrent add-alias HTTP request would queue on book-op by
+         design. The invariant this test pins is about the CAST lock, so acquire
+         that directly: under the pre-fix shape (evict inside the cast lock) the
+         acquisition could not start until the evict resolved. */
+      const { withCastLock } = await import('../workspace/cast-lock.js');
+      let lockTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          withCastLock(join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK), async () => {}),
+          new Promise<never>((_, rej) => {
+            lockTimer = setTimeout(
+              () => rej(new Error('DEADLOCK: cast lock blocked behind the sidecar evict')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(lockTimer);
+      }
+      lockLanded = true;
+    } finally {
+      // Release the evict even on a failed run so the DELETE is never left
+      // dangling on the gate.
+      releaseEvict();
+    }
 
     const deleteRes = await deletePromise;
     expect(deleteRes.status).toBe(200);
+    /* The ordering witness: the cast lock had already been acquired when the
+       parked evict resumed, i.e. it was free while the evict was pending. */
+    expect(lockLandedWhenEvictResumed).toBe(true);
     const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
     expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });

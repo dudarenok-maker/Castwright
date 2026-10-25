@@ -26,6 +26,7 @@ import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/st
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import { sha256Hex } from '../workspace/manuscript-hints.js';
 import { parseManuscript } from '../parsers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -188,6 +189,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       uploadedAt: now,
       sourceText: parsed.sourceText,
       chapterHints: parsed.chapters.map((c) => ({ ...c })),
+      sourceSha256: sha256Hex(buffer),
       bookId,
       bookDir,
     };

@@ -79,6 +79,7 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
+import { removeManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -87,6 +88,7 @@ import {
   ensureChapterUuids,
   reconcileChapterUuids,
   carryTitleSynthesized,
+  carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
 import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
@@ -937,14 +939,25 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
   export: 'exporting',
 };
 
-function busySentence(kinds: BookJobKind[], action: 'rename' | 'delete'): string {
+function busySentence(
+  kinds: BookJobKind[],
+  action: 'rename' | 'delete' | 'reparse' | 'replace',
+): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
   }
   const what = [...new Set(kinds.map((k) => BUSY_PHRASE[k]))].join(', ');
-  return action === 'rename'
-    ? `This book is busy (${what}). Wait for it to finish before renaming it — a rename now would split the book across two folders.`
-    : `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
+  if (action === 'rename') {
+    return `This book is busy (${what}). Wait for it to finish before renaming it — a rename now would split the book across two folders.`;
+  }
+  if (action === 'delete') {
+    return `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
+  }
+  /* #3717 — reparse / replace-manuscript are refused like the movers: both
+     delete cast.json and the audio/ directory under a job still writing them. */
+  return action === 'reparse'
+    ? `This book is busy (${what}). Stop it or wait for it to finish, then re-parse it.`
+    : `This book is busy (${what}). Stop it or wait for it to finish, then replace its manuscript.`;
 }
 
 /* #3711 — the 409 for each refusal the sanctioned movers raise. Every body is
@@ -1202,15 +1215,27 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         return {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid` or `titleSynthesized`, so a
+          /* srv-35 — no in-app caller sends `chapters` on this slice; the merge
+             guards an API caller sending a (possibly stale) chapters list that
+             doesn't track the server-only `uuid` or `titleSynthesized`, so a
              wholesale replace would strip them. reconcileChapterUuids
-             carries each uuid across by id (and mints for a genuinely-new
-             chapter); carryTitleSynthesized does the same for the
-             app-made-title flag, ignoring whatever the client sent. */
+             carries each uuid across from the stored chapter matching on
+             id + slug (and mints for a genuinely-new chapter);
+             carryTitleSynthesized carries the app-made-title flag by id alone
+             (kept only while the title is unchanged), ignoring whatever the
+             client sent.
+             #3683 — carryServerOwnedChapterFields then takes the render and
+             failure stamps (duration, audio*, generation*) from the locked
+             fresh read for a chapter matched on id + slug: a client value is
+             ignored, and only an explicit `null` clears a generation* field
+             (an absent key keeps disk), so a stale copy can't revert a
+             finalize or a failure. The uuid is not touched here. */
           chapters: patch.chapters
-            ? carryTitleSynthesized(
-                reconcileChapterUuids(patch.chapters, state.chapters),
+            ? carryServerOwnedChapterFields(
+                carryTitleSynthesized(
+                  reconcileChapterUuids(patch.chapters, state.chapters),
+                  state.chapters,
+                ),
                 state.chapters,
               )
             : state.chapters,
@@ -1323,7 +1348,8 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
    parsed manuscript, regenerates the chapter list, snapshots the srv-13
    reuse/voice carryover, wipes the now-stale analysis cache / cast / audio,
    reconciles manuscript-edits (via the GET-side merge — the file is left in
-   place here), appends a change-log entry, refreshes the in-memory
+   place here), deletes manuscript-hints.json (#3703: the restructure it
+   recorded is discarded with the old chapter list), appends a change-log entry, refreshes the in-memory
    ManuscriptRecord, and returns the response payload both routes send.
 
    The caller is responsible for everything BEFORE this point: locating the
@@ -1337,6 +1363,9 @@ async function applyReparse(
     changeLogType: string;
     changeLogTitle: string;
     manuscriptFile?: string;
+    /** sha256 of the manuscript file bytes `parsed` came from; stamped onto the
+        refreshed ManuscriptRecord (#3703). */
+    sourceSha256: string;
     /** Called inside the locked step, immediately before state.json is
         written; puts the new manuscript file in place and returns an undo
         that restores the previous one if the state write then fails. */
@@ -1563,6 +1592,18 @@ async function applyReparse(
     /* Absent under the lock: the book was deleted after it was located. Nothing
        was installed or written; the caller answers 404. */
     if (!nextState) return null;
+    /* #3703 -- drop the persisted restructure (manuscript-hints.json) now that the
+       new chapter list has landed, still under the `book` lock. AFTER the state
+       write: deleting first would leave a failed state write holding the old
+       (restructured) chapter list with no file to hydrate it from. The delete
+       protects nothing the write does not already cover -- reparsed chapters
+       carry no uuid, so a leftover file can never validate against them -- so it
+       is housekeeping: best-effort, logged and swallowed, never failing a reparse
+       whose cast / audio / cache wipe already happened. Not in the destructive
+       arms above: they run before the moved-book check. */
+    await removeManuscriptHints(fresh.bookDir).catch((err) => {
+      console.warn(`[book-state] ${nextState!.manuscriptId}: could not remove manuscript-hints.json`, err);
+    });
 
     const newExcludedById = new Map<number, boolean>();
     for (const c of newChapters) {
@@ -1581,6 +1622,7 @@ async function applyReparse(
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),
+      sourceSha256: opts.sourceSha256,
       bookId: nextState.bookId,
       bookDir: fresh.bookDir,
     };
@@ -1642,7 +1684,10 @@ type ParsedManuscript = Awaited<ReturnType<typeof parseManuscript>>;
 
 async function prepareReparse(
   bookId: string,
-): Promise<'gone' | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null }> {
+): Promise<
+  | 'gone'
+  | { fingerprint: ManuscriptFingerprint | null; parsed: ParsedManuscript | null; sourceSha256: string | null }
+> {
   for (let attempt = 0; ; attempt++) {
     const peeked = await peekBook(bookId);
     if (!peeked) return 'gone';
@@ -1671,7 +1716,7 @@ async function prepareReparse(
       : null;
     if (!buffer) {
       if (attempt === 0) continue;
-      return { fingerprint: null, parsed: null };
+      return { fingerprint: null, parsed: null, sourceSha256: null };
     }
     const looksLikeEpub =
       buffer.length >= 4 &&
@@ -1699,7 +1744,7 @@ async function prepareReparse(
         sourcePath: manuscriptPath,
       });
     }
-    return { fingerprint, parsed };
+    return { fingerprint, parsed, sourceSha256: sha256Hex(buffer) };
   }
 }
 
@@ -1717,7 +1762,9 @@ async function prepareReparse(
    silently. The reparse logs how many edits were carried forward.
 
    Frontend confirms with the user before calling. Returns the fresh state
-   so the library / open-book flow can re-hydrate without a second round-trip. */
+   so the library / open-book flow can re-hydrate without a second round-trip.
+   Refused with 409 `book_busy` while any long job is registered for the book
+   (#3717) — see the first check inside the `withBookOp` callback. */
 bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => {
   try {
     /* #3711 — two-span: parse off a `peekBook` with no lock held, then commit
@@ -1726,6 +1773,17 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (prep === 'gone') return res.status(404).json({ error: 'Book not found.' });
     const outcome = await withBookOp(req.params.bookId, async (book) => {
       const { bookDir, state } = book;
+
+      /* #3717 — refuse while ANY long job is registered for the book, FIRST:
+         a reparse deletes `cast.json` and the `audio/` directory and resets
+         revisions while that job may still be writing them (a render exporting
+         chapter audio, an analysis writing the cache). `runBookJob` registers
+         its token inside `withBookOp`, so this check cannot race a
+         registration. */
+      const kinds = bookJobKinds(book.bookId);
+      if (kinds.length > 0) {
+        return { status: 409, body: { error: busySentence(kinds, 'reparse'), code: 'book_busy' } };
+      }
 
       /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
          deleted or rewritten (applyReparse's state write + Promise.all). */
@@ -1741,13 +1799,14 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
           },
         };
       }
-      if (!prep.parsed) {
+      if (!prep.parsed || prep.sourceSha256 === null) {
         return { status: 409, body: { error: `Manuscript file missing on disk: ${state.manuscriptFile}` } };
       }
 
       const payload = await applyReparse(bookDir, state, prep.parsed, {
         changeLogType: 'reparse',
         changeLogTitle: 'Re-parsed manuscript',
+        sourceSha256: prep.sourceSha256,
       });
       if (!payload) return reparseRefusal(book.bookId, bookDir);
       return { status: 200, body: payload };
@@ -1771,7 +1830,9 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
    reuse/voice carryover is snapshotted so designed voices resurrect for
    characters that still match on the next analysis, and analysis cache / cast
    / audio are cleared. Book identity (bookId, dir, title/author/series, cover)
-   is untouched — this is NOT a re-import. */
+   is untouched — this is NOT a re-import. Refused with 409 `book_busy` while
+   any long job is registered for the book (#3717) — see the first check inside
+   the `withBookOp` callback. */
 bookStateRouter.post(
   '/:bookId/replace-manuscript',
   manuscriptUpload.single('file'),
@@ -1794,6 +1855,17 @@ bookStateRouter.post(
 
       const outcome = await withBookOp(req.params.bookId, async (book) => {
         const { bookDir } = book;
+
+        /* #3717 — refuse while ANY long job is registered for the book, FIRST:
+           a replace-manuscript deletes `cast.json` and the `audio/` directory
+           and resets revisions while that job may still be writing them (a
+           render exporting chapter audio, an analysis writing the cache).
+           `runBookJob` registers its token inside `withBookOp`, so this check
+           cannot race a registration. */
+        const kinds = bookJobKinds(book.bookId);
+        if (kinds.length > 0) {
+          return { status: 409, body: { error: busySentence(kinds, 'replace'), code: 'book_busy' } };
+        }
 
         /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
            writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
@@ -1826,6 +1898,7 @@ bookStateRouter.post(
             changeLogType: 'replace-manuscript',
             changeLogTitle: 'Replaced manuscript',
             manuscriptFile: newFile,
+            sourceSha256: sha256Hex(upload),
             installManuscript: async () => {
               /* The upload is written here -- inside the state-json lock, once
                  state.json is confirmed present -- so a book moved or deleted
@@ -1959,9 +2032,14 @@ bookStateRouter.post(
         if (state.manuscriptId) {
           const rec = getManuscript(state.manuscriptId);
           if (rec) {
-            rec.chapterHints = rec.chapterHints.map((h) =>
-              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-            );
+            /* Replace, never mutate in place: only `putManuscript` moves the
+               version a cold hydrate checks before it caches (#3703). */
+            putManuscript({
+              ...rec,
+              chapterHints: rec.chapterHints.map((h) =>
+                h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+              ),
+            });
           }
         }
 

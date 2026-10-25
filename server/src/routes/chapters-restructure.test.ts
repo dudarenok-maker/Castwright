@@ -179,6 +179,8 @@ beforeEach(async () => {
   seedAudio('02-chapter-two');
   // chapter 3 deliberately has no audio
   if (existsSync(cachePath)) rmSync(cachePath, { force: true });
+  // A previous case's restructure left a hints file the next hydrate would read.
+  rmSync(join(bookDir, '.audiobook', 'manuscript-hints.json'), { force: true });
   // Evict the cached ManuscriptRecord so the next route call re-hydrates
   // ChapterHint[] from the manuscript file on disk — otherwise prior
   // tests' in-memory mutations leak into this case.

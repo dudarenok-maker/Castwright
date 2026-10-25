@@ -39,7 +39,7 @@ existing web player. **Lands before `srv-32`.**
   - `server/src/workspace/chapter-uuid.ts` — `ensureChapterUuids(state)` (mint a
     `uuid` for any chapter lacking one; idempotent; covers excluded chapters) and
     `reconcileChapterUuids(incoming, existing)` (carry a chapter's `uuid` across a
-    wholesale `chapters` replacement, matched by `id`; mint for genuinely-new
+    wholesale `chapters` replacement, matched by `id` + `slug`; mint for genuinely-new
     chapters). These are the lazy-migration + anti-strip primitives.
   - Optional `uuid?: string` on the `state.json` chapter shape
     (`BookStateJson.chapters[]`, `scan.ts`) and an optional `chapterUuid` on
@@ -64,7 +64,7 @@ existing web player. **Lands before `srv-32`.**
   `PUT /:bookId/state` replaces `chapters` wholesale
   (`book-state.ts:568 — chapters: patch.chapters ?? state.chapters`); a frontend
   that doesn't track `uuid` would otherwise erase it on every chapter edit, so the
-  patch is routed through `reconcileChapterUuids` to preserve `uuid` by `id`.
+  patch is routed through `reconcileChapterUuids` to preserve `uuid` by `id` + `slug`.
 - **Reversibility:** Fully additive. Deleting the `uuid` field + the helper
   reverts cleanly; existing books keep loading (the field is optional everywhere
   it appears, and every keyed-by-`uuid` path falls back to `id`).
@@ -80,8 +80,11 @@ existing web player. **Lands before `srv-32`.**
    the original on the **first** half and mints a fresh one for the **second**;
    rename/exclude/refresh-titles preserve `uuid` (they spread `...chapter`).
 3. **A wholesale `chapters` PUT never strips `uuid`**
-   (`book-state.ts` PUT `/:bookId/state`) — `reconcileChapterUuids` carries it by
-   `id`.
+   (`book-state.ts` PUT `/:bookId/state`) — `reconcileChapterUuids` carries it from the
+   on-disk chapter matching on `id` + `slug`. On a match the on-disk `uuid`
+   always wins over one the client sends (#3683); with no match the client
+   `uuid` is kept only if no on-disk chapter and no other output chapter holds
+   it, else a fresh one is minted.
 4. **Resume resolves by `uuid` when present** (`book-state.ts` listen-progress
    GET): a stored `chapterUuid` resolves to the *current* `chapterId`; falls back
    to the stored `chapterId` when the `uuid` is absent (legacy record) or no
@@ -94,8 +97,9 @@ Paired automated tests land with the change:
 
 - **`chapter-uuid.test.ts`** — `ensureChapterUuids` mints for chapters missing a
   `uuid` (including excluded), is idempotent, and never overwrites an existing
-  `uuid`; `reconcileChapterUuids` carries `uuid` by `id`, mints for unmatched
-  incoming chapters, and respects a `uuid` the caller already supplied.
+  `uuid`; `reconcileChapterUuids` carries `uuid` by `id` + `slug`, mints for
+  unmatched incoming chapters, and ignores a client-supplied `uuid` when the
+  matching on-disk chapter has one (#3683).
 - **`restructure.test.ts`** — reorder preserves each chapter's `uuid`; merge keeps
   the survivor's; split keeps the first half's + mints a distinct second-half
   `uuid`; rename and exclude preserve `uuid`.
