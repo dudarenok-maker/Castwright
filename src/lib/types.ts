@@ -624,40 +624,8 @@ export interface ActiveAnalysesResponse {
   snapshots: ActiveAnalysisSummary[];
 }
 
-export interface AnalysisStateResponse {
-  manuscriptId: string;
-  phaseId: number;
-  phaseLabel: string;
-  phaseProgress: number;
-  /** `running` never appears on the wire from the cold-boot endpoint
-      UNLESS a live in-flight job is still serving from memory. The
-      server coerces disk-`running` to `paused` when no live job is
-      present. */
-  state: 'running' | 'paused' | 'halted';
-  /** Engine the analyzer was using when this snapshot was written.
-      Carried so the reverse-direction local-analyzer guard
-      (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
-      right engine on a cold-boot rehydrated pill. Undefined for
-      pre-E1 snapshots — guard defaults to "do not prompt". */
-  engine?: AnalysisEngine;
-  /** Discriminator for the in-flight job's shape (plan 32 D1).
-      `'main'` = full-book sticky run; `'subset'` = per-chapter retry
-      via POST /:id/analysis/chapters. Optional — pre-D1 snapshots
-      omit it and the pill falls back to main semantics. */
-  kind?: 'main' | 'subset';
-  /** Set only when `kind === 'subset'`. The chapter ids being
-      retried, used by the AnalysisPill to render "Retrying N
-      chapters" copy. */
-  subsetChapterIds?: number[];
-  /** Set only on a live `kind === 'subset'` answer (#3774): what started the run.
-      `'include'` is the Generate view's Include in book; the snapshot rebuilt from
-      this answer keeps it so the job-start block survives a book switch / reload. */
-  subsetOrigin?: 'include' | 'reanalyse';
-  haltCode?: string;
-  haltReason?: string;
-  lastTickAt: number;
-  writtenAt?: number;
-}
+/* GET /api/books/:bookId/analysis/state — generated from openapi.yaml (#3787). */
+export type AnalysisStateResponse = components['schemas']['AnalysisState'];
 
 export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 

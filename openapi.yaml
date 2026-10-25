@@ -1457,6 +1457,43 @@ paths:
                       type: string
                       enum: [render, scoring, analysis, design, script-review, export]
 
+  /api/books/{bookId}/analysis/state:
+    get:
+      summary: Cold-boot discovery of a book's analysis run
+      operationId: getBookAnalysisState
+      description: |
+        Memory-first, disk-fallback (#3787). A live, non-aborted in-flight job answers from memory
+        (`state: running`; a subset retry wins over the main run). Otherwise the per-book
+        `analysis-state.json` snapshot is returned, with a stored `running` coerced to `paused`
+        because no live job means the analyzer did not survive the restart. 404 when the book is
+        unknown, has no manuscript, or has neither a live job nor a snapshot.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The live or persisted analysis state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisState' }
+        '404':
+          description: Book not found, book has no manuscript, or no rehydratable analysis state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        '500':
+          description: The snapshot could not be read
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
   /api/books/{bookId}/listen-progress:
     get:
       summary: Read the per-book resume bookmark
@@ -6684,6 +6721,47 @@ components:
           description: |
             Present only with `analysisEngine`, and only when an endpoint target took over: the card
             tag that target holds (`none` | `any` | `cuda:N`).
+
+    AnalysisState:
+      type: object
+      description: |
+        One shape for both answers of `GET /api/books/{bookId}/analysis/state` (#3787): the persisted
+        `analysis-state.json` snapshot and the live in-flight job's synthesised snapshot. Fields both
+        carry are required; the rest are optional.
+      required: [manuscriptId, phaseId, phaseLabel, phaseProgress, state, lastTickAt, writtenAt]
+      properties:
+        manuscriptId: { type: string }
+        phaseId: { type: integer }
+        phaseLabel: { type: string }
+        phaseProgress: { type: number }
+        state:
+          type: string
+          enum: [running, paused, halted]
+          description: '`running` only while a live in-flight job serves from memory; a stored `running` is coerced to `paused`.'
+        engine:
+          type: string
+          enum: [local, openai, gemini]
+          description: Engine the run used. Absent on snapshots written before the engine was captured.
+        kind:
+          type: string
+          enum: [main, subset]
+          description: Absent on snapshots written before the discriminator existed; treat as `main`.
+        subsetChapterIds:
+          type: array
+          items: { type: integer }
+          description: Only when `kind` is `subset`.
+        subsetOrigin:
+          type: string
+          enum: [include, reanalyse]
+          description: Live snapshot only (never persisted), only when `kind` is `subset` (#3774).
+        haltCode:
+          type: string
+          description: Persisted snapshot only, when `state` is `halted`.
+        haltReason:
+          type: string
+          description: Persisted snapshot only, when `state` is `halted`; trimmed to 256 characters.
+        lastTickAt: { type: integer, description: 'ms since epoch of the latest tick.' }
+        writtenAt: { type: integer, description: 'ms since epoch the snapshot was written.' }
 
     AnalyseWarningEvent:
       type: object

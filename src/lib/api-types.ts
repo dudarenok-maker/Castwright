@@ -957,6 +957,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/analysis/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cold-boot discovery of a book's analysis run
+         * @description Memory-first, disk-fallback (#3787). A live, non-aborted in-flight job answers from memory
+         *     (`state: running`; a subset retry wins over the main run). Otherwise the per-book
+         *     `analysis-state.json` snapshot is returned, with a stored `running` coerced to `paused`
+         *     because no live job means the analyzer did not survive the restart. 404 when the book is
+         *     unknown, has no manuscript, or has neither a live job nor a snapshot.
+         */
+        get: operations["getBookAnalysisState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/listen-progress": {
         parameters: {
             query?: never;
@@ -4707,6 +4731,47 @@ export interface components {
              *     tag that target holds (`none` | `any` | `cuda:N`).
              */
             analysisGpu?: string;
+        };
+        /**
+         * @description One shape for both answers of `GET /api/books/{bookId}/analysis/state` (#3787): the persisted
+         *     `analysis-state.json` snapshot and the live in-flight job's synthesised snapshot. Fields both
+         *     carry are required; the rest are optional.
+         */
+        AnalysisState: {
+            manuscriptId: string;
+            phaseId: number;
+            phaseLabel: string;
+            phaseProgress: number;
+            /**
+             * @description `running` only while a live in-flight job serves from memory; a stored `running` is coerced to `paused`.
+             * @enum {string}
+             */
+            state: "running" | "paused" | "halted";
+            /**
+             * @description Engine the run used. Absent on snapshots written before the engine was captured.
+             * @enum {string}
+             */
+            engine?: "local" | "openai" | "gemini";
+            /**
+             * @description Absent on snapshots written before the discriminator existed; treat as `main`.
+             * @enum {string}
+             */
+            kind?: "main" | "subset";
+            /** @description Only when `kind` is `subset`. */
+            subsetChapterIds?: number[];
+            /**
+             * @description Live snapshot only (never persisted), only when `kind` is `subset` (#3774).
+             * @enum {string}
+             */
+            subsetOrigin?: "include" | "reanalyse";
+            /** @description Persisted snapshot only, when `state` is `halted`. */
+            haltCode?: string;
+            /** @description Persisted snapshot only, when `state` is `halted`; trimmed to 256 characters. */
+            haltReason?: string;
+            /** @description ms since epoch of the latest tick. */
+            lastTickAt: number;
+            /** @description ms since epoch the snapshot was written. */
+            writtenAt: number;
         };
         /**
          * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;
@@ -8976,6 +9041,50 @@ export interface operations {
                 content: {
                     "application/json": {
                         kinds: ("render" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
+                    };
+                };
+            };
+        };
+    };
+    getBookAnalysisState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The live or persisted analysis state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisState"];
+                };
+            };
+            /** @description Book not found, book has no manuscript, or no rehydratable analysis state */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+            /** @description The snapshot could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
                     };
                 };
             };
