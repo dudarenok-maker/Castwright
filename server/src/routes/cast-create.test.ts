@@ -13,6 +13,23 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import { buildCastResolver } from '../store/cast-resolve.js';
 
+/* #3773 — hoisted `vi.mock` (passthrough by default) so the cast-lock-alone
+   race test can park the route's in-lock cast.json `readJson`, which is bound
+   at the route module's own load time. Every other test in this file sees the
+   real implementation. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+
+/* #3773 — passthrough `vi.mock` of cast-lock so the cast-lock-alone race test
+   can count `withCastLock` entries for the book (the premise pin: the second
+   writer reached the cast lock while the route was parked inside it). */
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_WITH_CAST = 'The Hollow Tide Book One';
@@ -70,6 +87,10 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
+  /* Load the mocked cast-lock first: the concurrent imports below otherwise
+     hand the route a second, real copy of it, which `castLockEntries` cannot
+     see. */
+  await import('../workspace/cast-lock.js');
   const [{ castCreateRouter }, { castMergeRouter }, { castRejectOrphanRouter }, { makeBookId }] =
     await Promise.all([
       import('./cast-create.js'),
@@ -168,11 +189,112 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     expect(res.body.error).toMatch(/no cast/i);
   });
 
+  /* #3773 — cast-lock-alone proof. The route-level race below is NOT cast-lock
+     proof: /create and the other writer's route both hold `book-op:<bookId>`
+     (#3711), which serialises them on its own, so it stays green with
+     `withCastLock` replaced by a no-op (confirmed: no-op cast lock green;
+     no-op cast lock AND book-op red). Here the real /create is parked at its
+     in-lock cast.json read while the second writer, `persistEmotionVariant`
+     (cast lock, NO book-op), runs directly on a different character. */
+  it('#3773 — cast lock alone: /create and a cast-lock-only writer on a different character both survive', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { persistEmotionVariant } = await import('./qwen-voice.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
+    const raceCastPath = castJsonPath(bookDir);
+    const castLock = await import('../workspace/cast-lock.js');
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === bookDir).length;
+    const entriesBefore = castLockEntries();
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* /create has no upfront lock-free read: its FIRST cast.json read is the
+       in-lock one. Park its resolution behind the gate. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      if (intercepted) return actual.readJson(path);
+      intercepted = true;
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resCreate: request.Response;
+    let second: unknown;
+    let createPromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      createPromise = callCreate(bookId, { name: 'Alpha' });
+      createPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: /create never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(intercepted).toBe(true);
+
+      secondPromise = persistEmotionVariant(bookDir, 'narrator', 'angry', 'qwen-v_narrator__angry');
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind /create's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Pin the premise: /create's entry plus the second writer's own means
+         the second writer reached the cast lock while /create was parked
+         inside it. A book-op span before the lock leaves this at 1 — a read
+         count cannot show that (the writer's lock-free early-out read comes
+         first). */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resCreate, second] = await Promise.all([createPromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([createPromise, secondPromise]);
+    }
+    expect(resCreate.status).toBe(200);
+    expect(second).toBe('applied');
+
+    const cast = readCastJson(bookDir);
+    /* /create's own append survived. */
+    expect(cast.characters.map((c) => c['id'])).toContain(resCreate.body.character.id);
+    /* the second writer's own mutation survived too — the lost-update this
+       test pins. */
+    const narrator = cast.characters.find((c) => c['id'] === 'narrator')!;
+    const narratorQwen = narrator['overrideTtsVoices'] as
+      | { qwen?: { variants?: Record<string, { name: string }> } }
+      | undefined;
+    expect(narratorQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_narrator__angry' });
+  });
+
   /* #1981 — two concurrent /create calls for the SAME book race cast.json.
      Unlocked, both requests' readJson resolve before either writeJsonAtomic
      lands, so the later write replays a `characters` snapshot taken before
      the earlier write happened and silently drops it. */
-  it('#1981 — keeps both new characters when two /create calls for one book overlap', async () => {
+  it('#1981 — keeps both new characters when two /create calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both /create calls hold `book-op:<bookId>`,
+       which by itself serialises them — this stays green with a no-op cast
+       lock (#3773), so it does NOT prove the cast lock; the test above does. */
     const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
     const [resA, resB] = await Promise.all([
       callCreate(bookId, { name: 'Alpha' }),

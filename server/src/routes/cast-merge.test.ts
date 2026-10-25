@@ -10,13 +10,26 @@
    Mirrors book-state.test.ts: defer module imports until WORKSPACE_DIR is
    set so paths.ts captures the right root. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #3773 — hoisted `vi.mock`s (passthrough by default) so the cast-lock-alone
+   race test can park the in-lock cast.json `readJson` (bound at the route
+   module's own load time) and count entries into the cast lock. Every other
+   test in this file sees the real implementations. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return { ...actual, withCastLock: vi.fn(actual.withCastLock) };
+});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -843,6 +856,19 @@ describe('#1981 — two /cast/merge calls for one book overlap', () => {
   let raceBookId: string;
   let raceBookDir: string;
 
+  const seedRaceCast = () =>
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'a1', name: 'A One', role: 'character', color: 'unset' },
+          { id: 'a2', name: 'A Two', role: 'character', color: 'unset' },
+          { id: 'b1', name: 'B One', role: 'character', color: 'unset' },
+          { id: 'b2', name: 'B Two', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+
   beforeAll(async () => {
     const { makeBookId } = await import('../workspace/paths.js');
     raceBookId = makeBookId(AUTHOR, SERIES, RACE_BOOK);
@@ -867,20 +893,128 @@ describe('#1981 — two /cast/merge calls for one book overlap', () => {
       }),
     );
     writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
-    writeFileSync(
-      join(raceBookDir, '.audiobook', 'cast.json'),
-      JSON.stringify({
-        characters: [
-          { id: 'a1', name: 'A One', role: 'character', color: 'unset' },
-          { id: 'a2', name: 'A Two', role: 'character', color: 'unset' },
-          { id: 'b1', name: 'B One', role: 'character', color: 'unset' },
-          { id: 'b2', name: 'B Two', role: 'character', color: 'unset' },
-        ],
-      }),
-    );
+    seedRaceCast();
   });
 
-  it('keeps both merges when two /cast/merge calls for one book overlap', async () => {
+  /* Re-seeded before EACH test: the two race tests below fold the same
+     characters, and a fold the first test already left on disk would let the
+     second pass without its own write ever landing. */
+  beforeEach(() => {
+    seedRaceCast();
+  });
+
+  /* #3773 — cast-lock-alone proof. The route-level race below is NOT cast-lock
+     proof: both /cast/merge calls hold `book-op:<bookId>` (#3711), which
+     serialises them on its own, so it stays green with `withCastLock` replaced
+     by a no-op (confirmed: no-op cast lock green; no-op cast lock AND book-op
+     red). Here the real /cast/merge is parked at its in-lock cast.json read
+     while the second writer, `performCastMerge` (the shared helper both merge
+     routes call: cast lock, NO book-op), merges the other pair directly. */
+  it('#3773 — cast lock alone: a /cast/merge and a cast-lock-only merge of a different pair both survive', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const castLock = await import('../workspace/cast-lock.js');
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const { performCastMerge } = await import('./cast-merge.js');
+    const raceCastPath = castJsonPath(raceBookDir);
+    const state = JSON.parse(readFileSync(join(raceBookDir, '.audiobook', 'state.json'), 'utf8'));
+    const castLockEntries = () =>
+      vi.mocked(castLock.withCastLock).mock.calls.filter(([dir]) => dir === raceBookDir).length;
+    const entriesBefore = castLockEntries();
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    let signalRead!: () => void;
+    const readReached = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    /* performCastMerge's FIRST cast.json read is the in-lock one (the route's
+       book-op span reads state.json only): park its resolution behind the
+       gate. */
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath || intercepted) return actual.readJson(path);
+      intercepted = true;
+      signalRead();
+      const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
+      await gate;
+      return value;
+    });
+
+    let resMerge: request.Response;
+    let second: unknown;
+    let mergePromise: request.Test | undefined;
+    let secondPromise: Promise<unknown> | undefined;
+    try {
+      mergePromise = request(app)
+        .post(`/api/books/${raceBookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId: 'a1', targetId: 'a2' });
+      mergePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      let reachTimer!: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          readReached,
+          new Promise<never>((_, rej) => {
+            reachTimer = setTimeout(
+              () => rej(new Error('HANG: /cast/merge never reached its in-lock cast.json read')),
+              8_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(reachTimer);
+      }
+      expect(intercepted).toBe(true);
+
+      secondPromise = performCastMerge({
+        bookId: raceBookId,
+        bookDir: raceBookDir,
+        state,
+        sourceId: 'b1',
+        targetId: 'b2',
+      });
+      secondPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked (the bug window)
+      // or queues behind /cast/merge's still-held lock when locked.
+      await new Promise((r) => setTimeout(r, 50));
+      /* Pin the premise: the second writer really reached the cast lock (the
+         route's entry + its own) while /cast/merge was parked. Its first
+         cast.json read is inside the lock, so a read count cannot show this
+         when the lock holds. Wrap it in book-op and it blocks before the lock
+         — this goes red instead of silently decaying. */
+      expect(castLockEntries() - entriesBefore).toBeGreaterThanOrEqual(2);
+
+      released();
+      [resMerge, second] = await Promise.all([mergePromise, secondPromise]);
+    } finally {
+      released(); // idempotent — a throw above still releases the held read
+      spy.mockImplementation(actual.readJson);
+      await Promise.allSettled([mergePromise, secondPromise]);
+    }
+    expect(resMerge.status).toBe(200);
+    expect((second as { sourceId: string }).sourceId).toBe('b1');
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[] }> };
+    const ids = cast.characters.map((c) => c.id);
+    /* /cast/merge's own fold survived: a1 gone, a2 carries the alias. */
+    expect(ids).not.toContain('a1');
+    expect(cast.characters.find((c) => c.id === 'a2')!.aliases).toContain('A One');
+    /* the second writer's own fold survived too — the lost-update this test
+       pins. */
+    expect(ids).not.toContain('b1');
+    expect(cast.characters.find((c) => c.id === 'b2')!.aliases).toContain('B One');
+  });
+
+  it('keeps both merges when two /cast/merge calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
+    /* Route-level coverage only: both calls hold `book-op:<bookId>`, which by
+       itself serialises them — this stays green with a no-op cast lock
+       (#3773), so it does NOT prove the cast lock; the test above does. */
     const [resA, resB] = await Promise.all([
       request(app)
         .post(`/api/books/${raceBookId}/cast/merge`)
