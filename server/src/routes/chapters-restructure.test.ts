@@ -311,6 +311,67 @@ describe('POST /:bookId/chapters/merge', () => {
   });
 });
 
+/* #3791 -- a merge/reorder rebuilds state.chapters from the manuscript hints, so
+   hints that do not pair one-to-one with state.json's chapters (count or ids)
+   make it delete a chapter's audio and orphan its sentences. It refuses with a
+   curated 409 and writes nothing. */
+describe('merge/reorder refuse when hints do not pair with state.json (#3791)', () => {
+  function snapshotDisk(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const dir of [join(bookDir, '.audiobook'), audioRoot]) {
+      for (const f of readdirSync(dir).sort()) {
+        out[`${dir}/${f}`] = readFileSync(join(dir, f), 'utf8');
+      }
+    }
+    return out;
+  }
+
+  /* state.json restructured to N chapters while the manuscript (and the absent
+     manuscript-hints.json) still parse to 3. */
+  function seedStateWithChapterIds(ids: number[]): void {
+    const path = join(bookDir, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(path, 'utf8'));
+    state.chapters = ids.map((id) => ({ id, title: `Chapter ${id}`, slug: `0${id}-chapter-${id}` }));
+    writeFileSync(path, JSON.stringify(state));
+  }
+
+  it('merge: 4 state chapters against a 3-chapter parse answers 409 hints_out_of_sync, nothing written', async () => {
+    seedStateWithChapterIds([1, 2, 3, 4]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(String(res.body.error)).toMatch(/re-parse/i);
+    expect(String(res.body.error)).not.toContain(workspaceRoot);
+    expect(snapshotDisk()).toEqual(before);
+    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+  });
+
+  it('merge: equal counts but a state chapter id the hints lack answers 409, nothing written', async () => {
+    seedStateWithChapterIds([1, 2, 4]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  it('reorder: equal counts but mismatched ids answers 409, nothing written', async () => {
+    seedStateWithChapterIds([1, 2, 4]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+});
+
 /* -- split ---------------------------------------------------------- */
 
 describe('POST /:bookId/chapters/split', () => {
@@ -726,7 +787,9 @@ describe('plan 70a — prune empty chapters (Part F)', () => {
   it('preserves excluded chapters even when they have zero sentences (soft-hide invariant)', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
-      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Dedication\n\n# Chapter Four\n\nDelta.\n',
+      /* The Dedication carries a body so the parse yields all four chapters and
+         pairs with state.json (#3791: a merge refuses on hints that do not). */
+      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Dedication\n\nFor Sam.\n\n# Chapter Four\n\nDelta.\n',
     );
     writeFileSync(
       join(bookDir, '.audiobook', 'state.json'),

@@ -31,6 +31,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import {
   applyMerge,
+  HintsOutOfSyncError,
   applySplit,
   applyReorder,
   applyExclude,
@@ -336,6 +337,10 @@ async function applyRestructureClaimed(
     try {
       result = transform(state, alignedHints, sentences, advisoryValid);
     } catch (e) {
+      /* #3791 -- nothing is written: this is before the hints/state/edits writes. */
+      if (e instanceof HintsOutOfSyncError) {
+        return { early: { status: 409, body: { error: e.message, code: e.code } } };
+      }
       return {
         early: {
           status: 400,

@@ -682,6 +682,31 @@ function postProcessRestructure(result: RestructureResult): RestructureResult {
   };
 }
 
+/* -- hints/state pairing (#3791) ------------------------------------ */
+
+/** Thrown by the operations that rebuild `state.chapters` from the hints when
+    the two do not pair one-to-one. The route answers it with a curated 409. */
+export class HintsOutOfSyncError extends Error {
+  readonly code = 'hints_out_of_sync';
+  constructor() {
+    super(
+      "This book's chapter list is out of date with its manuscript. Re-parse the book first, then try again.",
+    );
+    this.name = 'HintsOutOfSyncError';
+  }
+}
+
+/** Hints pair with state when both hold the same chapter ids (so the same
+    count). Hints carry no uuid, so the id is the whole pairing. */
+export function assertHintsPairWithState(
+  state: BookStateJson,
+  hints: readonly ChapterHint[],
+): void {
+  if (hints.length !== state.chapters.length) throw new HintsOutOfSyncError();
+  const stateIds = new Set(state.chapters.map((c) => c.id));
+  if (!hints.every((h) => stateIds.has(h.id))) throw new HintsOutOfSyncError();
+}
+
 /* -- merge ---------------------------------------------------------- */
 
 export function applyMerge(
@@ -690,6 +715,7 @@ export function applyMerge(
   sentences: readonly RestructureSentence[],
   op: MergeOp,
 ): RestructureResult {
+  assertHintsPairWithState(state, hints);
   if (!Array.isArray(op.chapterIds) || op.chapterIds.length < 2) {
     throw new Error('Merge requires at least 2 chapter ids.');
   }
@@ -1340,6 +1366,7 @@ export function applyReorder(
   sentences: readonly RestructureSentence[],
   op: ReorderOp,
 ): RestructureResult {
+  assertHintsPairWithState(state, hints);
   if (!Array.isArray(op.order)) {
     throw new Error('Reorder requires an order array.');
   }
