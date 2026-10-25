@@ -1785,4 +1785,80 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
     restore();
   });
+
+  /* A combined commit + confirmCast send that the server refuses (a 4xx)
+     after a newer build of the key was made. */
+  function refuseLater() {
+    let refuse!: () => void;
+    putBookState.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          refuse = () =>
+            reject(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'));
+        }),
+    );
+    return () => refuse();
+  }
+  type MetaState = {
+    bookMeta: { saved: { b1: { title: string } }; draft: { title?: string } | null };
+    notifications: { toasts: { dedupeKey?: string }[] };
+  };
+  const metaToasts = (store: S) =>
+    (store.getState() as MetaState).notifications.toasts.filter((t) => t.dedupeKey === 'book-meta-persist-failed');
+
+  it('a refused superseded save rolls back and toasts for the book-meta fields no newer build carries', async () => {
+    const { disk, store, restore } = setup();
+    const refuse = refuseLater();
+    commit(store, 'title', 'Collides');
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(600);
+    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'Collides' });
+    /* The newer build carries castConfirmed only. */
+    store.dispatch({ type: 'ui/confirmCast' });
+    refuse();
+    await advance(600);
+    expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    const state = store.getState() as MetaState;
+    expect(metaToasts(store)).toHaveLength(1);
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(state.bookMeta.draft?.title).toBe('Collides');
+    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'The Northern Star' });
+    restore();
+  });
+
+  it('a refused save a newer commit fully overtook neither rolls back nor toasts', async () => {
+    const { disk, store, restore } = setup();
+    const refuse = refuseLater();
+    commit(store, 'title', 'Collides');
+    await advance(600);
+    commit(store, 'title', 'Other');
+    refuse();
+    await advance(600);
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    const state = store.getState() as MetaState;
+    expect(metaToasts(store)).toHaveLength(0);
+    expect(state.bookMeta.saved.b1.title).toBe('Other');
+    expect(state.bookMeta.draft).toBeNull();
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'Other' });
+    restore();
+  });
+
+  it('a refused superseded save whose book-meta fields a newer commit carries does not roll them back', async () => {
+    const { disk, store, restore } = setup();
+    const refuse = refuseLater();
+    commit(store, 'title', 'Collides');
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(600);
+    /* Only castConfirmed is left uncovered: a plain 4xx with no handler. */
+    commit(store, 'title', 'Other');
+    refuse();
+    await advance(600);
+    expect(outcomes(disk).at(-1)).toBe('ok');
+    const state = store.getState() as MetaState;
+    expect(metaToasts(store)).toHaveLength(0);
+    expect(state.bookMeta.saved.b1.title).toBe('Other');
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'Other' });
+    restore();
+  });
 });

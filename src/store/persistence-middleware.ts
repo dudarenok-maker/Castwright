@@ -677,8 +677,9 @@ export const persistenceMiddleware: Middleware = (store) => {
           }
           /* A newer write for this key owns the outcome (and the user's
              current draft); don't re-send the stale patch over it. The fields
-             it does not carry are left behind (P6-4). */
-          if (superseded) {
+             it does not carry are left behind (P6-4). A refusal of fields it
+             does not carry is handled below like any refusal (#3784). */
+          if (superseded && (!refused || overtaken)) {
             if (!refused) leaveBehind();
             return { slice, ok: true };
           }
@@ -690,12 +691,16 @@ export const persistenceMiddleware: Middleware = (store) => {
             }
             continue;
           }
-          /* Final failure of the LATEST write (#2230). The rollback restores a
-             shared, book-agnostic draft, and the retry window (#3421) lets the
-             user open another book first — applying it then would overlay this
-             book's text on that one, so it only runs while this book is open. */
+          /* Final failure of the LATEST write (#2230), or a refusal of a
+             superseded one. The rollback restores a shared, book-agnostic
+             draft, and the retry window (#3421) lets the user open another
+             book first — applying it then would overlay this book's text on
+             that one, so it only runs while this book is open. A superseded
+             refusal answers for its handler only when the fields no newer
+             build carries include the handler's own (#3784). */
           const bookOpen = bookIdFromState(store.getState() as PersistableRootState) === bookId;
-          const rolledBack = !!handler?.rollback && bookOpen;
+          const own = !superseded || Object.keys(uncovered()).some((f) => ownFields?.has(f));
+          const rolledBack = own && !!handler?.rollback && bookOpen;
           /* Keep the patch for the book's next flush (#3421) — except a 4xx
              (the server's answer, so re-sending repeats a refused write) and
              the fields a rollback restores (the user's draft is restored for
@@ -718,7 +723,7 @@ export const persistenceMiddleware: Middleware = (store) => {
               kept.set(key, mergeSaves(kept.get(key), { patch: rest, base: seq.base, onSuccess: carried?.onSuccess }));
             }
           }
-          if (handler) {
+          if (handler && own) {
             const bookTitle = refused
               ? undefined
               : savedTitleOf(store.getState() as PersistableRootState, bookId);
