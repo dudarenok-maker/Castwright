@@ -35,7 +35,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   LOCK_ACQUISITION_TIMEOUT_CODE,
   LOCK_CONTENTION_REQUEST_ERROR,
@@ -251,8 +251,8 @@ async function accept(
 function healIndexAndRecord(bookId: string, bookDir: string, state: BookStateJson): void {
   if (!duplicateBookIds.has(bookId)) bookDirById.set(bookId, bookDir);
   /* Heal a live ManuscriptRecord only when it is THIS book's: twin books can
-     share a manuscriptId (a bundle imported under the `rename` strategy keeps
-     the bundle's), and healing the other twin's record would repoint it. */
+     share a manuscriptId (twins that predate #3823's fresh-id mint on import, or a
+     hand-copied folder), and healing the other twin's record would repoint it. */
   if (state.manuscriptId) {
     const rec = getManuscript(state.manuscriptId);
     if (rec && rec.bookId === bookId && rec.bookDir !== bookDir) {
@@ -643,15 +643,21 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
  *  callers answer that without failing: `isBookIdTaken` says "taken" (the
  *  bundle importer then mints), and `mintBookId` uses a suffix the counter never
  *  produces. One unreadable book therefore never blocks an unrelated import. */
-async function takenBookIds(): Promise<{
+export interface TakenIds {
   taken: Set<string>;
   takenManuscriptIds: Set<string>;
   uncertain: boolean;
-}> {
+}
+
+/** `exceptDir` leaves one folder out of the walk -- the overwrite target, whose
+ *  own ids must not count against the bundle that is replacing it (identified by
+ *  folder, not id: its state may carry no bookId or not be readable). */
+export async function takenBookIds(exceptDir?: string): Promise<TakenIds> {
   const taken = new Set<string>();
   const takenManuscriptIds = new Set<string>();
   let uncertain = false;
   for (const dir of walkBookDirs()) {
+    if (exceptDir !== undefined && resolve(dir) === resolve(exceptDir)) continue;
     let raw: BookStateJson | null;
     try {
       raw = await readBookStateOrThrow(dir);
@@ -666,22 +672,26 @@ async function takenBookIds(): Promise<{
   return { taken, takenManuscriptIds, uncertain };
 }
 
-/** True if any `state.json` in the workspace carries `manuscriptId` -- or if one
- *  could not be read (it might). One ManuscriptRecord lives per manuscriptId, so a
- *  creator of a NEW book that would otherwise reuse an id another book carries
- *  (#3823) mints a fresh one instead. Walks `books/` only, so a bundle's own
- *  `.staging/` tree never counts as taken. Called under the path claim. */
-export async function isManuscriptIdTaken(manuscriptId: string): Promise<boolean> {
-  const { takenManuscriptIds, uncertain } = await takenBookIds();
-  return uncertain || takenManuscriptIds.has(manuscriptId);
+/** True if `manuscriptId` is carried by a state in the walk -- or if one could not
+ *  be read (it might). One ManuscriptRecord lives per manuscriptId, so a creator
+ *  of a NEW book that would otherwise reuse an id another book carries (#3823)
+ *  mints a fresh one instead. The walk covers `books/` only, so a bundle's own
+ *  `.staging/` tree never counts as taken. Pure over a walk made under the path
+ *  claim (`takenBookIds`). */
+export function manuscriptIdTakenIn(ids: TakenIds, manuscriptId: string): boolean {
+  return ids.uncertain || ids.takenManuscriptIds.has(manuscriptId);
+}
+
+/** `isBookIdTaken` over a walk the caller already made. */
+export function bookIdTakenIn(ids: TakenIds, bookId: string): boolean {
+  return ids.uncertain || ids.taken.has(bookId);
 }
 
 /** True if any `state.json` in the workspace carries `bookId` -- or if one could
  *  not be read (it might). Called under the path claim by creators that want to
  *  KEEP an incoming id (a portable bundle's) when it is free. */
 export async function isBookIdTaken(bookId: string): Promise<boolean> {
-  const { taken, uncertain } = await takenBookIds();
-  return uncertain || taken.has(bookId);
+  return bookIdTakenIn(await takenBookIds(), bookId);
 }
 
 /** A bookId no `state.json` in the workspace carries. Called under the path
@@ -691,7 +701,17 @@ export async function isBookIdTaken(bookId: string): Promise<boolean> {
  *  counter id) the suffix is `-u<random hex>` instead, which the counter never
  *  produces. */
 export async function mintBookId(author: string, series: string, title: string): Promise<string> {
-  const { taken, uncertain } = await takenBookIds();
+  return mintBookIdFrom(await takenBookIds(), author, series, title);
+}
+
+/** `mintBookId` over a walk the caller already made (one walk answers the bookId
+ *  and manuscriptId decisions of a bundle import, under the global claim). */
+export function mintBookIdFrom(
+  { taken, uncertain }: TakenIds,
+  author: string,
+  series: string,
+  title: string,
+): string {
   const base = makeBookId(author, series || STANDALONES_SERIES, title);
   if (!uncertain && !taken.has(base)) return base;
   const parts = parseBookId(base);

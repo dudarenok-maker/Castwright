@@ -159,6 +159,7 @@ afterEach(() => {
 });
 
 import { BOOKS_ROOT } from '../workspace/paths.js';
+
 /** Compute the target dir for a given title. */
 function targetDirFor(state: BookStateJson, title?: string): string {
   return join(BOOKS_ROOT, state.author, state.series, title ?? state.title);
@@ -846,10 +847,13 @@ describe('importPortableBundle', () => {
           const ids = [original, ...copies].map((d) => readState(d).manuscriptId);
           expect(ids[0]).toBe(state.manuscriptId);
           expect(new Set(ids).size).toBe(3);
-          /* "restructuring" a copy rewrites only that copy's hints file. */
-          await writeManuscriptHints(copies[0]!, { schema: 1, entries: [] });
+          /* each twin's persisted hints are keyed to ITS OWN id (the source's
+             bytes are untouched), so a restructure of one never validates against
+             another's record. */
           expect(Buffer.compare(readFileSync(manuscriptHintsJsonPath(original)), originalHintsBytes)).toBe(0);
-          expect(readHints(copies[1]!).entries.length).toBe(1);
+          for (const [i, d] of [original, ...copies].entries()) {
+            expect(readHints(d).entries.map((e: { manuscriptId: string }) => e.manuscriptId)).toEqual([ids[i]]);
+          }
         } finally {
           for (const d of [original, ...copies]) rmSync(d, { recursive: true, force: true });
         }
@@ -907,6 +911,133 @@ describe('importPortableBundle', () => {
           rmSync(holder, { recursive: true, force: true });
           rmSync(target, { recursive: true, force: true });
         }
+      });
+
+      /* The invariant is "no two books share a manuscriptId", so the trigger is a
+         taken MANUSCRIPT id, not a minted bookId: here the bookId is free and the
+         folder is free, but another book carries the manuscriptId. */
+      it('a free bookId with a taken manuscriptId still mints a fresh manuscriptId', async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const holder = join(BOOKS_ROOT, state.author, state.series, 'Id Twin Holder');
+        mkdirSync(dotAudiobook(holder), { recursive: true });
+        writeFileSync(
+          stateJsonPath(holder),
+          JSON.stringify({ ...state, bookId: 'demo__standalones__id-twin-holder' }, null, 2),
+        );
+        const target = targetDirFor(state);
+        rmSync(target, { recursive: true, force: true });
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          const copyState = readState(target);
+          expect(copyState.bookId).toBe(state.bookId); // free: kept
+          expect(copyState.manuscriptId).not.toBe(state.manuscriptId); // taken: fresh
+          expect(readHints(target).entries[0].manuscriptId).toBe(copyState.manuscriptId);
+        } finally {
+          rmSync(holder, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
+      /* An unreadable state.json might carry the id, so it counts as taken (as it
+         does for a bookId). */
+      it('an unreadable state.json anywhere in the library counts the manuscriptId as taken', async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const odd = join(BOOKS_ROOT, state.author, state.series, 'Unreadable Sibling');
+        mkdirSync(dotAudiobook(odd), { recursive: true });
+        mkdirSync(stateJsonPath(odd)); // EISDIR on read
+        const target = targetDirFor(state);
+        rmSync(target, { recursive: true, force: true });
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          expect(readState(target).manuscriptId).not.toBe(state.manuscriptId);
+        } finally {
+          rmSync(odd, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
+      /* A hints file the reader would reject (hintsFromPersisted) must cost a
+         re-parse, never the import. */
+      it.each([
+        ['unparseable', '{', true],
+        ['null', 'null', true],
+        ['entries not an array', '{"schema":2,"entries":{"a":1}}', true],
+        ['a non-object entry', '{"schema":1,"entries":[null]}', false],
+      ])('a renamed copy imports when the bundle hints file is %s', async (_label, raw, dropped) => {
+        const state = hintsState();
+        const sourceDir = writeSourceBook(state, manuscript);
+        writeFileSync(manuscriptHintsJsonPath(sourceDir), raw);
+        const bundle = (await buildPortableBundle(sourceDir, state)).buffer;
+        const original = targetDirFor(state);
+        rmSync(original, { recursive: true, force: true });
+        let copy = '';
+        try {
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          copy = (await importPortableBundle(bundle)).targetPath;
+          expect(readState(copy).manuscriptId).not.toBe(state.manuscriptId);
+          expect(existsSync(manuscriptHintsJsonPath(copy))).toBe(!dropped);
+        } finally {
+          rmSync(original, { recursive: true, force: true });
+          if (copy) rmSync(copy, { recursive: true, force: true });
+        }
+      });
+
+      /* The same invariant on the overwrite path: a book OTHER than the target
+         carrying the bundle's manuscriptId forces a fresh one. */
+      describe("'overwrite'", () => {
+        it("overwriting a different book never leaves it sharing a copy's manuscriptId", async () => {
+          const state = hintsState();
+          const bundle = await bundleWithHints(state);
+          const target = targetDirFor(state);
+          rmSync(target, { recursive: true, force: true });
+          let copy = '';
+          try {
+            /* the user's OWN book sits where the bundle lands */
+            mkdirSync(dotAudiobook(target), { recursive: true });
+            writeFileSync(
+              stateJsonPath(target),
+              JSON.stringify({ ...state, bookId: 'demo__standalones__own', manuscriptId: 'mns_ownA' }, null, 2),
+            );
+            writeFileSync(join(target, 'manuscript.txt'), manuscript);
+            copy = (await importPortableBundle(bundle)).targetPath; // rename: keeps the unused id
+            expect(readState(copy).manuscriptId).toBe(state.manuscriptId);
+            await importPortableBundle(bundle, { onConflict: 'overwrite' });
+            const t = readState(target);
+            expect(t.bookId).toBe('demo__standalones__own');
+            expect(t.manuscriptId).not.toBe(readState(copy).manuscriptId);
+            expect(readHints(target).entries[0].manuscriptId).toBe(t.manuscriptId);
+          } finally {
+            rmSync(target, { recursive: true, force: true });
+            if (copy) rmSync(copy, { recursive: true, force: true });
+          }
+        });
+
+        it('a target whose state carries no bookId is a new book: a taken manuscriptId is replaced', async () => {
+          const state = hintsState();
+          const bundle = await bundleWithHints(state);
+          const target = targetDirFor(state);
+          rmSync(target, { recursive: true, force: true });
+          const holder = join(BOOKS_ROOT, state.author, state.series, 'Id Holder');
+          try {
+            mkdirSync(dotAudiobook(holder), { recursive: true });
+            writeFileSync(
+              stateJsonPath(holder),
+              JSON.stringify({ ...state, bookId: 'demo__standalones__id-holder' }, null, 2),
+            );
+            mkdirSync(dotAudiobook(target), { recursive: true });
+            writeFileSync(stateJsonPath(target), 'not json {'); // no readable bookId
+            await importPortableBundle(bundle, { onConflict: 'overwrite' });
+            const t = readState(target);
+            expect(t.manuscriptId).not.toBe(state.manuscriptId);
+            expect(readHints(target).entries[0].manuscriptId).toBe(t.manuscriptId);
+            expect(readState(holder).manuscriptId).toBe(state.manuscriptId);
+          } finally {
+            rmSync(holder, { recursive: true, force: true });
+            rmSync(target, { recursive: true, force: true });
+          }
+        });
       });
 
       it("'overwrite' keeps the bundle's manuscriptId", async () => {

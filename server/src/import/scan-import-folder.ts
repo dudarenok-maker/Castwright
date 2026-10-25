@@ -58,9 +58,11 @@ import {
   BOOK_GONE,
   BookBusyError,
   bookJobKinds,
-  isBookIdTaken,
-  isManuscriptIdTaken,
-  mintBookId,
+  bookIdTakenIn,
+  manuscriptIdTakenIn,
+  mintBookIdFrom,
+  takenBookIds,
+  type TakenIds,
   readBookStateOrThrow,
   withBookOp,
   withBookPathClaim,
@@ -358,30 +360,55 @@ export async function importPortableBundle(
         'utf8',
       );
 
-    /* #3823 -- a NEW book whose manuscriptId another book already carries (a
-       renamed copy, or an id-taken re-import into a free folder) gets its own
-       (one in-memory ManuscriptRecord per id: a shared id lets restructuring one
-       twin rewrite the hints the other reads). An unused id is kept. The staged hints entries are
-       keyed by the id they were written under, so re-key them to the fresh one or
-       the copy's own hints stop validating (`manuscriptId` mismatch -> re-parse).
+    /* #3823 -- a book whose manuscriptId ANOTHER book already carries (a renamed
+       copy, an id-taken re-import into a free folder, an overwrite of a different
+       book) gets its own: one in-memory ManuscriptRecord per id, so a shared id
+       lets restructuring one twin rewrite the hints the other reads. An unused id
+       is kept. The staged hints entries are keyed by the id they were written
+       under, so re-key them to the fresh one or the copy's own hints stop
+       validating (`manuscriptId` mismatch -> re-parse). A hints file the reader
+       would reject anyway (unparseable, no `entries` array) is dropped instead:
+       the copy re-parses, as it would have; a non-object entry is left alone.
        Analysis state / edits / the analyzer cache are not in a bundle. */
-    const rekeyStagedHints = async (manuscriptId: string): Promise<void> => {
+    const freshManuscriptId = async (
+      ids: TakenIds,
+    ): Promise<string | undefined> => {
+      if (!state.manuscriptId || !manuscriptIdTakenIn(ids, state.manuscriptId)) {
+        return state.manuscriptId;
+      }
+      const manuscriptId = 'mns_' + nanoid(10);
       const hintsPath = manuscriptHintsJsonPath(stage);
-      if (!existsSync(hintsPath)) return;
-      const file = JSON.parse(await readFile(hintsPath, 'utf8')) as {
-        entries?: Array<{ manuscriptId?: string }>;
-      };
-      for (const entry of file.entries ?? []) entry.manuscriptId = manuscriptId;
-      await writeFile(hintsPath, JSON.stringify(file, null, 2), 'utf8');
+      if (existsSync(hintsPath)) {
+        let file: { entries?: unknown } | null = null;
+        try {
+          file = JSON.parse(await readFile(hintsPath, 'utf8')) as { entries?: unknown } | null;
+        } catch {
+          /* unparseable: dropped below */
+        }
+        if (file && typeof file === 'object' && Array.isArray(file.entries)) {
+          for (const entry of file.entries) {
+            if (entry && typeof entry === 'object') {
+              (entry as { manuscriptId?: string }).manuscriptId = manuscriptId;
+            }
+          }
+          await writeFile(hintsPath, JSON.stringify(file, null, 2), 'utf8');
+        } else {
+          await rm(hintsPath, { force: true });
+          const rel = relative(stage, hintsPath);
+          const at = stagedRel.indexOf(rel);
+          if (at >= 0) stagedRel.splice(at, 1);
+        }
+      }
+      return manuscriptId;
     };
 
     /* The id a NEW book gets: the bundle's own when nothing in the workspace
        carries it, else a minted one (never two books with one id). Called under
        the claim. */
-    const idForNewBook = async (title: string, keepBundleId: boolean): Promise<string> =>
-      keepBundleId && state.bookId && !(await isBookIdTaken(state.bookId))
+    const idForNewBook = (ids: TakenIds, title: string, keepBundleId: boolean): string =>
+      keepBundleId && state.bookId && !bookIdTakenIn(ids, state.bookId)
         ? state.bookId
-        : mintBookId(author, series, title);
+        : mintBookIdFrom(ids, author, series, title);
 
     /* Fresh / `rename` import. Under the claim ONLY: collision check -> bookId ->
        mkdir the parents -> one directory rename of the staged tree into place. */
@@ -398,14 +425,10 @@ export async function importPortableBundle(
           title = renamed.title;
           renamedTo = bookDir;
         }
-        const bookId = await idForNewBook(title, renamedTo === undefined);
-        const manuscriptId =
-          state.manuscriptId && (await isManuscriptIdTaken(state.manuscriptId))
-            ? 'mns_' + nanoid(10)
-            : state.manuscriptId;
-        if (manuscriptId && manuscriptId !== state.manuscriptId) {
-          await rekeyStagedHints(manuscriptId);
-        }
+        /* ONE walk under the claim answers the bookId and manuscriptId decisions. */
+        const ids = await takenBookIds();
+        const bookId = idForNewBook(ids, title, renamedTo === undefined);
+        const manuscriptId = await freshManuscriptId(ids);
         await writeStagedState(bookId, title, manuscriptId);
         await mkdir(dirname(bookDir), { recursive: true });
         /* Placed under the target's state-json lock too (#3625: every bundle
@@ -435,8 +458,14 @@ export async function importPortableBundle(
         if (!existsSync(targetDir) || (live?.bookId ?? null) !== expectedId) {
           throw new BundleConflictError(targetDir);
         }
-        const bookId = expectedId ?? (await idForNewBook(baseTitle, true));
-        await writeStagedState(bookId, baseTitle);
+        /* The target folder is left out of the walk: its own ids are not "taken"
+           against the bundle replacing it (keyed by folder -- its state may carry no
+           bookId). A book OTHER than the target carrying the bundle's manuscriptId
+           still forces a fresh one (#3823). */
+        const ids = await takenBookIds(targetDir);
+        const bookId = expectedId ?? idForNewBook(ids, baseTitle, true);
+        const manuscriptId = await freshManuscriptId(ids);
+        await writeStagedState(bookId, baseTitle, manuscriptId);
         /* #3703 -- the manuscript on disk is becoming the bundle's, so a local
            restructure's hints describe another book's bodies and can still
            validate (same uuid sequence, same manuscript bytes). The hints file
