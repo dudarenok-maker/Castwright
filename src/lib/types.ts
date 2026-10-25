@@ -667,7 +667,7 @@ export interface AnalysisStateResponse {
 export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 
 /** Plan 289 — field name -> opaque token. Clients echo it back unchanged. */
-export type SliceRevision = Record<string, string>;
+export type SliceRevision = components['schemas']['SliceRevision'];
 
 export interface PutStateRequest {
   slice: StateSlice;
