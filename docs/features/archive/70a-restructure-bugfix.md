@@ -14,7 +14,9 @@ owner: null
 > an empty manuscript body (`isBodyEmpty`: blank, whitespace-only, or just its
 > own heading); a chapter with text, or with no hint entry, is kept. Read every
 > "prune zero-sentence chapters" statement below (Benefit item 2, the
-> automated-coverage bullet on the zero-sentence merge test, walkthrough steps
+> automated-coverage bullet on the zero-sentence merge test — since renamed and
+> inverted as `keeps a zero-sentence chapter that still has manuscript text
+> after a merge (#3783)` — walkthrough steps
 > 3-4, and the Out-of-scope parser-oversplit rationale) against this
 > correction. The parser-oversplit rationale also no longer holds as written:
 > no parser emits an empty chapter body, so the prune no longer cleans that
