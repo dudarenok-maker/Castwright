@@ -59,6 +59,7 @@ import {
   BookBusyError,
   bookJobKinds,
   isBookIdTaken,
+  isManuscriptIdTaken,
   mintBookId,
   readBookStateOrThrow,
   withBookOp,
@@ -357,9 +358,10 @@ export async function importPortableBundle(
         'utf8',
       );
 
-    /* #3823 -- a renamed copy is a second book, so it gets its own manuscriptId
+    /* #3823 -- a NEW book whose manuscriptId another book already carries (a
+       renamed copy, or an id-taken re-import into a free folder) gets its own
        (one in-memory ManuscriptRecord per id: a shared id lets restructuring one
-       twin rewrite the hints the other reads). The staged hints entries are
+       twin rewrite the hints the other reads). An unused id is kept. The staged hints entries are
        keyed by the id they were written under, so re-key them to the fresh one or
        the copy's own hints stop validating (`manuscriptId` mismatch -> re-parse).
        Analysis state / edits / the analyzer cache are not in a bundle. */
@@ -398,7 +400,9 @@ export async function importPortableBundle(
         }
         const bookId = await idForNewBook(title, renamedTo === undefined);
         const manuscriptId =
-          renamedTo !== undefined && state.manuscriptId ? 'mns_' + nanoid(10) : state.manuscriptId;
+          state.manuscriptId && (await isManuscriptIdTaken(state.manuscriptId))
+            ? 'mns_' + nanoid(10)
+            : state.manuscriptId;
         if (manuscriptId && manuscriptId !== state.manuscriptId) {
           await rekeyStagedHints(manuscriptId);
         }

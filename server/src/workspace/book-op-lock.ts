@@ -643,8 +643,13 @@ export async function removeBookFolder(book: BookHandle): Promise<'removed' | 'g
  *  callers answer that without failing: `isBookIdTaken` says "taken" (the
  *  bundle importer then mints), and `mintBookId` uses a suffix the counter never
  *  produces. One unreadable book therefore never blocks an unrelated import. */
-async function takenBookIds(): Promise<{ taken: Set<string>; uncertain: boolean }> {
+async function takenBookIds(): Promise<{
+  taken: Set<string>;
+  takenManuscriptIds: Set<string>;
+  uncertain: boolean;
+}> {
   const taken = new Set<string>();
+  const takenManuscriptIds = new Set<string>();
   let uncertain = false;
   for (const dir of walkBookDirs()) {
     let raw: BookStateJson | null;
@@ -656,8 +661,19 @@ async function takenBookIds(): Promise<{ taken: Set<string>; uncertain: boolean 
       continue;
     }
     if (raw?.bookId) taken.add(raw.bookId);
+    if (raw?.manuscriptId) takenManuscriptIds.add(raw.manuscriptId);
   }
-  return { taken, uncertain };
+  return { taken, takenManuscriptIds, uncertain };
+}
+
+/** True if any `state.json` in the workspace carries `manuscriptId` -- or if one
+ *  could not be read (it might). One ManuscriptRecord lives per manuscriptId, so a
+ *  creator of a NEW book that would otherwise reuse an id another book carries
+ *  (#3823) mints a fresh one instead. Walks `books/` only, so a bundle's own
+ *  `.staging/` tree never counts as taken. Called under the path claim. */
+export async function isManuscriptIdTaken(manuscriptId: string): Promise<boolean> {
+  const { takenManuscriptIds, uncertain } = await takenBookIds();
+  return uncertain || takenManuscriptIds.has(manuscriptId);
 }
 
 /** True if any `state.json` in the workspace carries `bookId` -- or if one could

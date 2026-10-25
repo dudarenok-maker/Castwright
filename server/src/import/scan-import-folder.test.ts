@@ -159,7 +159,6 @@ afterEach(() => {
 });
 
 import { BOOKS_ROOT } from '../workspace/paths.js';
-
 /** Compute the target dir for a given title. */
 function targetDirFor(state: BookStateJson, title?: string): string {
   return join(BOOKS_ROOT, state.author, state.series, title ?? state.title);
@@ -877,6 +876,36 @@ describe('importPortableBundle', () => {
         } finally {
           rmSync(original, { recursive: true, force: true });
           if (copy) rmSync(copy, { recursive: true, force: true });
+        }
+      });
+
+      it('a free folder but a taken bookId + manuscriptId mints a fresh manuscriptId; an unused id is kept', async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        /* A book at ANOTHER folder carrying the bundle's bookId and manuscriptId
+           (e.g. a renamed twin), so the bundle's own target folder is free. */
+        const holder = join(BOOKS_ROOT, state.author, state.series, 'Hints Holder');
+        mkdirSync(dotAudiobook(holder), { recursive: true });
+        writeFileSync(stateJsonPath(holder), JSON.stringify(state, null, 2));
+        const target = targetDirFor(state);
+        rmSync(target, { recursive: true, force: true });
+        try {
+          const r = await importPortableBundle(bundle, { onConflict: 'fail' });
+          expect(r.conflict).toBeUndefined();
+          const copyState = readState(target);
+          expect(copyState.bookId).not.toBe(state.bookId);
+          expect(copyState.manuscriptId).not.toBe(state.manuscriptId);
+          const file = readHints(target);
+          const res = hintsFromPersisted(file, copyState, sha256Hex(readFileSync(join(target, 'manuscript.txt'))));
+          expect(res.ok).toBe(true);
+          /* remove the holder: the same bundle into a clean workspace keeps its id */
+          rmSync(holder, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+          await importPortableBundle(bundle, { onConflict: 'fail' });
+          expect(readState(target).manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(holder, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
         }
       });
 
