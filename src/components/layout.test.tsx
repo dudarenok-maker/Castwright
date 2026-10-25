@@ -49,6 +49,7 @@ const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
 const pollRevisionsBulkMock = vi.fn();
 const putBookStateMock = vi.fn();
+const restoreBookBackupMock = vi.fn();
 /* Task 22 — the A/B player's per-op routes. */
 const acceptRevisionMock = vi.fn();
 const rejectRevisionMock = vi.fn();
@@ -80,6 +81,11 @@ vi.mock('../lib/api', async (importOriginal) => {
          `undefined` if the middleware is ever wired into a test that doesn't
          configure it. */
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
+      /* Account -> Restore from backup (the #3784 D7 restore case). */
+      listBookBackups: async () => [
+        { file: '20260101-000000.json', sizeBytes: 1024, createdAt: '2026-01-01T00:00:00.000Z' },
+      ],
+      restoreBookBackup: (...args: unknown[]) => restoreBookBackupMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
       getAnalysisState: (...args: unknown[]) => getAnalysisStateMock(...args),
@@ -211,6 +217,9 @@ vi.mock('../views/book-library', () => ({
   ),
 }));
 
+/* The Account view is mounted for the restore case; its update card is not under test. */
+vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
+
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
@@ -236,6 +245,7 @@ import type { RootState } from '../store';
 import { modelLabel } from '../lib/model-label';
 import type { AnalyzerCatalog } from '../lib/types';
 import { BooksRoute } from '../routes/index';
+import { AccountView } from '../views/account';
 import { createBookStateDisk } from '../test/book-state-disk';
 
 function makeStore(extraMiddleware: Middleware[] = []) {
@@ -345,6 +355,7 @@ beforeEach(() => {
   pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
   putBookStateMock.mockReset();
   putBookStateMock.mockResolvedValue(undefined);
+  restoreBookBackupMock.mockReset();
   acceptRevisionMock.mockReset();
   rejectRevisionMock.mockReset();
   restorePreviousUnrecordedMock.mockReset();
@@ -3081,6 +3092,71 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
     expect(disk.books.get('A')!.state.title).toBe('T2');
     expect(titlePuts(disk).at(-1)).toBe('ok T2');
+  });
+
+  /* #3784 pass 6, P6-5 — the PUT lands on disk but its response is lost. */
+  it('P6-5: a Library Edit whose response is lost still marks the book, so the reopen reads in full', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    renderWithLibrary(store);
+    await openA(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+    putBookStateMock.mockImplementation(async (id: string, req: never) => {
+      disk.put(id, req);
+      throw new Error('Network error after the write landed');
+    });
+
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: { title: 'T2' } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await waitFor(() => expect(disk.books.get('A')!.state.title).toBe('T2'));
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A).toBe(1));
+
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+    commit(store, 'notes', 'A note');
+    await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+    expect(disk.books.get('A')!.state.title).toBe('T2');
+  });
+
+  /* #3784 pass 6, P6-2(a) — Account -> Restore from backup rewrites state.json
+     behind the slices the open book kept in memory. */
+  it('P6-2(a): after Account -> Restore from backup the return to the book reads in full, and a later notes edit keeps the restored title', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    restoreBookBackupMock.mockImplementation(async (id: string) => {
+      disk.write(id, 'state', { ...disk.books.get(id)!.state, title: 'Restored' });
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'cast_pending', tags: [] }] }] }] };
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+
+      const account = render(
+        <Provider store={store}>
+          <MemoryRouter>
+            <AccountView />
+          </MemoryRouter>
+        </Provider>,
+      );
+      fireEvent.change(await account.findByTestId('account-backup-book-picker'), { target: { value: 'A' } });
+      fireEvent.click(await account.findByRole('button', { name: /^restore$/i }));
+      await waitFor(() => expect(restoreBookBackupMock).toHaveBeenCalledWith('A', '20260101-000000.json'));
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A).toBe(1));
+      account.unmount();
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(savedTitle(store)).toBe('Restored'));
+      commit(store, 'notes', 'A note');
+      await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+      expect(disk.books.get('A')!.state.title).toBe('Restored');
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      confirm.mockRestore();
+    }
   });
 
   it('D2: a stale refusal while the book is open re-reads it in full at once', async () => {

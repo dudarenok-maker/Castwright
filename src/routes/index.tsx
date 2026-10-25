@@ -171,11 +171,14 @@ export function BooksRoute() {
         } catch (err) {
           showError(`Couldn't update "${b.title}"`, (err as Error).message, 'Edit');
           return;
+        } finally {
+          /* Plan 289 (D7) — a write the persistence middleware never sees: the
+             book's slices may still be in memory, so its next open (or now, if it
+             is open) reads it in full rather than keeping the old details. Marked
+             on a rejection too: a PUT that landed but lost its response has an
+             unknown outcome, and an extra full read is cheap. */
+          dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         }
-        /* Plan 289 (D7) — a write the persistence middleware never sees: the
-           book's slices may still be in memory, so its next open (or now, if it
-           is open) reads it in full rather than keeping the old details. */
-        dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
       }}
