@@ -30,7 +30,8 @@ const json = Buffer.from(JSON.stringify({ code: 'x', label: 'x' }));
 // Raw bytes on the wire. Without this, superagent JSON-serialises a Buffer sent
 // under application/json into {"type":"Buffer","data":[...]} and no real frame
 // ever reaches the server.
-const raw = (b: Buffer) => b;
+// (superagent types serialize as returning string; the Buffer passes through.)
+const raw = ((b: Buffer) => b) as unknown as (obj: unknown) => string;
 // The global-parser route and the per-route 1kb pairing parser.
 const ROUTES = ['/api/devices', '/api/pair/redeem'];
 
@@ -79,6 +80,44 @@ describe('Content-Encoding allowlist (#3790)', () => {
       .send(json);
     expect(res.status).toBe(201);
     expect(res.body.label).toBe('x');
+  });
+
+  // RFC 9110 5.6.1.2: empty list elements are ignored; body-parser reads '' as identity.
+  for (const header of ['', ' ']) {
+    it(`/api/devices: Content-Encoding ${JSON.stringify(header)} is identity (201, posted label)`, async () => {
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Content-Type', 'application/json')
+        .set('Content-Encoding', header)
+        .serialize(raw)
+        .send(json);
+      expect(res.status).toBe(201);
+      expect(res.body.label).toBe('x');
+    });
+  }
+
+  // body-parser itself refuses the literal value 'gzip,' (it does not split the
+  // list), so only assert the GUARD let it through: its sentence is absent.
+  it("/api/devices: 'gzip,' is not refused by the guard", async () => {
+    const res = await request(app)
+      .post('/api/devices')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'gzip,')
+      .serialize(raw)
+      .send(zlib.gzipSync(json));
+    expect(res.body?.error).not.toBe('Unsupported Content-Encoding.');
+  });
+
+  it('/api/devices: empty elements do not smuggle zstd through', async () => {
+    for (const header of ['zstd', 'gzip, zstd', ',zstd', 'zstd,']) {
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Content-Type', 'application/json')
+        .set('Content-Encoding', header)
+        .serialize(raw)
+        .send(json);
+      expect(res.status).toBe(415);
+    }
   });
 
   it('/api/devices: a real gzip body is accepted and decoded (201, posted label)', async () => {

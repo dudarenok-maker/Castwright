@@ -110,7 +110,12 @@ app.use((req, res, next) => {
   const header = req.headers['content-encoding'];
   if (
     header === undefined ||
-    header.split(',').every((coding) => ALLOWED_CONTENT_ENCODINGS.has(coding.trim().toLowerCase()))
+    // Empty list elements are ignored (RFC 9110 5.6.1.2); body-parser reads '' as identity.
+    header
+      .split(',')
+      .map((coding) => coding.trim().toLowerCase())
+      .filter(Boolean)
+      .every((coding) => ALLOWED_CONTENT_ENCODINGS.has(coding))
   ) {
     next();
     return;
