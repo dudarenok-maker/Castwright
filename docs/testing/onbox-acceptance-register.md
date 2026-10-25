@@ -740,8 +740,11 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > against the merged wave 4: the run must set Persona generation engine to the same-card
 > endpoint's model, and observes the persona requests reaching the endpoint before
 > VoiceDesign loads, W3d's eviction unloading it, and the "Pause audio generation to design
-> voices?" guard halting a streaming render before any persona request. The "cannot be run
-> until wave 4 merges" sentence is dropped. Run sheet §10 added. No row added or removed;
+> voices?" guard's **Pause and design** acknowledging the render's abort before the first
+> persona request (an in-flight sidecar synth is not awaited, so criterion 3 records whether
+> its tail overlapped; criteria 1, 3 and 5 reworded to say so). Criterion 3 now runs on its own
+> fresh book whose characters have no voice description, because the book that steps 1-2
+> design has none left to prompt for. The "cannot be run until wave 4 merges" sentence is dropped. Run sheet §10 added. No row added or removed;
 > `next-id` unchanged. Row is owed; not run here.
 >
 > **Prior change: 2026-10-17 (#3084 W3d, task 3d.10), 65 → 68.** Rows **A115**
@@ -5921,8 +5924,10 @@ acknowledged first, but an in-flight sidecar synth is not awaited).
 2. W3d's eviction unloads the endpoint's model before VoiceDesign loads (the unload request or
    model-unload line in the server log, then the VoiceDesign load), and VoiceDesign loads and
    designs without an OOM.
-3. With a chapter render streaming on that card, start Design full cast. Castwright shows
-   "Pause audio generation to design voices?". Choosing **Pause and design** acknowledges the
+3. With a chapter render streaming on that card, start Design full cast on a fresh book whose
+   characters have no voice description (not the book criteria 1-2 designed: Design full cast
+   is disabled there, and a book whose characters have voice descriptions never prompts).
+   Castwright shows "Pause audio generation to design voices?". Choosing **Pause and design** acknowledges the
    render's abort before the first persona request: the pause route aborts and answers at once,
    and the design starts only after that answer. It does not wait for an in-flight sidecar
    synth, so the run RECORDS whether the last synth's tail overlapped the first persona

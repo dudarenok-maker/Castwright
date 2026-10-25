@@ -322,8 +322,9 @@ Run by / date / SHA:
 
 **Hardware:** a single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or
 LM Studio) holding a model on that same card (the endpoint's `gpu` = the card Qwen targets),
-Qwen VoiceDesign. A book whose characters have no voice description, and a second book with a
-chapter you can render.
+Qwen VoiceDesign. Two books whose characters have no voice description (a fresh import each;
+steps 1-2 design every character of the first, and step 3 needs a second one that is still
+undesigned), and a third book with a chapter you can render.
 
 **Preconditions.** Advanced Settings → Persona generation engine MUST be set to the endpoint's
 model (`openai:<endpointId>::<model>`). The default is `gemini`; left alone, the run never
@@ -335,12 +336,16 @@ touches the endpoint and proves nothing. Follow the endpoint's server log.
    Result:
 2. W3d's eviction unloads the endpoint's model before VoiceDesign loads, and VoiceDesign loads and
    designs without an OOM. Unload line at ___, VoiceDesign load at ___. Result:
-3. With a chapter render streaming on that card, start Design full cast. "Pause audio generation
+3. With a chapter render streaming on that card, open the SECOND undesigned book (not the one
+   steps 1-2 designed: Design full cast is disabled there, and a book whose characters have a
+   voice description never prompts) and start Design full cast. "Pause audio generation
    to design voices?" shows. Choose **Pause and design**: the render's abort is acknowledged
    before the first persona request (the pause route aborts and answers at once; the design
    starts only after that answer). It does not wait for an in-flight sidecar synth, so record
    whether the last synth's tail overlapped the first persona requests, and whether that caused
-   an OOM. Pause acknowledged at ___, last synth ended at ___, first persona request at ___.
+   an OOM. Pause acknowledged at ___ (the browser devtools Network panel: the response to
+   `POST /api/books/<bookId>/generation/pause` and to `POST /api/queue/pause`; the server logs
+   nothing for the pause route), last synth ended at ___, first persona request at ___.
    Overlap: yes / no. OOM: yes / no. Result:
 4. The reverse order is also safe: with VoiceDesign resident on that card, run an analysis
    against the same-card endpoint. It does not OOM and does not silently fall back to another
