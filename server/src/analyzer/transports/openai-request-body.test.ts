@@ -52,4 +52,11 @@ describe('endpoint Auto max_tokens (#3084 P24)', () => {
     const manual = endpoint({ maxOutputTokens: 4_096, contextTokens: 8_192 });
     expect(buildOpenAIRequestBody(manual, 'm', req({ maxOutputTokens: 4_096, estimatedInputTokens: 6_000 })).max_tokens).toBe(4_096);
   });
+
+  it('a free-text request has no system turn, temperature or max_tokens (#3084 W4)', () => {
+    const body = buildOpenAIRequestBody(endpoint(), 'm', req({ system: '', temperature: undefined, freeText: {} }));
+    expect(body).not.toHaveProperty('max_tokens');
+    expect(body).not.toHaveProperty('temperature');
+    expect(body.messages).toEqual([{ role: 'user', content: 'u' }]);
+  });
 });

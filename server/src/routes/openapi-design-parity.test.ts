@@ -69,6 +69,12 @@ beforeAll(async () => {
 /** The text of one `components.schemas` entry: from its own anchor up to (but
     not including) the next sibling schema at the same 4-space indent. Mirrors
     openapi-setup-parity.test.ts's identical helper. */
+/* The `code:` property's `description: |` on CastDesignEvent. The lines skipped between `anyOf:` and
+   `description:` must be indented DEEPER than `code:` itself (\1), so the scan cannot run past the code
+   property into a later sibling's `description: |`. Still linear: each skipped line is consumed by one
+   alternative and a line is only read once. */
+const CAST_CODE_BLOCK_SCALAR = /(?:^|\n)( +)code:\r?\n\1 +anyOf:\r?\n(?:\1 +\S.*\r?\n)*?\1 +description: \|/;
+
 function schemaBlock(src: string, schemaName: string): string {
   const anchor = new RegExp(`\\r?\\n {4}${schemaName}:\\r?\\n`);
   const match = anchor.exec(src);
@@ -247,12 +253,42 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
      the `description: |` match fails and the truncation is caught. */
   it('CastDesignEvent.code and SingleDesignEvent.code descriptions use block scalars to avoid YAML comment truncation (#2509 B2)', () => {
     const castBlock = schemaBlock(yaml, 'CastDesignEvent');
-    expect(castBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(castBlock).toMatch(CAST_CODE_BLOCK_SCALAR);
     expect(castBlock).toContain('stated language with no sidecar mapping');
 
     const singleBlock = schemaBlock(yaml, 'SingleDesignEvent');
     expect(singleBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
     expect(singleBlock).toContain('stated language with no sidecar mapping');
+  });
+
+  /* Review finding 7: the old matcher skipped ANY indented line, so a malformed `code` (plain-scalar
+     description) still passed whenever a LATER sibling property carried `description: |`. */
+  it('the Cast code block-scalar matcher does not read past the code property into a sibling', () => {
+    const oldMatcher = /code:\r?\n\s+anyOf:\r?\n(?:[ \t]+\S.*\r?\n)*?[ \t]+description: \|/;
+    const malformed = [
+      '        code:',
+      '          anyOf:',
+      '            - type: string',
+      '          description: plain scalar with a #2246 comment opener',
+      '        message:',
+      '          type: string',
+      '          description: |',
+      '            sibling block scalar',
+      '',
+    ].join('\n');
+    expect(oldMatcher.test(malformed), 'witness: the old matcher wrongly accepts this').toBe(true);
+    expect(malformed).not.toMatch(CAST_CODE_BLOCK_SCALAR);
+    expect(malformed.replace(/\n/g, '\r\n')).not.toMatch(CAST_CODE_BLOCK_SCALAR);
+    const sound = malformed.replace('description: plain scalar with a #2246 comment opener', 'description: |');
+    expect(sound).toMatch(CAST_CODE_BLOCK_SCALAR);
+  });
+
+  it('the Cast code block-scalar matcher goes red when the real description is a plain scalar', () => {
+    const castBlock = schemaBlock(yaml, 'CastDesignEvent');
+    expect(castBlock).toMatch(CAST_CODE_BLOCK_SCALAR);
+    const idx = castBlock.search(/code:\r?\n\s+anyOf:/);
+    const mutated = castBlock.slice(0, idx) + castBlock.slice(idx).replace(/description: \|/, 'description: plain');
+    expect(mutated).not.toMatch(CAST_CODE_BLOCK_SCALAR);
   });
 /* #2510 S2 — the four new 409 language_unset responses */
   it('the analysis route declares a 409 language_unset response', () => {

@@ -3454,8 +3454,7 @@ export interface components {
              *     language has no sidecar mapping — checked before the stream
              *     produces any progress) / `lock-contention` (a cast-lock
              *     acquisition on this backstop's own path timed out — #2260) /
-             *     `unknown` (defensive catch-all for any other unexpected throw
-             *     escaping the design loop).
+             *     any other throw escaping the design loop — a whole-job persona-engine failure included — carries its analysis `FailureCode` (#3084 W4: `auth`, `analyzer-endpoint-missing`, `analyzer-timeout`, …), and `unknown` when the taxonomy recognises nothing. A per-character persona failure does not escape the loop and is reported as `character_failed` instead.
              * @enum {string}
              */
             type: "resume_from" | "idle" | "progress" | "heartbeat" | "character_skipped" | "character_designed" | "variant_designed" | "character_failed" | "error";
@@ -3493,9 +3492,8 @@ export interface components {
              *     stated a language — the honest pre-work abort replacing a
              *     silent English design; `unsupported_language` fires for a
              *     stated language with no sidecar mapping.
-             * @enum {string}
              */
-            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown";
+            code?: ("sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown") | components["schemas"]["FailureCode"];
             /** @description error only — human-readable abort message. */
             message?: string;
         };

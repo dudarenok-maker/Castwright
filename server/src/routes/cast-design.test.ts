@@ -49,21 +49,22 @@ let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
-const { personaMock, resolvePersonaEngineMock } = vi.hoisted(() => ({
+const { personaMock, personaSharesGpuMock } = vi.hoisted(() => ({
   personaMock: vi.fn(),
-  /* Default to 'gemini' so the pre-pass is a no-op for all the existing tests
-     that have nothing to do with the local persona path. */
-  resolvePersonaEngineMock: vi.fn().mockReturnValue('gemini'),
+  /* Default false (a Gemini persona) so the pre-pass is a no-op for all the existing tests
+     that have nothing to do with the shared-GPU persona path (#3084 W4: local Ollama, or an
+     endpoint on the Qwen card). */
+  personaSharesGpuMock: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: personaMock,
-  resolvePersonaEngine: resolvePersonaEngineMock,
+  personaSharesGpu: personaSharesGpuMock,
 }));
 
 /* Passthrough mock — persona-gpu-plan.preparePersonaBatch so the pre-pass
    doesn't try to reach a real sidecar or GPU during existing tests.  The
-   resolvePersonaEngineMock defaults to 'gemini' so preparePersonaBatch is never
+   personaSharesGpuMock defaults to false so preparePersonaBatch is never
    reached in the existing tests anyway, but the mock is here as a safety net
    and is overridden per-test in the pre-pass describe block. */
 vi.mock('../tts/persona-gpu-plan.js', () => ({
@@ -520,7 +521,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
      throws, and asserts the job still moves on to the NEXT character and ends
      in `idle` with a per-character failure recorded — never a bare error. */
   it('#3027/2: a persona-generation failure is a per-character failure, not a bare Halted', async () => {
-    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaSharesGpuMock.mockReturnValue(false);
     personaMock.mockReset();
     personaMock.mockRejectedValueOnce(new Error('Gemini quota exceeded'));
 
@@ -1187,14 +1188,14 @@ describe('cast-design persona pre-pass', () => {
     // implementations but not call counts; vi.clearAllMocks resets counts).
     vi.clearAllMocks();
     // Reset the hoisted mock return values to defaults so tests are fully isolated.
-    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaSharesGpuMock.mockReturnValue(false);
     personaMock.mockReset();
     personaMock.mockResolvedValue('a bright, quick-witted teenage boy');
   });
 
   it('local: all personas generated before the first designQwenVoiceForCharacter; variants skipped', async () => {
     // Use the hoisted mock directly — avoids spy ordering issues between tests.
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
@@ -1251,7 +1252,7 @@ describe('cast-design persona pre-pass', () => {
   });
 
   it('busy box: preparePersonaBatch returns CPU args, threaded into persona calls', async () => {
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: true, keepAlive: 0 });
@@ -1275,7 +1276,7 @@ describe('cast-design persona pre-pass', () => {
     // generateVoiceStylePersona must have been called with the CPU plan args from preparePersonaBatch
     expect(genSpy).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'hart' }),
-      { onCpu: true, keepAlive: 0 },
+      { onCpu: true, keepAlive: 0, signal: expect.any(AbortSignal) },
     );
 
     // design must still run (pre-pass does not abort the design)
@@ -1283,9 +1284,9 @@ describe('cast-design persona pre-pass', () => {
     expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'hart')).toBe(true);
   });
 
-  it('gemini engine: pre-pass returns early — preparePersonaBatch NOT called', async () => {
-    // resolvePersonaEngineMock is already reset to 'gemini' by afterEach; make it explicit.
-    resolvePersonaEngineMock.mockReturnValue('gemini');
+  it('no shared GPU (gemini, or an endpoint on no card): pre-pass returns early — preparePersonaBatch NOT called', async () => {
+    // personaSharesGpuMock is already reset to false by afterEach; make it explicit.
+    personaSharesGpuMock.mockReturnValue(false);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     // Wrap the module-level mock in a fresh spy so we can count calls in THIS test only.
@@ -1302,11 +1303,11 @@ describe('cast-design persona pre-pass', () => {
       .send({ modelKey: QWEN_KEY, characterIds: ['aria'] });
 
     expect(res.status).toBe(200);
-    // resolvePersonaEngine returns 'gemini' → pre-pass returns immediately.
+    // personaSharesGpu() is false → pre-pass returns immediately.
     // preparePersonaBatch must NOT have been called at all by the pre-pass.
     expect(prepSpy).not.toHaveBeenCalled();
-    // resolvePersonaEngineMock must have been called (confirms the guard ran)
-    expect(resolvePersonaEngineMock).toHaveBeenCalled();
+    // personaSharesGpuMock must have been called (confirms the guard ran)
+    expect(personaSharesGpuMock).toHaveBeenCalled();
   });
 
   it('heartbeat is emitted during pre-pass before the first character_designed event', async () => {
@@ -1328,7 +1329,7 @@ describe('cast-design persona pre-pass', () => {
        Because supertest awaits the full response, we interleave step 2 inside
        the persona mock (the mock is called during the await of the POST, so we
        advance timers from within the mock implementation). */
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
@@ -1379,7 +1380,7 @@ describe('cast-design persona pre-pass', () => {
        pause endpoint calls job.controller.abort() synchronously.  After the mock
        returns, the pre-pass loop checks signal.aborted and exits — so
        designQwenVoiceForCharacter must never be called. */
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
@@ -1430,7 +1431,7 @@ describe('cast-design persona pre-pass', () => {
            voiceStyle so the pre-pass skips it idempotently — total = 1 call for A).
          - designQwenVoiceForCharacter NOT called for A (skip guard prevents the retry).
          - designQwenVoiceForCharacter IS called for B (the healthy path is unaffected). */
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
@@ -1483,7 +1484,7 @@ describe('cast-design persona pre-pass', () => {
           (the job ends with an error event, no character_designed fires).
        2. By implication the finally{clearInterval(beat)} guard runs (no leaked
           timer — we can't directly assert that, but the test exercises the path). */
-    resolvePersonaEngineMock.mockReturnValue('local');
+    personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
@@ -1519,6 +1520,343 @@ describe('cast-design persona pre-pass', () => {
     expect(designSpy).not.toHaveBeenCalled();
 
     // Restore the cast.json for subsequent tests.
+    writeBookOnDisk(characters);
+  });
+
+  it('an endpoint unreachable error in the pre-pass ends the job wholesale, like Ollama\'s', async () => {
+    /* #3084 W4 — AnalyzerUnreachableError from any transport (LocalUnreachableError is its Ollama
+       subclass) would fail every remaining character identically: one terminal error, no designs. */
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerUnreachableError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerUnreachableError('Endpoint Lab at http://127.0.0.1:18080 is unreachable', 'openai'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent?.message).toContain('Endpoint Lab at http://127.0.0.1:18080 is unreachable');
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+
+    writeBookOnDisk(characters);
+  });
+
+  it.each<[string, string, () => Promise<Error>]>([
+    ['AnalyzerEndpointMissingError', 'analyzer-endpoint-missing', async () => {
+      const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
+      return new AnalyzerEndpointMissingError('lab', 'persona');
+    }],
+    ['AnalyzerKeyOriginError', 'auth', async () => {
+      const { AnalyzerKeyOriginError } = await import('../analyzer/errors.js');
+      return new AnalyzerKeyOriginError('lab', 'Lab');
+    }],
+    ['AnalyzerHttpError 401', 'auth', async () => {
+      const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+      return new AnalyzerHttpError('openai', 401, 'invalid api key', 'Endpoint qwen3 returned 401: invalid api key');
+    }],
+    ['AnalyzerHttpError 403', 'auth', async () => {
+      const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+      return new AnalyzerHttpError('openai', 403, 'forbidden', 'Endpoint qwen3 returned 403: forbidden');
+    }],
+    /* Owner decision B2: Google's OpenAI-compatible endpoint answers a bad key with a 400 whose body matches
+       GEMINI_KEY_REJECTED; the taxonomy codes it `auth`, so it is a whole-job error too. */
+    ['AnalyzerHttpError 400 (Google rejected the key)', 'auth', async () => {
+      const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+      return new AnalyzerHttpError('openai', 400, 'API key not valid. Please pass a valid API key. [API_KEY_INVALID]', 'Endpoint qwen3 returned 400: API_KEY_INVALID');
+    }],
+    ['AnalyzerTimeoutError', 'analyzer-timeout', async () => {
+      const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+      return new AnalyzerTimeoutError('openai', 'qwen3', 1_800_000, 'ceiling');
+    }],
+    /* The error the Ollama persona transport throws when its free-text budget expires on a connected but
+       silent daemon (ollama-timeout.test.ts pins the transport side). */
+    ['AnalyzerTimeoutError (local Ollama persona budget)', 'analyzer-timeout', async () => {
+      const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+      return new AnalyzerTimeoutError('ollama', 'qwen3.5:9b', 600_000, 'ceiling');
+    }],
+  ])('a %s in the pre-pass ends the job once (code %s) instead of failing every character', async (_name, code, makeErr) => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const err = await makeErr();
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(err);
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'error')?.code).toBe(code);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(events.some((e) => e.type === 'idle')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a non-auth HTTP error (500) in the pre-pass stays a per-character failure', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerHttpError('openai', 500, 'boom', 'Endpoint qwen3 returned 500: boom'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'character_failed')).toHaveLength(2);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('the pre-pass hands the job abort signal to each persona call; a pause mid-call records no failure', async () => {
+    /* #3084 W4 — with Task 4.5's real-HTTP proof (`aborting the caller signal aborts an in-flight
+       endpoint persona call`), this shows pausing a design job cancels an in-flight persona request. */
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    let seen: AbortSignal | undefined;
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (_character, opts) => {
+      seen = opts?.signal;
+      await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+      throw new AnalysisAbortedError('Endpoint qwen3 call aborted (paused or client disconnected).');
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    const events = parseSse(res.text);
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(true);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+  });
+
+  it('the lazy persona call gets the job abort signal; a pause mid-call ends the job idle, not with an error', async () => {
+    personaSharesGpuMock.mockReturnValue(false);
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    let seen: AbortSignal | undefined;
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (_character, opts) => {
+      seen = opts?.signal;
+      await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+      throw new AnalysisAbortedError('Endpoint qwen3 call aborted (paused or client disconnected).');
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    const events = parseSse(res.text);
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(true);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(events.some((e) => e.type === 'idle')).toBe(true);
+    /* #3084 W4 — the load-bearing half. The lazy call sits inside the per-character catch
+       `6222e483` added, which would otherwise record the abort as a failure against the
+       character the user paused on; the job would still end `idle` with no `error`, so the
+       two assertions above pass either way. These two are what actually fail without the
+       abort check at the top of that catch. */
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(events.find((e) => e.type === 'idle')?.failures).toHaveLength(0);
+  });
+
+  it('a lazy persona failure stays a per-character failure with its reason string — a reasoning overflow included (#3027/2, #3230)', async () => {
+    /* #3084 W4 — CHARACTERISATION, green before and after this PR. `6222e483` (second half of
+       #3027) gave the lazy call its own try/catch, so its error is
+       recorded per character and the loop moves on; it never reaches the route backstop, so no
+       FailureCode is written for it. P20's voice-design carve-out keeps exactly this behaviour,
+       and this case is what stops Task 4.5's move of the call into runFreeText (and the new
+       `signal` argument) from silently turning it back into a job halt. */
+    personaSharesGpuMock.mockReturnValue(false);
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const overflow = new AnalyzerReasoningOverflowError('openai', 'openai:lab::qwen3', 900);
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValueOnce(overflow);
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-nova', url: '/v/nova.mp3' });
+
+    /* hart has no voiceStyle, so the lazy fallback fires and throws; nova HAS one, so it designs
+       normally. Order [hart, nova] puts the failure first — a job halt would leave nova undesigned. */
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova', voiceStyle: 'a dry, clipped baritone' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    /* Per character, not job-wide: no terminal error event at all. */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failed).toBeDefined();
+    /* itemFailureReason passes a non-lock error's message through verbatim — a reason STRING, no code. */
+    expect(failed?.errorReason).toBe(overflow.message);
+    expect(failed).not.toHaveProperty('code');
+    /* The run continues to the next character and ends idle with the failure listed. */
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'nova')).toBe(true);
+    expect(designSpy).toHaveBeenCalledTimes(1);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a design job marks no endpoint run, so VoiceDesign can still evict a same-card persona endpoint (#3084 P1)', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const conc = await import('../analyzer/analyzer-concurrency.js');
+    const mark = vi.spyOn(conc, 'markEndpointRunActive');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    expect(res.status).toBe(200);
+    expect(mark).not.toHaveBeenCalled();
+  });
+
+  it('variants-only run on a shared-GPU persona engine reports a persona-less designed character instead of dropping it', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const genSpy = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_marlow__angry', url: '/v/m.mp3' });
+
+    /* quill: base voice designed, voiceStyle empty. scope:variants gives the pre-pass no base task,
+       so nothing else would ever record it. marlow: designed base + persona, designs normally. */
+    const quill = { id: 'quill', name: 'Quill', role: 'supporting', color: 'sky', voiceId: 'v_quill', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_quill' } } };
+    const marlow = { id: 'marlow', name: 'Marlow', role: 'supporting', color: 'sky', voiceId: 'v_marlow', voiceStyle: 'a quick-witted young man', overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } } };
+    writeBookOnDisk([...characters, quill, marlow]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [
+          { characterId: 'quill', emotions: ['angry'] },
+          { characterId: 'marlow', emotions: ['angry'] },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const failed = events.filter((e) => e.type === 'character_failed' && e.characterId === 'quill');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].errorReason).toBeTruthy();
+    expect(genSpy).not.toHaveBeenCalled(); // no lazy persona-gen on the shared card
+    expect(designSpy).toHaveBeenCalledTimes(1); // only marlow designs
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('quill');
+    // Every character is accounted for: done + skipped + failed === total === characters.
+    expect((idle?.done ?? 0) + (idle?.skipped ?? 0) + (idle?.failures?.length ?? 0)).toBe(2);
+    expect(idle?.total).toBe(2);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('decides personaSharesGpu once per job: a mid-job flip cannot desync the pre-pass from the lazy skip', async () => {
+    /* First call (the job's one decision) says shared; any later call would say not shared and send
+       the loop down the lazy Gemini-style path — generating a persona with VoiceDesign resident. */
+    personaSharesGpuMock.mockReset();
+    personaSharesGpuMock.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const genSpy = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_quill__angry', url: '/v/q.mp3' });
+
+    const quill = { id: 'quill', name: 'Quill', role: 'supporting', color: 'sky', voiceId: 'v_quill', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_quill' } } };
+    writeBookOnDisk([...characters, quill]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'quill', emotions: ['angry'] }] });
+
+    expect(res.status).toBe(200);
+    expect(personaSharesGpuMock).toHaveBeenCalledTimes(1);
+    expect(genSpy).not.toHaveBeenCalled();
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'quill')).toBe(true);
+
     writeBookOnDisk(characters);
   });
 });
@@ -1712,7 +2050,7 @@ describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not
 
 describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
   it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
-    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaSharesGpuMock.mockReturnValue(false);
     personaMock.mockReset();
     personaMock.mockResolvedValueOnce('A brand new persona for hart.');
 

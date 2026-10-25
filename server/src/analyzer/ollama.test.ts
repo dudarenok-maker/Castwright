@@ -1394,30 +1394,45 @@ function mockChatResponse(text: string) {
   });
 }
 
-/* generatePersonaViaOllama shares OllamaTransport's wire path: it is the second
-   /api/chat call site and also carries ANALYZER_DISPATCHER (its `stream:false`
-   makes the 300s default even tighter — headers wait for the WHOLE
-   generation). So these drive the same undici fetchMock, not a global spy. */
-describe('generatePersonaViaOllama', () => {
+/* Persona generation's Ollama path (#3084 W4, spec §10): OllamaAnalyzer's runner free-text call,
+   which OllamaTransport serves with ONE non-streaming /api/chat call — the body that was
+   the former Ollama-only persona function (main 80be2f1d). It carries ANALYZER_DISPATCHER too (`stream:false`
+   withholds headers for the WHOLE generation), so these drive the same undici fetchMock as chat(). */
+describe('Ollama free-text (persona) call', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('GPU path: sends the caller keep_alive and leaves num_gpu unset', async () => {
+  async function freeText(
+    ollama: { onCpu?: boolean; keepAlive?: string | number },
+    model = 'qwen3.5:9b',
+  ): Promise<string> {
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    return new OllamaAnalyzer({ url: 'http://ollama.test', model }).runner.runFreeText({
+      prompt: 'PROMPT',
+      temperature: 0.2,
+      ollama,
+    });
+  }
+
+  it('GPU path: sends the caller keep_alive, leaves num_gpu unset, and keeps the persona wire shape', async () => {
     fetchMock.mockResolvedValue(mockChatResponse('A warm voice.'));
-    const { generatePersonaViaOllama } = await import('./ollama.js');
-    const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
+    const out = await freeText({ onCpu: false, keepAlive: '5m' });
     expect(out).toBe('A warm voice.');
+    expect(fetchMock.mock.calls[0][0]).toBe('http://ollama.test/api/chat');
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.keep_alive).toBe('5m');
     expect(body.stream).toBe(false);
     expect(body.format).toBeUndefined();
     expect(body.think).toBe(false);
     expect(body.options?.num_gpu).toBeUndefined(); // GPU path leaves num_gpu unset
+    /* No num_ctx / num_predict, and a single user turn with no system message — exactly main's persona body. */
+    expect(Object.keys(body.options).sort()).toEqual(['temperature']);
+    expect(body.options.temperature).toBe(0.2);
+    expect(body.messages).toEqual([{ role: 'user', content: 'PROMPT' }]);
   });
 
   it('CPU path: num_gpu:0, keep_alive:0', async () => {
     fetchMock.mockResolvedValue(mockChatResponse('A cool voice.'));
-    const { generatePersonaViaOllama } = await import('./ollama.js');
-    const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: true });
+    const out = await freeText({ onCpu: true });
     expect(out).toBe('A cool voice.');
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.options.num_gpu).toBe(0);
@@ -1428,17 +1443,34 @@ describe('generatePersonaViaOllama', () => {
     fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
     );
-    const { generatePersonaViaOllama, LocalUnreachableError } = await import('./ollama.js');
-    await expect(generatePersonaViaOllama('P', 'qwen3.5:9b', { onCpu: true })).rejects.toBeInstanceOf(
-      LocalUnreachableError,
+    const { LocalUnreachableError } = await import('./ollama.js');
+    await expect(freeText({ onCpu: true })).rejects.toBeInstanceOf(LocalUnreachableError);
+  });
+
+  it('a non-OK response is an AnalyzerHttpError carrying the pre-transport message text', async () => {
+    fetchMock.mockResolvedValue(new Response('boom', { status: 500, statusText: 'Internal Server Error' }));
+    const { AnalyzerHttpError } = await import('./errors.js');
+    const err = (await freeText({ onCpu: true }).catch((e: unknown) => e)) as InstanceType<typeof AnalyzerHttpError>;
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    expect(err.httpStatus).toBe(500);
+    expect(err.message).toBe('Ollama http://ollama.test returned 500 Internal Server Error: boom');
+  });
+
+  it('a length stop with only thinking is a reasoning overflow, not an empty persona', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ message: { content: '', thinking: 'weighing the voice…' }, done: true, done_reason: 'length' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
     );
+    const { AnalyzerReasoningOverflowError } = await import('./errors.js');
+    await expect(freeText({ onCpu: false })).rejects.toBeInstanceOf(AnalyzerReasoningOverflowError);
   });
 
   it('persona gen goes through the analyzer slot, keyed on its model (GPU path)', async () => {
     const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
     fetchMock.mockResolvedValue(mockChatResponse('A warm voice.'));
-    const { generatePersonaViaOllama } = await import('./ollama.js');
-    await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
+    await freeText({ onCpu: false, keepAlive: '5m' });
     expect(spy).toHaveBeenCalledWith('qwen3.5:9b', false);
     expect(conc.analyzerConcurrency.inFlight).toBe(0);
     spy.mockRestore();
@@ -1447,8 +1479,7 @@ describe('generatePersonaViaOllama', () => {
   it('persona gen on CPU takes the limiter but no GPU slot', async () => {
     const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
     fetchMock.mockResolvedValue(mockChatResponse('A cool voice.'));
-    const { generatePersonaViaOllama } = await import('./ollama.js');
-    await generatePersonaViaOllama('PROMPT', 'qwen3.5:4b', { onCpu: true });
+    await freeText({ onCpu: true }, 'qwen3.5:4b');
     expect(spy).toHaveBeenCalledWith('qwen3.5:4b', true); // onCpu forwarded → lease no-ops
     spy.mockRestore();
   });

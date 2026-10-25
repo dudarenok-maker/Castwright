@@ -1,4 +1,4 @@
-/* Gemini voice-style persona generator (plan 108, Wave 4 dependency).
+/* Voice-style persona generator (plan 108 Wave 4 dependency; engine choice #3084 W4, spec §10).
 
    Every cast member gets a short natural-language "voice style" persona —
    a Qwen voice-design `instruct` like:
@@ -10,33 +10,35 @@
    editable, durable seed of a character's designed voice.
 
    Locked decisions (user 2026-05-24):
-     (a) model is pinned to `gemini-3.1-flash-lite` (env-overridable via
-         `VOICE_STYLE_MODEL` for triage) — its own rate-limit bucket,
-         500 RPD on the free tier;
-     (b) ONE Gemini call PER CHARACTER — never batch multiple characters
-         into one prompt, so a persona can't be contaminated by a
-         neighbouring character's traits;
+     (a) the Gemini model is `analyzer.gemini.voiceStyleModel` (default
+         gemini-3.1-flash-lite, its own free-tier rate-limit bucket);
+     (b) ONE call PER CHARACTER — never batch multiple characters into one
+         prompt, so a persona can't be contaminated by a neighbour's traits;
      (c) the persona is derived from the character's FULL profile —
          gender, age, role, description, tone metrics, AND their collected
          dialogue evidence quotes (reusing `buildHintFromCast`).
 
-   Every call goes through the shared `geminiRateLimiter` so a generate-all
-   batch can't compound into a 429 storm — same discipline as the analyzer's
-   stage calls. A Gemini API key is required (same resolution as the
-   analyzer); we fail with a clear message when it's absent. */
+   `analyzer.personaGeneration.engine` picks `gemini`, `local` (Ollama) or an
+   OpenAI-compatible endpoint model (`openai:<endpointId>::<model>`). Every
+   engine runs through the analyzer's stage runner free-text path
+   (`StageRunner.runFreeText`) and its transport, so the limiter, endpoint
+   concurrency, GPU in-flight accounting and request ceilings apply exactly as
+   they do to analysis. There is NO cross-provider fallback: a missing key, a
+   down daemon, or a missing/unreachable endpoint fails with its own error. */
 
-import { GoogleGenAI } from '@google/genai';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
-import { loadKnownAnalyzerSecrets } from './known-secrets-gate.js';
-import { redactGeminiError } from './transports/gemini-transport.js';
-import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
-import { geminiRateLimiter } from './rate-limit.js';
-import { stripCodeFences } from './gemini.js';
+import { getCachedUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { getResolvedOllamaModel, getResolvedOllamaUrl } from '../config/ollama-resolved.js';
+import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { endpointsSharingDevice } from '../gpu/endpoint-eviction.js';
+import { GeminiAnalyzer, stripCodeFences } from './gemini.js';
+import { OllamaAnalyzer, resolveOllamaTemperature, PERSONA_ABSOLUTE_MAX_MS } from './ollama.js';
+import { OpenAIAnalyzer } from './openai.js';
+import { inferEngineFromModelId, parseEndpointModelId } from './model-id.js';
+import { AnalyzerEndpointMissingError } from './errors.js';
+import type { StageRunner } from './runner/stage-runner.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
-import { generatePersonaViaOllama, PERSONA_ABSOLUTE_MAX_MS } from './ollama.js';
-import { inferEngineFromModelId } from './model-id.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
@@ -61,9 +63,45 @@ export function resolveVoiceStyleModel(): string {
   return configValue<string>('analyzer.gemini.voiceStyleModel');
 }
 
-/** Persona generation provider — `local` (Ollama) or `gemini`. Default gemini. */
-export function resolvePersonaEngine(): 'local' | 'gemini' {
-  return configValue<string>('analyzer.personaGeneration.engine') === 'local' ? 'local' : 'gemini';
+/** The persona engine selection, from `analyzer.personaGeneration.engine` (pattern-validated:
+    `local`, `gemini`, or `openai:<endpointId>::<model>`). */
+export type PersonaSelection =
+  | { engine: 'local'; model: string }
+  | { engine: 'gemini'; model: string }
+  | { engine: 'openai'; endpointId: string; model: string };
+
+export function resolvePersonaSelection(): PersonaSelection {
+  const value = configValue<string>('analyzer.personaGeneration.engine');
+  if (value === 'local') return { engine: 'local', model: resolvePersonaLocalModel() };
+  const endpointModel = parseEndpointModelId(value);
+  if (endpointModel) return { engine: 'openai', endpointId: endpointModel.endpointId, model: endpointModel.model };
+  return { engine: 'gemini', model: resolveVoiceStyleModel() };
+}
+
+function findEndpoint(endpointId: string): AnalyzerEndpoint | undefined {
+  return getCachedUserSettings().analyzerEndpoints.find((e) => e.id === endpointId);
+}
+
+/** True when the persona call can land on the card the Qwen VoiceDesign model uses — the condition
+    under which cast design must generate personas BEFORE VoiceDesign loads (plan 108) and
+    preparePersonaBatch must plan the GPU:
+      - local Ollama: always (the rule before #3084);
+      - gemini: never;
+      - an endpoint: W3d's endpointsSharingDevice against Qwen's pinned `cuda:N` (`any` shares every card); a Qwen device that names no
+        single card (`auto`, `cuda`, an unreconciled `cuda-uuid:`) fails closed; `cpu`/`mps` never share;
+        `gpu: 'none'` never shares; an endpoint id missing from settings fails closed. */
+export function personaSharesGpu(): boolean {
+  const selection = resolvePersonaSelection();
+  if (selection.engine === 'local') return true;
+  if (selection.engine === 'gemini') return false;
+  const endpoint = findEndpoint(selection.endpointId);
+  if (!endpoint) return true;
+  if (endpoint.gpu === 'none') return false;
+  const qwenDevice = configValue<string>('tts.qwen.device').trim().toLowerCase();
+  if (qwenDevice === 'cpu' || qwenDevice === 'mps') return false;
+  if (!/^cuda:\d+$/.test(qwenDevice)) return true;
+  /* W3d's same-card rule, not a second copy of it: `any` shares every card, otherwise the exact device key. */
+  return endpointsSharingDevice([endpoint], qwenDevice).length > 0;
 }
 
 /** Ollama model for the local persona path. Blank ⇒ inherit the analyzer's
@@ -168,77 +206,65 @@ export function cleanPersona(raw: string): string {
   return s;
 }
 
-/** Generate a voice-style persona for ONE character.
-    Dispatches to the local Ollama path (`PERSONA_GEN_ENGINE=local`) or the
-    Gemini path (default). The optional `opts` are forwarded to the local
-    branch only; existing callers that pass no opts remain backward-compatible.
+const GEMINI_KEY_REQUIRED =
+  'GEMINI_API_KEY is required to generate voice-style personas. ' +
+  'Set it in Admin → Model Manager → Gemini API key, ' +
+  'or in server/.env for CI / power users.';
 
-    - local  → generateViaOllama (never touches Gemini; throws LocalUnreachableError
-                when the daemon is down — NO silent Gemini fallback).
-    - gemini → generateViaGemini (existing inline Google-GenAI code, verbatim;
-                retains geminiRateLimiter.acquire to prevent 429 storms). */
+/* Build the analyzer for the selected engine and hand back its stage runner. Every selection error
+   (no Gemini key, endpoint missing, key stored for another origin) throws HERE, before any prompt is
+   built or any request is sent. */
+function personaRunner(selection: PersonaSelection): StageRunner {
+  switch (selection.engine) {
+    case 'local':
+      return new OllamaAnalyzer({ url: getResolvedOllamaUrl(), model: selection.model }).runner;
+    case 'gemini': {
+      const apiKey = getResolvedGeminiApiKey();
+      if (!apiKey) throw new Error(GEMINI_KEY_REQUIRED);
+      return new GeminiAnalyzer({ apiKey, model: selection.model }).runner;
+    }
+    case 'openai': {
+      const settings = getCachedUserSettings();
+      const endpoint = settings.analyzerEndpoints.find((e) => e.id === selection.endpointId);
+      if (!endpoint) throw new AnalyzerEndpointMissingError(selection.endpointId, 'persona');
+      /* W3b's resolver: throws AnalyzerKeyOriginError for a key bound to another origin, before any request exists. */
+      const apiKey = resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl);
+      return new OpenAIAnalyzer({ endpoint, apiKey, model: selection.model }).runner;
+    }
+  }
+}
+
+/** Generate a voice-style persona for ONE character through the selected engine.
+    `opts` places the LOCAL (Ollama) call only — CPU vs GPU and its keep_alive window, from
+    preparePersonaBatch; the Gemini and endpoint transports ignore it.
+    - local  → Ollama non-streaming call; LocalUnreachableError when the daemon is down.
+    - gemini → Gemini through the limiter; a clear error when no key resolves.
+    - openai → the endpoint through its transport; AnalyzerEndpointMissingError /
+               AnalyzerKeyOriginError before any call, AnalyzerUnreachableError when it is down.
+    `opts.signal` aborts the call on every engine (the design job passes its own).
+    Every engine is bounded by PERSONA_ABSOLUTE_MAX_MS, applied by its transport as
+    min(its request ceiling, this) (#3725, owner decision 4.3-B1); that ceiling is terminal.
+    Never falls back to another engine. */
 export async function generateVoiceStylePersona(
   character: CastCharacter,
-  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+  opts: { onCpu?: boolean; keepAlive?: string | number; signal?: AbortSignal } = {},
 ): Promise<string> {
-  const engine = resolvePersonaEngine();
-  return engine === 'local' ? generateViaOllama(character, opts) : generateViaGemini(character);
-}
-
-async function generateViaOllama(
-  character: CastCharacter,
-  opts: { onCpu?: boolean; keepAlive?: string | number },
-): Promise<string> {
-  const model = resolvePersonaLocalModel();
+  const selection = resolvePersonaSelection();
+  const runner = personaRunner(selection);
   const prompt = await buildVoiceStylePrompt(character);
-  const persona = cleanPersona(await generatePersonaViaOllama(prompt, model, opts));
-  if (!persona) {
-    throw new Error(`Voice-style generation for "${character.id}" returned an empty persona.`);
-  }
-  return persona;
-}
-
-/* generateViaGemini = the previous generateVoiceStylePersona body, unchanged:
-   getResolvedGeminiApiKey() guard → resolveVoiceStyleModel() → buildVoiceStylePrompt
-   → geminiRateLimiter.acquire(model, estTokens) → GoogleGenAI generateContent
-   → cleanPersona → empty-persona guard. MUST retain geminiRateLimiter.acquire. */
-async function generateViaGemini(character: CastCharacter): Promise<string> {
-  const apiKey = getResolvedGeminiApiKey();
-  if (!apiKey) {
-    throw new Error(
-      'GEMINI_API_KEY is required to generate voice-style personas. ' +
-        'Set it in Admin → Model Manager → Gemini API key, ' +
-        'or in server/.env for CI / power users.',
-    );
-  }
-
-  const model = resolveVoiceStyleModel();
-  const prompt = await buildVoiceStylePrompt(character);
-  /* Token estimate for the limiter — ~chars/4 plus a flat ceiling margin,
-     same heuristic as the analyzer's estimateInputTokens. */
-  const estTokens = Math.ceil(prompt.length / 4) + 200;
-
-  await geminiRateLimiter.acquire(model, estTokens);
-
-  const client = new GoogleGenAI({ apiKey });
-  let response;
-  try {
-    response = await client.models.generateContent({
-      model,
-      contents: prompt,
-      /* #3724 — bound the call locally: from @google/genai 2.29 the SDK no
-         longer inherits Node's 300 s undici timeout, so without this only
-         Google's server-side limit applies. Same ceiling as the local persona
-         path (generatePersonaViaOllama). */
-      config: { httpOptions: { timeout: PERSONA_ABSOLUTE_MAX_MS } },
-    });
-  } catch (err) {
-    /* #3084 P22 — a saved secret an upstream error echoes never reaches the
-       caller; with no secret the same error object is rethrown. */
-    throw redactGeminiError(err, await loadKnownAnalyzerSecrets());
-  }
-
-  const persona = cleanPersona(response.text ?? '');
+  const raw = await runner.runFreeText(
+    selection.engine === 'local'
+      ? {
+          prompt,
+          signal: opts.signal,
+          absoluteMaxMs: PERSONA_ABSOLUTE_MAX_MS,
+          /* Main's persona call sent the analyzer's first-attempt temperature to Ollama and none to Gemini. */
+          temperature: resolveOllamaTemperature(),
+          ollama: { onCpu: opts.onCpu, keepAlive: opts.keepAlive },
+        }
+      : { prompt, signal: opts.signal, absoluteMaxMs: PERSONA_ABSOLUTE_MAX_MS },
+  );
+  const persona = cleanPersona(raw);
   if (!persona) {
     throw new Error(`Voice-style generation for "${character.id}" returned an empty persona.`);
   }

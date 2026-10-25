@@ -5157,8 +5157,7 @@ components:
             language has no sidecar mapping — checked before the stream
             produces any progress) / `lock-contention` (a cast-lock
             acquisition on this backstop's own path timed out — #2260) /
-            `unknown` (defensive catch-all for any other unexpected throw
-            escaping the design loop).
+            any other throw escaping the design loop — a whole-job persona-engine failure included — carries its analysis `FailureCode` (#3084 W4: `auth`, `analyzer-endpoint-missing`, `analyzer-timeout`, …), and `unknown` when the taxonomy recognises nothing. A per-character persona failure does not escape the loop and is reported as `character_failed` instead.
         total: { type: integer }
         done: { type: integer }
         skipped:
@@ -5191,8 +5190,10 @@ components:
           description: character_skipped only — present exactly when the skip is the clone-protection guard; absent for every other skip cause.
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
-          type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+          anyOf:
+            - type: string
+              enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+            - $ref: '#/components/schemas/FailureCode'
           description: |
             error only — machine-readable whole-run abort reason.
             `language_unset` (Task 6, #2246) fires when the book never

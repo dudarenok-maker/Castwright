@@ -8,13 +8,18 @@
    designAllRequested pipeline. */
 
 import { useAppDispatch, useAppSelector } from '../store';
+import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { IconWarning, IconClose } from '../lib/icons';
 import { notificationsActions, type Toast } from '../store/notifications-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { designWillGeneratePersona } from '../lib/design-persona';
 
 export function VoiceNudgeToast({ toast }: { toast: Toast }) {
   const dispatch = useAppDispatch();
   const designRunning = useAppSelector((s) => s.castDesign.active?.state === 'running');
+  const characters = useAppSelector((s) => s.cast?.characters);
+  /* #3084 W4 — asks first when the persona engine shares a rendering card; the toast is sticky, so it renders the dialog. */
+  const { guard: designGuard, modal: designGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
   const nudge = toast.nudge!;
   const count = nudge.characterIds.length;
   const label = count > 1 ? 'Design all' : 'Design now';
@@ -24,15 +29,20 @@ export function VoiceNudgeToast({ toast }: { toast: Toast }) {
       : `New character «${nudge.names[0]}» needs a voice`;
 
   const onDesign = () => {
-    dispatch(
-      castDesignActions.designAllRequested({
-        bookId: nudge.bookId,
-        characterIds: nudge.characterIds,
-        modelKey: nudge.modelKey,
-        scope: 'bases',
-      }),
-    );
-    dispatch(notificationsActions.dismissToast(toast.id));
+    const proceed = () => {
+      dispatch(
+        castDesignActions.designAllRequested({
+          bookId: nudge.bookId,
+          characterIds: nudge.characterIds,
+          modelKey: nudge.modelKey,
+          scope: 'bases',
+        }),
+      );
+      dispatch(notificationsActions.dismissToast(toast.id));
+    };
+    /* Asks only when a voice description is about to be written (the server skips a character that has one). */
+    if (designWillGeneratePersona(characters, nudge.characterIds)) designGuard(proceed);
+    else proceed();
   };
 
   return (
@@ -62,6 +72,7 @@ export function VoiceNudgeToast({ toast }: { toast: Toast }) {
           <span className="text-xs text-ink/55">A voice design is already running…</span>
         )}
       </div>
+      {designGuardModal}
     </div>
   );
 }
