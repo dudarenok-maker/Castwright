@@ -500,6 +500,46 @@ recite:
     compared before the write, or the fill held under the writer's lock)?
     Then test by gating the fill between its read and its write, landing the
     invalidation, releasing, and asserting the cache holds the new value.
+43. **Client-side retention of a full-slice snapshot replayed after writes the
+    client never sees — each bookkeeping fix opens the next gap** — PR #3775
+    pass 5 (#3421 / #3784, plan 289): a failed save was kept and re-sent as a
+    whole-slice snapshot at an arbitrary later time, with a growing set of
+    per-field "seen / landed / superseded / parked" records to decide whether
+    the replay was still safe. Other writers (Library Edit, voice override,
+    another tab), a re-parse or re-import, and a request whose outcome the
+    client never learned (a lost response) all move the book without the
+    client seeing, so every record that closed one gap named a new one (N5 to
+    N8). The remedy was a server-side precondition (per-field revision tokens
+    checked inside the write's own lock span), not more client state.
+    Checkable: for any client structure that holds a write for later, list
+    every writer of the same data that does not pass through it, and ask what
+    the replay does after each; if the answer depends on the client having
+    observed the write, the check belongs on the server. Test by landing that
+    writer between the failure and the replay and asserting the replay is
+    refused and the newer value stands.
+44. **Two outcomes gated on independent conditions that leave a third case with
+    neither** — PR #3775 pass 6, P6-1 (#3784, `persistence-middleware.ts`):
+    a failed book-details save was rolled back only if the book was still
+    open, and kept only if the failure was retryable (not a 4xx). A 4xx that
+    arrived after the user left the book met neither condition, so `saved`
+    kept claiming the refused title while the toast said the save failed.
+    Checkable: for each failure path, write the table of the conditions the
+    outcomes are gated on (here open/left x retryable/refused) and confirm
+    every cell lands in exactly one outcome, not zero; then test each cell,
+    especially the one reached only by an unusual ordering (refused after
+    leaving).
+45. **A restore or import path that carries back the salt or epoch the design
+    relies on rotating** — PR #3775 pass 6, P6-2b (#3784,
+    `auto-backup.ts` `restoreBackup`): a token scheme salted with a per-book
+    `editEpoch` that every wiping writer rotates. A backup restore wrote the
+    snapshot's whole `state.json` (`{ ...parsed, ... }`), bringing the old
+    epoch back, so tokens from before an intervening re-parse matched again
+    and a kept `castConfirmed: true` replayed onto a book with no cast.
+    Checkable: for every server-owned salt, epoch, nonce or version, list
+    each writer that replaces the file holding it wholesale (restore, import,
+    bundle overwrite, sync) and confirm each mints a fresh one rather than
+    spreading the incoming copy; test by restoring a snapshot taken before a
+    rotation and asserting the epoch differs from the snapshot's.
 
 ### Keeping the catalogue current
 
