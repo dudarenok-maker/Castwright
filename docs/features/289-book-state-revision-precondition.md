@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 289 — Book-state revision precondition: a stale save is refused, not replayed (srv-97, #3784)
 
-> Status: draft (design of record; owner decisions OD1–OD6 below are open)
+> Status: active (ships with PR #3775; owner decisions OD1–OD6 answered 2026-10-25, see Ship notes)
 > Key files: `server/src/routes/book-state.ts` (`PUT` / `GET /:bookId/state`, `applyReparse`), new `server/src/workspace/slice-revision.ts`, `server/src/routes/import.ts`, `server/src/import/scan-import-folder.ts`, `server/src/routes/analysis.ts` (Start fresh), `openapi.yaml`, `src/lib/types.ts`, `src/lib/api.ts`, `src/store/persistence-middleware.ts`, `src/components/layout.tsx`, `src/routes/index.tsx`, `src/hooks/use-language-guard.tsx`
 > URL surface: indirect (the book-open hydrate and every autosave)
 > OpenAPI ops: `GET /api/books/{bookId}/state`, `PUT /api/books/{bookId}/state`
@@ -30,7 +30,7 @@ The full argument is in pass 5 (PR #3775, comment 6389974661).
 
 ## Decisions
 
-Decisions with more than one defensible outcome that the owner has a stake in are marked **OD** and carry a recommendation. Nothing is implemented until they are answered.
+Decisions with more than one defensible outcome that the owner has a stake in are marked **OD** and carry a recommendation. All were answered on 2026-10-25 (see Ship notes).
 
 ### D1 — Granularity — OD1
 
@@ -120,7 +120,7 @@ The **analysis `changeLog.json` append is unlocked** (`analysis.ts` ~`:528`) and
   - the edits before they are reassigned (~`:529-532`);
   - `state`, not `stateView` (~`:788-794`).
 
-  `BookStateResponse` is hand-modelled (`src/lib/types.ts` ~`:441`, `openapi.yaml` ~`:4033`), so add `sliceRevisions` there as well as in the schema.
+  `BookStateResponse` is hand-modelled (`src/lib/types.ts` ~`:441`, `openapi.yaml` ~`:9367`), so add `sliceRevisions` there as well as in the schema.
 - **`PUT` body adds an optional `baseRevision: SliceRevision`.** If it is absent, the write is unconditional: today's behaviour, which also serves an old tab and a write with no known base.
 - **No-op rule.** The value compared for each field is the server's **post-merge, post-transform** value:
   - `state`: the `buildNext(fresh)` output;
@@ -396,4 +396,36 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Ships with PR #3775 (branch `fix/frontend-3421-flush-retry`); closes #3421, #3755 and #3784. Status stays `active` until the PR merges; the merge SHA is added when it flips to `stable`.
+
+### What was built
+
+- **Server:** `server/src/workspace/slice-revision.ts` (pure tokens and `staleFields`); `state.json.editEpoch`, minted by both import paths and rotated by re-parse, replace and Start fresh; `GET /state` returns `sliceRevisions`; `PUT /state` takes an optional `baseRevision`, checks it inside each slice's existing lock span, answers `200 { revision }` and refuses a stale field with 409 `stale_revision` (fixed, path-free sentence). No new lock class.
+- **Contract:** `openapi.yaml`, `src/lib/api-types.ts`, the hand-modelled `BookStateResponse` / `PutStateRequest`, `realPutBookState` / `mockPutBookState` parity.
+- **Client:** a `known` map and a `kept` record (`{ patch, base, onSuccess? }`) in `persistence-middleware.ts`; conditional re-sends; a stale refusal toasts, is not kept and not rolled back, and marks the book for a full re-read (set by the middleware, `onEditBook` and the language guard). The park/restore machinery (`parked`, `sending`, `pendingWipes`, `retainedGen`, `supersedeBookSaves`, `restoreSupersededSaves`, `wipeSettled`) was deleted in 8b9e64f3.
+
+### Deviations from the plan as written
+
+- **`GET /state` reads the state tokens via a fresh read** of `state.json` rather than from the `book.state` resolved earlier.
+- **Start fresh always writes `state.json`**, so the epoch is always rotated.
+- **`canonicalJson` is kept separate from user-settings' `canonicalStringify`.** The two differ on `undefined` by design, so the existing helper was not reused (the plan's "grep for an existing stable-stringify helper" found it and ruled it out).
+- **The older-200 refresh skips kept-carrying sequences.** D6's refresh of an in-flight sequence's base from an older same-key 200 does not touch a sequence whose patch has a kept patch merged in, which carries the kept base on purpose.
+- **N6 and N7 are route-level tests** (`src/routes/index.test.tsx`), not middleware-level, because the sequences span the Library handlers and their wipe RPCs. Red at 5ec7178c, per the accepted acceptance adjustment.
+- **`sliceRevisions` is optional in the TS `BookStateResponse`.**
+- **The mock has no Start-fresh epoch rotation.** Its re-parse, replace and import do rotate it.
+- **The changeLog lock (79fecfca).** The plan listed the unlocked analysis `changeLog.json` append under Out of scope. It is now fixed in this PR: the analysis carried-forward append and the re-parse append take the per-book `book` lock around their read -> write, and the slice PUT's changeLog check and write takes the same lock, so an append cannot land between the PUT's read and write. The lock order is unchanged.
+- **Merged kept fields (f559c156, found in passing).** `confirmCast` and `commitDraft` replace each other's queued `state` patch, so a second `state` build in the same debounce window dropped the kept fields while the kept base still rode along. Every build now merges the kept patch the queued send carries, newer fields winning.
+
+### Post-plan owner decisions (2026-10-25)
+
+OD1–OD6 were all accepted as recommended (comment on #3784). Three more followed from Task 5 and from merging #3782:
+
+1. **Queued `state` edits combine** (6c002345). `confirmCast` and `commitDraft` are merged instead of replacing each other; for each field the newest value wins, as on every other slice. This supersedes D1's note that they replace each other last-wins.
+2. **A rolled-back save keeps the older edit it carried** (a304ae55). When a state save that carried a merged kept edit gives up and is rolled back while the book is open, only its own new edit is rolled back; the carried edit goes back into the kept slot with its base and is re-sent next time, and the server refuses it if the book has moved on.
+3. **A book-meta save that finally fails after the user left the book is kept and re-sent,** not rolled back, whether the user is on the Library or in another book (f8871b1a, the merge of #3782 into this branch). The revision check refuses it if the book changed meanwhile. #3782's guarantees stay (a draft is never shown in another book; opening a different book clears the draft); its test (e) assertion on `saved.B` flipped to match.
+
+The acceptance adjustment (N6 and N7 count as proved when red at 5ec7178c) was also confirmed by the owner.
+
+### Not owed
+
+No on-box acceptance and no e2e (see the Test plan).
