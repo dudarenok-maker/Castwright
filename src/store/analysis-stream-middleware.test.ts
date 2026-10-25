@@ -1203,6 +1203,24 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 
+  it('#3774 — the restored snapshot keeps the include origin the server reports (and none when it reports none)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, subsetOrigin: 'include' as const });
+    lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+    await settle();
+    expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', subsetOrigin: 'include' });
+
+    const store2 = buildStore();
+    store2.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store2.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce(serverSubset);
+    lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+    await settle();
+    expect(store2.getState().analysis.activeStream?.subsetOrigin).toBeUndefined();
+  });
+
   it('a chapters_restructuring refusal is quiet too: no halt, no toast, snapshot restored from the server', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));

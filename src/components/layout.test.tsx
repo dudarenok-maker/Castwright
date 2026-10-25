@@ -56,6 +56,7 @@ const restorePreviousUnrecordedMock = vi.fn();
 const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
+const getAnalysisStateMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -81,7 +82,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
-      getAnalysisState: vi.fn(async () => null),
+      getAnalysisState: (...args: unknown[]) => getAnalysisStateMock(...args),
       /* Workspace-wide cold-boot scan. Layout's mount
          effect calls this; return empty so no pill seeds. */
       getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
@@ -202,6 +203,7 @@ import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
+import { analysisActions } from '../store/analysis-slice';
 import { RevisionOpFailure } from '../lib/revision-op-failure';
 import { bookMetaActions } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
@@ -314,6 +316,8 @@ function makeStoreWithScopeAndPersistence() {
 }
 
 beforeEach(() => {
+  getAnalysisStateMock.mockReset();
+  getAnalysisStateMock.mockResolvedValue(null);
   getBookStateMock.mockReset();
   pollRevisionsMock.mockReset();
   pollRevisionsMock.mockResolvedValue({ pending: [], drift: [] });
@@ -734,6 +738,106 @@ describe('Layout — revisions hydrate (plan 286)', () => {
     const pill = screen.queryByTestId('status-pill');
     if (pill && !screen.queryByTestId('status-popover-revisions')) fireEvent.click(pill);
     expect(screen.queryByText(/revisions? pending/)).toBeNull();
+  });
+});
+
+/* #3774 H' -- the include origin lives on the SERVER (the include's start POST
+   carries it; GET /analysis/state reports it for the live run), because the client
+   snapshot is rebuilt from that answer on every arrival at a book the manuscript
+   slice does not hold: a book switch, a reload, a second tab. The block on the
+   Generate view's job-start controls reads `subsetOrigin === 'include'` off that
+   snapshot (generation.test.tsx pins the view side). */
+describe('Layout -- the analysis hydrate keeps the include origin (#3774)', () => {
+  const liveSubset = (over: Record<string, unknown> = {}) => ({
+    manuscriptId: 'mns_bA', phaseId: 1, phaseLabel: 'server label', phaseProgress: 0.4, state: 'running',
+    kind: 'subset', subsetChapterIds: [3], subsetOrigin: 'include', lastTickAt: Date.now(), ...over,
+  });
+  const snapshotOf = (store: ReturnType<typeof makeStore>) => store.getState().analysis.activeStream;
+  const bookReads = () => getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, revState(id, null, 0, [])));
+
+  it('a fresh hydrate (a reload, a second tab) copies the server\'s subsetOrigin into the snapshot', async () => {
+    bookReads();
+    getAnalysisStateMock.mockResolvedValue(liveSubset());
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', subsetOrigin: 'include' }));
+  });
+
+  it('a REAL book switch away and back replaces the snapshot with the server\'s, origin kept', async () => {
+    bookReads();
+    getAnalysisStateMock.mockImplementation(async (id: string) => (id === 'bA' ? liveSubset() : null));
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.subsetOrigin).toBe('include'));
+    /* what the Generate view's own include start left in the slot */
+    act(() => {
+      store.dispatch(analysisActions.setActiveStream({
+        bookId: 'bA', manuscriptId: 'mns_bA', phaseId: 0, phaseLabel: 'client label', phaseProgress: 0, remainingMs: null,
+        lastTickAt: Date.now(), state: 'running', kind: 'subset', subsetChapterIds: [3], subsetOrigin: 'include',
+      }));
+    });
+    openAt(store, 'bB');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('bB')); // bB's full load landed: the slice no longer holds bA
+    expect(snapshotOf(store)?.phaseLabel).toBe('client label'); // bB has no analysis, so the slot is untouched
+    openAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.phaseLabel).toBe('server label')); // replaced by the hydrate
+    expect(snapshotOf(store)).toMatchObject({ bookId: 'bA', kind: 'subset', state: 'running', subsetOrigin: 'include' });
+  });
+
+  it('a server answer for a re-analyse run carries subsetOrigin reanalyse', async () => {
+    bookReads();
+    getAnalysisStateMock.mockResolvedValue(liveSubset({ subsetOrigin: 'reanalyse' }));
+    const store = makeStore();
+    openAt(store, 'bA');
+    renderLayoutAt(store, 'bA');
+    await waitFor(() => expect(snapshotOf(store)?.subsetOrigin).toBe('reanalyse'));
+  });
+
+  /* Second-tab wedge: the tab that started the include closed mid-run, so nothing ever clears
+     the other tab's broadcast copy. A hydrate that finds NO live subset run clears it -- but
+     only a copy that has gone quiet (a live run's snapshot is ticked every few seconds), so a
+     book switch in the window between the click and the server registering the job cannot
+     drop the include's own fresh snapshot. */
+  describe('a hydrate that reports no live subset run', () => {
+    const includeSnapshot = (lastTickAt: number) => ({
+      bookId: 'bA', manuscriptId: 'mns_bA', phaseId: 0, phaseLabel: 'mirrored', phaseProgress: 0, remainingMs: null,
+      lastTickAt, state: 'running' as const, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const,
+    });
+    const arriveWith = async (snap: ReturnType<typeof includeSnapshot>, serverAnswer: unknown) => {
+      bookReads();
+      getAnalysisStateMock.mockResolvedValue(serverAnswer);
+      const store = makeStore();
+      store.dispatch(analysisActions.setActiveStream(snap));
+      openAt(store, 'bA');
+      renderLayoutAt(store, 'bA');
+      await waitFor(() => expect(getAnalysisStateMock).toHaveBeenCalledWith('bA'));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      return store;
+    };
+
+    it('clears a stale (quiet) include snapshot for this book when the server has nothing', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now() - 60_000), null);
+      expect(snapshotOf(store)).toBeNull();
+    });
+
+    it('clears it when the server reports a paused run on a confirmed book (the cold-boot gate returns early)', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now() - 60_000), liveSubset({ state: 'paused' }));
+      expect(snapshotOf(store)).toBeNull();
+    });
+
+    it('keeps a fresh include snapshot (the click-to-registration window)', async () => {
+      const store = await arriveWith(includeSnapshot(Date.now()), null);
+      expect(snapshotOf(store)).toMatchObject({ subsetOrigin: 'include', phaseLabel: 'mirrored' });
+    });
+
+    it('never touches another book\'s snapshot or a non-include one', async () => {
+      const other = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), bookId: 'bZ' }, null);
+      expect(snapshotOf(other)).toMatchObject({ bookId: 'bZ' });
+      const reanalyse = await arriveWith({ ...includeSnapshot(Date.now() - 60_000), subsetOrigin: 'reanalyse' as never }, null);
+      expect(snapshotOf(reanalyse)).toMatchObject({ subsetOrigin: 'reanalyse' });
+    });
   });
 });
 

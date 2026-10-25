@@ -50,6 +50,15 @@ describe('analysisEngine / analysisGpu reach onPhase over the real SSE wire', ()
     expect(phases[1]).toMatchObject({ analysisEngine: 'local', analysisGpu: 'cuda:0' });
   });
 
+  it('realRunAnalysisForChapters sends the start origin in the POST body (#3774)', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(sseResponse([RESULT_FRAME])).mockResolvedValueOnce(sseResponse([RESULT_FRAME]));
+    await api.runAnalysisForChapters('mns-1', [1], { origin: 'include' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({ chapterIds: [1], origin: 'include' });
+    await api.runAnalysisForChapters('mns-1', [1]);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).origin).toBeUndefined();
+  });
+
   it('an unrecognised engine value is dropped, not trusted', async () => {
     const { api } = await import('./api');
     fetchMock.mockResolvedValueOnce(

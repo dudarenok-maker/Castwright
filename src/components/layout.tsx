@@ -1021,7 +1021,29 @@ export function Layout() {
           api
             .getAnalysisState(bookId)
             .then((snap) => {
-              if (cancelled || !snap) return;
+              if (cancelled) return;
+              /* #3774 — the server reports no live subset run for this book, so an
+                 include-origin snapshot for it is a stale copy to drop: the tab that
+                 started the include closed mid-run and nothing else ever clears the
+                 broadcast mirror, which would keep the Generate view's job-start
+                 controls disabled until a reload. Only a copy that has gone quiet
+                 (a live run's snapshot is ticked every few seconds): a book switch
+                 between the click and the server registering the job must not drop
+                 the include's own fresh snapshot. */
+              if (!(snap?.kind === 'subset' && snap.state === 'running')) {
+                const held = store.getState().analysis.activeStream;
+                if (
+                  held &&
+                  held.bookId === bookId &&
+                  held.kind === 'subset' &&
+                  held.state === 'running' &&
+                  held.subsetOrigin === 'include' &&
+                  Date.now() - held.lastTickAt > STALL_THRESHOLD_MS
+                ) {
+                  dispatch(analysisActions.clearActiveStream());
+                }
+              }
+              if (!snap) return;
               /* Don't resurrect a stale/terminal analysis pill for a book whose
                  cast is already confirmed — a lingering paused/halted snapshot
                  from an aborted or displaced run must not present a clickable
@@ -1049,6 +1071,12 @@ export function Layout() {
                    phase label. */
                   kind: snap.kind,
                   subsetChapterIds: snap.subsetChapterIds,
+                  /* #3774 — the server's record of what started the run. This
+                     hydrate replaces the snapshot on every arrival at a book the
+                     manuscript slice does not hold (a book switch, a reload, a
+                     second tab); without it the Generate view's include
+                     job-start block is lost. */
+                  subsetOrigin: snap.subsetOrigin,
                 }),
               );
             })

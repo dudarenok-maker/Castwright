@@ -320,6 +320,10 @@ export interface AnalyseOpts {
       "Accept smaller roster" button; clicking re-fires the request
       with this flag set, which bypasses the gate for that attempt. */
   allowStage1Shrink?: boolean;
+  /** Subset route only (#3774): what is starting the run. The server keeps it on the
+      job and reports it on `GET /analysis/state`, so a client that rebuilds its
+      snapshot keeps the include-origin block. Absent = a re-analyse. */
+  origin?: 'include' | 'reanalyse';
 }
 export interface MatchArgs {
   bookId: string;
@@ -5801,6 +5805,7 @@ async function realRunAnalysisForChapters(
     onWarning,
     model,
     allowStage1Shrink,
+    origin,
   }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   const res = await fetch(
@@ -5808,7 +5813,7 @@ async function realRunAnalysisForChapters(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapterIds, model, allowStage1Shrink }),
+      body: JSON.stringify({ chapterIds, model, allowStage1Shrink, origin }),
       signal,
     },
   );
