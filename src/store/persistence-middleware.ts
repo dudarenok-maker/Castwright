@@ -709,9 +709,11 @@ export const persistenceMiddleware: Middleware = (store) => {
              the fields a rollback restores (the user's draft is restored for
              them to save again). A save that gave up WITHOUT rolling back has
              no draft left, so it is kept and re-sent. A save that rolled back
-             keeps its other fields (#3784), with the base they were sent with
-             and the carried kept save's success handler: the screen still
-             shows them, and the server refuses them if the book moved on. */
+             keeps its other fields (#3784), with the base they were sent with:
+             the screen still shows them, and the server refuses them if the
+             book moved on. They keep no success handler: the rollback already
+             cleared the snapshot it would prune, and the next commit that
+             makes a new one takes this save with its own handler. */
           /* A field an older superseded send left behind (P6-4) is kept with it. */
           if (!refused && !rolledBack) {
             kept.set(
@@ -723,7 +725,7 @@ export const persistenceMiddleware: Middleware = (store) => {
               Object.entries(patch as Record<string, unknown>).filter(([f]) => !ownFields?.has(f)),
             );
             if (Object.keys(rest).length > 0) {
-              kept.set(key, mergeSaves(kept.get(key), { patch: rest, base: seq.base, onSuccess: carried?.onSuccess }));
+              kept.set(key, mergeSaves(kept.get(key), { patch: rest, base: seq.base }));
             }
           }
           if (handler && own) {
