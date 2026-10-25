@@ -2757,6 +2757,23 @@ describe('Layout — empty book-state read after another book resets the slices 
     expect(store.getState().manuscript).toMatchObject({ manuscriptId: 'm-up', sourceText: 'abc', bookId: null });
     expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['up-hero']);
   });
+
+  it('(e) does not reset when the slices already hold the book being opened', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' } as never,
+        sentences: [{ id: 1, chapterId: 1, text: 'A-ONLY' }] as never,
+      }),
+    );
+    /* Cast left empty on purpose: a confirm-stage book with no cast is not
+       "ready", so the full load runs (and reads null) even though the
+       slices already hold A. */
+    await openEmptyA(store);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.getState().manuscript.bookId).toBe('b1');
+    expect(store.getState().manuscript.sentences.map((s) => s.text)).toEqual(['A-ONLY']);
+  });
 });
 
 describe('Layout — config hydration on mount (#3084 P13)', () => {
