@@ -101,6 +101,23 @@ import { assertNoTrustProxy } from './lan-safety.js';
 export const app = express();
 assertNoTrustProxy(app);
 
+/* #3790 — body-parser 2.4 decodes `Content-Encoding: zstd`, and the body limit
+   caps decoded output, not the decoder window: a tiny frame declaring a huge
+   window commits ~131 MB per request, pre-auth. ALLOWLIST the encodings before
+   any body parser (the /api/pair per-route parsers included) can see them. */
+const ALLOWED_CONTENT_ENCODINGS = new Set(['identity', 'gzip', 'deflate', 'br']);
+app.use((req, res, next) => {
+  const header = req.headers['content-encoding'];
+  if (
+    header === undefined ||
+    header.split(',').every((coding) => ALLOWED_CONTENT_ENCODINGS.has(coding.trim().toLowerCase()))
+  ) {
+    next();
+    return;
+  }
+  res.status(415).json({ error: 'Unsupported Content-Encoding.' });
+});
+
 /* QR pairing redeem routes are code-gated and intentionally pre-guard. Mounted
    BEFORE the global body parser so the per-route express.json({ limit: '1kb' })
    on each redeem handler engages first — placing them after the 20MB global
