@@ -502,9 +502,9 @@ function isBodyEmpty(body: string, title: string): boolean {
    This is the structural cleanup pass that resolves the user-reported
    "empty rows at the end of the list" symptom — those rows had stale
    parser state from a previous import path or orphaned sentences that
-   were dropped silently by the pre-fix remapSentences. Now that orphan
-   recovery preserves content, empty chapters truly mean "no content";
-   pruning is safe.
+   were dropped silently by the pre-fix remapSentences. Zero sentences alone
+   does NOT mean "no content" (a never-analysed chapter has none), hence the
+   body check below.
 
    Only a chapter with no manuscript text is pruned (#3783): zero sentences
    AND an empty body in `result.hints` (see `isBodyEmpty`). A never-analysed

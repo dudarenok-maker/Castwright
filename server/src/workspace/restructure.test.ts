@@ -707,7 +707,7 @@ describe('post-process passes move audio with the slug (#3400)', () => {
   });
 });
 
-/* -- #3783: prune ONLY a chapter this same operation emptied -------- */
+/* -- #3783: prune ONLY a chapter with no manuscript text ------------ */
 
 describe('prune only a chapter with no manuscript text (#3783)', () => {
   const four = () => {
@@ -803,6 +803,34 @@ describe('prune only a chapter with no manuscript text (#3783)', () => {
     const { state, hints, sentences } = withBody({ 1: 'b1', 3: 'b3', 4: 'b4' });
     const r = applyExclude(state, hints, sentences, { chapterIds: [4], excluded: true });
     expect(r.state.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('including an excluded zero-sentence chapter whose body is empty prunes it and renumbers later audio', () => {
+    const rendered = { audioModelKey: 'kokoro-v1', audioRenderedAt: '2026-01-01T00:00:00.000Z' };
+    const state = makeState([
+      { id: 1, title: 'Alpha' },
+      { id: 2, title: 'Beta', excluded: true },
+      { id: 3, title: 'Gamma', ...rendered },
+      { id: 4, title: 'Delta', ...rendered },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'Alpha', body: 'b1' },
+      { id: 2, title: 'Beta', body: '', excluded: true },
+      { id: 3, title: 'Gamma', body: 'b3' },
+      { id: 4, title: 'Delta', body: 'b4' },
+    ]);
+    const sentences = [s(1, 1, 'n', 'a'), s(1, 3, 'n', 'c'), s(1, 4, 'n', 'd')];
+    const r = applyExclude(state, hints, sentences, { chapterIds: [2], excluded: false });
+    expect(r.state.chapters.map((c) => [c.id, c.title])).toEqual([
+      [1, 'Alpha'],
+      [2, 'Gamma'],
+      [3, 'Delta'],
+    ]);
+    expect(r.audioOps.map((o) => [o.kind, o.from, o.kind === 'rename' ? o.to : undefined])).toEqual([
+      ['rename', '03-gamma', '02-gamma'],
+      ['rename', '04-delta', '03-delta'],
+    ]);
+    expect(r.warnings.some((w) => /Beta/.test(w))).toBe(true);
   });
 });
 
