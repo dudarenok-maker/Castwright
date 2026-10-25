@@ -69,6 +69,14 @@ export interface BookMetaState {
       Persisted through the server book-state slice; toggled by the Task-12
       analysis-form toggle. */
   prosodyEnabled: Record<string, boolean | undefined>;
+  /** Plan 289 (D7) — books whose in-memory slices may be older than disk: a
+      save was refused as stale, or a writer the persistence middleware never
+      sees (Library Edit, the language guard) changed the book. Layout reads a
+      marked book in full, even when its slices are loaded, and the full read
+      clears the mark. The value counts marks, so a read clears only the marks
+      made before it was issued. Optional so hand-built test stores need not
+      carry it. */
+  needsFullRead?: Record<string, number>;
 }
 
 const initialState: BookMetaState = {
@@ -76,6 +84,7 @@ const initialState: BookMetaState = {
   saved: {},
   lastCommitted: {},
   prosodyEnabled: {},
+  needsFullRead: {},
 };
 
 interface HydratePayload {
@@ -190,6 +199,19 @@ export const bookMetaSlice = createSlice({
     commitDraftSucceeded: (s, a: PayloadAction<{ bookId: string }>) => {
       const { bookId } = a.payload;
       if (s.lastCommitted) delete s.lastCommitted[bookId];
+    },
+
+    /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`). */
+    markNeedsFullRead: (s, a: PayloadAction<{ bookId: string }>) => {
+      const marks = (s.needsFullRead ??= {});
+      marks[a.payload.bookId] = (marks[a.payload.bookId] ?? 0) + 1;
+    },
+
+    /* Plan 289 (D7) — a full read landed. `upTo` is the mark count when it was
+       issued; a mark made while it was in flight survives it. */
+    clearNeedsFullRead: (s, a: PayloadAction<{ bookId: string; upTo: number }>) => {
+      const { bookId, upTo } = a.payload;
+      if (s.needsFullRead && (s.needsFullRead[bookId] ?? 0) <= upTo) delete s.needsFullRead[bookId];
     },
   },
 });

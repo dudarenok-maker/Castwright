@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { libraryActions } from '../store/library-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import {
@@ -200,6 +201,9 @@ export function useLanguageGuard(): LanguageGuardResult {
            `book` (not the selector) supplies the bookId, so the manuscriptId
            pathway still persists to the book the selector resolved. */
           await api.putBookState(book.bookId, { slice: 'state', patch });
+          /* Plan 289 (D7) — a direct write the persistence middleware never
+             sees, so the book is re-read in full. */
+          dispatch(bookMetaActions.markNeedsFullRead({ bookId: book.bookId }));
           const fresh = await api.getLibrary().catch(() => null);
           if (fresh) dispatch(libraryActions.hydrate(fresh));
         }}

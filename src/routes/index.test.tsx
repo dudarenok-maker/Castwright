@@ -31,7 +31,10 @@ import {
   flushBookPersistence,
   supersedeBookSaves,
   restoreSupersededSaves,
+  beginFullRead,
+  learnSliceRevisions,
 } from '../store/persistence-middleware';
+import { createBookStateDisk } from '../test/book-state-disk';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
@@ -1147,6 +1150,38 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         await reopenAndFlush(store);
         expect(sentVane()).toHaveLength(2);
       });
+    });
+
+    /* Plan 289, N8 — a delete can answer 500 after the folder is already gone
+       (a failing cache cleanup, a lost response). The client then gives the
+       kept save back, and a re-import under the same id must not receive it:
+       the import's new edit epoch moves every token, so the replay is refused. */
+    it('N8: a delete that answered 500 after removing the book, then a re-import under the same id: the kept save is refused', async () => {
+      const disk = createBookStateDisk();
+      const stale = [{ id: 'c1', name: 'Stale1', voiceState: 'generated' } as Character];
+      disk.seed('b1', { state: { title: 'the Coalfall Commission' }, cast: { characters: stale } });
+      putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+      const store = makePopulatedStore({ persist: true });
+      /* The full read Layout made when the book was last opened. */
+      store.dispatch(
+        learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
+      );
+      disk.failNext(4);
+      await renameThenLeave(store);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(disk.log.map((p) => p.outcome)).toEqual(['503', '503', '503', '503']);
+
+      deleteBookMock.mockImplementation(async (id: string) => {
+        disk.remove(id);
+        throw new Error('Book delete failed (500): EBUSY');
+      });
+      await runWipe(store, deleteBookMock, cases[2].trigger);
+      const reimported = [{ id: 'c1', name: 'Fresh', voiceState: 'generated' } as Character];
+      disk.reimport('b1', { state: { title: 'the Coalfall Commission' }, cast: { characters: reimported } });
+
+      await reopenAndFlush(store);
+      expect(disk.log.at(-1)).toMatchObject({ slice: 'cast', base: true, outcome: '409' });
+      expect(disk.books.get('b1')!.cast!.characters).toEqual(reimported);
     });
   });
 

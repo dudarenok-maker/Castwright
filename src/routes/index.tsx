@@ -186,6 +186,10 @@ export function BooksRoute() {
           showError(`Couldn't update "${b.title}"`, (err as Error).message, 'Edit');
           return;
         }
+        /* Plan 289 (D7) — a write the persistence middleware never sees: the
+           book's slices may still be in memory, so its next open (or now, if it
+           is open) reads it in full rather than keeping the old details. */
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
       }}

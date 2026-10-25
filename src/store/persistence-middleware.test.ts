@@ -14,8 +14,14 @@ import {
   dropRetainedSaves,
   supersedeBookSaves,
   restoreSupersededSaves,
+  beginFullRead,
+  learnSliceRevisions,
   type BookFlushOutcome,
 } from './persistence-middleware';
+import { castSlice, castActions } from './cast-slice';
+import { changeLogSlice } from './change-log-slice';
+import { createBookStateDisk } from '../test/book-state-disk';
+import type { Character, SliceRevision } from '../lib/types';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
@@ -1575,5 +1581,216 @@ describe('a given-up save toast names the last-saved title (#3421 S2)', () => {
       }),
     );
     expect(toast.payload.message).toContain('"The Library Title"');
+  });
+});
+
+/* Plan 289 — a re-sent save carries the revision it was built against, and a
+   save the book has moved past is refused (D2, D6). Driven against the shared
+   disk model, which applies the server's precondition and edit epoch. */
+describe('re-sent saves carry their base revision (plan 289)', () => {
+  const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as Character;
+  const isCast = (_id: string, req: { slice: string }) => req.slice === 'cast';
+  const isState = (_id: string, req: { slice: string }) => req.slice === 'state';
+  type Req = { slice: string; patch: Record<string, unknown>; baseRevision?: SliceRevision };
+  const reqs = () => putBookState.mock.calls.map((c) => c[1] as Req);
+
+  function setup() {
+    const disk = createBookStateDisk();
+    disk.seed('b1', {
+      state: { title: 'The Northern Star', author: 'Marin Vale', castConfirmed: false },
+      cast: { characters: [eliza('Eliza')] },
+    });
+    putBookState.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      } as never,
+      preloadedState: {
+        ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+        bookMeta: {
+          draft: null,
+          saved: {
+            b1: {
+              title: 'The Northern Star',
+              author: 'Marin Vale',
+              series: '',
+              narratorCredit: 'Castwright',
+              genre: null,
+              publicationDate: null,
+              description: null,
+              notes: null,
+            },
+          },
+          prosodyEnabled: {},
+        },
+      } as never,
+      middleware: (gDM) => gDM().concat(persistenceMiddleware),
+    });
+    /* The full read Layout makes on open. */
+    learn(store, disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    return { disk, store, restore: () => err.mockRestore() };
+  }
+  type S = ReturnType<typeof setup>['store'];
+  type Disk = ReturnType<typeof setup>['disk'];
+  function learn(store: S, revisions: Record<string, SliceRevision>, seq: number) {
+    store.dispatch(learnSliceRevisions('b1', revisions, seq));
+  }
+  const rename = (store: S, name: string) => store.dispatch(castActions.setCharacters([eliza(name)]));
+  const castName = (disk: Disk) => (disk.books.get('b1')!.cast!.characters[0] as Character).name;
+  const outcomes = (disk: Disk) => disk.log.map((p) => p.outcome);
+  const staleToasts = (store: S) =>
+    (store.getState() as { notifications: { toasts: { dedupeKey?: string; message: string }[] } })
+      .notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:b1');
+  const marks = (store: S) =>
+    (store.getState() as { bookMeta: { needsFullRead?: Record<string, number> } }).bookMeta.needsFullRead?.b1;
+
+  /* A cast save whose four attempts all fail: kept for the book's next flush. */
+  async function keepCastSave(store: S, disk: Disk, name: string) {
+    disk.failNext(4, isCast);
+    rename(store, name);
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+  }
+
+  it('attempt 0 carries no base; its retries and the replay of the kept save carry the captured base', async () => {
+    const { disk, store, restore } = setup();
+    const captured = disk.revision('b1', 'cast');
+    await keepCastSave(store, disk, 'Eliza Vane');
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    const sent = reqs();
+    expect(sent).toHaveLength(5);
+    expect(sent[0].baseRevision).toBeUndefined();
+    for (const r of sent.slice(1)) expect(r.baseRevision).toEqual(captured);
+    expect(outcomes(disk)).toEqual(['503', '503', '503', '503', 'ok']);
+    restore();
+  });
+
+  it('a live build a kept save was merged into carries the kept base, so an outside write refuses it', async () => {
+    const { disk, store, restore } = setup();
+    const captured = disk.revision('b1', 'state');
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
+
+    /* Another writer renames the book; a live book-meta edit then merges the kept castConfirmed. */
+    disk.write('b1', 'state', { ...disk.books.get('b1')!.state, title: 'Elsewhere' });
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'n' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await advance(600);
+
+    const last = reqs().at(-1)!;
+    expect(last.patch).toMatchObject({ castConfirmed: true, title: 'The Northern Star', notes: 'n' });
+    expect(last.baseRevision).toEqual(captured);
+    expect(outcomes(disk).at(-1)).toBe('409');
+    expect(disk.books.get('b1')!.state.title).toBe('Elsewhere');
+    restore();
+  });
+
+  it("an older same-key 200 refreshes the newer in-flight sequence's base", async () => {
+    const { disk, store, restore } = setup();
+    let release!: () => void;
+    let landed: SliceRevision | undefined;
+    putBookState.mockImplementationOnce(
+      (id: string, req: never) =>
+        new Promise((r) => {
+          release = () => {
+            const res = disk.put(id, req);
+            landed = res.revision;
+            r(res);
+          };
+        }),
+    );
+    rename(store, 'Eliza X');
+    await advance(500);
+    disk.failNext(1, isCast);
+    rename(store, 'Eliza Y');
+    await advance(500);
+    release();
+    await advance(1000);
+    expect(outcomes(disk)).toEqual(['503', 'ok', 'ok']);
+    expect(reqs()[2].baseRevision).toEqual(landed);
+    expect(castName(disk)).toBe('Eliza Y');
+    restore();
+  });
+
+  it('a full read stamped before a PUT landed does not overwrite what the PUT taught', async () => {
+    const { disk, store, restore } = setup();
+    const before = disk.revisions('b1');
+    const seq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    rename(store, 'Eliza X');
+    await advance(500);
+    /* The read's response arrives late, carrying the pre-write tokens. */
+    learn(store, before, seq);
+    disk.failNext(1, isCast);
+    rename(store, 'Eliza Y');
+    await advance(1600);
+    expect(outcomes(disk)).toEqual(['ok', '503', 'ok']);
+    expect(castName(disk)).toBe('Eliza Y');
+    restore();
+  });
+
+  it('voice override: a kept roster is refused after another book applied a linked override to this one', async () => {
+    const { disk, store, restore } = setup();
+    await keepCastSave(store, disk, 'Eliza Vane');
+    const overridden = [{ ...eliza('Eliza'), overrideTtsVoices: { qwen: { name: 'designed-1' } } }];
+    disk.write('b1', 'cast', { characters: overridden });
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    expect(outcomes(disk).at(-1)).toBe('409');
+    expect(disk.books.get('b1')!.cast!.characters).toEqual(overridden);
+    restore();
+  });
+
+  it('wipe: a retrying confirmCast that spans a re-parse is refused, and the book stays unconfirmed', async () => {
+    const { disk, store, restore } = setup();
+    disk.failNext(1, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(500);
+    disk.reparse('b1');
+    await advance(1000);
+    expect(outcomes(disk)).toEqual(['503', '409']);
+    expect(disk.books.get('b1')!.state.castConfirmed).toBe(false);
+    restore();
+  });
+
+  it('D2 on a retry: toasts once, does not roll back, is not kept, and marks the book', async () => {
+    const { disk, store, restore } = setup();
+    disk.write('b1', 'state', { ...disk.books.get('b1')!.state, title: 'Elsewhere' });
+    disk.failNext(1, isState);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await advance(2000);
+
+    expect(outcomes(disk)).toEqual(['503', '409']);
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(staleToasts(store)[0].message).toContain('changed elsewhere');
+    const meta = (store.getState() as { bookMeta: { saved: { b1: { title: string } }; draft: unknown } }).bookMeta;
+    expect(meta.saved.b1.title).toBe('T1');
+    expect(meta.draft).toBeNull();
+    expect(marks(store)).toBe(1);
+    expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+    restore();
+  });
+
+  it('D2 on a replay: toasts once naming the book, is not kept, and marks the book', async () => {
+    const { disk, store, restore } = setup();
+    await keepCastSave(store, disk, 'Eliza Vane');
+    disk.write('b1', 'cast', { characters: [eliza('Elsewhere')] });
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    expect(outcomes(disk).at(-1)).toBe('409');
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(staleToasts(store)[0].message).toContain('"The Northern Star"');
+    expect(marks(store)).toBe(1);
+    expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+    restore();
   });
 });

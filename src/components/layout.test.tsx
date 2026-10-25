@@ -192,6 +192,24 @@ vi.mock('../routes/prefetch', () => ({
   importUploadView: vi.fn(() => Promise.resolve({})),
 }));
 
+/* Plan 289 — the N5 / Library-Edit cases drive BooksRoute's real `onEditBook`
+   inside Layout. The library view itself is not under test: a stub exposes
+   one button that calls `onEditBook` with the book and patch the test sets. */
+const libraryEdit = vi.hoisted(() => ({
+  current: null as null | { book: { bookId: string; title: string }; patch: Record<string, unknown> },
+}));
+vi.mock('../views/book-library', () => ({
+  BookLibraryView: (p: { onEditBook: (b: unknown, patch: unknown) => Promise<void> }) => (
+    <button
+      type="button"
+      data-testid="library-edit"
+      onClick={() => void p.onEditBook(libraryEdit.current!.book, libraryEdit.current!.patch)}
+    >
+      Edit
+    </button>
+  ),
+}));
+
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
@@ -215,6 +233,8 @@ import {
 import type { RootState } from '../store';
 import { modelLabel } from '../lib/model-label';
 import type { AnalyzerCatalog } from '../lib/types';
+import { BooksRoute } from '../routes/index';
+import { createBookStateDisk } from '../test/book-state-disk';
 
 function makeStore(extraMiddleware: Middleware[] = []) {
   return configureStore({
@@ -2826,6 +2846,183 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
       expect(hasFailToast(store)).toBe(false);
     } finally {
       m.unsubscribe();
+    }
+  });
+});
+
+describe('Layout — a save made stale elsewhere is refused, and the book re-read (plan 289)', () => {
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as Character;
+  const isTitlePut = (id: string, req: { slice: string; patch: unknown }) =>
+    id === 'A' && req.slice === 'state' && 'title' in (req.patch as object);
+
+  /* The disk model behind both api calls: a GET returns its tokens, a PUT goes
+     through its precondition. */
+  function wireDisk() {
+    const disk = createBookStateDisk();
+    disk.seed('A', {
+      state: { ...bookStateFor('A', null).state, title: 'T0', notes: null },
+      cast: { characters: [eliza] },
+    });
+    getBookStateMock.mockImplementation(async (id: string) => {
+      const b = disk.books.get(id);
+      if (!b) return null;
+      return bookStateFor(id, revState(id, null, 0, []), {
+        state: b.state,
+        cast: b.cast,
+        manuscriptEdits: b.manuscript,
+        changeLog: b.changeLog,
+        sliceRevisions: disk.revisions(id),
+      });
+    });
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    return disk;
+  }
+
+  function renderWithLibrary(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/A/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<BooksRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  const savedTitle = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().bookMeta.saved.A?.title;
+  const reads = () => getBookStateMock.mock.calls.filter(([id]) => id === 'A').length;
+  const titlePuts = (disk: ReturnType<typeof createBookStateDisk>) =>
+    disk.log
+      .filter((p) => p.bookId === 'A' && p.slice === 'state' && 'title' in p.patch)
+      .map((p) => `${p.outcome} ${String(p.patch.title)}`);
+
+  async function openA(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBeDefined());
+    await act(async () => {
+      await store.dispatch(flushBookPersistence('A') as never);
+    });
+  }
+  const commit = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>, field: 'title' | 'notes', value: string) =>
+    act(() => {
+      store.dispatch(bookMetaActions.setDraftField({ field, value }));
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    });
+  async function libraryEditTitle(disk: ReturnType<typeof createBookStateDisk>, title: string) {
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: { title } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await waitFor(() => expect(disk.books.get('A')!.state.title).toBe(title));
+  }
+
+  it('N5: a kept rename is refused after a Library Edit, the book is re-read in full, and the next edit keeps the new title', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+
+      /* Rename to T1 and leave; every attempt answers 503, so the save is kept. */
+      disk.failNext(4, isTitlePut);
+      commit(store, 'title', 'T1');
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+
+      /* Library -> Edit -> T2 lands. */
+      await libraryEditTitle(disk, 'T2');
+
+      /* Reopen: the slices are still loaded, so this would be a revisions-only read. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+
+      expect(titlePuts(disk)).toEqual(['503 T1', '503 T1', '503 T1', '503 T1', 'ok T2', '409 T1']);
+      expect(disk.books.get('A')!.state.title).toBe('T2');
+      const stale = store.getState().notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:A');
+      expect(stale).toHaveLength(1);
+      expect(stale[0].message).toContain('changed elsewhere');
+
+      /* The next book-meta commit is built from T2, not T1. */
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(titlePuts(disk).at(-1)).toBe('ok T2');
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'T2', notes: 'A note' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a Library Edit with no kept save: the reopen reads in full, so a later notes edit keeps the new title (red on main)', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    renderWithLibrary(store);
+    await openA(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+
+    await libraryEditTitle(disk, 'T2');
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+
+    commit(store, 'notes', 'A note');
+    await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+    expect(disk.books.get('A')!.state.title).toBe('T2');
+    expect(titlePuts(disk).at(-1)).toBe('ok T2');
+  });
+
+  it('D2: a stale refusal while the book is open re-reads it in full at once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      const readsBefore = reads();
+
+      /* Another tab renames the book; this tab's rename fails once, and its
+         retry carries the base it was built against. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Elsewhere' });
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+      await waitFor(() => expect(savedTitle(store)).toBe('Elsewhere'));
+      expect(reads()).toBe(readsBefore + 1);
+      expect(titlePuts(disk)).toEqual(['503 T1', '409 T1']);
+      expect(store.getState().bookMeta.needsFullRead?.A).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('D6: a revisions-only read does not refresh the base a retry carries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+
+      /* Disk moves while the book is closed; the reopen reads revisions only. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Elsewhere' });
+      const readsBefore = reads();
+      openAt(store as never, 'A');
+      await waitFor(() => expect(reads()).toBe(readsBefore + 1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(savedTitle(store)).toBe('T0');
+
+      /* So the retry still carries the base from the first full read, and is refused. */
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(titlePuts(disk)).toEqual(['503 T1', '409 T1']);
+      expect(disk.books.get('A')!.state.title).toBe('Elsewhere');
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -31,7 +31,12 @@ import { startPreviewRegen, approvePreviewSideEffects, restoreUnrecordedPreview 
 import { selectActivePreviewStub } from '../store/ui-slice';
 import { selectBookEditsLocked } from '../store/restructure-lock';
 import { selectChapterRendering } from '../store/splice-slice';
-import { dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  beginFullRead,
+  dropRetainedSaves,
+  flushBookPersistence,
+  learnSliceRevisions,
+} from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
@@ -844,6 +849,18 @@ export function Layout() {
     revisionsReadFor.current = null;
   }, [bookId]);
 
+  /* Plan 289 (D7) — a book marked `needsFullRead` (a save refused as stale, or
+     a write the persistence middleware never saw) is read in full even when
+     its slices are loaded. The mark is read from the store when a read is
+     issued, not taken as a dependency of the hydration effect, so clearing it
+     does not cancel the read that cleared it. A mark made while the open book
+     has no full read under way bumps `fullReadTick`, which re-runs the
+     hydration effect now. */
+  const fullReadMarks = useAppSelector((s) => (bookId ? (s.bookMeta.needsFullRead?.[bookId] ?? 0) : 0));
+  const [fullReadTick, setFullReadTick] = useState(0);
+  const fullReadInFlight = useRef<string | null>(null);
+  const marksFor = (id: string) => store.getState().bookMeta.needsFullRead?.[id] ?? 0;
+
   /* Per-book hydration. When the user opens a book whose redux state isn't
      populated (page refresh, library click on a previously analysed book, or
      library click on a book mid-analysis), fetch the on-disk .audiobook/*.json
@@ -875,8 +892,10 @@ export function Layout() {
        delete + re-import in another tab — is picked up. A stage change within
        the same book does not re-read (revisionsReadFor). The other slices keep
        their short-circuit. */
-    if (manuscriptReady && revisionsReadFor.current === bookId) return;
-    const revisionsOnly = manuscriptReady;
+    if (manuscriptReady && revisionsReadFor.current === bookId && marksFor(bookId) === 0) return;
+    /* Decided per read, after the flush below: a save that flush re-sends may
+       be refused as stale and mark the book (plan 289, D7). */
+    let revisionsOnly = manuscriptReady;
     let cancelled = false;
     /* #3395 pass 4, S2 (OD3) — a failed FULL load is retried with bounded
        backoff until it lands, with a notice shown while it can't. A failed
@@ -888,10 +907,23 @@ export function Layout() {
     let failureNoticeShown = false;
     const load = (attempt: number): void => {
       const requestSeq = store.getState().revisions.adoptSeq;
+      const marks = marksFor(bookId);
+      revisionsOnly = manuscriptReady && marks === 0;
+      if (!revisionsOnly) fullReadInFlight.current = bookId;
+      /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
+         so a save that lands while it is in flight wins over what it read. */
+      const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
       api
         .getBookState(bookId)
         .then((res) => {
           if (cancelled) return;
+          if (!revisionsOnly) {
+            fullReadInFlight.current = null;
+            /* The full read clears the marks made before it was issued; one
+               made since means disk moved again, so read again. */
+            dispatch(bookMetaActions.clearNeedsFullRead({ bookId, upTo: marks }));
+            if (marksFor(bookId) > 0) setFullReadTick((t) => t + 1);
+          }
           if (attempt > 0) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
           /* null = no persisted state for this book (mock fresh boot, or
              real backend hasn't seen this book yet). */
@@ -912,6 +944,9 @@ export function Layout() {
                one still kept was given up on again and its edit is reverted by
                this re-read, so it must not land later behind the user's back. */
             dispatch(dropRetainedSaves(bookId));
+            if (typeof readSeq === 'number') {
+              dispatch(learnSliceRevisions(bookId, res.sliceRevisions, readSeq));
+            }
             dispatch(
               manuscriptActions.hydrateFromBookState({
                 state: res.state,
@@ -1076,6 +1111,7 @@ export function Layout() {
         }, (err) => {
           console.warn('[book-state] hydrate failed, retrying:', err?.message);
           if (cancelled) return;
+          fullReadInFlight.current = null;
           if (revisionsOnly) {
             console.warn('[book-state] revisions re-read failed; the next poll repairs it:', err?.message);
             return;
@@ -1113,11 +1149,19 @@ export function Layout() {
     }
     return () => {
       cancelled = true;
+      fullReadInFlight.current = null;
       if (retryTimer) clearTimeout(retryTimer);
       if (failureNoticeShown) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, stageKind]);
+  }, [bookId, stageKind, fullReadTick]);
+
+  /* Plan 289 (D7) — the open book was marked with no full read under way:
+     read it now. Declared after the hydration effect, so a book opened with a
+     mark already set is read by that effect's own first run. */
+  useEffect(() => {
+    if (fullReadMarks > 0 && fullReadInFlight.current !== bookId) setFullReadTick((t) => t + 1);
+  }, [fullReadMarks, bookId]);
 
   /* Book-meta fallback hydration — covers the mock-mode path where
      getBookState rejects (no disk workspace) and the realer flow where the
