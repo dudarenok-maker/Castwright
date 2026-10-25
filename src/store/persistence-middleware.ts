@@ -56,8 +56,9 @@ interface PersistFailureHandler {
   message: (err: unknown) => string;
   dedupeKey: string;
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
-      optimistic local update. Returns the action to dispatch. */
-  rollback?: (bookId: string) => { type: string };
+      optimistic local update. `stillOpen` is whether the failing book is still
+      the last-open one (#3754). Returns the action to dispatch. */
+  rollback?: (bookId: string, stillOpen: boolean) => { type: string };
   /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
       snapshot now that its optimistically-written value is confirmed on disk,
       so the next commit snapshots a fresh baseline. Returns the action. */
@@ -86,7 +87,8 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
       return `Book details couldn't be saved: ${sentence}`;
     },
     dedupeKey: 'book-meta-persist-failed',
-    rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
+    rollback: (bookId, stillOpen) =>
+      bookMetaActions.rollbackCommitDraft({ bookId, restoreDraft: stillOpen }),
     onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
   },
 };
@@ -403,8 +405,12 @@ export const persistenceMiddleware: Middleware = (store) => {
           );
           /* #2230 — a refused rename must not leave the persisted value claiming
              a title the server rejected; roll the optimistic saved update back
-             (and restore the draft so the user's text is preserved for retry). */
-          if (handler.rollback) store.dispatch(handler.rollback(bookId));
+             (and restore the draft so the user's text is preserved for retry —
+             unless the user has since opened a different book, #3754: the
+             draft was already cleared for that switch and must stay clear). */
+          if (handler.rollback) {
+            store.dispatch(handler.rollback(bookId, bookId === lastOpenBookId));
+          }
         }
       });
   };

@@ -124,6 +124,53 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     expect(store.getState().bookMeta.saved.B?.title).toBe('B DRAFT');
   });
 
+  it('(e) a save for B that FAILS after A is opened reverts saved[B] but does not put B\'s text back in the draft', async () => {
+    const store = makeStore();
+    let rejectB: (e: Error) => void = () => {};
+    putBookState.mockImplementationOnce(
+      () => new Promise<void>((_res, rej) => { rejectB = rej; }),
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    openBook(store, 'B');
+    typeDraftOnB(store);
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+    /* Switching away sends B's queued PUT at once (S3); it stays pending. */
+    openBook(store, 'A');
+    expect(putsTo('B')).toHaveLength(1);
+    rejectB(new Error('Book state PUT failed (500)'));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    errSpy.mockRestore();
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    expect(store.getState().bookMeta.draft).toBeNull();
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    await store.dispatch(flushBookPersistence('A') as never);
+    for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
+    expect(store.getState().bookMeta.saved.A?.title).toBe('A title');
+  });
+
+  it('(f) control: a save for B that fails while B is still the open book restores the draft', async () => {
+    const store = makeStore();
+    let rejectB: (e: Error) => void = () => {};
+    putBookState.mockImplementationOnce(
+      () => new Promise<void>((_res, rej) => { rejectB = rej; }),
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    openBook(store, 'B');
+    typeDraftOnB(store);
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+    /* B -> library: B's PUT goes out and stays pending; the library never
+       counts as "a different book". */
+    store.dispatch(uiActions.goHome());
+    expect(putsTo('B')).toHaveLength(1);
+    rejectB(new Error('Book state PUT failed (500)'));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    errSpy.mockRestore();
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    expect(store.getState().bookMeta.draft).toEqual({ title: 'B DRAFT' });
+  });
+
   it('(d) control: a view change within the same book keeps the draft', () => {
     const store = makeStore();
     openBook(store, 'B');
