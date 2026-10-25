@@ -51,6 +51,12 @@ function setIncludeRollbackPending(bookId: string, pending: boolean): void {
   else includeRollbackPending.delete(bookId);
   includeRollbackListeners.forEach((l) => l());
 }
+/** Test-only: the set is module-level, so a test that ends mid-rollback would
+    otherwise leak a pending book into every later test in the file. */
+export function __resetIncludeRollbackPendingForTests(): void {
+  includeRollbackPending.clear();
+  includeRollbackListeners.forEach((l) => l());
+}
 function useIncludeRollbackPending(bookId: string | null | undefined): boolean {
   return useSyncExternalStore(
     (listener) => {

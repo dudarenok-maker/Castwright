@@ -1,6 +1,6 @@
 // Pairs with docs/features/archive/16-generation-stream.md
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -18,7 +18,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { analysisStreamMiddleware } from '../store/analysis-stream-middleware';
-import { GenerationView, ChapterSegmentStrip } from './generation';
+import { GenerationView, ChapterSegmentStrip, __resetIncludeRollbackPendingForTests } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { api, AnalysisError } from '../lib/api';
@@ -132,6 +132,12 @@ vi.mock('../lib/api', () => ({
     }
   },
 }));
+
+/* #3774 — the include-rollback set is module-level; never let one test's pending
+   rollback leak into the next. */
+afterEach(() => {
+  __resetIncludeRollbackPendingForTests();
+});
 
 beforeEach(() => {
   unloadAnalyzerSpy.mockReset();
@@ -2948,6 +2954,29 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       await act(async () => finishRollback());
       await waitFor(() => expect(resume()).toBeEnabled());
       expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('H\': a FAILED include run (not a Cancel) also holds the block until its rollback ends', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      let finishRollback!: () => void;
+      setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+        excluded
+          ? new Promise((r) => (finishRollback = () => r({ id, title: '', slug: '', excluded: true })))
+          : Promise.resolve({ id, title: '', slug: '', excluded: false }),
+      );
+      runAnalysisForChaptersSpy.mockRejectedValue(new Error('analyzer exploded'));
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, true)); // the rollback is waiting
+      act(() => {
+        store.dispatch(analysisActions.clearActiveStream());
+      });
+      first.unmount();
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+      await act(async () => finishRollback());
+      await waitFor(() => expect(resume()).toBeEnabled());
     });
 
     it('the busy poll keeps running while a started include has no excluded chapter left (the subset row alone is the include surface)', async () => {
