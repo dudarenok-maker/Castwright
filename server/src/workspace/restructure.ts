@@ -495,14 +495,16 @@ function renumberGenericTitlesInChapters(
    recovery preserves content, empty chapters truly mean "no content";
    pruning is safe.
 
-   Excluded chapters are not pruned even when empty — preserving the
-   soft-hide invariant. Excluded chapters with sentences attached are
-   kept as well. `keepIds` names chapters the SAME operation just un-excluded
-   (#3774): a never-analysed chapter has zero sentences, so pruning it would
-   delete the chapter the user just included. */
+   Only a chapter THIS operation emptied is pruned (#3783): `hadSentences`
+   holds the result chapter ids that received at least one input sentence's
+   chapter (via the op's fate map). A chapter that had zero sentences going
+   in — e.g. one included but never analysed — is never pruned, or any later
+   restructure would delete its manuscript text and renumber its neighbours.
+   Excluded chapters are not pruned either — preserving the soft-hide
+   invariant. */
 function pruneEmptyChaptersInResult(
   result: RestructureResult,
-  keepIds: ReadonlySet<number> = new Set(),
+  hadSentences: ReadonlySet<number>,
 ): {
   result: RestructureResult;
   /** pre-prune chapter id → post-prune id; absent = pruned. Identity when nothing pruned. */
@@ -521,7 +523,7 @@ function pruneEmptyChaptersInResult(
   }
 
   const pruned = result.state.chapters.filter(
-    (c) => !c.excluded && !keepIds.has(c.id) && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
+    (c) => !c.excluded && hadSentences.has(c.id) && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
   );
   if (pruned.length === 0) return { result, idRemap: null };
 
@@ -587,6 +589,21 @@ function pruneEmptyChaptersInResult(
   };
 }
 
+/** Result chapter ids that received at least one INPUT sentence, following
+    the op's fate map (old chapter id → new id). A merge source therefore
+    counts via the merged chapter's new id. */
+function newIdsWithInputSentences(
+  sentences: readonly RestructureSentence[],
+  fates: ReadonlyMap<number, OldChapterFate>,
+): Set<number> {
+  const ids = new Set<number>();
+  for (const s of sentences) {
+    const fate = fates.get(s.chapterId);
+    if (fate) ids.add(fate.newId);
+  }
+  return ids;
+}
+
 /* Combined post-process: prune empties → renumber app-made generic titles.
    Order matters: pruning may shift ids, after which app-made titles must
    re-derive against the new ids. Renumbering also recomputes slugs for
@@ -597,11 +614,11 @@ function pruneEmptyChaptersInResult(
    caller, yet its files must follow it. Only chapters flagged
    `titleSynthesized` are renumbered — an explicit title (rename, merge
    `mergedTitle`) clears the flag — so a user-chosen title is never rewritten. */
-function postProcessRestructure(
+export function postProcessRestructure(
   result: RestructureResult,
-  keepIds?: ReadonlySet<number>,
+  hadSentences: ReadonlySet<number>,
 ): RestructureResult {
-  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result, keepIds);
+  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result, hadSentences);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
   if (titled.renumbered === 0 && idRemap === null) return pruned;
 
@@ -775,18 +792,21 @@ export function applyMerge(
   );
   const audioOps = buildAudioOps(state.chapters, newStateChapters, fates);
 
-  return postProcessRestructure({
-    state: {
-      ...state,
-      chapters: newStateChapters,
-      updatedAt: new Date().toISOString(),
+  return postProcessRestructure(
+    {
+      state: {
+        ...state,
+        chapters: newStateChapters,
+        updatedAt: new Date().toISOString(),
+      },
+      hints: newHints,
+      sentences: newSentences,
+      remap,
+      audioOps,
+      warnings,
     },
-    hints: newHints,
-    sentences: newSentences,
-    remap,
-    audioOps,
-    warnings,
-  });
+    newIdsWithInputSentences(sentences, fates),
+  );
 }
 
 /* -- split ---------------------------------------------------------- */
@@ -1153,10 +1173,9 @@ export function applyRefreshTitles(
 
    No structural change — ids and slugs are preserved, audio files stay
    on disk, and the sentence remap is identity. The shared
-   postProcessRestructure pipeline still runs so any pre-existing empty
-   chapters / stale generic titles get cleaned up by the same operation,
-   matching the user expectation that "any restructure tidies up the
-   list as a side effect." */
+   postProcessRestructure pipeline still runs so stale generic titles get
+   cleaned up by the same operation. Chapters with no sentences are never
+   pruned here: exclude empties nothing (#3783). */
 export function applyExclude(
   state: BookStateJson,
   hints: readonly ChapterHint[],
@@ -1207,13 +1226,6 @@ export function applyExclude(
     state.chapters.map((c) => c.id),
   );
 
-  /* #3774 -- a chapter this op just un-excluded is never pruned: a
-     never-analysed chapter has no sentences, so the prune would delete the
-     chapter being included. */
-  const justIncluded = new Set(
-    op.excluded ? [] : state.chapters.filter((c) => c.excluded && targetIds.has(c.id)).map((c) => c.id),
-  );
-
   return postProcessRestructure(
     {
       state: {
@@ -1227,7 +1239,8 @@ export function applyExclude(
       audioOps: [],
       warnings,
     },
-    justIncluded,
+    // Identity op: the chapters that had sentences going in are the same ids.
+    new Set(sentences.map((x) => x.chapterId)),
   );
 }
 
@@ -1381,16 +1394,19 @@ export function applyReorder(
   );
   const audioOps = buildAudioOps(state.chapters, newStateChapters, fates);
 
-  return postProcessRestructure({
-    state: {
-      ...state,
-      chapters: newStateChapters,
-      updatedAt: new Date().toISOString(),
+  return postProcessRestructure(
+    {
+      state: {
+        ...state,
+        chapters: newStateChapters,
+        updatedAt: new Date().toISOString(),
+      },
+      hints: newHints,
+      sentences: newSentences,
+      remap,
+      audioOps,
+      warnings,
     },
-    hints: newHints,
-    sentences: newSentences,
-    remap,
-    audioOps,
-    warnings,
-  });
+    newIdsWithInputSentences(sentences, fates),
+  );
 }
