@@ -1436,6 +1436,29 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
+  /* #3784 (owner decision) — a rolled-back save undoes only the book-meta
+     edit; the castConfirmed combined into it is kept and re-sent. */
+  it('a combined commit + confirmCast that gives up with the book open rolls back the commit and keeps castConfirmed', async () => {
+    const { disk, store, restore } = setup();
+    const captured = disk.revision('b1', 'state');
+    disk.failNext(4, isState);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'X' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch({ type: 'ui/confirmCast' });
+    await advance(8000);
+    const meta = (store.getState() as { bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null } }).bookMeta;
+    expect(meta.saved.b1.title).toBe('The Northern Star');
+    expect(meta.draft?.title).toBe('X');
+
+    store.dispatch(flushBookPersistence('b1'));
+    await advance(0);
+    const last = reqs().at(-1)!;
+    expect(last.patch).toEqual({ castConfirmed: true });
+    expect(last.baseRevision).toEqual(captured);
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'The Northern Star', castConfirmed: true });
+    restore();
+  });
+
   it("an older same-key 200 refreshes the newer in-flight sequence's base", async () => {
     const { disk, store, restore } = setup();
     let release!: () => void;

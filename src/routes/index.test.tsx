@@ -25,6 +25,7 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice, bookMetaActions } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import {
   persistenceMiddleware,
@@ -1264,9 +1265,17 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         expect(store.getState().cast.characters[0].name).toBe('Q');
       });
 
-      it('N7: a kept save landing during a newer rename does not prune that rename’s rollback baseline', async () => {
-        const disk = setupDisk();
-        const store = makePopulatedStore({ persist: true });
+      /* The full read Layout makes when the book is opened. */
+      const learnOnOpen = (store: ReturnType<typeof makeStore>, disk: ReturnType<typeof createBookStateDisk>) =>
+        store.dispatch(
+          learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
+        );
+      /* N7's sequence: a kept {castConfirmed, T1}, then a T2 rename that
+         carries it gives up with the book open and rolls back. */
+      async function keptConfirmThenRolledBackRename(
+        disk: ReturnType<typeof createBookStateDisk>,
+        store: ReturnType<typeof makeStore>,
+      ) {
         store.dispatch(
           bookMetaActions.hydrateFromBookState({
             bookId: 'b1',
@@ -1299,12 +1308,53 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         const flushed = store.dispatch(flushBookPersistence('b1') as never) as unknown as Promise<unknown>;
         await vi.advanceTimersByTimeAsync(10000);
         await flushed;
+      }
+
+      it('N7: a kept save landing during a newer rename does not prune that rename’s rollback baseline', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        await keptConfirmThenRolledBackRename(disk, store);
         /* T2 gave up with its book open: the rollback restores the title on
            disk and gives the user their typed T2 back. */
         const meta = store.getState().bookMeta;
         expect(disk.books.get('b1')!.state.title).toBe('T0');
         expect(meta.saved.b1.title).toBe('T0');
         expect(meta.draft?.title).toBe('T2');
+      });
+
+      /* #3784 (owner decision) — the rollback undoes only the rename's own
+         edit. The castConfirmed it carried goes back into the kept slot, with
+         its base, and the next flush re-sends it. */
+      it('N7 (b): the castConfirmed a rolled-back rename carried is re-sent on the next flush and lands', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        learnOnOpen(store, disk);
+        await keptConfirmThenRolledBackRename(disk, store);
+        expect(disk.books.get('b1')!.state.castConfirmed).toBeUndefined();
+
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(disk.log.at(-1)).toMatchObject({ slice: 'state', base: true, outcome: 'ok' });
+        expect(disk.log.at(-1)!.patch).toEqual({ castConfirmed: true });
+        expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T0', castConfirmed: true });
+        expect(store.getState().bookMeta.draft?.title).toBe('T2');
+      });
+
+      it('N7 (c): with the book changed meanwhile, the re-sent castConfirmed is refused and the book re-read', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        learnOnOpen(store, disk);
+        await keptConfirmThenRolledBackRename(disk, store);
+        /* Another writer un-confirms the cast. */
+        disk.write('b1', 'state', { ...disk.books.get('b1')!.state, castConfirmed: false });
+        const marksBefore = store.getState().bookMeta.needsFullRead?.b1 ?? 0;
+        const toast = vi.spyOn(notificationsActions, 'pushToast');
+
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(disk.log.at(-1)).toMatchObject({ slice: 'state', base: true, outcome: '409' });
+        expect(disk.books.get('b1')!.state.castConfirmed).toBe(false);
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'book-persist-stale:b1' }));
+        toast.mockRestore();
+        expect(store.getState().bookMeta.needsFullRead?.b1 ?? 0).toBeGreaterThan(marksBefore);
       });
     });
   });

@@ -398,6 +398,11 @@ export const persistenceMiddleware: Middleware = (store) => {
      so the toast text can be per-action (bulk-reassign copy vs the server's own
      refused-rename sentence) and any rollback can fire. */
   const toastPending = new Map<FlushKey, PersistFailureHandler>();
+  /* #3784 — the fields the pending write's rollback handler restores (the
+     book-meta fields of a `commitDraft`). A save that rolls back keeps the
+     rest of its patch — a `confirmCast` combined into it, or a kept save it
+     carried — for the book's next flush. */
+  const rollbackFields = new Map<FlushKey, Set<string>>();
   /* #2230 — monotonically-increasing counter per key, bumped every time a
      write is (re)scheduled. A flush captures the counter at fire time; its
      success/failure effects (snapshot prune / rollback / toast) only run if it
@@ -487,6 +492,8 @@ export const persistenceMiddleware: Middleware = (store) => {
     timers.delete(key);
     const handler = toastPending.get(key);
     toastPending.delete(key);
+    const ownFields = rollbackFields.get(key);
+    rollbackFields.delete(key);
     const carried = carriedKept.get(key);
     carriedKept.delete(key);
     const onSuccess = handler?.onSuccess ?? carried?.onSuccess;
@@ -578,12 +585,22 @@ export const persistenceMiddleware: Middleware = (store) => {
           const rolledBack =
             !!handler?.rollback && bookIdFromState(store.getState() as PersistableRootState) === bookId;
           /* Keep the patch for the book's next flush (#3421) — except a 4xx
-             (the server's answer, so re-sending repeats a refused write) and a
-             save that rolled back (the user's draft is restored for them to
-             save again). A save that gave up WITHOUT rolling back has no draft
-             left, so it is kept and re-sent. */
+             (the server's answer, so re-sending repeats a refused write) and
+             the fields a rollback restores (the user's draft is restored for
+             them to save again). A save that gave up WITHOUT rolling back has
+             no draft left, so it is kept and re-sent. A save that rolled back
+             keeps its other fields (#3784), with the base they were sent with
+             and the carried kept save's success handler: the screen still
+             shows them, and the server refuses them if the book moved on. */
           if (!refused && !rolledBack) {
             kept.set(key, { patch: patch as Record<string, unknown>, base: seq.base, onSuccess });
+          } else if (!refused) {
+            const rest = Object.fromEntries(
+              Object.entries(patch as Record<string, unknown>).filter(([f]) => !ownFields?.has(f)),
+            );
+            if (Object.keys(rest).length > 0) {
+              kept.set(key, { patch: rest, base: seq.base, onSuccess: carried?.onSuccess });
+            }
           }
           if (handler) {
             const bookTitle = refused
@@ -719,6 +736,11 @@ export const persistenceMiddleware: Middleware = (store) => {
        handler: the send still carries the book-meta fields, so its failure
        rolls them back and its success prunes their rollback baseline. */
     if (failHandler) toastPending.set(key, failHandler);
+    if (failHandler?.rollback) {
+      const own = rollbackFields.get(key) ?? new Set<string>();
+      for (const f of Object.keys(built as Record<string, unknown>)) own.add(f);
+      rollbackFields.set(key, own);
+    }
     const prev = timers.get(key);
     if (prev) clearTimeout(prev);
     timers.set(
