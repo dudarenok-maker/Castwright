@@ -8653,7 +8653,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair one-to-one (same chapter ids) with state.json: re-parse the book, then try again; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8708,7 +8708,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair one-to-one (same chapter ids) with state.json: re-parse the book, then try again; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8760,7 +8760,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair one-to-one (same chapter ids) with state.json: re-parse the book, then try again; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -690,21 +690,43 @@ export class HintsOutOfSyncError extends Error {
   readonly code = 'hints_out_of_sync';
   constructor() {
     super(
-      "This book's chapter list is out of date with its manuscript. Re-parse the book first, then try again.",
+      "This book's chapter list is out of date with its manuscript. Re-parse it from the book's menu in the Library to fix this — re-parsing discards its analysis, cast and audio.",
     );
     this.name = 'HintsOutOfSyncError';
   }
 }
 
+/** Whether a fresh parse's titles agree with state.json's, position by position.
+    Exact comparison, like `backfillTitleSynthesized`: state titles come from the
+    parse verbatim (import, re-parse, title refresh). Two kinds of position are
+    skipped because their title is not evidence of which chapter it is: a
+    `titleOverridden` chapter (the user's own wording) and one the parser made up
+    (`null`, or `titleSynthesized` in state: "Chapter N" renumbers with position).
+    So a book whose every title is app-made cannot be caught by this check. */
+export function parseTitlesPairWithState(
+  state: BookStateJson,
+  parseTitles: ReadonlyArray<string | null>,
+): boolean {
+  return state.chapters.every((c, i) => {
+    const parsed = parseTitles[i];
+    return c.titleOverridden === true || c.titleSynthesized === true || parsed == null || c.title === parsed;
+  });
+}
+
 /** Hints pair with state when both hold the same chapter ids (so the same
-    count). Hints carry no uuid, so the id is the whole pairing. */
+    count). Hints carry no uuid, so for hints from a persisted file that is all
+    there is to check. Hints from a parse fallback (`parseTitles` given) carry no
+    identity at all, so each position's parsed title must also match state's: a
+    same-count mispairing (a reorder from before #3703) fails here. */
 export function assertHintsPairWithState(
   state: BookStateJson,
   hints: readonly ChapterHint[],
+  parseTitles?: ReadonlyArray<string | null>,
 ): void {
   if (hints.length !== state.chapters.length) throw new HintsOutOfSyncError();
   const stateIds = new Set(state.chapters.map((c) => c.id));
   if (!hints.every((h) => stateIds.has(h.id))) throw new HintsOutOfSyncError();
+  if (parseTitles && !parseTitlesPairWithState(state, parseTitles)) throw new HintsOutOfSyncError();
 }
 
 /* -- merge ---------------------------------------------------------- */
@@ -714,8 +736,9 @@ export function applyMerge(
   hints: readonly ChapterHint[],
   sentences: readonly RestructureSentence[],
   op: MergeOp,
+  parseTitles?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints);
+  assertHintsPairWithState(state, hints, parseTitles);
   if (!Array.isArray(op.chapterIds) || op.chapterIds.length < 2) {
     throw new Error('Merge requires at least 2 chapter ids.');
   }
@@ -872,8 +895,9 @@ export function applySplit(
   hints: readonly ChapterHint[],
   sentences: readonly RestructureSentence[],
   op: SplitOp,
+  parseTitles?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints);
+  assertHintsPairWithState(state, hints, parseTitles);
   const sortedHints = sortById(hints);
   const sortedHintsIds = sortedHints.map((h) => h.id);
   const targetIdx = sortedHintsIds.indexOf(op.chapterId);
@@ -1366,8 +1390,9 @@ export function applyReorder(
   hints: readonly ChapterHint[],
   sentences: readonly RestructureSentence[],
   op: ReorderOp,
+  parseTitles?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints);
+  assertHintsPairWithState(state, hints, parseTitles);
   if (!Array.isArray(op.order)) {
     throw new Error('Reorder requires an order array.');
   }

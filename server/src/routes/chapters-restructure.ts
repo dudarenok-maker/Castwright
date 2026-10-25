@@ -32,6 +32,7 @@ import type { Request, Response } from '../http.js';
 import {
   applyMerge,
   HintsOutOfSyncError,
+  parseTitlesPairWithState,
   applySplit,
   applyReorder,
   applyExclude,
@@ -201,6 +202,7 @@ async function applyRestructure(
     hints: Parameters<typeof applyMerge>[1],
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
+    parseTitles: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
 ): Promise<{
   status: number;
@@ -261,6 +263,7 @@ async function applyRestructureClaimed(
     hints: Parameters<typeof applyMerge>[1],
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
+    parseTitles: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
 ): Promise<{
   status: number;
@@ -333,9 +336,20 @@ async function applyRestructureClaimed(
        mutates `state` in place. */
     const oldChapters = state.chapters.map((c) => ({ ...c }));
 
+    /* Read before the transform, which may rewrite `state`. */
+    const hintsMispaired =
+      record.hintsSource === 'parse' &&
+      record.parseTitles !== undefined &&
+      !parseTitlesPairWithState(state, record.parseTitles);
     let result: RestructureResult;
     try {
-      result = transform(state, alignedHints, sentences, advisoryValid);
+      result = transform(
+        state,
+        alignedHints,
+        sentences,
+        advisoryValid,
+        record.hintsSource === 'parse' ? record.parseTitles : undefined,
+      );
     } catch (e) {
       /* #3791 -- nothing is written: this is before the hints/state/edits writes. */
       if (e instanceof HintsOutOfSyncError) {
@@ -380,18 +394,24 @@ async function applyRestructureClaimed(
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
-       the restructure itself is still valid -- skip rather than fail it. Which
-       operations skip: exclude, rename and refresh-titles, which hand the hints
-       back unchanged (so the counts still differ). Merge and split rebuild state
-       from the hints, so they are aligned by construction and DO write a file; a
-       reorder is only accepted with an order naming every parsed chapter, and
-       then writes one too. A file written here persists whatever pairing the
+       the restructure itself is still valid -- skip rather than fail it. Only
+       exclude, rename and refresh-titles get here with such a book: they hand the
+       hints back unchanged (so the counts still differ). Merge, split and reorder
+       rebuild state from the hints and refuse it with a 409 before this point
+       (#3791), including a same-count book whose parse-fallback titles disagree
+       with state (`hintsMispaired`). That second case is skipped as well: a file
+       written here would make the mispaired bodies `persisted`, which no later
+       check looks at. A file written here persists whatever pairing the
        in-memory record already had: a pre-upgrade restructure is not repaired. */
     const aligned = result.hints.length === result.state.chapters.length;
     if (bodiesCurrent && !aligned) {
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
     }
-    if (bodiesCurrent && aligned) {
+    if (bodiesCurrent && aligned && hintsMispaired) {
+      console.warn(`[chapters-restructure] ${manuscriptId}: parsed titles do not pair with state; skipping manuscript-hints.json`);
+    }
+    const hintsWritten = bodiesCurrent && aligned && !hintsMispaired;
+    if (hintsWritten) {
       /* An unreadable previous file just means no previous entry to keep. */
       const previousFile = await readManuscriptHints(bookDir).catch(() => null);
       await writeManuscriptHints(
@@ -435,17 +455,24 @@ async function applyRestructureClaimed(
         ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
         : {}),
     });
-    return { early: null, result, editsPath, oldChapters };
+    return { early: null, result, editsPath, oldChapters, hintsWritten };
   });
   if (outcome.early) return outcome.early;
-  const { result, editsPath, oldChapters } = outcome;
+  const { result, editsPath, oldChapters, hintsWritten } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
   /* Replace the record, never mutate it in place: a cold hydrate still parsing
      checks the store's per-id version before it caches, and only `putManuscript`
      moves that (#3703). The spread keeps `sourceSha256` and every other field. */
-  putManuscript({ ...record, chapterHints: result.hints });
+  /* Once the file is written these hints are what a restart hydrates, so the
+     record is `persisted` and no longer carries the parser's raw titles. */
+  const { parseTitles: _parseTitles, ...recordRest } = record;
+  putManuscript(
+    hintsWritten
+      ? { ...recordRest, chapterHints: result.hints, hintsSource: 'persisted' }
+      : { ...record, chapterHints: result.hints },
+  );
 
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
@@ -504,8 +531,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences) =>
-          applyMerge(state, hints, sentences, op),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
+          applyMerge(state, hints, sentences, op, parseTitles),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -537,8 +564,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences) =>
-          applySplit(state, hints, sentences, op),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
+          applySplit(state, hints, sentences, op, parseTitles),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -726,8 +753,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences) =>
-          applyReorder(state, hints, sentences, op),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
+          applyReorder(state, hints, sentences, op, parseTitles),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
