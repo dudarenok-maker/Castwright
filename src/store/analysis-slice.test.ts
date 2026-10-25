@@ -7,7 +7,14 @@
    cross-book guard, and idempotency of the terminal transitions. */
 
 import { describe, it, expect } from 'vitest';
-import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import {
+  analysisSlice,
+  analysisActions,
+  isStaleIncludeSnapshot,
+  UNCONFIRMED_INCLUDE_MAX_MS,
+  type AnalysisStreamSnapshot,
+} from './analysis-slice';
+import { STALL_THRESHOLD_MS } from './chapters-slice';
 import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 import { analyzerSharesGenerationDevice } from '../lib/analyzer-endpoints';
 
@@ -32,6 +39,57 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
   it('setActiveStream sets the snapshot verbatim', () => {
     const state = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
     expect(state.activeStream).toEqual(baseSnapshot);
+  });
+
+  it('the in-run reducers (tick, heartbeat, paused, halted) keep the origin of a subset run, so a run that is progressing or ending is still told apart as an include (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    let state = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
+    state = analysisSlice.reducer(
+      state,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: snap.manuscriptId, phaseId: 1, phaseProgress: 0.5, lastTickAt: 99 }),
+    );
+    state = analysisSlice.reducer(state, analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: snap.manuscriptId, lastTickAt: 100 }));
+    expect(state.activeStream).toMatchObject({ phaseId: 1, lastTickAt: 100, subsetOrigin: 'include' });
+    expect(
+      analysisSlice.reducer(state, analysisActions.setPaused({ manuscriptId: snap.manuscriptId })).activeStream,
+    ).toMatchObject({ state: 'paused', subsetOrigin: 'include' });
+    expect(
+      analysisSlice.reducer(state, analysisActions.setHalted({ manuscriptId: snap.manuscriptId, code: 'x', message: 'm' })).activeStream,
+    ).toMatchObject({ state: 'halted', subsetOrigin: 'include' });
+  });
+
+  it('serverConfirmed: set by a tick, a heartbeat or the busy mark (this book only), kept through pause/halt, and gates isStaleIncludeSnapshot (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    const seeded = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
+    const quiet = snap.lastTickAt + STALL_THRESHOLD_MS + 1;
+    expect(seeded.activeStream?.serverConfirmed).toBeUndefined();
+    expect(isStaleIncludeSnapshot(seeded.activeStream, 'b1', quiet)).toBe(false);
+    const tick = analysisSlice.reducer(
+      seeded,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1 }),
+    );
+    const beat = analysisSlice.reducer(seeded, analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: 'm1', lastTickAt: 1000 }));
+    const mark = analysisSlice.reducer(seeded, analysisActions.markAnalysisServerConfirmed({ bookId: 'b1' }));
+    for (const s of [tick, beat, mark]) {
+      expect(s.activeStream?.serverConfirmed).toBe(true);
+      expect(isStaleIncludeSnapshot(s.activeStream, 'b1', quiet)).toBe(true);
+      expect(analysisSlice.reducer(s, analysisActions.setPaused({ manuscriptId: 'm1' })).activeStream?.serverConfirmed).toBe(true);
+    }
+    expect(
+      analysisSlice.reducer(seeded, analysisActions.markAnalysisServerConfirmed({ bookId: 'other' })).activeStream?.serverConfirmed,
+    ).toBeUndefined();
+  });
+
+  it('an UNCONFIRMED include snapshot is stale only once it is older than UNCONFIRMED_INCLUDE_MAX_MS; a confirmed one keeps the 30 s rule (#3774)', () => {
+    const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
+    expect(UNCONFIRMED_INCLUDE_MAX_MS).toBe(120_000);
+    expect(isStaleIncludeSnapshot(snap, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS)).toBe(false);
+    expect(isStaleIncludeSnapshot(snap, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(true);
+    const confirmed = { ...snap, serverConfirmed: true };
+    expect(isStaleIncludeSnapshot(confirmed, 'b1', snap.lastTickAt + STALL_THRESHOLD_MS)).toBe(false);
+    expect(isStaleIncludeSnapshot(confirmed, 'b1', snap.lastTickAt + STALL_THRESHOLD_MS + 1)).toBe(true);
+    expect(isStaleIncludeSnapshot({ ...snap, state: 'paused' }, 'b1', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(false);
+    expect(isStaleIncludeSnapshot(snap, 'other', snap.lastTickAt + UNCONFIRMED_INCLUDE_MAX_MS + 1)).toBe(false);
   });
 
   it('clearActiveStream tears down the snapshot', () => {

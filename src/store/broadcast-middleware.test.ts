@@ -214,7 +214,8 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
        progress-only ticks getting collapsed. */
     const mock = makeMockChannel();
     const store = makeStore(mock.channel, { now: clock.now, debounceMs: 250 });
-    store.dispatch(analysisActions.setActiveStream(analysisSnap));
+    /* already server-confirmed, so the first tick's diff is not the flag flipping (#3774) */
+    store.dispatch(analysisActions.setActiveStream({ ...analysisSnap, serverConfirmed: true }));
     mock.sent.length = 0;
     /* Advance past the debounce window so the next tick is sent on its own. */
     clock.advance(500);
@@ -249,7 +250,8 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
     const clock = makeClock();
     const mock = makeMockChannel();
     const store = makeStore(mock.channel, { now: clock.now, debounceMs: PROGRESS_DEBOUNCE_MS });
-    store.dispatch(analysisActions.setActiveStream(analysisSnap));
+    /* already server-confirmed, so the first tick's diff is not the flag flipping (#3774) */
+    store.dispatch(analysisActions.setActiveStream({ ...analysisSnap, serverConfirmed: true }));
     mock.sent.length = 0;
 
     /* Five rapid progress-only ticks inside the window — only the first
@@ -302,7 +304,8 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
     const clock = makeClock();
     const mock = makeMockChannel();
     const store = makeStore(mock.channel, { now: clock.now, debounceMs: PROGRESS_DEBOUNCE_MS });
-    store.dispatch(analysisActions.setActiveStream(analysisSnap));
+    /* already server-confirmed, so the first tick's diff is not the flag flipping (#3774) */
+    store.dispatch(analysisActions.setActiveStream({ ...analysisSnap, serverConfirmed: true }));
     mock.sent.length = 0;
 
     clock.advance(10);
@@ -326,7 +329,8 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
     const clock = makeClock();
     const mock = makeMockChannel();
     const store = makeStore(mock.channel, { now: clock.now, debounceMs: 250 });
-    store.dispatch(analysisActions.setActiveStream(analysisSnap));
+    /* already server-confirmed, so the first tick's diff is not the flag flipping (#3774) */
+    store.dispatch(analysisActions.setActiveStream({ ...analysisSnap, serverConfirmed: true }));
     mock.sent.length = 0;
     /* Open a fresh stream on a different book. */
     clock.advance(500);
@@ -406,7 +410,8 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
     const clock = makeClock();
     const mock = makeMockChannel();
     const store = makeStore(mock.channel, { now: clock.now, debounceMs: 250 });
-    store.dispatch(analysisActions.setActiveStream(analysisSnap));
+    /* already server-confirmed, so the first tick's diff is not the flag flipping (#3774) */
+    store.dispatch(analysisActions.setActiveStream({ ...analysisSnap, serverConfirmed: true }));
     mock.sent.length = 0;
     clock.advance(500);
     store.dispatch(analysisActions.hydrateColdBoot(analysisSnap));

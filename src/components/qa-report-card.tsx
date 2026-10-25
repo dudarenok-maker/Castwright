@@ -13,6 +13,9 @@ interface QaReportCardProps {
   bookTitle: string;
   bookId: string;
   scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+  /** #3774 — why starting a job is off right now (an include's run is live); the
+      Resume scoring button is disabled with this reason shown. */
+  jobStartBlockedReason?: string;
 }
 
 function slugify(title: string): string {
@@ -67,10 +70,12 @@ function VoiceMatchRow({
   report,
   bookId,
   scoringProgress,
+  jobStartBlockedReason,
 }: {
   report: BookQaReport;
   bookId: string;
   scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+  jobStartBlockedReason?: string;
 }) {
   const vd = report.voiceDrift;
   const [resuming, setResuming] = useState(false);
@@ -139,11 +144,17 @@ function VoiceMatchRow({
                   setResuming(false);
                 }
               }}
-              disabled={resuming}
+              disabled={resuming || jobStartBlockedReason != null}
+              aria-describedby={jobStartBlockedReason ? 'qa-resume-scoring-blocked' : undefined}
               className="text-xs font-semibold text-ink/70 hover:text-ink px-3 py-1 rounded-full border border-ink/10 disabled:opacity-50"
             >
               {resuming ? 'Resuming…' : 'Resume scoring'}
             </button>
+          )}
+          {!resumed && jobStartBlockedReason && (
+            <span id="qa-resume-scoring-blocked" className="text-[11px] text-ink/60">
+              {jobStartBlockedReason}
+            </span>
           )}
         </div>
       </div>
@@ -197,7 +208,7 @@ function CastContinuityRow({ report }: { report: BookQaReport }) {
   );
 }
 
-export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress }: QaReportCardProps) {
+export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason }: QaReportCardProps) {
   if (loading) {
     return <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 text-sm text-ink/50">Loading QA report…</div>;
   }
@@ -218,7 +229,7 @@ export function QaReportCard({ report, loading, error, bookTitle, bookId, scorin
       <div className="divide-y divide-ink/5">
         <AcousticRow report={report} />
         <TranscriptRow report={report} />
-        <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} />
+        <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} jobStartBlockedReason={jobStartBlockedReason} />
         <CastContinuityRow report={report} />
       </div>
       <div className="flex gap-2 mt-4">

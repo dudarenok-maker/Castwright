@@ -145,6 +145,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           haltReason: server.haltReason,
           kind: server.kind,
           subsetChapterIds: server.subsetChapterIds,
+          /* #3774 — the server's record of what started the run; without it the
+             Generate view's include job-start block is lost on this restore. */
+          subsetOrigin: server.subsetOrigin,
+          /* #3774 — rebuilt from the server's own answer: the run is registered. */
+          serverConfirmed: true,
         }),
       );
     } catch (err) {

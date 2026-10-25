@@ -1,11 +1,11 @@
 // Pairs with docs/features/archive/16-generation-stream.md
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
-import { chaptersSlice } from '../store/chapters-slice';
+import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
@@ -18,7 +18,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { analysisStreamMiddleware } from '../store/analysis-stream-middleware';
-import { GenerationView, ChapterSegmentStrip } from './generation';
+import { GenerationView, ChapterSegmentStrip, __resetIncludeRollbackPendingForTests } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { api, AnalysisError } from '../lib/api';
@@ -67,7 +67,9 @@ const getOllamaHealthSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
 const setChapterExcludedSpy = vi.fn();
 const runAnalysisForChaptersSpy = vi.fn();
+const pauseAnalysisSpy = vi.fn();
 const getQaReportSpy = vi.fn();
+const getBookBusySpy = vi.fn();
 
 vi.mock('../lib/api', () => ({
   /* Never-resolving so the ChapterSegmentStrip useEffect doesn't flush a
@@ -113,6 +115,10 @@ vi.mock('../lib/api', () => ({
     /* fs-51 — QaReportCard's useQaReport hook fetches on mount and on the
        live chapter_complete refetch trigger under test below. */
     getQaReport: (bookId: string) => getQaReportSpy(bookId),
+    /* #3774 — Cancel on an Include stops the server's subset job. */
+    pauseAnalysis: (args: { manuscriptId: string }) => pauseAnalysisSpy(args),
+    /* #3774 — which long jobs hold the book; Include is disabled while any does. */
+    getBookBusy: (bookId: string) => getBookBusySpy(bookId),
   },
   /* Stub class so `instanceof AnalysisError` checks in production code
      don't throw "Right-hand side of instanceof is not callable". */
@@ -127,6 +133,12 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
+/* #3774 — the include-rollback set is module-level; never let one test's pending
+   rollback leak into the next. */
+afterEach(() => {
+  __resetIncludeRollbackPendingForTests();
+});
+
 beforeEach(() => {
   unloadAnalyzerSpy.mockReset();
   loadSidecarSpy.mockReset();
@@ -135,8 +147,12 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   setChapterExcludedSpy.mockReset();
   runAnalysisForChaptersSpy.mockReset();
+  pauseAnalysisSpy.mockReset();
+  pauseAnalysisSpy.mockResolvedValue(undefined);
   getQaReportSpy.mockReset();
   getQaReportSpy.mockResolvedValue(MOCK_QA_REPORT);
+  getBookBusySpy.mockReset();
+  getBookBusySpy.mockResolvedValue([]);
   vi.mocked(api.getChapterAudio).mockReset();
   vi.mocked(api.getChapterAudio).mockReturnValue(new Promise(() => {}));
   getOllamaHealthSpy.mockResolvedValue({
@@ -2222,10 +2238,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     selectedModel,
     activeStream,
     withMiddleware,
+    chapters = [chapter1, chapter2, ch3Excluded],
   }: {
     selectedModel?: string;
     activeStream?: { bookId: string; modelKey: string };
     withMiddleware?: boolean;
+    chapters?: Chapter[];
   } = {}) {
     const store = configureStore({
       reducer: {
@@ -2242,7 +2260,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       },
       middleware: (g) => (withMiddleware ? g().concat(analysisStreamMiddleware) : g()),
     });
-    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     /* Order matters: hydrateFromAnalysis FIRST while manuscriptId is
        still null so the slice takes the wholesale-replace branch and
@@ -2256,7 +2274,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         manuscriptId: 'm1',
         title: 'the Coalfall Commission',
         characters,
-        chapters: [chapter1, chapter2, ch3Excluded],
+        chapters,
         sentences,
       } as any),
     );
@@ -2291,11 +2309,14 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     return store;
   }
 
-  function renderInclude(store: ReturnType<typeof makeIncludeStore>) {
+  function renderInclude(
+    store: ReturnType<typeof makeIncludeStore>,
+    chapters: Chapter[] = [chapter1, chapter2, ch3Excluded],
+  ) {
     return render(
       <Provider store={store}>
         <HostedGenerationView
-          chapters={[chapter1, chapter2, ch3Excluded]}
+          chapters={chapters}
           characters={characters}
           paused
           title="the Coalfall Commission"
@@ -2520,6 +2541,836 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
+  /* #3774 — an include POST that FAILED (a 500 here; the server no longer
+     refuses an include with `book_busy`) started no job of ours, so the
+     snapshot of another chapter's still-running subset job, which this click
+     took over, is put back. */
+  it('#3774 — Include flow: a failed include POST restores the other job\'s snapshot', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+    setChapterExcludedSpy.mockRejectedValueOnce(new Error('Server error (500)'));
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(/Server error \(500\)/);
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+  });
+
+  /* #3774 — pins the `includePosted` guard: once the include POST landed, the
+     snapshot is THIS include's own, so a failing subset run clears it rather
+     than restoring what was there before. Mutating the guard to always restore
+     turns this red. */
+  it('#3774 — Include flow: a subset run that fails AFTER the include POST landed clears the snapshot (does not restore the prior one)', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 40,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'subset',
+        subsetChapterIds: [5],
+      }),
+    );
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(/Re-analysis failed: analyzer offline/i);
+    expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, false);
+    expect(store.getState().analysis.activeStream).toBeNull();
+  });
+
+  /* #3774 — Include is disabled while ANY long job holds the book (the server
+     refuses the rollback's re-exclude meanwhile, and only the include's own
+     subset job is the one Cancel stops). */
+  describe('#3774 — Include is disabled while a long job holds the book', () => {
+    it.each([
+      ['a render', ['render'], 'rendering audio'],
+      ['an export', ['export'], 'exporting'],
+      ['another chapter\'s subset analysis', ['analysis'], 'analysing'],
+      ['two jobs at once', ['render', 'scoring'], 'rendering audio, scoring'],
+    ])('%s disables Include with the reason as visible text; it re-enables when the job ends', async (_label, kinds, phrase) => {
+      getBookBusySpy.mockResolvedValue(kinds);
+      const store = makeIncludeStore();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderInclude(store);
+        const include = screen.getByRole('button', { name: /\+ Include in book/i });
+        await waitFor(() => expect(include).toBeDisabled(), { timeout: 1000 });
+        /* the reason is visible text on the row, not a hover-only title (a
+           disabled pointer-events-none button never shows its title; touch has
+           no hover) */
+        const reason = screen.getByText(new RegExp(`This book is busy \\(${phrase}\\)`));
+        expect(reason).toBeVisible();
+        expect(include).toHaveAttribute('aria-describedby', reason.id);
+        expect(include).not.toHaveAttribute('title');
+        fireEvent.click(include);
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+        /* the job ends: the next refresh re-enables the control */
+        getBookBusySpy.mockResolvedValue([]);
+        await vi.advanceTimersByTimeAsync(6000);
+        await waitFor(() => expect(include).toBeEnabled(), { timeout: 1000 });
+        expect(screen.queryByText(/This book is busy/)).toBeNull();
+        expect(include).not.toHaveAttribute('aria-describedby');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('is enabled when no job holds the book', async () => {
+      const store = makeIncludeStore();
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalledWith('b1'));
+      expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeEnabled();
+    });
+  });
+
+  /* #3774 pass 3 (E) — Include, Retry and "Accept smaller cast" all end in
+     `handleToggleExcluded(id, false)`; the busy state the buttons read can be up
+     to 5 s stale, so the include branch itself re-reads `GET /busy` at click
+     time and also refuses while this tab's own subset run is live. */
+  describe('#3774 — every route into the include flow is gated at click time', () => {
+    const ch4Excluded: Chapter = { ...ch3Excluded, id: 4, title: 'Chapter 4' };
+    const includePosts = () => setChapterExcludedSpy.mock.calls.filter((c) => c[2] === false);
+
+    async function renderFailedInclude(err: Error) {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(err);
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await screen.findByRole('button', { name: /Retry/ });
+      return store;
+    }
+
+    it('Retry on an include-origin error row is refused while the book is busy: no include POST, the reason is toasted, the row is untouched', async () => {
+      const store = await renderFailedInclude(new Error('analyzer offline'));
+      expect(includePosts()).toHaveLength(1);
+      /* a render started after the last read: the button has not caught up */
+      getBookBusySpy.mockResolvedValue(['render']);
+      const retry = screen.getByRole('button', { name: /Retry/ });
+      expect(retry).toBeEnabled();
+      fireEvent.click(retry);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringContaining('rendering audio') }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(1);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Re-analysis failed: analyzer offline')).toBeInTheDocument();
+      /* the click-time read taught the row: Retry is now disabled */
+      await waitFor(() => expect(screen.getByRole('button', { name: /Retry/ })).toBeDisabled());
+    });
+
+    it('the busy reason shows as visible text beside a disabled Retry', async () => {
+      await renderFailedInclude(new Error('analyzer offline'));
+      getBookBusySpy.mockResolvedValue(['render']);
+      fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+      const reason = await screen.findByText(/This book is busy \(rendering audio\)/);
+      expect(reason).toBeVisible();
+      expect(screen.getByRole('button', { name: /Retry/ })).toBeDisabled();
+    });
+
+    it('"Accept smaller cast" on an include-origin error row is refused while the book is busy', async () => {
+      const store = await renderFailedInclude(new AnalysisError('Cast shrank.', 'stage1_shrink_refused'));
+      expect(includePosts()).toHaveLength(1);
+      getBookBusySpy.mockResolvedValue(['scoring']);
+      const accept = screen.getByRole('button', { name: /Accept smaller cast/ });
+      expect(accept).toBeEnabled();
+      fireEvent.click(accept);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringContaining('scoring') }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(1);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Accept smaller cast/ })).toBeDisabled());
+    });
+
+    it('Include itself is refused at click time when the book went busy since the last read', async () => {
+      const store = makeIncludeStore();
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      getBookBusySpy.mockResolvedValue(['render']);
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+      expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+    });
+
+    it("a second chapter's Include right after the first one started is refused, whether the first is still being checked or already running", async () => {
+      const both = [chapter1, chapter2, ch3Excluded, ch4Excluded];
+      const store = makeIncludeStore({ chapters: both });
+      renderInclude(store, both);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      const includes = screen.getAllByRole('button', { name: /\+ Include in book/i });
+      expect(includes).toHaveLength(2);
+      /* (1) chapter 3's click-time read is still in flight */
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      fireEvent.click(includes[0]);
+      fireEvent.click(includes[1]);
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 4, false);
+      /* chapter 3's own check passes and its run starts */
+      await act(async () => {
+        release([]);
+      });
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, false));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      /* (2) chapter 3's run is live: chapter 4's Include is unavailable at once,
+         not only after the next 5 s poll */
+      expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeDisabled();
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 4, false);
+    });
+
+    it('fails closed: when the busy read errors at click time nothing is included and the user is told', async () => {
+      getBookBusySpy.mockRejectedValue(new Error('network down'));
+      const store = makeIncludeStore();
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ kind: 'warn', message: expect.stringMatching(/could not check/i) }),
+        ]),
+      );
+      expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    });
+
+    it("the busy read is repeated when this view's own subset run starts and when it ends, not only every 5 s", async () => {
+      const store = makeIncludeStore();
+      let failRun!: (e: Error) => void;
+      runAnalysisForChaptersSpy.mockReturnValue(new Promise((_, rej) => (failRun = rej)));
+      renderInclude(store);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      /* start: the click-time gate read (+1) AND the effect's re-read (+1) */
+      await waitFor(() => expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(3));
+      await new Promise((r) => setTimeout(r, 50));
+      const afterStart = getBookBusySpy.mock.calls.length;
+      await act(async () => {
+        failRun(new Error('analyzer offline'));
+      });
+      await screen.findByRole('button', { name: /Retry/ });
+      /* end: one more read, long before the 5 s tick */
+      await waitFor(() => expect(getBookBusySpy.mock.calls.length).toBeGreaterThan(afterStart));
+    });
+  });
+
+  /* #3774 pass 3 (F) — a job started while an include's subset run is live would
+     hold the book, so the include's Cancel rollback (re-exclude) is refused for
+     up to 20 s and the chapter ends included with no analysis. The Generate view
+     disables every control that starts a job until the include run ends. */
+  describe('#3774 — job-start controls are disabled while an include run is live', () => {
+    const drifted: Chapter = { ...chapter1, audioModelKey: 'kokoro-v1' };
+    const failed: Chapter = {
+      id: 5,
+      title: 'Chapter 5',
+      duration: '00:00',
+      state: 'failed',
+      progress: 0,
+      errorReason: 'The voice engine crashed.',
+      characters: { narrator: 'failed' },
+    };
+    const allDone: Chapter = { ...chapter2, state: 'done', progress: 1, characters: { narrator: 'done' } };
+    const mixed = [drifted, chapter2, failed, ch3Excluded];
+    const complete = [chapter1, allDone, ch3Excluded];
+
+    const cases: [string, Chapter[], string | null, () => HTMLElement][] = [
+      ['Resume generation', mixed, null, () => screen.getByTestId('generation-view-resume')],
+      ['Regenerate all (drifted chapters)', mixed, null, () => screen.getByRole('button', { name: /Regenerate all/ })],
+      ['the book-level Regenerate', complete, null, () => screen.getByRole('button', { name: /^Regenerate$/ })],
+      ['a done row\'s Regenerate', mixed, null, () => screen.getByRole('button', { name: 'Regenerate this chapter' })],
+      ['a failed row\'s Retry', mixed, null, () => screen.getByRole('button', { name: /^Retry$/ })],
+      ['Generate this chapter', mixed, 'Chapter 2', () => screen.getByTestId('chapter-row-2-generate')],
+      ['a per-character Regenerate', mixed, 'Chapter 1', () => screen.getByRole('button', { name: 'Regenerate Narrator in this chapter' })],
+    ];
+
+    async function startRun(chapters: Chapter[], expand: string | null) {
+      /* a run that ends (rejecting AbortError) when its Cancel aborts the signal */
+      runAnalysisForChaptersSpy.mockImplementation(
+        (_m: string, _c: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_, reject) =>
+            opts.signal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })),
+            ),
+          ),
+      );
+      const store = makeIncludeStore({ chapters });
+      renderInclude(store, chapters);
+      if (expand) fireEvent.click(screen.getByText(expand));
+      return store;
+    }
+    async function clickInclude() {
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+    }
+
+    it.each(cases)('%s is disabled with a visible reason while a chapter is being included, and enabled again after Cancel', async (_label, chapters, expand, find) => {
+      await startRun(chapters, expand);
+      expect(find()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      await clickInclude();
+      expect(find()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toHaveTextContent(
+        /being included.*before starting generation/i,
+      );
+      /* Cancel ends the run: the controls come back */
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      await waitFor(() => expect(find()).toBeEnabled());
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('a re-analyse run does not disable them (only an include run strands a chapter)', async () => {
+      await startRun(mixed, null);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+  });
+
+  /* #3774 pass 4 — the job-start block is tied to the RUN (the store's analysis
+     snapshot), not to the view instance: the include outlives the view, which
+     remounts on every navigation. */
+  describe('#3774 pass 4 — the include block outlives the view; the gate is bounded and pinned', () => {
+    const ch4Excluded: Chapter = { ...ch3Excluded, id: 4, title: 'Chapter 4' };
+    const rows = [chapter1, chapter2, ch3Excluded];
+    const includePosts = () => setChapterExcludedSpy.mock.calls.filter((c) => c[2] === false);
+    const resume = () => screen.getByTestId('generation-view-resume');
+
+    it('H: a remount while the include run is live keeps Resume disabled with the banner', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(resume()).toBeDisabled();
+      first.unmount();
+      /* the run is still live in the store; a fresh instance has no local state */
+      expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+    });
+
+    it('H: a remount while a RE-ANALYSE run is live does not block Resume', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const first = renderInclude(store, rows);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      first.unmount();
+      expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
+      renderInclude(store, rows);
+      expect(resume()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('H: leaving the view during the click-time busy read starts nothing', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      const view = renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      view.unmount();
+      await act(async () => {
+        release([]);
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(includePosts()).toHaveLength(0);
+      expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    });
+
+    it('H\': the include start POST carries origin include, a re-analyse start carries reanalyse', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(runAnalysisForChaptersSpy.mock.calls[0][2]).toMatchObject({ origin: 'include' });
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      runAnalysisForChaptersSpy.mockClear();
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(runAnalysisForChaptersSpy.mock.calls[0][2]).toMatchObject({ origin: 'reanalyse' });
+    });
+
+    it('H\': a remount after Cancel, while the rollback still waits for the lease, keeps the block until the rollback ends', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      let finishRollback!: () => void;
+      setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+        excluded
+          ? new Promise((r) => (finishRollback = () => r({ id, title: '', slug: '', excluded: true })))
+          : Promise.resolve({ id, title: '', slug: '', excluded: false }),
+      );
+      runAnalysisForChaptersSpy.mockImplementation(
+        (_m: string, _c: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_, reject) =>
+            opts.signal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })),
+            ),
+          ),
+      );
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, true)); // the rollback is waiting
+      /* what the stream middleware does when the server's stop lands: the snapshot is no longer 'running' */
+      act(() => {
+        store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
+      });
+      first.unmount();
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+      await act(async () => finishRollback());
+      await waitFor(() => expect(resume()).toBeEnabled());
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('H\': a FAILED include run (not a Cancel) also holds the block until its rollback ends', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      let finishRollback!: () => void;
+      setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+        excluded
+          ? new Promise((r) => (finishRollback = () => r({ id, title: '', slug: '', excluded: true })))
+          : Promise.resolve({ id, title: '', slug: '', excluded: false }),
+      );
+      runAnalysisForChaptersSpy.mockRejectedValue(new Error('analyzer exploded'));
+      const first = renderInclude(store, rows);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, true)); // the rollback is waiting
+      act(() => {
+        store.dispatch(analysisActions.clearActiveStream());
+      });
+      first.unmount();
+      renderInclude(store, rows);
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+      await act(async () => finishRollback());
+      await waitFor(() => expect(resume()).toBeEnabled());
+    });
+
+    it('the busy poll keeps running while a started include has no excluded chapter left (the subset row alone is the include surface)', async () => {
+      const oneExcluded = [chapter1, chapter2, ch3Excluded];
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore({ chapters: oneExcluded });
+        const view = renderInclude(store, oneExcluded);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+        /* the include landed: no chapter is excluded any more, only the subset row remains */
+        const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
+        expect(store.getState().chapters.chapters.some((c) => c.excluded)).toBe(false);
+        view.rerender(
+          <Provider store={store}>
+            <HostedGenerationView
+              chapters={included}
+              characters={characters}
+              paused
+              title="the Coalfall Commission"
+              bookId="b1"
+              modelKey="coqui-xtts-v2"
+              onRegenerate={() => {}}
+              onRegenerateBook={() => {}}
+              onRegenerateCharacterInChapter={() => {}}
+              onPreview={() => {}}
+            />
+          </Provider>,
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        const settled = getBookBusySpy.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(settled + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /* #3774 pass 6 (J) — after a reload (or a tab opened mid-run) the layout's
+       hydrate rebuilds an include-origin snapshot but the stream that would end
+       it died with the old page. The Generate view's busy poll ends it: no
+       `analysis` job on `/busy` AND the snapshot quiet > STALL_THRESHOLD_MS. */
+    describe('J: a store-only include block ends with the run', () => {
+      const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
+      const hydrated = (lastTickAt: number) =>
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          bookTitle: 'the Coalfall Commission',
+          engine: 'local',
+          phaseId: 'attribution',
+          phaseLabel: 'Attribution',
+          phaseProgress: 0.5,
+          remainingMs: null,
+          lastTickAt,
+          state: 'running',
+          kind: 'subset',
+          subsetChapterIds: [3],
+          subsetOrigin: 'include',
+          serverConfirmed: true,
+        } as any);
+
+      it('a hydrate-shaped include snapshot is cleared once /busy has no analysis job and it has been quiet > 30 s', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          expect(resume()).toBeDisabled();
+          expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
+          expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a live run (/busy reports analysis) is never cleared, however quiet its snapshot', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS * 3);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('a fresh snapshot (< 30 s quiet) is not cleared even when /busy has no analysis job yet', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(hydrated(Date.now()));
+          });
+          renderInclude(store, included);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS - 10_000);
+          expect(getBookBusySpy).toHaveBeenCalled();
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    /* #3774 pass 7 (J') — the include snapshot is created at click time, before the job
+       registers its lease, so `/busy` truthfully reports no `analysis` for a LIVE include
+       until then. Quiet time only counts once the snapshot has server evidence. */
+    describe("J': a live include is never cleared before its job has registered", () => {
+      const included = [chapter1, chapter2, { ...ch3Excluded, excluded: false }];
+      const withFakeTimers = async (body: () => Promise<void>) => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+          await body();
+        } finally {
+          vi.useRealTimers();
+        }
+      };
+
+      it('P1: no registration for 36 s keeps the snapshot (also across a remount); registration + a tick then runs normally', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          const first = renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          first.unmount();
+          renderInclude(store, rows);
+          expect(resume()).toBeDisabled();
+          expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          /* the job registers: /busy reports it, and a phase tick lands */
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ serverConfirmed: true });
+          act(() => {
+            store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, lastTickAt: Date.now() }));
+          });
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS * 2);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+        });
+      });
+
+      it('freeze: the clock jumping 60 s during the include POST does not clear the snapshot', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          let landInclude!: () => void;
+          setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+            excluded
+              ? Promise.resolve({ id, title: '', slug: '', excluded })
+              : new Promise((r) => (landInclude = () => r({ id, title: '', slug: '', excluded }))),
+          );
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(includePosts()).toHaveLength(1));
+          vi.setSystemTime(Date.now() + 60_000);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          expect(resume()).toBeDisabled();
+          await act(async () => landInclude());
+        });
+      });
+
+      it('the starting view never clears while its own include request is pending, even after /busy once reported analysis', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          getBookBusySpy.mockResolvedValue([]);
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+          /* another job's lease makes /busy report analysis for a moment, then it ends */
+          getBookBusySpy.mockResolvedValue(['analysis']);
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ serverConfirmed: true });
+          getBookBusySpy.mockResolvedValue([]);
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+        });
+      });
+
+      /* the clicking tab closed before the job registered: this tab holds only the broadcast
+         copy, which no stream will ever confirm or end — the 2-minute rule clears it */
+      it('an unconfirmed include snapshot with no analysis job on /busy is kept at 119 s and cleared past 120 s', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          act(() => {
+            store.dispatch(
+              analysisActions.setActiveStream({
+                bookId: 'b1',
+                manuscriptId: 'm1',
+                bookTitle: 'the Coalfall Commission',
+                engine: 'local',
+                phaseId: 1,
+                phaseLabel: 'Attribution',
+                phaseProgress: 0,
+                remainingMs: null,
+                lastTickAt: Date.now(),
+                state: 'running',
+                kind: 'subset',
+                subsetChapterIds: [3],
+                subsetOrigin: 'include',
+              } as any),
+            );
+          });
+          renderInclude(store, included);
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(119_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running' });
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(7_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
+        });
+      });
+
+      it('the starting view never clears its unconfirmed snapshot while its own include request is pending, even past 120 s', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: rows });
+          let landInclude!: () => void;
+          setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+            excluded
+              ? Promise.resolve({ id, title: '', slug: '', excluded })
+              : new Promise((r) => (landInclude = () => r({ id, title: '', slug: '', excluded }))),
+          );
+          renderInclude(store, rows);
+          fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+          await waitFor(() => expect(includePosts()).toHaveLength(1));
+          await vi.advanceTimersByTimeAsync(121_000);
+          expect(store.getState().analysis.activeStream).toMatchObject({ state: 'running', subsetOrigin: 'include' });
+          expect(resume()).toBeDisabled();
+          await act(async () => landInclude());
+        });
+      });
+
+      it('real reload order: the view mounts first, then the hydrate-shaped server snapshot lands; the poll then ends it', async () => {
+        await withFakeTimers(async () => {
+          const store = makeIncludeStore({ chapters: included, withMiddleware: true });
+          renderInclude(store, included);
+          expect(resume()).toBeEnabled();
+          act(() => {
+            store.dispatch(
+              analysisActions.setActiveStream({
+                bookId: 'b1',
+                manuscriptId: 'm1',
+                bookTitle: 'the Coalfall Commission',
+                engine: 'local',
+                phaseId: 1,
+                phaseLabel: 'Attribution',
+                phaseProgress: 0.5,
+                remainingMs: null,
+                lastTickAt: Date.now(),
+                state: 'running',
+                kind: 'subset',
+                subsetChapterIds: [3],
+                subsetOrigin: 'include',
+                serverConfirmed: true,
+              } as any),
+            );
+          });
+          expect(resume()).toBeDisabled();
+          await vi.advanceTimersByTimeAsync(STALL_THRESHOLD_MS + 6_000);
+          expect(store.getState().analysis.activeStream).toBeNull();
+          expect(resume()).toBeEnabled();
+        });
+      });
+    });
+
+    it('I: Resume scoring on the QA card is disabled with the reason while an include run is live', async () => {
+      getQaReportSpy.mockResolvedValue({
+        ...MOCK_QA_REPORT,
+        voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 6, charactersPending: ['narrator'] },
+      });
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      expect(await screen.findByRole('button', { name: /resume scoring/i })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      const btn = screen.getByRole('button', { name: /resume scoring/i });
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAccessibleDescription(/being included and analysed/i);
+    });
+
+    it('a double click on one chapter does nothing the second time (no wrong-reason toast, one include)', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      let release!: (kinds: string[]) => void;
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>((r) => (release = r)));
+      const include = screen.getByRole('button', { name: /\+ Include in book/i });
+      fireEvent.click(include);
+      fireEvent.click(include);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+      await act(async () => {
+        release([]);
+      });
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      expect(includePosts()).toHaveLength(1);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
+    it('another chapter Include while a read is in flight says so (not "being analysed")', async () => {
+      const both = [chapter1, chapter2, ch3Excluded, ch4Excluded];
+      const store = makeIncludeStore({ chapters: both });
+      renderInclude(store, both);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      getBookBusySpy.mockReturnValueOnce(new Promise<string[]>(() => {}));
+      const includes = screen.getAllByRole('button', { name: /\+ Include in book/i });
+      fireEvent.click(includes[0]);
+      fireEvent.click(includes[1]);
+      await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+      const msg = store.getState().notifications.toasts[0].message;
+      expect(msg).toMatch(/still being checked/i);
+      expect(msg).not.toMatch(/being analysed/i);
+    });
+
+    it('the click-time gate refuses when a run started elsewhere while the analyzer-guard modal was open', async () => {
+      const store = makeIncludeStore({
+        chapters: rows,
+        selectedModel: 'qwen3.5:4b',
+        activeStream: { bookId: 'other-book', modelKey: 'coqui-xtts-v2' },
+      });
+      renderInclude(store, rows);
+      await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+      await screen.findByText(/Pause audio generation to analyse\?/i);
+      /* while it is open, a re-analyse of chapter 1 starts */
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: /Pause and analyse/i }));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts).toEqual([
+          expect.objectContaining({ message: expect.stringMatching(/being analysed/i) }),
+        ]),
+      );
+      expect(includePosts()).toHaveLength(0);
+      expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('a hung click-time busy read fails closed after a bounded wait and does not wedge the next click', async () => {
+      const store = makeIncludeStore({ chapters: rows });
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderInclude(store, rows);
+        await waitFor(() => expect(getBookBusySpy).toHaveBeenCalled());
+        getBookBusySpy.mockReturnValueOnce(new Promise<string[]>(() => {}));
+        fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+        expect(store.getState().notifications.toasts).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(9000);
+        await waitFor(() =>
+          expect(store.getState().notifications.toasts).toEqual([
+            expect.objectContaining({ message: expect.stringMatching(/could not check/i) }),
+          ]),
+        );
+        expect(includePosts()).toHaveLength(0);
+        /* the gate is free again: the next click goes through */
+        fireEvent.click(screen.getByRole('button', { name: /\+ Include in book/i }));
+        await waitFor(() => expect(includePosts()).toHaveLength(1));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('the busy poll runs only when some row can show an include-flow button', async () => {
+      const noExcluded = [chapter1, chapter2];
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const { unmount } = renderInclude(makeIncludeStore({ chapters: noExcluded }), noExcluded);
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(getBookBusySpy).not.toHaveBeenCalled();
+        unmount();
+        renderInclude(makeIncludeStore({ chapters: rows }), rows);
+        await vi.advanceTimersByTimeAsync(6_000);
+        expect(getBookBusySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   /* #3435 decision A — the server refuses a subset run while a main analysis
      run is live for the book, so the controls that start one are disabled
      until it is paused. */
@@ -2603,6 +3454,26 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
     expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
     expect(store.getState().analysis.activeStream).toBeNull();
+  });
+
+  /* #3774 — the server refuses an Exclude with 409 `book_busy` while a job is
+     registered; `realSetChapterExcluded` rejects with `new Error(<sentence>)`.
+     The sentence must reach the user (a warn toast) and the row must not change. */
+  it('#3774 an Exclude refused with the 409 book_busy sentence shows it as a toast and leaves the row alone', async () => {
+    const busy = 'This book is busy (rendering audio). Stop it or wait for it to finish, then exclude chapters.';
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockRejectedValueOnce(new Error(busy));
+    renderInclude(store);
+    // Chapter 2 is queued: its expanded panel carries Exclude.
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts).toEqual([
+        expect.objectContaining({ kind: 'warn', message: busy, dedupeKey: 'gen-exclude-failed' }),
+      ]),
+    );
+    expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 2, true);
+    expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBeFalsy();
   });
 
   it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
@@ -2796,6 +3667,210 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(capturedSignal?.aborted).toBe(true);
     /* Row reverts to idle — Include CTA is back. */
     expect(await screen.findByRole('button', { name: /\+ Include in book/i })).toBeInTheDocument();
+  });
+
+  /* #3774 — the server's subset job is sticky and holds the book's `analysis`
+     lease until it settles; an Exclude is refused (409 `book_busy`) meanwhile.
+     Cancel must stop the job, wait for the lease to release, then re-exclude.
+     The mock models the sticky job: the re-exclude is refused until the stop
+     has been requested AND two further polls have passed. */
+  describe('#3774 — Include → Cancel stops the server job, waits, then re-excludes', () => {
+    const busy = 'This book is busy (analysing). Stop it or wait for it to finish, then exclude chapters.';
+    const busyErr = () => Object.assign(new Error(busy), { code: 'book_busy' });
+
+    function stickyJob(): void {
+      let polls = 0;
+      setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+        if (excluded) {
+          const stopped = pauseAnalysisSpy.mock.calls.length > 0;
+          if (!stopped || polls++ < 2) throw busyErr();
+        }
+        return { id, title: '', slug: '', excluded };
+      });
+      runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+        const signal = (opts as { signal?: AbortSignal }).signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            const err: Error & { name: string } = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        });
+      });
+    }
+
+    /* Fake timers on the two waiting tests: a failure then surfaces as a NAMED
+       assertion (the bounded waitFor below is shorter than the test timeout) and
+       the retry loop's pending timer is dropped with the fake clock, so it can
+       never keep calling the module-level spies into a later test. */
+    it('calls the stop endpoint, retries the refused re-exclude until the job settles, and ends excluded', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore();
+        stickyJob();
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+        await vi.advanceTimersByTimeAsync(3000);
+
+        await waitFor(
+          () => expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true),
+          { timeout: 1000 },
+        );
+        expect(pauseAnalysisSpy).toHaveBeenCalledWith({ manuscriptId: 'm1' });
+        const excludeCalls = setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true);
+        expect(excludeCalls.length).toBe(3); // two refused (job still holding its lease), one accepted
+        /* the first refused re-exclude came after the stop request */
+        expect(pauseAnalysisSpy.mock.invocationCallOrder[0]).toBeLessThan(
+          setChapterExcludedSpy.mock.invocationCallOrder[1],
+        );
+        expect(store.getState().notifications.toasts).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /* #3774 pass-2 B — the server's stop is manuscript-wide (it also aborts
+       another chapter's subset run), so Cancel only sends it once this
+       include's subset request was actually sent. A Cancel while the include
+       POST is still in flight must not. */
+    it('Cancel while the include POST is still in flight does not send the manuscript-wide stop, and still rolls back', async () => {
+      const store = makeIncludeStore();
+      let resolveInclude!: (v: unknown) => void;
+      setChapterExcludedSpy.mockImplementation((_b: string, id: number, excluded: boolean) =>
+        excluded
+          ? Promise.resolve({ id, title: '', slug: '', excluded })
+          : new Promise((r) => (resolveInclude = r)),
+      );
+      /* a real fetch rejects at once when handed an already-aborted signal */
+      runAnalysisForChaptersSpy.mockImplementation((_m, _ids, opts) => {
+        const signal = (opts as { signal: AbortSignal }).signal;
+        return signal.aborted
+          ? Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          : new Promise(() => {});
+      });
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+      await act(async () => resolveInclude({ id: 3, title: '', slug: '', excluded: false }));
+
+      await waitFor(
+        () => expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true),
+        { timeout: 1000 },
+      );
+      expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+    });
+
+    it('a job that never settles surfaces the server sentence as a toast and leaves the chapter included', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+          if (excluded) throw busyErr();
+          return { id, title: '', slug: '', excluded };
+        });
+        runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
+          const signal = (opts as { signal?: AbortSignal }).signal;
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              const err: Error & { name: string } = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        });
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+        await vi.advanceTimersByTimeAsync(60_000);
+        await waitFor(() =>
+          expect(store.getState().notifications.toasts).toEqual([
+            expect.objectContaining({
+              kind: 'warn',
+              message: expect.stringContaining(busy),
+              dedupeKey: 'gen-include-rollback-failed',
+            }),
+          ]),
+        );
+        /* #3774 — the give-up names the chapter, and the row carries a gap note. */
+        expect(store.getState().notifications.toasts[0].message).toContain('Chapter 3');
+        expect(store.getState().chapters.analysisGapById?.[3]?.message).toContain('still included');
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).not.toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a failed run whose rollback also fails keeps the 'still included' note, with the run's own error beside it", async () => {
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+        if (excluded) throw new Error('The workspace is read-only.');
+        return { id, title: '', slug: '', excluded };
+      });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(store.getState().chapters.analysisGapById?.[3]).toBeDefined());
+      await screen.findByText(/analyzer offline/);
+      const gap = store.getState().chapters.analysisGapById?.[3]?.message ?? '';
+      expect(gap).toContain('still included');
+      expect(gap).toContain('analyzer offline');
+      expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).not.toBe(true);
+    });
+
+    it('a failed run waits out the lease the same way (no stop request) and then re-excludes', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore();
+        let polls = 0;
+        setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+          if (excluded && polls++ < 1) throw busyErr();
+          return { id, title: '', slug: '', excluded };
+        });
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        await vi.advanceTimersByTimeAsync(3000);
+        /* chapter 3 starts excluded, so wait for the 2nd exclude attempt (the
+           accepted retry) before reading the slice. */
+        await waitFor(
+          () => expect(setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true).length).toBe(2),
+          { timeout: 1000 },
+        );
+        await waitFor(
+          () => expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true),
+          { timeout: 1000 },
+        );
+        expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('the give-up is not announced once the view has unmounted (the server calls still ran)', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockImplementation(async (_b: string, id: number, excluded: boolean) => {
+          if (excluded) throw busyErr();
+          return { id, title: '', slug: '', excluded };
+        });
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new Error('analyzer offline'));
+        const view = renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        await waitFor(
+          () => expect(setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true).length).toBeGreaterThan(0),
+          { timeout: 1000 },
+        );
+        view.unmount();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(setChapterExcludedSpy.mock.calls.filter((c) => c[2] === true).length).toBeGreaterThan(2);
+        expect(store.getState().notifications.toasts).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('on error, surfaces the message inline with a Retry button that re-runs the subset call', async () => {
@@ -3283,8 +4358,11 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
       renderInclude(store2);
       fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      /* #3774 — the gap keeps the "still included" note and carries the run's error too */
       await waitFor(() =>
-        expect(store2.getState().chapters.analysisGapById?.[3]).toEqual({ message: 'The analyzer timed out.' }),
+        expect(store2.getState().chapters.analysisGapById?.[3]?.message).toMatch(
+          /still included.*The analyzer timed out\./,
+        ),
       );
     });
 

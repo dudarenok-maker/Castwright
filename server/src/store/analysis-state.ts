@@ -63,6 +63,12 @@ export interface AnalysisStateFile {
       copy instead of the generic phase label. Optional / unset for
       `'main'` snapshots. */
   subsetChapterIds?: number[];
+  /** Set only on a LIVE `kind === 'subset'` snapshot (never written to disk) --
+      what started the run: `'include'` (the Generate view's Include in book) or
+      `'reanalyse'` (Retry / Re-analyse, and any start that names no origin). Lets a
+      client rebuilding its snapshot from this answer (a book switch, a reload, a
+      second tab) keep the include-origin job-start block (#3774). */
+  subsetOrigin?: 'include' | 'reanalyse';
   /** Error code from the terminal event when state === 'halted'.
       Carried so the pill / view can route to the right banner. */
   haltCode?: string;

@@ -649,6 +649,10 @@ export interface AnalysisStateResponse {
       retried, used by the AnalysisPill to render "Retrying N
       chapters" copy. */
   subsetChapterIds?: number[];
+  /** Set only on a live `kind === 'subset'` answer (#3774): what started the run.
+      `'include'` is the Generate view's Include in book; the snapshot rebuilt from
+      this answer keeps it so the job-start block survives a book switch / reload. */
+  subsetOrigin?: 'include' | 'reanalyse';
   haltCode?: string;
   haltReason?: string;
   lastTickAt: number;

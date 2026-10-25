@@ -661,13 +661,25 @@ export interface paths {
         put?: never;
         /**
          * Override a chapter's title with a user-supplied label
-         * @description Sets `state.chapters[chapterId-1].title` to the supplied value and
-         *     flips `titleOverridden` to true so subsequent heuristic refresh
-         *     passes (`refreshChapterTitles` on book-state GET, and the
-         *     explicit POST `/chapters/refresh-titles`) leave it alone.
-         *     Writes state.json atomically; holds the per-book write lock.
-         *     Pure label mutation — does not touch sentence ids, slugs, audio
-         *     files, or analysis cache.
+         * @description Sets the title of the chapter whose `id` is `chapterId` to the
+         *     supplied value and flips `titleOverridden` to true so subsequent
+         *     heuristic refresh passes (`refreshChapterTitles` on book-state GET,
+         *     and the explicit POST `/chapters/refresh-titles`) leave it alone.
+         *     The chapter id and every sentence id are unchanged, but the
+         *     chapter's slug is re-derived from the new title. When the slug
+         *     changes and the chapter has rendered audio, its audio files (and
+         *     companion files) are renamed to the new slug, with the chapter title
+         *     and id in the segments metadata updated to match; the audio itself
+         *     is not regenerated. The new title is also written into the chapter's
+         *     manuscript hints.
+         *
+         *     Runs through the same restructure path as merge and split, so it
+         *     writes state.json atomically, rebuilds the analysis cache from
+         *     manuscript-edits.json, and takes the per-book operation lock, the
+         *     restructure claim and the per-book state lock. Like them it is
+         *     refused with 409 while analysis or any other long job is running on
+         *     the book. Re-sending the current title of an already-overridden
+         *     chapter changes no title or slug and renames no audio.
          */
         post: operations["renameChapter"];
         delete?: never;
@@ -769,9 +781,11 @@ export interface paths {
         /**
          * Soft-hide or un-hide a set of chapters
          * @description Sets `Chapter.excluded` on every listed chapter in one atomic
-         *     restructure pass. Sentence remap is identity; audio files are left
-         *     on disk. For a single chapter the Generate-view toggle uses
-         *     `setChapterExcluded` instead.
+         *     restructure pass. Sentence remap is identity; the pass also prunes
+         *     zero-sentence chapters and renumbers the rest, so it can move audio
+         *     files. Refused with `book_busy` in both directions while a long job
+         *     runs (#3774). For a single chapter the Generate-view toggle uses
+         *     `setChapterExcluded` instead; only its hiding direction is refused.
          */
         post: operations["excludeChapters"];
         delete?: never;
@@ -917,6 +931,30 @@ export interface paths {
          *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
          */
         patch: operations["setCoverFraming"];
+        trace?: never;
+    };
+    "/api/books/{bookId}/busy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which long jobs are registered for the book right now
+         * @description Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+         *     design, script-review, export) currently registered for the book
+         *     (#3774). Lock-free read of the in-memory busy registry; an unknown book
+         *     is simply not busy (`kinds: []`, never a 404). The Generate view
+         *     disables "Include in book" while any kind is listed.
+         */
+        get: operations["getBookBusy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/books/{bookId}/listen-progress": {
@@ -3390,6 +3428,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book. `error` is a curated sentence with no filesystem path. */
+        RestructureConflictError: {
+            error: string;
+            /** @enum {string} */
+            code: "analysis_running" | "book_busy";
+        };
         /**
          * @description A suggested merge pair produced by the dedup pass (Tier-2b).
          *     `sourceId` is the diminutive/duplicate character; `targetId` is the
@@ -8247,6 +8291,17 @@ export interface operations {
                     phase0Model?: string;
                     /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
                     phase1Model?: string;
+                    /**
+                     * @description #3774 — what is starting the run: `include` (the Generate view's Include in
+                     *     book) or `reanalyse` (Retry / Re-analyse; the default when absent or
+                     *     unrecognised). Kept on the job and reported as `subsetOrigin` by
+                     *     `GET /api/books/{bookId}/analysis/state` while the run is live, so a client
+                     *     that rebuilds its snapshot (book switch, reload, second tab) keeps the
+                     *     include-origin job-start block. A request that joins a live run never
+                     *     changes its origin.
+                     * @enum {string}
+                     */
+                    origin?: "include" | "reanalyse";
                 };
             };
         };
@@ -8325,6 +8380,19 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "book_busy";
+                    };
+                };
+            };
         };
     };
     renameChapter: {
@@ -8374,12 +8442,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8426,12 +8496,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8479,12 +8551,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8529,12 +8603,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8579,12 +8655,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8622,12 +8700,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RestructureConflictError"];
+                };
             };
         };
     };
@@ -8874,6 +8954,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getBookBusy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The registered job kinds, empty when the book is idle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        kinds: ("render" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
+                    };
+                };
             };
         };
     };
