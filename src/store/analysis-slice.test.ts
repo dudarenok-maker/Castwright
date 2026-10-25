@@ -34,10 +34,21 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(state.activeStream).toEqual(baseSnapshot);
   });
 
-  it('setActiveStream keeps the origin of a subset run so a remounted view can tell an include from a re-analyse (#3774)', () => {
+  it('the in-run reducers (tick, heartbeat, paused, halted) keep the origin of a subset run, so a run that is progressing or ending is still told apart as an include (#3774)', () => {
     const snap = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3], subsetOrigin: 'include' as const };
-    const state = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
-    expect(state.activeStream?.subsetOrigin).toBe('include');
+    let state = analysisSlice.reducer(undefined, analysisActions.setActiveStream(snap));
+    state = analysisSlice.reducer(
+      state,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: snap.manuscriptId, phaseId: 1, phaseProgress: 0.5, lastTickAt: 99 }),
+    );
+    state = analysisSlice.reducer(state, analysisActions.bumpActiveStreamHeartbeat({ manuscriptId: snap.manuscriptId, lastTickAt: 100 }));
+    expect(state.activeStream).toMatchObject({ phaseId: 1, lastTickAt: 100, subsetOrigin: 'include' });
+    expect(
+      analysisSlice.reducer(state, analysisActions.setPaused({ manuscriptId: snap.manuscriptId })).activeStream,
+    ).toMatchObject({ state: 'paused', subsetOrigin: 'include' });
+    expect(
+      analysisSlice.reducer(state, analysisActions.setHalted({ manuscriptId: snap.manuscriptId, code: 'x', message: 'm' })).activeStream,
+    ).toMatchObject({ state: 'halted', subsetOrigin: 'include' });
   });
 
   it('clearActiveStream tears down the snapshot', () => {
