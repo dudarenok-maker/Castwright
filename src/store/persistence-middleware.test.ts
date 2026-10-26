@@ -2201,5 +2201,18 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       expect(stateOnDisk(disk).castConfirmed).toBe(true);
       restore();
     });
+
+    /* P2 is narrowed to the `state` slice: a full read puts the screen back to
+       disk without a kept whole-slice save, so keeping it would land a roster
+       the screen no longer shows (F1). */
+    it('P2 scope: a full read drops a based kept cast save', async () => {
+      const { disk, store, restore } = setup();
+      await keepCastSave(store, disk, 'Eliza Vane');
+      expect(reqs().at(-1)!.baseRevision).toEqual(disk.revision('b1', 'cast'));
+      store.dispatch(dropRetainedSaves('b1', true));
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      expect(castName(disk)).toBe('Eliza');
+      restore();
+    });
   });
 });
