@@ -371,7 +371,7 @@ export class AnalyzerKeyOriginError extends Error {
 }
 
 /** The Test action recorded that this model refuses a setting the run is configured
-    to send (its structured-output mode, or — from wave 5 — its reasoning level), so
+    to send (its structured-output mode or its reasoning level), so
     the run stops before its first request. Nothing was sent, so it deliberately has
     NO `status` property: the taxonomy's bare-status branch reads `.status`, and this
     refusal must never be taken for an HTTP answer. `classifyAnalysisFailure` gives it
@@ -381,7 +381,7 @@ export class AnalyzerCapabilityRejectedError extends Error {
   readonly code = 'ANALYZER_CAPABILITY_REJECTED';
   constructor(
     readonly modelId: string,
-    /** Which setting the record refused. W3 records only `structuredOutput`. */
+    /** Which setting the record refused: the structured-output mode or the reasoning level. */
     readonly setting: 'structuredOutput' | 'reasoning',
     /** The value the run would have sent (`schema` / `json` / `off`, or a level key). */
     readonly value: string,

@@ -20,12 +20,12 @@ import {
   ALL_STRUCTURED_OUTPUT_MODES,
   STAGE_GRAMMAR_SCHEMAS,
   capabilityRecordFor,
-  defaultReasoningKey,
   draft07,
   plannedTestRequestCount,
   type ModelCapabilityRecord,
   type ProbeOutcome,
 } from '../capabilities.js';
+import { resolveReasoningSetting } from '../reasoning.js';
 import {
   adaptSchemaForGemini,
   adaptSchemaForOllama,
@@ -260,17 +260,28 @@ function droppedForKind(kind: CatalogGroupKind): string[] {
   return out;
 }
 
-const OFFERED = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES };
-
 function toEntry(
   raw: RawModel,
-  ctx: { kind: CatalogGroupKind; engine: AnalyzerCatalogEntry['engine']; mode: StructuredOutputMode; serverUrl: string; settings: UserSettings },
+  ctx: {
+    kind: CatalogGroupKind;
+    engine: AnalyzerCatalogEntry['engine'];
+    mode: StructuredOutputMode;
+    serverUrl: string;
+    settings: UserSettings;
+    endpoint?: AnalyzerEndpoint;
+  },
 ): AnalyzerCatalogEntry {
   const capability = capabilityRecordFor(ctx.settings, raw.id, ctx.serverUrl, raw.digest); // A3: another build's record is dropped
   const dropped = ctx.mode === 'schema' ? droppedForKind(ctx.kind) : [];
-  const planDeps = { ...OFFERED, configuredMode: ctx.mode };
+  const sel = { engine: ctx.engine, model: raw.model, endpoint: ctx.endpoint, record: capability };
   /* P7: label from the record filed under the level a run of this model sends. */
-  const level = defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind);
+  const level = resolveReasoningSetting(ctx.settings, sel);
+  const planDeps = {
+    configuredMode: ctx.mode,
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    reasoningSelection: () => sel,
+    configuredReasoning: () => level,
+  };
   /* `label` never says "rejected" by design (the fixture table pins this) — a mode
      refused at the level a run sends still shows its plain structured-output label
      there, because refusal is enforced by the pre-run check, not the label. A
@@ -356,7 +367,7 @@ async function endpointGroup(
   return {
     ...base,
     status: 'ok',
-    models: listing.models.map((m) => toEntry(m, { kind: 'endpoint', engine: 'openai', mode: endpoint.structuredOutput, serverUrl: endpoint.baseUrl, settings })),
+    models: listing.models.map((m) => toEntry(m, { kind: 'endpoint', engine: 'openai', mode: endpoint.structuredOutput, serverUrl: endpoint.baseUrl, settings, endpoint })),
   };
 }
 

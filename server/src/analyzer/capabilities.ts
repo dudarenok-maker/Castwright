@@ -22,7 +22,13 @@ import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } fro
 import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
 import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
-import { resolveReasoningSetting, testableReasoningLevels, type ReasoningLevel, type ReasoningSelection } from './reasoning.js';
+import {
+  defaultReasoningLevel,
+  resolveReasoningSetting,
+  testableReasoningLevels,
+  type ReasoningLevel,
+  type ReasoningSelection,
+} from './reasoning.js';
 import {
   emotionAnnotationSchema,
   escalationSchema,
@@ -71,6 +77,10 @@ export interface ModelTestDeps {
   /** P7: the model's context size and resolved Auto output cap (`null` = no cap, the context
       governs). Read once, after `transport.prepare()` has warmed served limits (P15). */
   probeLimits: () => { contextTokens: number; maxOutputTokens: number | null };
+  /** #3084 wave 5 — engine, bare model, endpoint and Test record for the id (reasoning.ts shape). */
+  reasoningSelection: (modelId: string) => ReasoningSelection;
+  /** #3084 wave 5 — the level the next run of this model would send (resolveReasoningSetting). */
+  configuredReasoning: (modelId: string) => ReasoningLevel;
   /** The client's abort signal: the route aborts it when the request closes. */
   signal?: AbortSignal;
   now?: () => Date;
@@ -273,12 +283,15 @@ export function assertAnalyzerTargetUsable(
 
 export function plannedTestRequestCount(
   input: { modelId: string; scope: 'configured' | 'all' },
-  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes'>,
+  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes' | 'reasoningSelection' | 'configuredReasoning'>,
 ): number {
-  /* P7 ladder: the control (`off` mode) always; wave 5 adds its level step here; then one
-     mode step per `schema` / `json` mode. An `off` mode step is the control itself. */
+  const sel = deps.reasoningSelection(input.modelId);
+  const levels = reasoningLevelsToProbe(input.scope, sel, deps.configuredReasoning(input.modelId));
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
-  return 1 + modes.filter((mode) => mode !== 'off').length;
+  /* P7 ladder: the control; the level step's requests (every level other than the control's); one
+     mode step per `schema` / `json` mode. A rejected configured level skips the mode steps, so this
+     is the upper bound the confirmation shows. */
+  return 1 + plannedReasoningProbeCount(levels, defaultReasoningLevel(sel.engine)) + modes.filter((mode) => mode !== 'off').length;
 }
 
 /** The control request failed, so nothing could be attributed. Nothing is saved; an
@@ -360,7 +373,7 @@ function providerText(err: unknown): string {
   return err instanceof AnalyzerHttpError ? `${message} ${err.bodyExcerpt}` : message;
 }
 
-function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number): Promise<TransportResult> {
+function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number, reasoning: ReasoningLevel): Promise<TransportResult> {
   throwIfAborted(deps.signal);
   return deps.transport.send({
     system: PROBE_SYSTEM,
@@ -370,6 +383,7 @@ function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: num
     maxOutputTokens,
     estimatedInputTokens: estimateProbeInput(format),
     signal: deps.signal,
+    reasoning,
     call: {},
   });
 }
@@ -386,12 +400,13 @@ async function modeStep(
   format: ProbeFormat,
   marker: string,
   cap: number,
+  level: ReasoningLevel,
   deps: ModelTestDeps,
   redact: (text: string) => string,
 ): Promise<ProbeOutcome> {
   let result: TransportResult;
   try {
-    result = await sendStep(deps, format, cap);
+    result = await sendStep(deps, format, cap, level);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
     if (isProbeRejected(err)) {
@@ -468,8 +483,11 @@ export async function runModelTest(
 ): Promise<ModelCapabilityRecord> {
   const redact = deps.redact ?? ((t: string) => t);
   const testedAt = (deps.now ?? (() => new Date()))().toISOString();
-  /* P7: a record is keyed by the level its requests actually sent. */
-  const level = defaultReasoningKey(deps.transport.kind);
+  /* P7: the control runs at the engine's default level; the level step and the mode steps at the
+     configured level. Every record is keyed by the level its requests actually sent. */
+  const sel = deps.reasoningSelection(input.modelId);
+  const controlLevel = defaultReasoningLevel(sel.engine);
+  const configuredLevel = deps.configuredReasoning(input.modelId);
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
   const marker = (deps.markerValue ?? newMarkerValue)();
   const control: ProbeFormat = { mode: 'off' };
@@ -484,30 +502,51 @@ export async function runModelTest(
 
   /* Step 1 — control: `off` mode at the engine's default level. Any finish passes. */
   try {
-    await sendStep(deps, control, cap);
+    await sendStep(deps, control, cap, controlLevel);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
     throw new ModelTestControlFailedError(input.modelId, redact(err instanceof Error ? err.message : String(err)).slice(0, 500));
   }
 
-  /* Step 2 — WAVE 5 (Task 5a) INSERTS THE LEVEL STEP HERE: `off` mode at the configured
-     reasoning level, differing from the control only in that level. It records
-     `reasoning[configuredLevel]`, skips step 3 when that level is rejected, and changes
-     `level` below to the configured level. W3 sends no reasoning field, so the control's
-     level is the only level there is. */
+  /* Step 2 — the level step (P7): `off` mode, differing from the control only in `reasoning`. */
+  const reasoning = await probeReasoningLevels(reasoningLevelsToProbe(input.scope, sel, configuredLevel), {
+    modelId: input.modelId,
+    controlLevel,
+    redact,
+    send: (level) => sendStep(deps, control, cap, level),
+  });
 
-  /* Step 3 — one mode step per tested mode. An `off` step is the control, already sent. */
+  /* Step 3 — one mode step per tested mode, at the configured level. An `off` step is the level
+     step (or the control), already sent. A rejected configured level leaves nothing to attribute. */
   const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
-  for (const mode of modes) {
-    const format = stepFormats.get(mode);
-    structuredOutput[mode] = {
-      [level]: format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, deps, redact) : 'accepted',
-    };
+  if (reasoning[configuredLevel] !== 'rejected') {
+    for (const mode of modes) {
+      const format = stepFormats.get(mode);
+      structuredOutput[mode] = {
+        [configuredLevel]:
+          format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, configuredLevel, deps, redact) : 'accepted',
+      };
+    }
   }
   /* A3: stamp the installed build, so a later `ollama pull` discards this record rather than
      letting a stale verdict refuse runs. Best-effort: no digest, no stamp. */
   const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;
-  return { serverUrl: deps.serverUrl, testedAt, control: { ok: true }, structuredOutput, reasoning: {}, ...(digest ? { digest } : {}) };
+  /* A2: each verdict's own date, so a later merge can keep a verdict without claiming this Test measured it. */
+  const verdictTestedAt = {
+    reasoning: Object.fromEntries(Object.keys(reasoning).map((level) => [level, testedAt])),
+    structuredOutput: Object.fromEntries(
+      Object.entries(structuredOutput).map(([mode, byLevel]) => [mode, Object.fromEntries(Object.keys(byLevel ?? {}).map((level) => [level, testedAt]))]),
+    ),
+  };
+  return {
+    serverUrl: deps.serverUrl,
+    testedAt,
+    control: { ok: true },
+    structuredOutput,
+    reasoning,
+    ...(digest ? { digest } : {}),
+    verdictTestedAt,
+  };
 }
 
 /** Engine, bare model, saved endpoint and Test record for a model id. `engine` defaults to the id

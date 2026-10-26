@@ -1,20 +1,25 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
 import {
+  ALL_STRUCTURED_OUTPUT_MODES,
   assertConfiguredCapabilitiesAllowed,
   capabilityRecordFor,
   capabilityRecordKey,
   isProbeRejected,
   ModelTestInconclusiveError,
   plannedReasoningProbeCount,
+  plannedTestRequestCount,
   probeReasoningLevels,
   ReasoningLevelTestInconclusiveError,
   reasoningLevelsToProbe,
+  runModelTest,
   verdictTestedAtFor,
   type ModelCapabilityRecord,
+  type ModelTestDeps,
 } from './capabilities.js';
 import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from './errors.js';
-import type { TransportResult } from './runner/transport.js';
+import { structuredOutputLabel } from './runner/schema-adapters.js';
+import type { ChatTransport, TransportRequest, TransportResult } from './runner/transport.js';
 import type { ReasoningLevel } from './reasoning.js';
 
 const rec = (over: Partial<ModelCapabilityRecord> = {}): ModelCapabilityRecord => ({
@@ -24,6 +29,35 @@ const rec = (over: Partial<ModelCapabilityRecord> = {}): ModelCapabilityRecord =
 const http400 = () => new AnalyzerHttpError('ollama', 400, '"q:4b" does not support thinking', 'Ollama returned 400');
 const stop = (): TransportResult => ({ text: '{"ok":true}', reasoningSeen: false, finish: 'stop', receivedBytes: 11 });
 const lengthStop = (): TransportResult => ({ text: '', reasoningSeen: true, finish: 'length', receivedBytes: 0, usage: { reasoningTokens: 900 } });
+
+function recording(respond: (req: TransportRequest) => TransportResult) {
+  const calls: TransportRequest[] = [];
+  const transport: ChatTransport = {
+    kind: 'ollama',
+    model: 'q:4b',
+    send: vi.fn(async (req: TransportRequest) => {
+      calls.push(req);
+      return respond(req);
+    }),
+  };
+  return { calls, transport };
+}
+
+function ollamaDeps(transport: ChatTransport, over: Partial<ModelTestDeps> = {}): ModelTestDeps {
+  return {
+    transport,
+    serverUrl: 'http://127.0.0.1:11434',
+    configuredMode: 'off',
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: null }),
+    reasoningSelection: () => ({ engine: 'local', model: 'q:4b' }),
+    configuredReasoning: () => 'off',
+    now: () => new Date('2026-09-11T10:00:00.000Z'),
+    markerValue: () => 'mk-fixed',
+    ...over,
+  };
+}
 
 describe('isProbeRejected', () => {
   it('is true only for a 400 from any transport', () => {
@@ -98,12 +132,57 @@ describe('probeReasoningLevels — the level step (P7)', () => {
   });
 });
 
+describe("runModelTest — the level step at W3c's step-2 hook", () => {
+  it('the level step is the control request with only reasoning changed; mode steps run at the configured level', async () => {
+    const { calls, transport } = recording(() => stop());
+    const deps = ollamaDeps(transport, { configuredMode: 'json', configuredReasoning: () => 'on' });
+    const record = await runModelTest({ modelId: 'q:4b', scope: 'configured' }, deps);
+    expect(calls).toHaveLength(plannedTestRequestCount({ modelId: 'q:4b', scope: 'configured' }, deps));
+    expect(calls.map((c) => [c.structuredOutput.mode, c.reasoning])).toEqual([
+      ['off', 'off'],
+      ['off', 'on'],
+      ['json', 'on'],
+    ]);
+    const { reasoning: _controlLevel, ...control } = calls[0];
+    const { reasoning: _probeLevel, ...probe } = calls[1];
+    expect(probe).toEqual(control);
+    expect(record.reasoning).toEqual({ on: 'accepted' });
+    expect(record.structuredOutput).toEqual({ json: { on: 'accepted' } });
+  });
+
+  it('scope all on a thinking model: every level probe that stops with length is recorded accepted', async () => {
+    const { transport } = recording((req) => (req.reasoning === 'off' ? stop() : lengthStop()));
+    const record = await runModelTest({ modelId: 'q:4b', scope: 'all' }, ollamaDeps(transport, { offeredModes: ['off'] }));
+    expect(record.control).toEqual({ ok: true });
+    expect(record.reasoning).toEqual({ 'model-default': 'accepted', off: 'accepted', on: 'accepted', low: 'accepted', medium: 'accepted', high: 'accepted' });
+  });
+
+  it('a rejected configured level skips the mode steps: nothing could be attributed', async () => {
+    const { calls, transport } = recording((req) => {
+      if (req.reasoning === 'on') throw http400();
+      return stop();
+    });
+    const record = await runModelTest({ modelId: 'q:4b', scope: 'configured' }, ollamaDeps(transport, { configuredMode: 'json', configuredReasoning: () => 'on' }));
+    expect(record.reasoning).toEqual({ on: 'rejected' });
+    expect(record.structuredOutput).toEqual({});
+    expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'off']);
+  });
+});
+
 describe('levels to probe and counts', () => {
   it('configured probes one level; all probes every testable level; the plan counts the level step', () => {
     expect(reasoningLevelsToProbe('configured', { engine: 'local', model: 'q:4b' }, 'on')).toEqual(['on']);
     expect(reasoningLevelsToProbe('all', { engine: 'local', model: 'q:4b' }, 'off')).toEqual(['model-default', 'off', 'on', 'low', 'medium', 'high']);
     expect(plannedReasoningProbeCount(['model-default', 'off', 'on', 'low', 'medium', 'high'], 'off')).toBe(5);
     expect(plannedReasoningProbeCount(['model-default'], 'model-default')).toBe(0);
+    const planDeps = {
+      configuredMode: 'schema' as const,
+      offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+      reasoningSelection: () => ({ engine: 'local' as const, model: 'q:4b' }),
+      configuredReasoning: () => 'off' as const,
+    };
+    expect(plannedTestRequestCount({ modelId: 'q:4b', scope: 'configured' }, planDeps)).toBe(2);
+    expect(plannedTestRequestCount({ modelId: 'q:4b', scope: 'all' }, planDeps)).toBe(8);
   });
 });
 
@@ -138,5 +217,14 @@ describe("a refusal cites the verdict's own Test date (A2)", () => {
     expect(verdictTestedAtFor(rec({ testedAt: '2026-09-12T09:00:00.000Z', reasoning: { on: 'rejected' } }), { setting: 'reasoning', reasoning: 'on' })).toBe(
       '2026-09-12T09:00:00.000Z',
     );
+  });
+});
+
+describe('label reflects the configured level', () => {
+  it('schema (not enforced) only for the level the probe ran at', () => {
+    const r = rec({ structuredOutput: { schema: { on: 'ignored', off: 'enforced' } } });
+    expect(structuredOutputLabel('schema', [], r, 'on')).toBe('schema (not enforced)');
+    expect(structuredOutputLabel('schema', [], r, 'off')).toBe('schema');
+    expect(structuredOutputLabel('schema', [], r, 'low')).toBe('schema');
   });
 });

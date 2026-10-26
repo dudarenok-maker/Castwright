@@ -48,6 +48,8 @@ function deps(transport: ChatTransport, over: Partial<ModelTestDeps> = {}): Mode
     offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
     adaptSchema: (s) => ({ schema: s, dropped: [] }),
     probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: null }),
+    reasoningSelection: () => ({ engine: 'openai', model: 'm', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' } }),
+    configuredReasoning: () => 'model-default',
     now: () => new Date('2026-09-11T10:00:00.000Z'),
     markerValue: () => 'mk-fixed',
     ...over,
@@ -80,7 +82,11 @@ describe('runModelTest — the P7 ladder (#3084)', () => {
       testedAt: '2026-09-11T10:00:00.000Z',
       control: { ok: true },
       structuredOutput: { schema: { 'model-default': 'enforced' } },
-      reasoning: {},
+      reasoning: { 'model-default': 'accepted' },
+      verdictTestedAt: {
+        reasoning: { 'model-default': '2026-09-11T10:00:00.000Z' },
+        structuredOutput: { schema: { 'model-default': '2026-09-11T10:00:00.000Z' } },
+      },
     });
   });
 
@@ -120,7 +126,17 @@ describe('runModelTest — the P7 ladder (#3084)', () => {
   it('files the record under the level actually sent: off for Ollama (think:false), model-default for Gemini and endpoints', async () => {
     for (const [kind, level] of [['ollama', 'off'], ['gemini', 'model-default'], ['openai', 'model-default']] as const) {
       const { transport } = fakeTransport(obedient, { kind });
-      const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
+      const record = await runModelTest(
+        { modelId: 'm', scope: 'configured' },
+        deps(
+          transport,
+          kind === 'ollama'
+            ? { reasoningSelection: () => ({ engine: 'local', model: 'm' }), configuredReasoning: () => 'off' }
+            : kind === 'gemini'
+              ? { reasoningSelection: () => ({ engine: 'gemini', model: 'm' }) }
+              : {},
+        ),
+      );
       expect(record.structuredOutput).toEqual({ schema: { [level]: 'enforced' } });
     }
   });
