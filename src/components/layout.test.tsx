@@ -3211,6 +3211,47 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       vi.useRealTimers();
     }
   });
+
+  /* #3784 P1 (review pass 8) — a title refused as stale stays in `saved` until
+     the re-read hydrates it, so a notes commit made before then must not send
+     it back without a base. The commit waits for the read, and goes out with
+     the read's title and the user's notes. */
+  it('P1: a commit made before the stale re-read lands keeps the outside title, and its notes land after the read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        await gate;
+        return read(id);
+      });
+
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(titlePuts(disk)).toEqual(['503 Mine', '409 Mine']);
+
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.title).toBe('Theirs');
+
+      releaseRead();
+      await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+      expect(disk.books.get('A')!.state.title).toBe('Theirs');
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', notes: 'A note' });
+      expect(store.getState().notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:A')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });
 
 describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {

@@ -209,10 +209,16 @@ export const bookMetaSlice = createSlice({
       if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
-    /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`). */
-    markNeedsFullRead: (s, a: PayloadAction<{ bookId: string }>) => {
+    /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`).
+       #3784 P1 — `refused` names book-meta fields the server refused as
+       stale: they stop being the user's pending edit, so a rollback does not
+       restore them and the persistence middleware does not re-commit them
+       after the re-read. */
+    markNeedsFullRead: (s, a: PayloadAction<{ bookId: string; refused?: string[] }>) => {
       const marks = (s.needsFullRead ??= {});
       marks[a.payload.bookId] = (marks[a.payload.bookId] ?? 0) + 1;
+      const pending = s.lastCommitted?.[a.payload.bookId];
+      for (const f of a.payload.refused ?? []) delete pending?.draft[f as EditableBookMetaField];
     },
 
     /* Plan 289 (D7) — a full read landed. `upTo` is the mark count when it was

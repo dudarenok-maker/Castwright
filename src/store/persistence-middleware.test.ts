@@ -1326,6 +1326,18 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       .notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:b1');
   const marks = (store: S) =>
     (store.getState() as { bookMeta: { needsFullRead?: Record<string, number> } }).bookMeta.needsFullRead?.b1;
+  /* Layout's full read of b1, in its order: the mark is cleared, the kept
+     saves are let go, the tokens learnt, then the slices hydrated. A
+     book-meta save held for the read goes once it hydrates (#3784 P1). */
+  function fullRead(store: S, disk: Disk) {
+    const seq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: marks(store) ?? 0 }));
+    store.dispatch(dropRetainedSaves('b1', true));
+    learn(store, disk.revisions('b1'), seq);
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({ bookId: 'b1', state: disk.books.get('b1')!.state as never }),
+    );
+  }
 
   /* A cast save whose four attempts all fail: kept for the book's next flush. */
   async function keepCastSave(store: S, disk: Disk, name: string) {
@@ -1369,6 +1381,10 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'n' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     await advance(600);
+    /* #3784 P1 — the follow-up waits for the re-read the refusal asked for. */
+    expect(marks(store)).toBe(1);
+    fullRead(store, disk);
+    await advance(600);
 
     const refused = reqs().at(-2)!;
     expect(refused.patch).toMatchObject({ title: 'T1', notes: 'n' });
@@ -1377,7 +1393,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(outcomes(disk).slice(-2)).toEqual(['409', 'ok']);
     expect(disk.books.get('b1')!.state).toMatchObject({ title: 'Elsewhere', notes: 'n' });
     expect(staleToasts(store)).toHaveLength(1);
-    expect(marks(store)).toBe(1);
+    expect(marks(store)).toBeUndefined();
     restore();
   });
 
@@ -1528,9 +1544,8 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     await advance(2000);
 
     /* Pass 7 (C6) — only the stale title is dropped; the other based fields of
-       the commit go in a follow-up. */
-    expect(outcomes(disk)).toEqual(['503', '409', 'ok']);
-    expect(reqs().at(-1)!.patch).not.toHaveProperty('title');
+       the commit go in a follow-up, once the re-read lands (#3784 P1). */
+    expect(outcomes(disk)).toEqual(['503', '409']);
     expect(disk.books.get('b1')!.state.title).toBe('Elsewhere');
     expect(staleToasts(store)).toHaveLength(1);
     expect(staleToasts(store)[0].message).toContain('changed elsewhere');
@@ -1539,6 +1554,11 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(meta.draft).toBeNull();
     expect(marks(store)).toBe(1);
     expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+    fullRead(store, disk);
+    await advance(0);
+    expect(outcomes(disk)).toEqual(['503', '409', 'ok']);
+    expect(reqs().at(-1)!.patch).not.toHaveProperty('title');
+    expect(disk.books.get('b1')!.state.title).toBe('Elsewhere');
     restore();
   });
 
@@ -1717,10 +1737,13 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     commit(store, 'title', 'T');
     release();
     await advance(600);
+    expect(marks(store)).toBe(1);
+    fullRead(store, disk);
+    await advance(600);
     expect(outcomes(disk)).toEqual(['503', '503', '503', '503', '409', 'ok']);
     expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: false, title: 'T' });
     expect(staleToasts(store)).toHaveLength(1);
-    expect(marks(store)).toBe(1);
+    expect(marks(store)).toBeUndefined();
     restore();
   });
 
@@ -2030,12 +2053,15 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       );
       commit(store, 'title', 'T');
       await advance(5000);
+      expect(marks(store)).toBe(1);
+      fullRead(store, disk);
+      await advance(600);
       expect(reqs().at(-2)!.patch).toMatchObject({ castConfirmed: true, title: 'T' });
       expect(reqs().at(-1)!.patch).toMatchObject({ title: 'T' });
       expect(reqs().at(-1)!.patch).not.toHaveProperty('castConfirmed');
       expect(stateOnDisk(disk)).toMatchObject({ title: 'T', castConfirmed: false });
       expect(staleToasts(store)).toHaveLength(1);
-      expect(marks(store)).toBe(1);
+      expect(marks(store)).toBeUndefined();
       expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
       restore();
     });
@@ -2103,5 +2129,32 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       expect(stateOnDisk(disk).title).toBe('Y');
       restore();
     });
+
+
+    /* #3784 P1 (review pass 8) — a marked book's book-meta sends wait for its
+       full read; the read's drop of kept saves does not take them. */
+    it('P1: a marked book holds its state sends until its full read lands, then sends them', async () => {
+      const { disk, store, restore } = setup();
+      store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'b1' }));
+      store.dispatch({ type: 'ui/confirmCast' });
+      rename(store, 'Eliza X');
+      await advance(10_000);
+      expect(reqs().map((r) => r.slice)).toEqual(['cast']);
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      fullRead(store, disk);
+      await advance(0);
+      expect(stateOnDisk(disk).castConfirmed).toBe(true);
+      restore();
+    });
+
+    it('P1 control: a mark on another book holds nothing', async () => {
+      const { disk, store, restore } = setup();
+      store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'b2' }));
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(600);
+      expect(stateOnDisk(disk).castConfirmed).toBe(true);
+      restore();
+    });
+
   });
 });

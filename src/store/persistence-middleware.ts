@@ -23,7 +23,7 @@ import type { BookMetaState } from './book-meta-slice';
 import type { PutStateResponse, SliceRevision, StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 import { notificationsActions } from './notifications-slice';
-import { bookMetaActions } from './book-meta-slice';
+import { bookMetaActions, type EditableBookMetaField } from './book-meta-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -332,20 +332,14 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
   return `${bookId}:${slice}`;
 }
 
-/* #3395 pass 4, S3 — dispatched by Layout's per-book hydrate before it
-   re-reads a book's disk state. The middleware sends that book's queued
-   writes now and the dispatch returns a promise that settles once every
-   write for the book has landed or been given up on after the retries
-   (#3421), or `null` when nothing is queued or in flight — so the re-read
-   never sees disk from before a write that LANDED. It resolves with the
-   slices that still failed; a write that was given up on has already raised
-   a toast. A given-up save is kept and re-sent first by the book's next
-   flush (#3421), so this promise also covers that re-send, and a chapter
-   restructure waits for it. It is let go (`dropRetainedSaves`) once the book's
-   slices are re-read in full, or the book is deleted. Plan 286 — revisions
-   no longer persists from the client, so the write-then-re-read hazard this
-   describes now applies only to the other slices.
-   Not a reducer action: no slice handles it. */
+/* #3395 pass 4, S3 — dispatched by Layout's per-book hydrate before it re-reads a
+   book's disk state. The middleware sends that book's queued writes now; the
+   promise returned settles once each has landed, been given up on after the
+   retries (#3421, already toasted) or been held for the read (#3784 P1), with the
+   slices that failed — `null` when nothing was sent — so the re-read never sees
+   disk from before a write that LANDED. A given-up save is kept and re-sent first
+   by the book's next flush (a chapter restructure waits for it) until
+   `dropRetainedSaves`. Plan 286 — revisions never persists from the client. */
 /* #3421 — what `flushBookPersistence` resolves with: the slices whose write was
    given up on. Empty when every write landed. */
 export interface BookFlushOutcome {
@@ -377,15 +371,15 @@ const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
 
 /* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
-   that book's slices are re-read in full (Layout's full hydrate: the user has
-   seen the failure and the revert, so a kept save landing later would
-   contradict what they see) and when the book is deleted (hygiene: nothing is
-   left for a gone book). A re-parse or a manuscript replace drops nothing:
-   it rotates the book's edit epoch, so the server refuses every kept save
-   (plan 289, D8b). Touches only the kept saves — a newer edit already queued
-   for the book is untouched. Not a reducer action. */
+   that book's slices are re-read in full (Layout's full hydrate, `onFullRead`:
+   the user has seen the failure and the revert, so a kept save landing later
+   would contradict what they see; a save held for the read stays, #3784 P1)
+   and when the book is deleted (hygiene). A re-parse or a manuscript replace
+   drops nothing: it rotates the book's edit epoch, so the server refuses every
+   kept save (plan 289, D8b). Touches only the kept saves — a newer edit
+   already queued for the book is untouched. Not a reducer action. */
 const DROP_RETAINED = 'persistence/dropRetained';
-export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, payload: bookId });
+export const dropRetainedSaves = (bookId: string, onFullRead = false) => ({ type: DROP_RETAINED, payload: bookId, onFullRead });
 
 /* Plan 289 (D6) — a re-sent save carries the revision it was built against, so
    the server can refuse it if the book changed since. The middleware learns
@@ -436,6 +430,8 @@ export const persistenceMiddleware: Middleware = (store) => {
      read stamped before that teaches nothing for the field. */
   const landedAt = new Map<FlushKey, Record<string, number>>();
   let clock = 0;
+  const waiting = new Set<FlushKey>(); // #3784 P1: `state` keys held for their marked book's full read
+  const marked = (id: string) => !!(store.getState() as PersistableRootState).bookMeta?.needsFullRead?.[id];
 
   /* The token fields a unit's value carries: its own name on `state`, the
      build's defined fields on a whole-slice unit. An undefined value is not
@@ -459,11 +455,11 @@ export const persistenceMiddleware: Middleware = (store) => {
      and keeps the user's unsaved draft. */
   let lastOpenBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
 
-  /* C2 — start a key's flight. Only a debounce timer and a book flush call
-     this; a flight's own end never does, so a give-up cannot restart itself. */
+  /* C2 — start a key's flight: only a debounce timer, a book flush or a held save's
+     release (P1); never a flight's own end, so a give-up cannot restart itself. */
   const pump = (bookId: string, slice: StateSlice) => {
     const key = flushKey(bookId, slice);
-    if (flights.has(key) || !outbox.get(key)?.size) return;
+    if (flights.has(key) || !outbox.get(key)?.size || (slice === 'state' && marked(bookId) && waiting.add(key))) return;
     flights.set(key, run(bookId, slice));
   };
   /* C7 — send the book's kept saves (idle keys), in slice order. */
@@ -489,16 +485,16 @@ export const persistenceMiddleware: Middleware = (store) => {
   };
 
   /* C2 / C5 / C6 — one key's send loop. Each attempt re-snapshots the outbox,
-     so a value built meanwhile rides it; after a server answer, what is left
-     goes at once unless a debounce timer is pending (that timer sends it, so
-     typing still coalesces). A transport failure (network / 5xx) is retried
-     at +1 s, +2 s, +4 s, then given up on. */
+     so a value built meanwhile rides it; after a server answer, what is left goes
+     at once unless a debounce timer is pending (it sends it: typing coalesces) or
+     P1 holds it. A network / 5xx failure is retried at +1 s, +2 s, +4 s, then given up on. */
   const run = async (bookId: string, slice: StateSlice): Promise<{ slice: StateSlice; ok: boolean }> => {
     const key = flushKey(bookId, slice);
     const box = boxOf(key);
     let failures = 0;
     let ok = true;
     for (;;) {
+      if (slice === 'state' && marked(bookId) && waiting.add(key)) break; // P1: a retry or follow-up too
       const sent = new Map(Array.from(box, ([u, e]) => [u, { value: e.value, based: !!e.base, handler: e.handler }]));
       const base: SliceRevision = Object.assign({}, ...Array.from(box.values(), (e) => e.base));
       const knownAtSend = { ...known.get(key) };
@@ -546,12 +542,11 @@ export const persistenceMiddleware: Middleware = (store) => {
           /* Plan 289 (D2, C6) — the server wrote nothing: a field it names was
              changed elsewhere since this unit's base. Only a based unit can be
              stale; a missing or useless `fields` reads as every based unit.
-             A refused unit is dropped (a 4xx is final) and not rolled back:
-             the baseline is older than disk, so restoring it would show the
-             user neither value. The book is marked for a full re-read (Layout
-             re-reads it now if open), with one toast naming it. A unit a newer
-             build replaced is left to that value: no toast, no re-read (P6-3,
-             OD-C3). Every other unit goes in the follow-up with its base. */
+             A refused unit is dropped (a 4xx is final), not rolled back (the
+             baseline is older than disk). The book is marked for a full re-read
+             (Layout re-reads it now if open), with one toast naming it. A unit a
+             newer build replaced is left to that value: no toast, no re-read
+             (P6-3, OD-C3). Every other unit follows with its base, after the read (P1). */
           failures = 0;
           const named = (err as { fields?: unknown }).fields;
           const based = Array.from(sent.keys()).filter((u) => sent.get(u)!.based);
@@ -569,7 +564,7 @@ export const persistenceMiddleware: Middleware = (store) => {
               handler ? handler.message(err, title) : title ? staleMessage(title) : STALE_MESSAGE,
               `book-persist-stale:${bookId}`,
             );
-            store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
+            store.dispatch(bookMetaActions.markNeedsFullRead({ bookId, refused: slice === 'state' ? dropped : [] }));
             ok = false;
           }
         } else if (PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err))) {
@@ -647,6 +642,7 @@ export const persistenceMiddleware: Middleware = (store) => {
   };
 
   return (next) => (action) => {
+    const typed = (store.getState() as PersistableRootState).bookMeta?.lastCommitted; // P1, before a hydrate wipes it
     const result = next(action);
     const a = action as { type?: string; payload?: unknown };
     const type = a?.type;
@@ -690,7 +686,8 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
       for (const slice of LEARNED_SLICES) {
         const key = flushKey(a.payload, slice);
-        if (!timers.has(key) && !flights.has(key)) outbox.delete(key);
+        const forRead = (a as { onFullRead?: boolean }).onFullRead && waiting.has(key);
+        if (!timers.has(key) && !flights.has(key) && !forRead) outbox.delete(key);
       }
       return result;
     }
@@ -726,6 +723,22 @@ export const persistenceMiddleware: Middleware = (store) => {
             }),
           )
         : null;
+    }
+
+    /* P1 — the full read a held save waited for has hydrated (a failed read
+       keeps it held; Layout retries the read until it lands). Its unbased
+       book-meta entries are rebuilt by re-committing the user's typed fields on
+       the read's values, so a value refused as stale is never re-sent; based
+       entries go as they are, for the server to judge. */
+    const hid = type === bookMetaActions.hydrateFromBookState.type ? (a.payload as { bookId: string }).bookId : '';
+    if (!marked(hid) && waiting.delete(flushKey(hid, 'state'))) {
+      const box = boxOf(flushKey(hid, 'state'));
+      const draft = typed?.[hid]?.draft ?? {};
+      const redo = Array.from(box).flatMap(([u, e]) => (!e.base && e.handler?.rollback && box.delete(u) ? [u] : []));
+      const retyped = bookId === hid ? redo.filter((u): u is EditableBookMetaField => u in draft) : [];
+      retyped.forEach((field) => store.dispatch(bookMetaActions.setDraftField({ field, value: draft[field] ?? null })));
+      if (retyped.length > 0) store.dispatch(bookMetaActions.commitDraft({ bookId: hid })); else pump(hid, 'state');
+      return result;
     }
 
     const rule = PERSIST_RULES[type];
