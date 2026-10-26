@@ -372,9 +372,9 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
 
 /* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
    that book's slices are re-read in full (Layout's full hydrate, `onFullRead`:
-   the user has seen the failure and the revert, so a kept save landing later
-   would contradict what they see; a save held for the read stays, #3784 P1)
-   and when the book is deleted (hygiene). A re-parse or a manuscript replace
+   the user has seen the failure and the revert; a save held for the read, or
+   one with a base, stays, as the server refuses it if the book moved: #3784
+   P1, P2) and when the book is deleted (hygiene). A re-parse or a manuscript replace
    drops nothing: it rotates the book's edit epoch, so the server refuses every
    kept save (plan 289, D8b). Touches only the kept saves — a newer edit
    already queued for the book is untouched. Not a reducer action. */
@@ -686,8 +686,9 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
       for (const slice of LEARNED_SLICES) {
         const key = flushKey(a.payload, slice);
-        const forRead = (a as { onFullRead?: boolean }).onFullRead && waiting.has(key);
-        if (!timers.has(key) && !flights.has(key) && !forRead) outbox.delete(key);
+        const onRead = (a as { onFullRead?: boolean }).onFullRead;
+        if (timers.has(key) || flights.has(key) || (onRead && waiting.has(key))) continue;
+        for (const [u, e] of outbox.get(key) ?? []) if (!(onRead && e.base)) outbox.get(key)!.delete(u);
       }
       return result;
     }

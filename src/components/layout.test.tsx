@@ -3252,6 +3252,43 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
+  /* #3784 P2 (review pass 8) — a title commit and confirmCast share a send that
+     is given up on inside the re-open's flush. The commit is rolled back; the
+     kept castConfirmed carries a base, so the read keeps it for the server to
+     judge, and the book's next flush lands it. */
+  it('P2: a based castConfirmed kept by a give-up inside the reopen flush survives the full read and lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.write('A', 'state', { ...disk.books.get('A')!.state, castConfirmed: false });
+    disk.seed('B', { state: { ...bookStateFor('B', null).state }, cast: { characters: [eliza] } });
+    const isStatePutA = (id: string, req: { slice: string }) => id === 'A' && req.slice === 'state';
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(4, isStatePutA);
+      commit(store, 'title', 'X');
+      act(() => { store.dispatch({ type: 'ui/confirmCast' }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const statePuts = disk.log.filter((p) => p.bookId === 'A' && p.slice === 'state');
+      expect(statePuts.slice(0, 4).map((p) => p.outcome)).toEqual(['503', '503', '503', '503']);
+      expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('book-meta-persist-failed');
+
+      /* The kept castConfirmed goes with the book's next send, leaving it at the latest. */
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.castConfirmed).toBe(true);
+      expect(disk.books.get('A')!.state.title).toBe('T0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {

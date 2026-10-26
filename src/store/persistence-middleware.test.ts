@@ -2156,5 +2156,30 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       restore();
     });
 
+    /* #3784 P2 (review pass 8) — a full read keeps a kept save that carries a
+       base, for the server to judge; one with no base still goes, and a
+       delete takes both. */
+    it('P2 control: a full read drops a kept save with no base', async () => {
+      const { disk, store, restore } = setup();
+      store.dispatch(learnSliceRevisions('b1', undefined, store.dispatch(beginFullRead('b1')) as unknown as number));
+      await keepConfirm(store, disk);
+      store.dispatch(dropRetainedSaves('b1', true));
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      expect(stateOnDisk(disk).castConfirmed).toBe(false);
+      restore();
+    });
+
+    it('P2: a full read keeps a based kept save, and a delete drops it', async () => {
+      const { disk, store, restore } = setup();
+      await keepConfirm(store, disk);
+      store.dispatch(dropRetainedSaves('b1', true));
+      store.dispatch(dropRetainedSaves('b1'));
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      await keepConfirm(store, disk);
+      store.dispatch(dropRetainedSaves('b1', true));
+      await store.dispatch(flushBookPersistence('b1'));
+      expect(stateOnDisk(disk).castConfirmed).toBe(true);
+      restore();
+    });
   });
 });
