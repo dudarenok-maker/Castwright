@@ -18,12 +18,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { ZipFile } from 'yazl';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { audioDir, BOOKS_ROOT, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
-import { STAGING_ROOT } from '../workspace/portable-staging.js';
+import { makeStagingDir } from '../workspace/portable-staging.js';
 import { importPortableBundle } from './scan-import-folder.js';
 
 vi.mock('../workspace/file-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/file-lock.js')>();
   return { ...actual, withStateJsonLock: vi.fn(actual.withStateJsonLock) };
+});
+
+/* The server test forks share one workspace, so the global `.staging/` can hold
+   a concurrent import test's dir; wrap makeStagingDir to learn THIS import's
+   exact dir by identity rather than by diffing the directory listing. */
+vi.mock('../workspace/portable-staging.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/portable-staging.js')>();
+  return { ...actual, makeStagingDir: vi.fn(actual.makeStagingDir) };
 });
 
 function bundle(title: string): Promise<Buffer> {
@@ -70,17 +78,6 @@ function bundle(title: string): Promise<Buffer> {
 const tmpFilesUnder = (dir: string): string[] =>
   readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => f.includes('.tmp-'));
 
-/* Top-level entries of the GLOBAL staging root (one `<nonce>/` per import). The
-   server test forks share one workspace, so a concurrent import test's dir can
-   be here too; callers diff against a pre-import snapshot. */
-const stagingDirs = (): string[] => {
-  try {
-    return readdirSync(STAGING_ROOT, { encoding: 'utf8' });
-  } catch {
-    return [];
-  }
-};
-
 describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
   it("'overwrite' removes every staged tmp file when the state lock times out", async () => {
     const { withStateJsonLock } = await import('../workspace/file-lock.js');
@@ -95,11 +92,13 @@ describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
     );
     /* The overwrite takes the target's state lock ONCE, for the promote, after
        every entry is staged; that call times out. */
-    const before = new Set(stagingDirs());
-    let stagedAtTimeout: string[] = [];
+    vi.mocked(makeStagingDir).mockClear();
+    let stagedAtTimeout: boolean[] = [];
     vi.mocked(withStateJsonLock)
       .mockImplementationOnce(async (p, fn) => {
-        stagedAtTimeout = stagingDirs().filter((d) => !before.has(d));
+        stagedAtTimeout = (await Promise.all(vi.mocked(makeStagingDir).mock.results.map((r) => r.value))).map(
+          (d) => existsSync(d),
+        );
         /* A REAL acquisition timeout: a holder queued on the same key, then the
            call with a 50ms budget (the curated error comes from the real lock). */
         const holder = actual.withStateJsonLock(p, () => new Promise<void>((r) => setTimeout(r, 400)));
@@ -114,17 +113,19 @@ describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
         (e: unknown) => e,
       );
       expect(isLockAcquisitionTimeout(err)).toBe(true);
-      /* Positive control: this import really staged a dir to be cleaned up. */
-      expect(stagedAtTimeout.length).toBeGreaterThan(0);
+      /* Positive control: this import made exactly one staging dir and it
+         existed at the timeout, so there is something to be cleaned up. */
+      expect(stagedAtTimeout).toEqual([true]);
       /* The seam fired, the live file was never promoted... */
       expect(readFileSync(stateJsonPath(target), 'utf8')).toBe(existing);
       /* ...and the staged files (state.json, manuscript, audio) are gone: none
-         reached the target, and none of THIS import's staging dirs survives. */
+         reached the target, and this import's staging dir is gone. */
       expect(tmpFilesUnder(target)).toEqual([]);
       expect(readdirSync(target, { recursive: true, encoding: 'utf8' }).sort()).toEqual(
         ['.audiobook', 'audio', join('.audiobook', 'state.json')].sort(),
       );
-      expect(stagedAtTimeout.filter((d) => existsSync(join(STAGING_ROOT, d)))).toEqual([]);
+      const made = await Promise.all(vi.mocked(makeStagingDir).mock.results.map((r) => r.value));
+      expect(made.filter((d) => existsSync(d))).toEqual([]);
     } finally {
       rmSync(target, { recursive: true, force: true });
     }
