@@ -1,7 +1,7 @@
 /* #3084 wave 5 — Advanced settings → Analyzer request controls. Reasoning per
    engine and model (Ollama and Gemini both per model, P18). Saves a PARTIAL patch through
    the account save thunk; server-side validation messages are shown verbatim. */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { fetchAnalyzerCatalog, saveAccountSettings } from '../../store/account-slice';
 import {
@@ -9,6 +9,7 @@ import {
   REASONING_LEVEL_LABELS,
   collectCatalogModels,
   normalizeOllamaReasoningMap,
+  normalizeOllamaTag,
   ollamaReasoningRows,
   type ReasoningLevel,
 } from '../../lib/reasoning-levels';
@@ -22,6 +23,11 @@ export function AnalyzerRequestControls() {
   const savedOllama = useAppSelector((s) => s.account.analyzerReasoningByEngine?.ollama);
   const savedGemini = useAppSelector((s) => s.account.analyzerReasoningByEngine?.gemini);
   const catalog = useAppSelector((s) => s.account.analyzerCatalog);
+  const stage = useAppSelector((s) => s.ui.stage);
+  const reasoningFocus = stage.kind === 'advanced' ? stage.reasoningFocus : undefined;
+  const scrolledForRef = useRef<string | undefined>(undefined);
+  /* Holds the pending highlight-removal timer (with its element) across re-runs of the highlight effect. */
+  const highlightTimerRef = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
   /* #3625 — while the settings file is unreadable the slice holds boot defaults; a save sends the whole
      analyzerReasoningByEngine key, which would replace the user's real maps. */
   const blocked = useAppSelector((s) => !!s.account.settingsFileUnreadable);
@@ -45,6 +51,35 @@ export function AnalyzerRequestControls() {
     () => models.filter((m) => m.kind === 'gemini' && m.offeredReasoningLevels.length > 1),
     [models],
   );
+
+  /* F7 deep link: scroll to and briefly highlight the row a reasoning-overflow fix names, once per focus value.
+     The rows arrive after the catalog loads, so this re-runs when they do. No cleanup here: it would run before
+     every re-run and cancel the removal timer; the timer is cleared on unmount only (next effect). */
+  useEffect(() => {
+    if (!reasoningFocus) return;
+    const key = `${reasoningFocus.engine}:${reasoningFocus.model}`;
+    if (scrolledForRef.current === key) return;
+    const targetId =
+      reasoningFocus.engine === 'ollama'
+        ? `analyzer-reasoning-ollama-${normalizeOllamaTag(reasoningFocus.model)}`
+        : `analyzer-reasoning-gemini-${reasoningFocus.model}`;
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    scrolledForRef.current = key;
+    el.scrollIntoView?.({ block: 'center' });
+    el.classList.add('ring-2', 'ring-magenta/60');
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current.timer);
+    const timer = setTimeout(() => {
+      el.classList.remove('ring-2', 'ring-magenta/60');
+    }, 2400);
+    highlightTimerRef.current = { el, timer };
+  }, [reasoningFocus, ollamaRows, geminiModels]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current.timer);
+    };
+  }, []);
 
   const onSave = async () => {
     if (blocked) return;
@@ -76,7 +111,7 @@ export function AnalyzerRequestControls() {
           Sent as &quot;think&quot;. Off is today&apos;s default. Low / Medium / High appear for a model once that model&apos;s own Test accepted them; a model that doesn&apos;t think rejects On and every level.
         </span>
         {ollamaRows.map((row) => (
-          <label key={row.id} className="block">
+          <label key={row.id} id={`analyzer-reasoning-ollama-${row.id}`} className="block">
             <span className="block text-xs text-ink/70">
               {row.label}
               {row.isCurrent ? ' (current analysis model)' : ''}
@@ -102,7 +137,7 @@ export function AnalyzerRequestControls() {
         <div className="space-y-3">
           <span className="block text-sm font-medium text-ink">Gemini reasoning, per model</span>
           {geminiModels.map((m) => (
-            <label key={m.id} className="block">
+            <label key={m.id} id={`analyzer-reasoning-gemini-${m.id}`} className="block">
               <span className="block text-xs text-ink/70">{m.label}</span>
               <select
                 data-testid={`analyzer-reasoning-gemini-${m.id}`}

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { accountSlice } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import type { Stage } from '../../lib/types';
@@ -109,5 +109,79 @@ describe('AnalyzerRequestControls — reasoning', () => {
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     expect(mockPut).not.toHaveBeenCalled();
     expect(screen.getByTestId('analyzer-request-controls-unreadable')).toBeInTheDocument();
+  });
+});
+
+describe('AnalyzerRequestControls — deep-linked reasoning row (5.6b)', () => {
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  it('scrolls to and highlights the deep-linked Gemini row once its data arrives', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockModels.mockResolvedValue({
+      groups: [{ kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [{ id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', offeredReasoningLevels: ['model-default', 'minimal', 'low'] }] }],
+    } as never);
+    renderControls({}, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } });
+    await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.6-flash');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.6-flash')?.className).toMatch(/ring-2/);
+  });
+
+  it('matches an Ollama row by its normalised tag, not the raw URL value', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockModels.mockResolvedValue({
+      groups: [{ kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'qwen3.5:4b', label: 'qwen3.5:4b', offeredReasoningLevels: ['model-default', 'off', 'on'] }] }],
+    } as never);
+    renderControls({}, { kind: 'advanced', reasoningFocus: { engine: 'ollama', model: 'qwen3.5:4b:latest' } });
+    await screen.findByTestId('analyzer-reasoning-ollama-qwen3.5:4b');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+
+  it('does nothing when the deep-linked row is not in the current lists', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockModels.mockResolvedValue({ groups: [] } as never);
+    renderControls({}, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-9-ultra' } });
+    await waitFor(() => expect(mockModels).toHaveBeenCalled());
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('does not re-scroll on an unrelated edit while the same deep-link stage persists', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockModels.mockResolvedValue(CATALOG as never);
+    renderControls({ defaultAnalysisModel: 'q:9b' }, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.8-flash' } });
+    await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:9b'), { target: { value: 'on' } });
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it('still removes the highlight after an unrelated edit within the highlight window (review pass 3, item 7)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      mockModels.mockResolvedValue(CATALOG as never);
+      renderControls({ defaultAnalysisModel: 'q:9b' }, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.8-flash' } });
+      await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).toMatch(/ring-2/);
+      // An unrelated edit re-runs the highlight effect (ollamaRows/geminiModels change identity)
+      // while the removal timer is still pending.
+      act(() => {
+        fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:9b'), { target: { value: 'on' } });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2400);
+      });
+      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).not.toMatch(/ring-2/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
