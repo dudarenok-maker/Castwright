@@ -18,7 +18,9 @@ import { configValue } from '../config/resolver.js';
 /* #3192 moved the Ollama URL resolver into this leaf (not user-settings.ts). */
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
-import { parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
+import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
 import {
   emotionAnnotationSchema,
@@ -41,15 +43,19 @@ export interface ModelCapabilityRecord {
   control: { ok: true } | { ok: false; error: string };
   /** mode → reasoning level the requests actually sent → outcome (P7). */
   structuredOutput: Partial<Record<StructuredOutputMode, Record<string, ProbeOutcome>>>;
-  /** W5 narrows the key to ReasoningLevel; W3 records `{}`. Required-keyed, not
-      `Partial`: the persisted `modelCapabilityRecordSchema` (user-settings.ts) infers
-      `z.record`, so a record typed by that schema and this interface must agree
-      (Task 3c.3 Step 4 typecheck). A key is only ever present with a verdict. */
+  /** Keys are ReasoningLevel values but stay `string` (as stored values are, N10), so this stays
+      mutually assignable with the persisted schema. Required-keyed, not `Partial`: the persisted
+      `modelCapabilityRecordSchema` (user-settings.ts) infers `z.record`, so a record typed by that
+      schema and this interface must agree (Task 3c.3 Step 4 typecheck). A key is only ever present
+      with a verdict. */
   reasoning: Record<string, 'accepted' | 'rejected'>;
   /** 3c (A3): Ollama only — the installed model's `/api/tags` digest when the Test ran. A record
       whose digest differs from the model installed now is discarded, like a moved server URL,
       so `ollama pull` of a fixed build cannot leave a stale `rejected` refusing every run. */
   digest?: string;
+  /** #3084 wave 5 (A2) — each verdict's own Test date, keyed like the verdicts; a verdict with no
+      entry takes `testedAt`. Mirrors modelCapabilityRecordSchema exactly (both directions, strict). */
+  verdictTestedAt?: { reasoning?: Record<string, string>; structuredOutput?: Record<string, Record<string, string>> };
 }
 
 export interface ModelTestDeps {
@@ -163,8 +169,33 @@ export function classifyMarkerProbe(text: string, marker: string): 'enforced' | 
   return 'ignored';
 }
 
-function sameServer(a: string, b: string): boolean {
-  return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+/** N7 — the key a Test record is saved under: an Ollama tag through normalizeModelTag, so `qwen3` and
+    `qwen3:latest` are one model; any other id (an endpoint id, a Gemini id) as is. */
+export function capabilityRecordKey(modelId: string): string {
+  return inferEngineFromModelId(modelId) === 'openai' ? modelId : normalizeModelTag(modelId);
+}
+
+/** A2 — whether two record keys name the same model, so the write can merge into the record saved under
+    the other tag form and leave one key behind (an endpoint id is compared exactly; capabilityRecordKey
+    leaves it as is). */
+export function sameCapabilityRecordModel(a: string, b: string): boolean {
+  return capabilityRecordKey(a) === capabilityRecordKey(b);
+}
+
+/** A2 — the date of the Test that recorded one verdict: its own `verdictTestedAt` entry, else the
+    record's `testedAt` (a record written before per-verdict dates existed). The pre-run refusal cites
+    this, never a newer date a later Test of another verdict brought in. */
+export function verdictTestedAtFor(
+  record: ModelCapabilityRecord,
+  cell:
+    | { setting: 'reasoning'; reasoning: string }
+    | { setting: 'structuredOutput'; structuredOutput: StructuredOutputMode; reasoning: string },
+): string {
+  const own =
+    cell.setting === 'reasoning'
+      ? record.verdictTestedAt?.reasoning?.[cell.reasoning]
+      : record.verdictTestedAt?.structuredOutput?.[cell.structuredOutput]?.[cell.reasoning];
+  return own ?? record.testedAt;
 }
 
 export function capabilityRecordFor(
@@ -174,7 +205,11 @@ export function capabilityRecordFor(
   /** A3: the digest of the model installed now (Ollama only). Unknown → the record is kept. */
   currentDigest?: string,
 ): ModelCapabilityRecord | undefined {
-  const stored = settings.analyzerCapabilitiesByModel[modelId];
+  /* N7 — an Ollama record saved under either tag form answers for the other; an endpoint id is exact. */
+  const stored =
+    inferEngineFromModelId(modelId) === 'openai'
+      ? settings.analyzerCapabilitiesByModel[modelId]
+      : entryForModelTag(settings.analyzerCapabilitiesByModel, modelId);
   if (!stored || !sameServer(stored.serverUrl, currentServerUrl)) return undefined;
   /* A3: a record written for another build of the model says nothing about this one. Fail-open on
      an unknown current digest: the check never invents a discard it cannot see a reason for. */
@@ -189,11 +224,16 @@ export function assertConfiguredCapabilitiesAllowed(
 ): void {
   if (!record || !record.control.ok) return;
   if (record.reasoning[configured.reasoning] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', configured.reasoning, record.testedAt);
+    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', configured.reasoning, verdictTestedAtFor(record, { setting: 'reasoning', reasoning: configured.reasoning }));
   }
   /* P7: only a rejection recorded at the level this run sends refuses it. */
   if (record.structuredOutput[configured.structuredOutput]?.[configured.reasoning] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
+    throw new AnalyzerCapabilityRejectedError(
+      modelId,
+      'structuredOutput',
+      configured.structuredOutput,
+      verdictTestedAtFor(record, { setting: 'structuredOutput', structuredOutput: configured.structuredOutput, reasoning: configured.reasoning }),
+    );
   }
 }
 
