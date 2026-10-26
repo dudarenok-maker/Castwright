@@ -384,3 +384,14 @@ describe('endpoint form — reasoning fields', () => {
     expect(screen.queryByTestId('endpoint-save-error')?.textContent ?? '').not.toContain('not offered');
   });
 });
+
+describe('endpoint form — touch targets', () => {
+  it.each(['endpoint-name', 'endpoint-context-tokens', 'endpoint-reasoning-style', 'endpoint-reasoning'])(
+    '%s meets the 44px touch target on touch devices (CLAUDE.md mobile protocol)',
+    (testId) => {
+      renderSection();
+      fireEvent.click(screen.getByTestId('add-endpoint'));
+      expect(screen.getByTestId(testId)).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+    },
+  );
+});

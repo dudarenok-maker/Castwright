@@ -68,7 +68,7 @@ export const ENDPOINT_FIELD_TEST_IDS: Record<IssueField, string> = {
   maxInputTokensPerRequest: 'endpoint-max-input-tokens',
 };
 
-const INPUT = 'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30';
+const INPUT = 'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0';
 
 export function slugifyEndpointId(name: string, taken: readonly string[]): string {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 36) || 'endpoint';
@@ -398,7 +398,7 @@ export function AnalyzerEndpointsSection() {
           </FieldRow>
           <FieldRow label="Context size (tokens)" sublabel="Required: what the server actually serves per request, not the model's training context. List models fills it from served values; Detect reads llama.cpp / llama-swap. It sets the chunk size: each stage's chunks are at most its input fraction (Advanced Settings → Analyzer chunking) × this × 2 characters per token, capped by the pass ceiling.">
             <div className="flex flex-wrap items-center gap-2">
-              <input data-testid="endpoint-context-tokens" type="number" min={512} value={draft.contextTokens} onChange={(e) => set('contextTokens', e.target.value)} className="w-40 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm" />
+              <input data-testid="endpoint-context-tokens" type="number" min={512} value={draft.contextTokens} onChange={(e) => set('contextTokens', e.target.value)} className="w-40 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm min-h-[44px] fine-pointer:min-h-0" />
               <button type="button" data-testid="endpoint-list-models" onClick={() => void listModels()} className="px-3 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">List models</button>
               <select data-testid="endpoint-detect-flavor" value={detectFlavor} onChange={(e) => setDetectFlavor(e.target.value as 'llama.cpp' | 'llama-swap')} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">
                 <option value="llama.cpp">llama.cpp</option>
