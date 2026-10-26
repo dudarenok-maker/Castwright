@@ -285,6 +285,9 @@ export function AdvancedView() {
   /* The highlight is transient (~2 s), the scroll is not — same shape as
      help.tsx's `?code=` highlight timer. */
   const [focusHighlight, setFocusHighlight] = useState(false);
+  /* Held in a ref so a `descriptors` reload (which re-runs the effect below)
+     cannot cancel a pending timer and strand the highlight on. */
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focusGroupId = descriptors.find((d) => d.key === focusKey)?.group;
 
   useEffect(() => {
@@ -299,12 +302,15 @@ export function AdvancedView() {
     focusedRowRef.current.scrollIntoView?.({ block: 'center' });
     scrolledForRef.current = focusKey;
     setFocusHighlight(true);
-    const timer = setTimeout(() => setFocusHighlight(false), 2000);
-    return () => clearTimeout(timer);
+    clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setFocusHighlight(false), 2000);
     /* `descriptors` is a dependency on purpose: on the first render (before
        fetchConfig resolves) there are no rows, so the target does not exist
        yet; this re-runs when they arrive. */
   }, [focusKey, descriptors]);
+
+  /* Unmount only: the timer must outlive effect re-runs (see above). */
+  useEffect(() => () => clearTimeout(highlightTimerRef.current), []);
 
   useEffect(() => {
     dispatch(fetchConfig());
