@@ -3720,6 +3720,34 @@ export interface components {
              */
             createdAt: string;
         };
+        /**
+         * @description Reasoning level for one analyzer engine, Gemini model or endpoint.
+         *     Which values apply depends on the engine family (Gemini per model,
+         *     Ollama) or the endpoint's reasoningStyle; the server offers only those
+         *     and refuses others on save. `model-default` sends no reasoning field.
+         *     A server may accept a level and ignore it — that cannot be observed.
+         * @enum {string}
+         */
+        ReasoningLevel: "model-default" | "off" | "on" | "none" | "minimal" | "low" | "medium" | "high";
+        /**
+         * @description #3084 — per-engine reasoning, keyed by model id. Ollama: absent = 'off';
+         *     low / medium / high only for a model whose own Test accepted them; keys are
+         *     stored through normalizeModelTag (`qwen3` and `qwen3:latest` are one model).
+         *     Gemini: absent = 'model-default'. Values are strings: a save accepts only a
+         *     ReasoningLevel the model offers, and a stored value this version no longer
+         *     offers or does not know is returned as saved and refuses a run before it
+         *     starts. A PUT replaces this map, and each engine map inside it, as a whole:
+         *     send every engine's entries, because an engine left out of a sent map loses
+         *     them.
+         */
+        AnalyzerReasoningByEngine: {
+            ollama?: {
+                [key: string]: string;
+            };
+            gemini?: {
+                [key: string]: string;
+            };
+        };
         UserSettings: {
             /**
              * @description Free-text name shown in the top-bar avatar and used as the
@@ -3908,6 +3936,7 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
@@ -4140,6 +4169,7 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.

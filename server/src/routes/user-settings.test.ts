@@ -33,16 +33,21 @@ let userSettingsPath: string;
 let resetCache: () => void;
 let userSettingsSchema: SettingsModule['userSettingsSchema'];
 let writeUserSettings: SettingsModule['writeUserSettings'];
+let _setUserSettingsCacheForTest: SettingsModule['_setUserSettingsCacheForTest'];
+let getResolvedOllamaUrl: () => string;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-user-settings-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   delete process.env.GEMINI_API_KEY;
 
-  const [{ userSettingsRouter }, settings] = await Promise.all([
+  const [{ userSettingsRouter }, settings, ollamaResolved] = await Promise.all([
     import('./user-settings.js'),
     import('../workspace/user-settings.js'),
+    import('../config/ollama-resolved.js'),
   ]);
+  _setUserSettingsCacheForTest = settings._setUserSettingsCacheForTest;
+  getResolvedOllamaUrl = ollamaResolved.getResolvedOllamaUrl;
 
   userSettingsPath = settings.USER_SETTINGS_PATH;
   resetCache = settings._resetUserSettingsCache;
@@ -443,6 +448,8 @@ describe('user-settings router', () => {
          general PUT (it is NOT in FORBIDDEN_KEYS), so it round-trips like any
          other writable field. */
       analyzerRateLimitsByModel: { 'gemma-4-31b-it': { rpm: 12 } },
+      /* #3084 wave 5 — both levels pass the write rules with no Test record. */
+      analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } },
     };
 
     /* Guard: every writable schema field has a sample value here. A field
@@ -477,6 +484,103 @@ describe('user-settings router', () => {
       expect(res.body[key], `GET echo for "${key}"`).toEqual(SAMPLE_VALUES[key]);
       expect(onDisk[key], `on-disk value for "${key}"`).toEqual(SAMPLE_VALUES[key]);
     }
+  });
+
+  it('PUT refuses a Gemini reasoning level the model does not offer and writes nothing', async () => {
+    /* F2 — a 3.x id: gemini-3.8-flash rejects minimal (offered: model-default, low, medium, high). */
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({ displayName: 'Changed', analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid user settings.');
+    expect(res.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Gemini reasoning "minimal" is not available for gemini-3.8-flash (offered: model-default, low, medium, high).',
+    ]);
+    expect(existsSync(userSettingsPath)).toBe(false);
+  });
+
+  it('PUT persists analyzerReasoningByEngine and GET returns it', async () => {
+    const put = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    expect(put.status).toBe(200);
+    resetCache();
+    const get = await request(app).get('/api/user/settings');
+    expect(get.body.analyzerReasoningByEngine).toEqual({ ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } });
+  });
+
+  it("PUT refuses a named Ollama level until that model's own Test accepted it (P18)", async () => {
+    const refused = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Ollama reasoning "low" for qwen3.5:4b needs a Test of that model that accepted it (offered now: model-default, off, on).',
+    ]);
+    expect(existsSync(userSettingsPath)).toBe(false);
+    _setUserSettingsCacheForTest({
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': { serverUrl: getResolvedOllamaUrl(), testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+      },
+    });
+    const accepted = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(accepted.status).toBe(200);
+  });
+
+  it('PUT judges only what the save changes: a Gemini level saves while an unchanged stale Ollama entry stays (N6)', async () => {
+    /* The record that accepted `low` was taken on another Ollama server, so capabilityRecordFor discards
+       it for the current URL and the saved `low` is stale. The Settings UI still sends the whole map. */
+    _setUserSettingsCacheForTest({
+      analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } },
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': { serverUrl: 'http://old-ollama.invalid:11434', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+      },
+    });
+    const saved = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.analyzerReasoningByEngine).toEqual({ ollama: { 'qwen3.5:4b': 'low' }, gemini: { 'gemini-3.6-flash': 'low' } });
+    /* An entry the save changes is still judged. */
+    const changed = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low', 'qwen3.5:9b': 'low' } } });
+    expect(changed.status).toBe(400);
+  });
+
+  it('PUT reads the stored Test records before judging, even when the save arrives before the boot read (N6)', async () => {
+    /* The boot read (server/src/index.ts) is not awaited, so an early PUT can find the cache cold. The
+       record exists only on disk here: a check against the cold cache would refuse this save. */
+    resetCache();
+    const serverUrl = getResolvedOllamaUrl();
+    mkdirSync(dirname(userSettingsPath), { recursive: true });
+    writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        analyzerCapabilitiesByModel: {
+          'qwen3.5:4b': { serverUrl, testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+        },
+      }),
+    );
+    const res = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(res.status).toBe(200);
+  });
+
+  it('PUT stores an Ollama reasoning level under the normalised tag (N7)', async () => {
+    const put = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3:latest': 'on' } } });
+    expect(put.status).toBe(200);
+    resetCache();
+    expect((await request(app).get('/api/user/settings')).body.analyzerReasoningByEngine).toEqual({ ollama: { qwen3: 'on' } });
+  });
+
+  it('PUT replaces the whole analyzerReasoningByEngine map: an engine left out of the save loses its entries', async () => {
+    /* `writeUserSettings` replaces each sent top-level key wholesale, which is what the OpenAPI
+       description promises clients; a partial map is a removal, not a patch. */
+    await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    const put = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'low' } } });
+    expect(put.status).toBe(200);
+    resetCache();
+    expect((await request(app).get('/api/user/settings')).body.analyzerReasoningByEngine).toEqual({ gemini: { 'gemini-3.6-flash': 'low' } });
   });
 
   /* Plan 49 — dedicated Gemini-key PUT endpoint. The general PUT still

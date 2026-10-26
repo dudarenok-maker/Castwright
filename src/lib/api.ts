@@ -7194,6 +7194,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   workspaceSource: 'default',
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
+  analyzerReasoningByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   analyzerEndpoints: [],
@@ -7681,6 +7682,65 @@ const RETIRED_ANALYZER_FIELDS = [
   'analyzerPhase1MinLagChapters',
 ] as const;
 
+/* #3084 PR 5a — mirrors the server's PUT judgement of analyzerReasoningByEngine (routes/user-settings.ts
+   + workspace/analyzer-request-controls.ts analyzerRequestControlsPatchSchemaFor): only entries this save
+   changes are judged (N6); Ollama keys are written normalised (N7); a named Ollama level needs that
+   model's own accepted Test record (P18); a Gemini level must be one the model offers. Paths and messages
+   are the server's. Deliberate subset, unobservable in mock mode: the mock ignores a record's server-URL
+   binding (mockTestAnalyzerModel always writes for the mock server), and its Gemini table holds only the
+   mock catalog's one Gemini id; any other Gemini id offers model-default only, as the server does for an
+   id its table lacks. */
+type MockReasoningLevel = ApiComponents['schemas']['ReasoningLevel'];
+const MOCK_OLLAMA_BASE_LEVELS: readonly MockReasoningLevel[] = ['model-default', 'off', 'on'];
+const MOCK_OLLAMA_NAMED_LEVELS = ['low', 'medium', 'high'] as const;
+const MOCK_GEMINI_LEVELS: Record<string, readonly MockReasoningLevel[]> = {
+  'gemini-3.5-flash-lite': ['model-default', 'minimal', 'low', 'medium', 'high'],
+};
+const mockNormalizeTag = (tag: string): string => (tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag);
+
+/** The levels the server's catalog would offer this Ollama model: the base levels, plus each named level
+    the model's own Test record accepted (either tag form, N7). Also used by mockGetAnalyzerModels (5.2b). */
+function mockOllamaOffered(model: string, records: UserSettings['analyzerCapabilitiesByModel'] | undefined): readonly MockReasoningLevel[] {
+  const key = mockNormalizeTag(model);
+  const record = records?.[key] ?? Object.entries(records ?? {}).find(([saved]) => mockNormalizeTag(saved) === key)?.[1];
+  const named = MOCK_OLLAMA_NAMED_LEVELS.filter((level) => record?.control.ok === true && record.reasoning[level] === 'accepted');
+  return [...MOCK_OLLAMA_BASE_LEVELS, ...named];
+}
+
+function mockReasoningIssues(next: NonNullable<UserSettingsPatch['analyzerReasoningByEngine']>): { path: string[]; message: string }[] {
+  const stored = MOCK_USER_SETTINGS.analyzerReasoningByEngine ?? {};
+  const issues: { path: string[]; message: string }[] = [];
+  const writable: readonly string[] = [...MOCK_OLLAMA_BASE_LEVELS, ...MOCK_OLLAMA_NAMED_LEVELS];
+  for (const [model, level] of Object.entries(next.ollama ?? {})) {
+    const path = ['analyzerReasoningByEngine', 'ollama', model];
+    const before = Object.entries(stored.ollama ?? {}).find(([saved]) => mockNormalizeTag(saved) === mockNormalizeTag(model))?.[1];
+    if (before === level) continue; // N6 — an unchanged entry is saved back as it was
+    if (engineForModelId(model) === 'openai') {
+      issues.push({ path, message: `Ollama reasoning map key "${model}" is an endpoint model id; endpoints carry their own Reasoning setting.` });
+    } else if (!writable.includes(level)) {
+      issues.push({ path, message: `Ollama reasoning "${level}" for ${model} is not an Ollama level (${writable.join(', ')}).` });
+    } else {
+      const offered = mockOllamaOffered(model, MOCK_USER_SETTINGS.analyzerCapabilitiesByModel);
+      if (!(offered as readonly string[]).includes(level)) {
+        issues.push({ path, message: `Ollama reasoning "${level}" for ${model} needs a Test of that model that accepted it (offered now: ${offered.join(', ')}).` });
+      }
+    }
+  }
+  for (const [model, level] of Object.entries(next.gemini ?? {})) {
+    const path = ['analyzerReasoningByEngine', 'gemini', model];
+    if (stored.gemini?.[model] === level) continue; // N6
+    if (engineForModelId(model) !== 'gemini') {
+      issues.push({ path, message: `Gemini reasoning map key "${model}" is not a Gemini model id.` });
+      continue;
+    }
+    const offered = MOCK_GEMINI_LEVELS[model] ?? ['model-default'];
+    if (!(offered as readonly string[]).includes(level)) {
+      issues.push({ path, message: `Gemini reasoning "${level}" is not available for ${model} (offered: ${offered.join(', ')}).` });
+    }
+  }
+  return issues;
+}
+
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
   /* #3084 P23 — mirrors the server's refusal of an endpoint id in the one
@@ -7712,6 +7772,13 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
       } managed in Advanced Settings and cannot be set here.`,
     );
   }
+  /* #3084 PR 5a — the server's 400 + issues body, as the endpoint-id refusal above formats it. */
+  if (patch.analyzerReasoningByEngine) {
+    const issues = mockReasoningIssues(patch.analyzerReasoningByEngine);
+    if (issues.length > 0) {
+      throw new Error(`User settings save failed (400): ${JSON.stringify({ error: 'Invalid user settings.', issues })}`);
+    }
+  }
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
   const {
@@ -7725,6 +7792,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     dualModelEnabled,
     analyzerKeepAliveByModel,
     analyzerRateLimitsByModel,
+    analyzerReasoningByEngine,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7740,6 +7808,13 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         dualModelEnabled,
         analyzerKeepAliveByModel,
         analyzerRateLimitsByModel,
+        /* N7 — Ollama keys are stored normalised. */
+        analyzerReasoningByEngine: analyzerReasoningByEngine && {
+          ...analyzerReasoningByEngine,
+          ...(analyzerReasoningByEngine.ollama
+            ? { ollama: Object.fromEntries(Object.entries(analyzerReasoningByEngine.ollama).map(([m, l]) => [mockNormalizeTag(m), l])) }
+            : {}),
+        },
       }).filter(([, v]) => v !== undefined),
     ),
   );

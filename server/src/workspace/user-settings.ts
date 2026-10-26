@@ -395,6 +395,19 @@ export const userSettingsSchema = z.object({
      synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
      files load unchanged. */
   analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),
+  /* #3084 wave 5 — per-engine reasoning level, keyed by model id (P18; Ollama keys
+     stored through normalizeModelTag, N7). Ollama: absent = 'off', today's
+     think:false. Gemini: absent = 'model-default', no thinking field. Endpoints
+     carry their own `reasoning`. Lenient on read: any string (N10), so a value
+     this version does not know never resets the file; the pre-run check refuses
+     it (P17). Offered-level rules run on write in the PUT handler
+     (routes/user-settings.ts, via analyzer-request-controls.ts). */
+  analyzerReasoningByEngine: z
+    .object({
+      ollama: z.record(z.string(), z.string()).optional(),
+      gemini: z.record(z.string(), z.string()).optional(),
+    })
+    .default({}),
   /* #3084 — per-model analyzer rate limits (Advanced → Analyzer rate limits). Sparse:
      model id (Gemini id or `openai:<endpointId>::<model>`) → any of rpm/tpm/rpd.
      Gemini ids: env → this map → built-in table; endpoint ids: this map → unlimited.
@@ -498,6 +511,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Per-model analyzer keep-alive — empty by default; every model falls
      through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
+  /* #3084 wave 5 — empty = today's behaviour (Ollama off, Gemini model-default). */
+  analyzerReasoningByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   /* #3084 — no endpoints and no keys on a fresh install. */
