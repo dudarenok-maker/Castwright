@@ -90,7 +90,6 @@ import {
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
-import { titlesLookPermuted } from '../workspace/restructure.js';
 import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
@@ -288,25 +287,6 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
     if (parsed.chapters.length !== state.chapters.length) {
       console.warn(
         `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
-      );
-      return state;
-    }
-
-    /* #3791 -- a parse-fallback book whose titles look permuted against the parse (a
-       reorder from before #3703) must keep them: this is a parser-aligned retitle, and
-       copying the parse's titles onto it would make a later merge's title check pass
-       and persist the mispairing. The version stays behind, so a re-parse retries.
-       Hints that were persisted or built in this process are never title-checked. */
-    const record = state.manuscriptId ? await getOrHydrateManuscript(state.manuscriptId) : null;
-    if (
-      record?.hintsSource === 'parse' &&
-      titlesLookPermuted(
-        state,
-        parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)),
-      )
-    ) {
-      console.warn(
-        `[book-state] title-refresh skipped for ${state.bookId}: titles look reordered against the manuscript. Re-parse the book to fix.`,
       );
       return state;
     }

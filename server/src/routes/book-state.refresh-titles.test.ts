@@ -13,7 +13,7 @@
    server/src/parsers/version.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -50,9 +50,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-refresh-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { chaptersRestructureRouter }, { makeBookId }] = await Promise.all([
+  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
     import('./book-state.js'),
-    import('./chapters-restructure.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
@@ -64,7 +63,6 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', bookStateRouter);
-  app.use('/api/books', chaptersRestructureRouter);
 });
 
 afterAll(() => {
@@ -72,13 +70,9 @@ afterAll(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   /* Fresh source file every test — some cases delete it. */
   writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
-  /* The title refresh reads the cached manuscript record's hints source (#3791). */
-  const { removeManuscript } = await import('../store/manuscripts.js');
-  removeManuscript('m_refresh_test');
-  rmSync(join(bookDir, '.audiobook', 'manuscript-hints.json'), { force: true });
 });
 
 /* Helper: write a state.json with the given chapter list and (optional)
@@ -327,86 +321,5 @@ describe('GET /:bookId/state — titleSynthesized through the title refresh (#36
     expect(onDisk.chapters[2].title).toBe('My Sticky Name');
     expect(onDisk.chapters[2].titleOverridden).toBe(true);
     expect(onDisk.chapters[2].titleSynthesized).toBe(true);
-  });
-});
-
-describe('GET /:bookId/state — the title refresh does not hide a mispaired book from a merge (#3791)', () => {
-  /* '# Alpha' becomes the book title, so this parses to [Chapter 1 (app-made), Beta, Gamma]. */
-  const REORDERED_MANUSCRIPT = '# Alpha\n\nA body line.\n\n# Beta\n\nB body line.\n\n# Gamma\n\nG body line.\n';
-
-  /* Reordered [2,1,3] before #3703: state is [Beta, Chapter 2 (renumbered), Gamma],
-     no manuscript-hints.json, parser version behind. A refresh would copy the parse
-     titles onto it and make the two agree. */
-  function seedPreReorderedBook(): void {
-    writeFileSync(join(bookDir, 'manuscript.md'), REORDERED_MANUSCRIPT);
-    writeState({
-      chapters: [
-        { id: 1, title: 'Beta', slug: '01-beta' },
-        { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
-        { id: 3, title: 'Gamma', slug: '03-gamma' },
-      ],
-    });
-  }
-
-  it('leaves the titles and the parser version alone, so a later merge still answers 409', async () => {
-    seedPreReorderedBook();
-
-    const res = await request(app).get(`/api/books/${bookId}/state`);
-    expect(res.status).toBe(200);
-    const onDisk = JSON.parse(readFileSync(statePath, 'utf8')) as {
-      chapters: Array<{ title: string }>;
-      chapterTitleParserVersion?: number;
-    };
-    expect(onDisk.chapters.map((c) => c.title)).toEqual(['Beta', 'Chapter 2', 'Gamma']);
-    expect(onDisk.chapterTitleParserVersion).toBeUndefined();
-
-    const merge = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
-    expect(merge.status).toBe(409);
-    expect(merge.body.code).toBe('hints_out_of_sync');
-    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
-  });
-
-  it('still refreshes a legacy-titled book whose titles match no other chapter in the parse', async () => {
-    writeState({
-      chapters: [
-        { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-        { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-      ],
-    });
-    const res = await request(app).get(`/api/books/${bookId}/state`);
-    expect(res.body.state.chapters.map((c: { title: string }) => c.title)).toEqual([
-      'Chapter 1 — The Beginning',
-      'Chapter 2 — A Manifest',
-    ]);
-  });
-
-  it('refreshes a book whose hints come from a persisted manuscript-hints.json', async () => {
-    seedPreReorderedBook();
-    /* A restructure writes the file and flips the record to persisted: merge does it here
-       on a healthy book, then the state is put back behind the parser version. */
-    writeState({
-      chapters: [
-        { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
-        { id: 2, title: 'Beta', slug: '02-beta' },
-        { id: 3, title: 'Gamma', slug: '03-gamma' },
-      ],
-      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
-    });
-    const exclude = await request(app)
-      .post(`/api/books/${bookId}/chapters/exclude`)
-      .send({ chapterIds: [3], excluded: false });
-    expect(exclude.status).toBe(200);
-    const reorder = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 1, 3] });
-    expect(reorder.status).toBe(200);
-    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(true);
-    const state = JSON.parse(readFileSync(statePath, 'utf8'));
-    delete state.chapterTitleParserVersion;
-    writeFileSync(statePath, JSON.stringify(state));
-    const { removeManuscript } = await import('../store/manuscripts.js');
-    removeManuscript('m_refresh_test');
-
-    const res = await request(app).get(`/api/books/${bookId}/state`);
-    expect(res.status).toBe(200);
-    expect(res.body.state.chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
   });
 });

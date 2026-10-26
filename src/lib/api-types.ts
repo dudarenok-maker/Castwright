@@ -8812,7 +8812,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8857,7 +8857,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;

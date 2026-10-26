@@ -716,23 +716,6 @@ export function parseTitlesPairWithState(
   });
 }
 
-/** Whether state.json's titles look like the parse's, permuted: some chapter
-    carries the title the parse gives ANOTHER position, and not its own. This is
-    the evidence a pre-#3703 reorder leaves, and it is what the GET title refresh
-    can use: that refresh runs while a legacy book's titles still differ from the
-    parse for an ordinary reason (the parser improved), so the exact comparison of
-    `parseTitlesPairWithState` would flag every such book. A `titleOverridden`
-    chapter is the user's own wording and is skipped. */
-export function titlesLookPermuted(
-  state: BookStateJson,
-  parseTitles: ReadonlyArray<string | null>,
-): boolean {
-  return state.chapters.some((c, i) => {
-    if (c.titleOverridden === true || c.title === parseTitles[i]) return false;
-    return parseTitles.some((t, j) => j !== i && t === c.title);
-  });
-}
-
 /** Hints pair with state when both hold the same chapter ids (so the same
     count). Hints carry no uuid, so for hints from a persisted file that is all
     there is to check. Hints from a parse fallback (`parseTitles` given) carry no
