@@ -13,6 +13,7 @@ import { SettingsAccordion, SettingsSection } from '../components/settings/setti
 import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { AnalyzerModelLimits } from '../components/settings/analyzer-model-limits';
+import { AnalyzerRequestControls } from '../components/settings/analyzer-request-controls';
 import { DroppedEndpointEntriesBanner } from '../components/settings/dropped-endpoint-entries-banner';
 import { EnvCleanupNotice } from '../components/env-cleanup-notice';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -545,6 +546,8 @@ export function AdvancedView() {
               Reset all
             </button>
           </div>
+
+          <AnalyzerRequestControls />
 
           <SettingsAccordion
             sections={groups.map((g) => ({ id: g.id, label: g.label, risk: g.risk }))}

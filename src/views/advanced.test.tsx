@@ -270,12 +270,17 @@ describe('AdvancedView — OverrideRow dispatch', () => {
 
 /* ── Device-knob picker ───────────────────────────────────────────────────── */
 
-/* The mobile "Jump to section" nav is also a <select role="combobox">, so the
-   device-knob select must be picked out by elimination. */
+/* The mobile "Jump to section" nav and the reasoning editor card's per-model
+   selects are also <select role="combobox">, so the device-knob select must be
+   picked out by elimination. */
 function getDeviceSelect(): HTMLSelectElement {
   const combobox = screen
     .getAllByRole('combobox')
-    .find((el) => el.getAttribute('aria-label') !== 'Jump to section');
+    .find(
+      (el) =>
+        el.getAttribute('aria-label') !== 'Jump to section' &&
+        !el.closest('[data-testid="analyzer-request-controls"]'),
+    );
   if (!combobox) throw new Error('device knob <select> not found');
   return combobox as HTMLSelectElement;
 }
