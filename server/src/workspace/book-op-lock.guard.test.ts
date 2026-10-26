@@ -387,7 +387,7 @@ const ENUMERATED_WRITERS: ReadonlySet<string> = new Set([
 const CREATOR_TOKENS: ReadonlyMap<string, RegExp[]> = new Map([
   ['routes/import.ts', [/\bwithBookPathClaim\(/g, /\bmintBookId\(/g]],
   ['routes/samples.ts', [/\bwithBookPathClaim\(/g, /\bpeekBook\(/g]],
-  ['import/scan-import-folder.ts', [/\bwithBookPathClaim\(/g, /\bwithBookOp\(/g, /\bmintBookId\(/g]],
+  ['import/scan-import-folder.ts', [/\bwithBookPathClaim\(/g, /\bwithBookOp\(/g, /\bmintBookIdFrom\(/g, /\btakenBookIds\(/g]],
 ]);
 
 /** Creator files missing one of their required tokens (prose and strings do not count). */
@@ -801,6 +801,11 @@ describe('book-op lock — static guard (#3711)', () => {
     expect(missingCreatorTokens('x.ts', 'await withBookPathClaim(async () => { const id = await mintBookId(a, s, t); });', req)).toEqual([]);
     expect(missingCreatorTokens('x.ts', '// withBookPathClaim( mintBookId( used to be here\nconst s = "mintBookId(";', req)).toHaveLength(2);
     expect(missingCreatorTokens('x.ts', 'await withBookPathClaim(async () => {});', req)).toHaveLength(1);
+    /* the importer mints from a walk it already made (`mintBookIdFrom`, `takenBookIds`) */
+    const walkReq = [/\bmintBookIdFrom\(/g, /\btakenBookIds\(/g];
+    expect(missingCreatorTokens('x.ts', 'const id = await mintBookId(a, s, t);', walkReq)).toHaveLength(2);
+    expect(missingCreatorTokens('x.ts', 'const ids = await takenBookIds(); mintBookIdFrom(ids, a, s, t);', walkReq)).toEqual([]);
+    expect(missingCreatorTokens('x.ts', '// mintBookIdFrom( takenBookIds(\nconst s = "takenBookIds(";', walkReq)).toHaveLength(2);
   });
 
   it('no pending:T<n> allowlist entry remains', () => {
