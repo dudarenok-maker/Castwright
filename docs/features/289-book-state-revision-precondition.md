@@ -416,7 +416,7 @@ Per key `${bookId}:${slice}` the middleware holds `outbox: Map<unit, Entry>`, wh
 
 - **`state`: one entry per editorial field** (the D1 token fields), with `value` holding the field's value. The fields are independent on the server: it merges a partial state patch.
 - **`cast`, `manuscript`, `changeLog`: ONE entry for the whole build** (unit `*`), with `value` holding the built object (`{characters}`, `{sentences, mergedAwayKeys}`, `{events}`) and `base` covering all of its token fields.
-  - *Forced, not chosen.* The server's manuscript PUT **replaces the file** (`writeJsonAtomic(editsPath, parsed.data)`, `book-state.ts:~1187`; `mergedAwayKeys` is optional in its schema). So a send carrying `sentences` without `mergedAwayKeys` would wipe the merge tombstones on disk: this is the fs-58 loss pinned at `persistence-middleware.test.ts:201`.
+  - *Forced, not chosen.* The server's manuscript PUT **replaces the file** (`writeJsonAtomic(editsPath, parsed.data)`, `book-state.ts:~1187`; `mergedAwayKeys` is optional in its schema). So a send carrying `sentences` without `mergedAwayKeys` would wipe the merge tombstones on disk: this is the fs-58 loss pinned at `persistence-middleware.test.ts "fs-58 batch ordering"`.
   - A per-field outbox would produce exactly that send. A 200 would clear an unchanged `mergedAwayKeys` and leave a newer `sentences` queued.
   - So for these slices the owner's "per-field outbox" is a single unit, and "drops only the stale fields" drops the unit. This is noted for the owner rather than offered as a choice, because a split send is never correct. Cast and changeLog have one token field each, so nothing changes for them.
 - **The send's `baseRevision` is the union of its entries' `base` maps** (omitted when empty).
@@ -425,7 +425,7 @@ Per key `${bookId}:${slice}` the middleware holds `outbox: Map<unit, Entry>`, wh
   - **Unchanged** (every field `Object.is` equal): the entry is kept as it is, base and all. This matters because `commitDraft` re-sends all eight book-meta fields on every commit. Without it, a commit that only touched `notes` would strip the base from a kept `title` and send it unconditionally.
     - Immer keeps an untouched array reference-equal, so `Object.is` is cheap.
     - Some cast reducers re-map `characters` even when nothing changes (`cast-slice.ts:179`, `:793`). A dispatch of one then reads as "changed" and makes a kept cast save unconditional (C11). That fails open, at `main` parity, and needs no deep compare.
-  - **Handler is sticky:** `entry.handler = buildHandler ?? previous?.handler`. A bulk reassignment still unsent in the unit owns the unit's failure toast even when a plain edit rode along. That is correct: the send still carries the reassignment, and it is today's `toastPending` behaviour. **Its pin is new work (T3)**: `:687` does not exercise stickiness.
+  - **Handler is sticky:** `entry.handler = buildHandler ?? previous?.handler`. A bulk reassignment still unsent in the unit owns the unit's failure toast even when a plain edit rode along. That is correct: the send still carries the reassignment, and it is today's `toastPending` behaviour. **Its pin is new work (T3)**: `"a non-bulk manuscript edit PUT failure raises the generic save toast"` does not exercise stickiness.
 - **Combined queued edits (6c002345) are true by construction:** `confirmCast` and `commitDraft` write different fields of one map.
 
 #### C2 — One request in flight per key: the flight loop
@@ -590,7 +590,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 
   *Why (a):* the server is already failing, and (b) compresses the outage window, so the save gives up sooner. It also adds a cancellable sleep.
 - **OD-C2 — Consequence of "a live build carries no base" (confirm).** When a live commit is combined with a kept field, only the kept field carries its base, and the live fields go unconditionally.
-  - **(a) Recommended: accept.** D6 chose differently: it based every field of such a send (test :1346, "a live build a kept save was merged into carries the kept base, so an outside write refuses it"). That test is rewritten to: an outside write *to the kept field* refuses the send; an outside write to a live field is overwritten, as on `main`.
+  - **(a) Recommended: accept.** D6 chose differently: it based every field of such a send (test "a live build a kept save was merged into carries the kept base, so an outside write refuses it"). That test is rewritten to: an outside write *to the kept field* refuses the send; an outside write to a live field is overwritten, as on `main`.
   - **(b)** Base every field of a send that carries a kept field. This is one ingredient of R3: it can refuse the user's own unacknowledged write. Under the outbox it does not reproduce R3 alone (single flight leaves no older same-key request to have already landed the write); R3 is pinned by C3's "a live build carries no base", and the red-first R3 test is red only when that rule is broken.
 
   *Why (a):* this is `main` parity for live edits. Same-tab outside writers are covered by D7's full read.
@@ -681,7 +681,7 @@ All of them use `src/test/book-state-disk.ts`, which must first be brought close
 - **A replayed save that lands prunes `lastCommitted`.** This is the pass-7 cleanup, and it had no test that could fail. *Mutation:* skip `onSuccess` on a replay.
 - **A give-up with a coalesced, never-sent value.** It stays kept and is sent on the next flush. *Mutation:* clear the outbox on give-up.
 - **A 404 drops the key's outbox and ends the flight** (termination). *Mutation:* keep the rest on a no-handler 4xx.
-- **The bulk-reassign handler is sticky** over a later plain manuscript edit in the window. This is new work; the existing :687 does not exercise it. *Mutation:* `handler = buildHandler`.
+- **The bulk-reassign handler is sticky** over a later plain manuscript edit in the window. This is new work; the existing "a non-bulk manuscript edit PUT failure raises the generic save toast" does not exercise it. *Mutation:* `handler = buildHandler`.
 - **The `fields` fallback.** The api parses `fields`. In the middleware, a missing or empty `fields` drops every **based** sent unit, keeps unbased live units, and the flight ends. *Mutation:* fall back to every sent unit.
 
 **Server (T1):** a 409 body `{ error, code, fields }` on the four shapes in C9, `fields ⊆ FIELDS[slice]`, with two stale fields both listed. These are red with `fields` removed from the route.
@@ -698,44 +698,46 @@ All of them use `src/test/book-state-disk.ts`, which must first be brought close
 | N8 | Still needed (server, epoch) | Server + route N8: keep |
 | P6-1 | Still needed: `restoreDraft = bookOpen` (C8) | meta-draft (g), (h): keep |
 | P6-2 (a), (b) | Still needed (D7 mark; restore epoch) | Layout P6-2(a), server restore-epoch: keep |
-| P6-3 | Per-field rule (C9) | :1589, :1703: keep the behaviour, rewrite the choreography for single flight |
-| P6-4 | Moot by construction (no supersession) | :1638, :1763 → one coalesce test ("a commit during `confirmCast`'s backoff rides its retry; `castConfirmed` keeps its base"); :1678 keep, rewrite the choreography |
+| P6-3 | Per-field rule (C9) | "a stale refusal a newer save superseded", "a stale refusal of a field the newer send did not carry": keep the behaviour, rewrite the choreography for single flight |
+| P6-4 | Moot by construction (no supersession) | "a superseded state send keeps a carried kept field", "a superseded state send whose newer edit is still queued" → one coalesce test ("a commit during `confirmCast`'s backoff rides its retry; `castConfirmed` keeps its base"); "a newer save given up on after leaving the book" keep, rewrite the choreography |
 | P6-5 | Still needed (marks in catch) | Layout P6-5, language guard: keep |
 | P6-6 | Server, verified; the plan's false caveat is corrected (Ship notes) | Server lock tests: keep |
 | R1 | Fixed by construction (C2, C4) | Red-first 1, 2 |
 | R2 | Fixed (C6: other 4xx row) | Red-first 3 |
-| R3 | Fixed by construction (C3) | Red-first 4; :1652 folds into it |
+| R3 | Fixed by construction (C3) | Red-first 4; "a later edit that takes the left-behind field" folds into it |
 | `leaveBehind` own-field `onSuccess` (pass-7 cleanup) | Mechanism gone; the behaviour is natural | New pin "a replayed save that lands prunes `lastCommitted`" |
 | False refusal: slow 200 | Fixed by single flight | Red-first 4 |
-| False refusal: overtaken blind spot | Fixed by `fields` (C9) | :1703 |
+| False refusal: overtaken blind spot | Fixed by `fields` (C9) | "a stale refusal of a field the newer send did not carry" |
 | False refusal: lost 200 | Same value: fixed (no-op). Newer value plus a second failure: residual (OD-C4) | Documented in C11 |
 | P6-6 doc caveat false | Fixed in this plan; release-notes-next :300 and the PR body in T4 | — |
 | Catalogue chores (R1, R3 shapes) | T4 adds entries 46 and 47 to `reviewer-brief.md` | — |
 
 ### Test map (existing PR tests, `persistence-middleware.test.ts` unless named)
 
+Rows cite the test title as of 11a2509f, because line numbers drift. Tests the rework re-titled are mapped old to new in the PR #3775 body.
+
 | Test | Fate | Task |
 |---|---|---|
-| :533 "a newer write supersedes a pending retry" | Keep. It passes as written: the retry carries the newer value. | T2 |
-| :948 "#2230 race" | Adjust: one PUT in flight at a time (`deferred` length 1, then 1). The end-state assertions are unchanged. | T2 |
-| :993–:1160 (i)…(v-b) kept saves | Keep | — |
-| :1332 base on retries and replay | Keep (the assertion is a per-field subset) | T2 |
-| :1346 live build plus kept base | Rewrite per OD-C2: the outside write to the kept field refuses it | T2 |
-| :914 commit + confirmCast, generic 4xx | **Adjust per R2:** the commit rolls back and `castConfirmed` goes in a follow-up, so expect 2 PUTs, not 1. Not a regression: this is the owner's a304ae55 rule applied to refusals. | T2 |
-| :1036 (i-c) two kept slices each re-sent once | Keep the invariant (each once). Assert the order C2 fixes (`LEARNED_SLICES` order) or no order. | T2 |
-| :1368, :1441 | **Adjust** `baseRevision` to the kept unit's subset (`{castConfirmed}`), not the 16-field revision | T2 |
-| :1394 | Keep | — |
-| :1412 confirmCast after a commit that carried a kept title | Adjust `baseRevision` to the per-field subset (title is live, so it has none) | T2 |
-| :1462 older same-key 200 refreshes | **Delete.** Replaced by red-first 1 and 5 (no refresh exists) | T2 |
-| :1489 full read stamped before a PUT landed | Keep. The per-field variant is a new pin | T3 |
-| :1505, :1517, :1548, :1603 | Keep | — |
-| :1529 D2 on a retry | **Adjust:** after the stale drop of `title`, the other based fields go in a follow-up, so expect outcomes `['503','409','ok']` | T2 |
-| :1589, :1703, :1664, :1678, :1830 | Keep the end state; rewrite the overlap choreography for single flight | T2 if red, else T3 |
-| :1638, :1763 | Replace with one coalesce test (P6-4 row) | T3 |
-| :1652 | Replace with red-first 4 (R3) | T3 |
-| :1735 book-meta riding a queued confirmCast | **Adjust choreography:** under OD-C1, `castConfirmed` waits for the retry; after the path-taken 4xx, `castConfirmed` goes alone in the follow-up. Keep the toast and rollback assertions. | T2 |
-| :1809 | Keep the behaviour (a refused send whose handler entries all hold their values rolls back and toasts); re-title | T3 |
-| :1847 | Keep, plus the `castConfirmed` assertion (R2 (c)) | T2 |
+| "a newer write supersedes a pending retry" | Keep. It passes as written: the retry carries the newer value. | T2 |
+| "#2230 race" | Adjust: one PUT in flight at a time (`deferred` length 1, then 1). The end-state assertions are unchanged. | T2 |
+| the (i)…(v-b) kept-save tests (`describe` "a given-up save is kept and re-sent on the next flush") | Keep | — |
+| "attempt 0 carries no base" (base on retries and replay) | Keep (the assertion is a per-field subset) | T2 |
+| "a live build a kept save was merged into carries the kept base" | Rewrite per OD-C2: the outside write to the kept field refuses it | T2 |
+| "a ui/confirmCast in the same window combines with the book-meta commits" (commit + confirmCast, generic 4xx) | **Adjust per R2:** the commit rolls back and `castConfirmed` goes in a follow-up, so expect 2 PUTs, not 1. Not a regression: this is the owner's a304ae55 rule applied to refusals. | T2 |
+| "(i-c) two kept slices of one book are each re-sent exactly once" | Keep the invariant (each once). Assert the order C2 fixes (`LEARNED_SLICES` order) or no order. | T2 |
+| "a second state build in the same window keeps the kept fields", "a combined commit + confirmCast that gives up with the book open" | **Adjust** `baseRevision` to the kept unit's subset (`{castConfirmed}`), not the 16-field revision | T2 |
+| "two queued state edits with no kept save combine" | Keep | — |
+| "a confirmCast after a commit that carried a kept title" | Adjust `baseRevision` to the per-field subset (title is live, so it has none) | T2 |
+| "an older same-key 200 refreshes the newer in-flight sequence's base" | **Delete.** Replaced by red-first 1 and 5 (no refresh exists) | T2 |
+| "a full read stamped before a PUT landed" | Keep. The per-field variant is a new pin | T3 |
+| "voice override: a kept roster is refused", "wipe: a retrying confirmCast that spans a re-parse is refused", "D2 on a replay", "a stale refusal nothing superseded still toasts" | Keep | — |
+| "D2 on a retry" | **Adjust:** after the stale drop of `title`, the other based fields go in a follow-up, so expect outcomes `['503','409','ok']` | T2 |
+| "a stale refusal a newer save superseded", "a stale refusal of a field the newer send did not carry", "a left-behind field is refused once the book changed elsewhere", "a newer save given up on after leaving the book", "a refused save a newer commit fully overtook" | Keep the end state; rewrite the overlap choreography for single flight | T2 if red, else T3 |
+| "a superseded state send keeps a carried kept field", "a superseded state send whose newer edit is still queued" | Replace with one coalesce test (P6-4 row) | T3 |
+| "a later edit that takes the left-behind field" | Replace with red-first 4 (R3) | T3 |
+| "book-meta fields that ride a queued confirmCast" | **Adjust choreography:** under OD-C1, `castConfirmed` waits for the retry; after the path-taken 4xx, `castConfirmed` goes alone in the follow-up. Keep the toast and rollback assertions. | T2 |
+| "a refused superseded save rolls back and toasts" | Keep the behaviour (a refused send whose handler entries all hold their values rolls back and toasts); re-title | T3 |
+| "a refused superseded save whose book-meta fields a newer commit carries" | Keep, plus the `castConfirmed` assertion (R2 (c)) | T2 |
 | meta-draft (e)–(h), route N6/N7/N8/S1/S3, Layout, restructure, api tests | Keep | — |
 
 Every deleted or replaced test is named in the PR body's deleted-test → replacement map (T4).
@@ -748,7 +750,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 
 - **#1 (Critical): a per-field outbox splits manuscript sends, and the server replaces the file.** That wipes `mergedAwayKeys` (fs-58). C1 now makes each whole-slice build one unit. This is forced, not a choice: it is noted for the owner, but it is not an OD.
 - **#2 (Critical): `book-state-disk.ts` merges where the server replaces, and has no non-stale 4xx.** T2 brings the helper to parity first (replace semantics, a 400 on a missing `sentences`, `refuseNext`), and a tombstone pin was added.
-- **#3: the test map missed rows that break.** Added :914 (R2 reverses it), :1036 order, :1368 / :1441 base subset, :1529 follow-up, and :1735 choreography. T2 now re-derives the map against the rewritten engine before editing any assertion.
+- **#3: the test map missed rows that break.** Added "a ui/confirmCast in the same window combines with the book-meta commits" (R2 reverses it), "(i-c) two kept slices of one book are each re-sent exactly once" order, "a second state build in the same window keeps the kept fields" / "a combined commit + confirmCast that gives up with the book open" base subset, "D2 on a retry" follow-up, and "book-meta fields that ride a queued confirmCast" choreography. T2 now re-derives the map against the rewritten engine before editing any assertion.
 - **#4: termination gaps.**
   - `pump` is no longer "called at a flight's end": a settle never pumps, so a give-up cannot restart itself.
   - An empty or useless `fields` now falls back to "every based sent unit", which always makes progress.
@@ -844,6 +846,27 @@ All three still hold under the C rework; C1 makes 1 true by construction, and C6
 - **5c6cb6a1:** a kept save is merged under a queued one on resend. (**Superseded by C1.**)
 - **6e936845:** the unobservable `onSuccess` pass-through is removed (M16); the matching `leaveBehind` fallback went in this round's follow-up. (**Superseded by C6.**)
 - **P6-6, cfb9c94a:** the slice PUT's `manuscript-edits.json` check-then-write takes the `book` lock, and so do the other writers of that file: Start fresh's delete, both analysis persists and the interim edits rolls (pass 7 verified each, red with the lock removed). *Corrected 2026-10-26: this note first said those writers do not take `book`, which cfb9c94a made false (pass 7).*
+
+### Client rework (pass 7), shipped
+
+Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were all accepted as recommended. The server half is as built, except the 409 body.
+
+- **T1, 0ee01f03:** a 409 `stale_revision` now answers `{ error, code, fields }`, field names only; `openapi.yaml`, `api-types.ts`, `realPutBookState`, `mockPutBookState` and the disk model surface `fields`.
+- **T2, a82870bb:** `src/test/book-state-disk.ts` reaches server parity (replace on the whole-slice slices, 400 on a manuscript patch without `sentences`, `refuseNext`, `loseResponse`, `serve` with `hold` and `maxInTransit`), pinned by `src/test/book-state-disk.test.ts`.
+- **T2, 8149095a:** the engine in `persistence-middleware.ts` is rewritten as a single-flight per-field outbox (C1 to C9). Deleted: `pending`, `toastPending`, `rollbackFields`, `generation`, `inFlight`, `kept`, `carriedKept`, `sequences`, `KeptSave`, `Sequence`, `mergeSaves`, `sendBase`, `resendRetained`, `leaveBehind`, `uncovered` and the older-200 refresh. Exports are unchanged.
+- **T2 follow-up, a14b0727:** a stale refusal that drops nothing is final for the whole send (toast, mark for a full re-read, stop). See the deviations below.
+- **T3, da7219d0:** the tests and comments that still named deleted mechanisms are re-titled, and new pins were added: a manuscript 409 naming only `sentences` drops the whole build, a plain edit keeps the bulk reassignment toast, a 409 with missing or empty `fields` drops the based unit only, and a 404 ends the flight with nothing kept. OD-C2 (b) no longer claims to be exactly R3's mechanism, because the mutation battery showed it alone does not reproduce it.
+- **Size:** `persistence-middleware.ts` is **786 lines** (925 at 11a2509f, 511 on `main`), inside the 800 ceiling.
+
+**Deviations and facts to know**
+
+- **T2 did three T3 rows early.** The rows for "a superseded state send keeps a carried kept field" and "a superseded state send whose newer edit is still queued" (replaced by one coalesce test) and "a later edit that takes the left-behind field" (replaced by the R3 red-first test) were red under the new engine, so they were done in 8149095a rather than T3.
+- **The tombstone pin is also red at head, for an interleaving reason.** "a sentence edit made while a merge is in flight keeps the tombstone in the follow-up (fs-58)" is red at head too, for an interleaving reason (overlapping sends), not only the whole-build rule.
+- **The per-field `landedAt` pin cannot be red at head.** "a full read is ignored only for the fields a PUT landed on since it was stamped" cannot be made red against the old engine. It is pinned by mutation instead (the battery in T3).
+- **The disk model logs `refused` and `lost` outcomes** (`refuseNext` and `loseResponse`), beside `ok`, `503`, `409`, `404` and `400`, so a test can assert the exact sequence of answers.
+- **A stale refusal that drops nothing is final (a14b0727).** The server cannot produce one (it names only fields that had a base), but a mock or a future server could, and the engine would otherwise re-send the same send forever.
+- **N8a is defence in depth.** The `POST /api/books` epoch mint has no observable effect: every import mints a fresh `manuscriptId` (`server/src/routes/import.ts:378`), and the tokens are salted with it. It is kept so every new book has an epoch.
+- **The R3 choreography is pinned only by M8** (C3, "a live build carries no base"). No other mutation reproduces it.
 
 ### Not owed
 
