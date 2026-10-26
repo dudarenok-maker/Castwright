@@ -83,3 +83,23 @@ describe('mockPutUserSettings — analyzerReasoningByEngine (#3084)', () => {
     expect(out.analyzerReasoningByEngine).toEqual({ ollama: { qwen3: 'on' } });
   });
 });
+
+describe('mockPutUserSettings — analyzer.fallback.target refusal, as the server does (#3084 P30)', () => {
+  const endpoint = { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768, reasoningStyle: 'not_controllable', reasoning: 'model-default' };
+  const put = (target: string) => api.putUserSettings({ configOverrides: { 'analyzer.fallback.target': target } } as never);
+
+  it('refuses an unsaved endpoint target, accepts a saved one, and accepts an unchanged value', async () => {
+    _setMockUserSettingsForTest({ analyzerEndpoints: [], configOverrides: {} });
+    await expect(put('openai:lab::m')).rejects.toThrow(/400.*no analyzer endpoint \\"lab\\" is saved/);
+    _setMockUserSettingsForTest({ analyzerEndpoints: [endpoint as never] });
+    await expect(put('openai:lab::m')).resolves.toBeDefined();
+    /* The endpoint is deleted later; re-sending the unchanged stored target still saves. */
+    _setMockUserSettingsForTest({ analyzerEndpoints: [] });
+    await expect(put('openai:lab::m')).resolves.toBeDefined();
+  });
+
+  it('refuses gemini without a saved key', async () => {
+    _setMockUserSettingsForTest({ configOverrides: {}, apiKeyStatus: 'unset' } as never);
+    await expect(put('gemini')).rejects.toThrow(/gemini needs a Gemini API key/);
+  });
+});

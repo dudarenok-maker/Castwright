@@ -7761,6 +7761,29 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         );
       }
     }
+    /* #3084 P30 — mirrors the server's fallbackTargetSaveError (analyzer/fallback-target.ts) for a CHANGED
+       analyzer.fallback.target: gemini needs a saved key, an endpoint target needs a saved endpoint. An
+       unchanged value always saves. Messages are the server's, verbatim. */
+    const fallbackTarget = incomingOverrides['analyzer.fallback.target'];
+    const storedOverrides = (MOCK_USER_SETTINGS as { configOverrides?: Record<string, unknown> }).configOverrides ?? {};
+    if (typeof fallbackTarget === 'string' && fallbackTarget.trim() !== storedOverrides['analyzer.fallback.target']) {
+      const target = fallbackTarget.trim();
+      const parsed = parseEndpointModelId(target);
+      let message: string | null = null;
+      if (target === 'gemini' && MOCK_USER_SETTINGS.apiKeyStatus !== 'set') {
+        message = 'analyzer.fallback.target: gemini needs a Gemini API key. Add one in Model Manager → Server configuration, or pick another target.';
+      } else if (parsed && !(MOCK_USER_SETTINGS.analyzerEndpoints ?? []).some((e) => e.id === parsed.endpointId)) {
+        message = `analyzer.fallback.target: no analyzer endpoint "${parsed.endpointId}" is saved. Add it in Model Manager → Analyzer endpoints, or pick another target.`;
+      }
+      if (message) {
+        throw new Error(
+          `User settings save failed (400): ${JSON.stringify({
+            error: 'Invalid user settings.',
+            issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }],
+          })}`,
+        );
+      }
+    }
   }
   const offending = RETIRED_ANALYZER_FIELDS.filter(
     (field) => field in (patch as Record<string, unknown>),
