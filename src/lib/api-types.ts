@@ -4055,8 +4055,8 @@ export interface components {
         };
         /**
          * @description Master-contract fields id, label, contextTokens, outputTokens, capability
-         *     (offeredReasoningLevels arrives in wave 5); W3c adds engine, model,
-         *     structuredOutput and testPlan.
+         *     and offeredReasoningLevels; W3c adds engine, model, structuredOutput and
+         *     testPlan.
          */
         AnalyzerCatalogEntry: {
             id: string;
@@ -4065,6 +4065,8 @@ export interface components {
             contextTokens?: number;
             outputTokens?: number;
             capability?: components["schemas"]["ModelCapabilityRecord"];
+            /** @description Levels the Settings UI may offer for this model (engine family, endpoint style, and the model's Test record). */
+            offeredReasoningLevels?: components["schemas"]["ReasoningLevel"][];
             /** @enum {string} */
             engine: "local" | "gemini" | "openai";
             model: string;
@@ -4215,6 +4217,7 @@ export interface components {
             structuredOutput: "schema" | "json" | "off";
             /** @enum {string} */
             reasoningStyle: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            /** @description A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint's reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts. */
             reasoning: string;
             /** @description 0 = Auto. */
             maxOutputTokens: number;
@@ -4239,6 +4242,7 @@ export interface components {
             structuredOutput?: "schema" | "json" | "off";
             /** @enum {string} */
             reasoningStyle?: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            /** @description A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint's reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts. */
             reasoning?: string;
             maxOutputTokens?: number;
             contextTokens: number;

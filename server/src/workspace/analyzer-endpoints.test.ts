@@ -152,18 +152,45 @@ describe('create / update / delete / key decisions', () => {
       applyCreate(empty, { ...base, unloadUrl: 'http://127.0.0.1:8080/api/models/unload/{model}' }).analyzerEndpoints,
     ).toHaveLength(1);
   });
-  it('until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, naming the PR that enables each (P23)', () => {
-    const reasoning = refusal(() => applyCreate(empty, { ...base, reasoning: 'high' }));
-    expect(reasoning).toMatchObject({ status: 400, refusal: 'invalid' });
-    expect(reasoning.issues).toEqual([
-      { path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' },
-    ]);
+  it('until PR 5b, refuses a non-empty payload, naming the PR that enables it (P23)', () => {
     const payload = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20 } }));
     expect(payload).toMatchObject({ status: 400, refusal: 'invalid' });
     expect(payload.issues).toEqual([
       { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
     ]);
-    expect(applyCreate(empty, { ...base, reasoning: 'model-default', extraParams: {} }).analyzerEndpoints).toHaveLength(1);
+    expect(applyCreate(empty, { ...base, extraParams: {} }).analyzerEndpoints).toHaveLength(1);
+  });
+  it('accepts a reasoning level its control style offers, and refuses one it does not, naming the style (5a rules)', () => {
+    expect(applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off' }).analyzerEndpoints[0].reasoning).toBe('off');
+    expect(applyCreate(empty, { ...base, reasoningStyle: 'reasoning_effort', reasoning: 'none' }).analyzerEndpoints[0].reasoning).toBe('none');
+    expect(applyCreate(empty, { ...base, reasoning: 'model-default' }).analyzerEndpoints[0].reasoning).toBe('model-default');
+    const wrongStyle = refusal(() => applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'none' }));
+    expect(wrongStyle).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(wrongStyle.issues).toEqual([
+      { path: ['reasoning'], message: 'Reasoning "none" is not offered by the enable_thinking control style (offered: model-default, off, on).' },
+    ]);
+    const notControllable = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, reasoning: 'high' }));
+    expect(notControllable.issues).toEqual([
+      { path: ['reasoning'], message: 'Reasoning "high" is not offered by the not_controllable control style (offered: model-default).' },
+    ]);
+  });
+  it('an update judges the level only when it changes: an unchanged stale level saves, a changed one is refused (A7)', () => {
+    /* A level whose style changed under it (or a table change): stored, and no longer offered. */
+    const created = applyCreate(empty, { ...base, reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    const stale = { ...created, analyzerEndpoints: [{ ...created.analyzerEndpoints[0], reasoningStyle: 'not_controllable' as const }] };
+    /* The same level sent back with a new name: not judged, so the edit saves. */
+    expect(applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', reasoningStyle: 'not_controllable', reasoning: 'high' }).analyzerEndpoints[0]).toMatchObject({
+      name: 'Lab renamed',
+      reasoning: 'high',
+    });
+    /* Changing the level is judged. */
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, reasoningStyle: 'not_controllable', reasoning: 'low' })).issues).toEqual([
+      { path: ['reasoning'], message: 'Reasoning "low" is not offered by the not_controllable control style (offered: model-default).' },
+    ]);
+    /* So is changing the style that decides which levels are offered. */
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, reasoningStyle: 'enable_thinking', reasoning: 'high' })).issues).toEqual([
+      { path: ['reasoning'], message: 'Reasoning "high" is not offered by the enable_thinking control style (offered: model-default, off, on).' },
+    ]);
   });
   it('update keeps the id immutable and 404s an unknown endpoint', () => {
     const s = applyCreate(empty, base);

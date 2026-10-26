@@ -7869,7 +7869,15 @@ function mockOrigin(url: string): string | null {
   }
 }
 
-function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
+/* #3084 PR 5a — the server's endpoint control-style levels (reasoning.ts levelsForReasoningStyle;
+   fixture server/src/analyzer/__fixtures__/reasoning-style-levels.json). */
+const MOCK_STYLE_LEVELS: Record<'reasoning_effort' | 'enable_thinking' | 'not_controllable', readonly MockReasoningLevel[]> = {
+  reasoning_effort: ['model-default', 'none', 'minimal', 'low', 'medium', 'high'],
+  enable_thinking: ['model-default', 'off', 'on'],
+  not_controllable: ['model-default'],
+};
+
+function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEndpoint): AnalyzerEndpoint {
   /* #3084 F5 — {path, message}, never the rejected value (mirrors the server). */
   const problems: { path: string[]; message: string }[] = [];
   if (!MOCK_ENDPOINT_ID.test(input.id ?? '')) problems.push({ path: ['id'], message: 'must match ^[a-z0-9-]{1,40}$' });
@@ -7880,15 +7888,23 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
     problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
   }
   if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
-  /* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */
-  const notYet: { path: string[]; message: string }[] = [];
-  if (input.reasoning !== undefined && input.reasoning !== 'model-default') {
-    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
+  /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
+     payload refusal until PR 5b. */
+  const controlProblems: { path: string[]; message: string }[] = [];
+  const style = input.reasoningStyle ?? 'not_controllable';
+  const level = input.reasoning ?? 'model-default';
+  /* A7, as the server — judge the level only when this save changes it or the style that decides it. */
+  const levelChanged = !stored || stored.reasoning !== level || (stored.reasoningStyle ?? 'not_controllable') !== style;
+  if (levelChanged && !(MOCK_STYLE_LEVELS[style] as readonly string[]).includes(level)) {
+    controlProblems.push({
+      path: ['reasoning'],
+      message: `Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
+    });
   }
   if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
-    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+    controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
-  if (notYet.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
+  if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
   if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
     /* F5 no-echo — names the field, never either URL. */
     throw new AnalyzerEndpointError(400, 'unload-off-origin', 'The unload URL must be on the same scheme, host and port as the base URL.', [
@@ -7938,9 +7954,9 @@ async function mockCreateAnalyzerEndpoint(input: AnalyzerEndpointInput): Promise
 
 async function mockUpdateAnalyzerEndpoint(id: string, input: AnalyzerEndpointInput): Promise<UserSettings> {
   await wait(50);
-  mockEndpointOrThrow(id);
+  const stored = mockEndpointOrThrow(id);
   if (input.id !== id) throw new AnalyzerEndpointError(400, 'invalid', 'An endpoint id cannot be changed.');
-  const ep = mockEndpointFromInput(input);
+  const ep = mockEndpointFromInput(input, stored);
   return mockSettingsWithEndpoints(mockEndpoints().map((e) => (e.id === id ? ep : e)));
 }
 
@@ -9344,7 +9360,7 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
   };
   if (g.__SEED_ANALYZER_CATALOG__) return g.__SEED_ANALYZER_CATALOG__;
   const capabilities = { ...(source.analyzerCapabilitiesByModel ?? {}), ...(g.__SEED_ANALYZER_CAPABILITIES__ ?? {}) };
-  const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model: string, mode: StructuredOutputMode, droppedIfSchema: string[]): AnalyzerCatalogEntry => {
+  const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model: string, mode: StructuredOutputMode, droppedIfSchema: string[], offered: readonly MockReasoningLevel[]): AnalyzerCatalogEntry => {
     const serverUrl = mockServerUrlFor(id, source).replace(/\/+$/, '');
     const stored = capabilities[id];
     const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
@@ -9359,13 +9375,14 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       model,
       structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, level), ...(outcome ? { outcome } : {}) },
       testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
+      offeredReasoningLevels: [...offered],
     };
   };
   return {
     groups: [
-      { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'local', 'qwen3.5:4b', 'schema', [])] },
+      { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'local', 'qwen3.5:4b', 'schema', [], mockOllamaOffered('qwen3.5:4b', capabilities))] },
       source.apiKeyStatus === 'set'
-        ? { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [entry('gemini-3.5-flash-lite', 'gemini', 'gemini-3.5-flash-lite', 'json', [])] }
+        ? { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [entry('gemini-3.5-flash-lite', 'gemini', 'gemini-3.5-flash-lite', 'json', [], MOCK_GEMINI_LEVELS['gemini-3.5-flash-lite'])] }
         : { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'fallback', models: [] },
       ...(source.analyzerEndpoints ?? []).map((e) => ({
         kind: 'endpoint' as const,
@@ -9373,7 +9390,7 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
         label: e.name,
         status: 'ok' as const,
         models: (g.__SEED_ENDPOINT_MODELS__?.[e.id] ?? ['mock-model']).map((m) =>
-          entry(endpointModelId(e.id, m), 'openai', m, e.structuredOutput ?? 'schema', []),
+          entry(endpointModelId(e.id, m), 'openai', m, e.structuredOutput ?? 'schema', [], MOCK_STYLE_LEVELS[e.reasoningStyle ?? 'not_controllable']),
         ),
       })),
     ],

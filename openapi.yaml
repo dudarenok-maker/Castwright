@@ -5861,8 +5861,8 @@ components:
       type: object
       description: |
         Master-contract fields id, label, contextTokens, outputTokens, capability
-        (offeredReasoningLevels arrives in wave 5); W3c adds engine, model,
-        structuredOutput and testPlan.
+        and offeredReasoningLevels; W3c adds engine, model, structuredOutput and
+        testPlan.
       required: [id, label, engine, model, structuredOutput, testPlan]
       properties:
         id: { type: string }
@@ -5870,6 +5870,11 @@ components:
         contextTokens: { type: integer, minimum: 1 }
         outputTokens: { type: integer, minimum: 1 }
         capability: { $ref: '#/components/schemas/ModelCapabilityRecord' }
+        offeredReasoningLevels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningLevel'
+          description: Levels the Settings UI may offer for this model (engine family, endpoint style, and the model's Test record).
         engine: { type: string, enum: [local, gemini, openai] }
         model: { type: string }
         structuredOutput:
@@ -6059,7 +6064,9 @@ components:
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
         reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
-        reasoning: { type: string }
+        reasoning:
+          type: string
+          description: 'A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint''s reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts.'
         maxOutputTokens: { type: integer, minimum: 0, description: '0 = Auto.' }
         contextTokens: { type: integer, minimum: 512 }
         maxInputTokensPerRequest: { type: integer, minimum: 256 }
@@ -6079,7 +6086,9 @@ components:
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
         reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
-        reasoning: { type: string }
+        reasoning:
+          type: string
+          description: 'A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint''s reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts.'
         maxOutputTokens: { type: integer, minimum: 0 }
         contextTokens: { type: integer, minimum: 512 }
         maxInputTokensPerRequest: { type: integer, minimum: 256 }
