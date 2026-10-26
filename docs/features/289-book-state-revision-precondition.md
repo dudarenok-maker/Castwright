@@ -21,7 +21,7 @@ Blocks PR #3775 (#3421 / #3755). Lands on that PR's branch, `fix/frontend-3421-f
 
 ## The problem
 
-A kept save is a whole-slice snapshot, re-sent at an arbitrary later time. Whether it is still owed depends on two things the client cannot see:
+A kept save is a whole-slice snapshot, re-sent at an arbitrary later time. (This describes the pass-5 client; superseded by C1 and C7: a kept entry is now a per-field outbox entry, not a whole-slice snapshot.) Whether it is still owed depends on two things the client cannot see:
 
 - writes the middleware never routes: `onEditBook` and the language-guard modal call `api.putBookState` directly, `POST …/voice-override-linked` writes other books' `cast.json` on the server, and other tabs write too;
 - server outcomes the client cannot learn: a `DELETE` that removed the folder and then answered 500, or a response that was lost.
@@ -143,12 +143,12 @@ The **analysis `changeLog.json` append is unlocked** (`analysis.ts` ~`:528`) and
 - **(a) Recommended: every send that re-sends a write which already failed once,** and nothing else:
   - every retry (attempts 1–3);
   - every replay of a kept save;
-  - a **live build that a kept patch was merged into** (`persistence-middleware.ts` ~`:735-737`). That send carries the *kept* base, because otherwise the merge would smuggle the kept fields past the check.
+  - a **live build that a kept patch was merged into** (`persistence-middleware.ts` ~`:735-737`). That send carries the *kept* base, because otherwise the merge would smuggle the kept fields past the check. (Superseded by C1 and C3: a build merges per unit, and an unchanged entry keeps its own base, so no live field is ever sent against a kept base. OD-C2.)
 
   A plain attempt 0 carries no base. That is `main`'s last-writer-wins for a live edit built from the current screen.
-- **What the base is.** It is `known[book:slice]` as it stands when the sequence's first attempt is made. A kept record stores its base. Two rules keep the base from being older than the client's own writes:
-  - When a `PUT` of the same key lands with generation `g`, its returned revision replaces the base of every **in-flight sequence with a generation above `g`.** Their patches were built after `g`'s and already include it. That also covers overlapping same-key sequences (the #2230 case).
-  - `known` is updated from every middleware `PUT` 200, and from **full** Layout reads only. Each full read stamps its read sequence, and a learn that was issued before the latest `PUT` 200 for the key is ignored.
+- **What the base is.** It is `known[book:slice]` as it stands when the sequence's first attempt is made. A kept record stores its base. (Superseded by C3: a base is stamped per field by a transport failure, and a kept entry stores it on the entry.) Two rules keep the base from being older than the client's own writes:
+  - When a `PUT` of the same key lands with generation `g`, its returned revision replaces the base of every **in-flight sequence with a generation above `g`.** Their patches were built after `g`'s and already include it. That also covers overlapping same-key sequences (the #2230 case). (Superseded by C2 and C4: there are no generations or sequences, and no refresh. Single flight leaves no older same-key request in transit, and a 200 teaches only the fields it carried, which is R1's fix.)
+  - `known` is updated from every middleware `PUT` 200, and from **full** Layout reads only. Each full read stamps its read sequence, and a learn that was issued before the latest `PUT` 200 for the key is ignored. (Amended by C4: a 200 teaches only the fields it carried, and the ignore rule is per field.)
   - A **revisions-only read never updates `known`**, because it re-seeds none of these four slices (`layout.tsx` ~`:983`, `:997`).
   - With `known` absent, the send is unconditional.
 - **(b) Every send carries a base.** This also protects an out-of-order live attempt 0. The cost is that every `cast.json`- or `manuscript-edits.json`-writing endpoint whose result the client mirrors would have to return the new token: `applyAddAlias`, `applyRepointAlias`, `applyManualMatch`, the restructure, voice design, ConfirmRoute's cast re-hydrate (`routes/index.tsx` ~`:729-753`). Without that, mirrors are falsely refused. That is a large contract widening, for a reordering hazard that already exists on `main`.
@@ -303,11 +303,11 @@ The issue asks that each pass-5 shape has a test that is red without the precond
 - **D6** (**superseded by the C test plan**; the "older same-key 200 refreshes" and "live build with a kept patch carries the kept base" bullets are replaced there):
   - attempt 0 carries no base;
   - attempts 1–3 and replays carry the captured or kept base;
-  - a live build with a kept patch merged in carries the kept base;
-  - an older same-key 200 refreshes the newer in-flight sequence's base;
+  - a live build with a kept patch merged in carries the kept base; (Superseded by C1 and C3: an unchanged entry keeps its base and a changed one is unbased.)
+  - an older same-key 200 refreshes the newer in-flight sequence's base; (Superseded by C2 and C4: the refresh is deleted.)
   - a revisions-only read does not update `known`;
-  - an out-of-order learn is ignored.
-- **D2:** a stale refusal on a retry and on a replay each toasts once, does not roll back, is not kept, and marks the book. If the book is open, Layout re-reads it.
+  - an out-of-order learn is ignored. (Amended by C4: per field, `landedAt[key][f]`.)
+- **D2:** a stale refusal on a retry and on a replay each toasts once, does not roll back, is not kept, and marks the book. If the book is open, Layout re-reads it. (Amended by C6 and C9: per field, and toast and mark only when a field was dropped.)
 - **D8:** delete every test of supersede / restore / `pendingWipes` / `newerFields` / `landedFields` / `retainedGen`, and replace each with the shape test above that covers its user-level invariant. The PR body maps each deleted test to its replacement. The existing tests for retry delays, the 4xx being final, toast naming, flush-before-read and the #3755 abort stay green and unchanged.
 
 **E2E:** none. The shapes need a scripted 503 on a chosen PUT, and the mock-mode Playwright harness has no network to intercept. The router/redux/layout crossing is covered by the jsdom BooksRoute + Layout reopen test.
@@ -342,8 +342,8 @@ The issue asks that each pass-5 shape has a test that is red without the precond
    - The api tests. Fix any caller the new return type breaks (type-only).
 4. **Client: conditional re-sends and re-seeding.**
    - `known`, with its learn-sequence guard and full-read-only learning.
-   - The `kept` record (D8a per OD5).
-   - Base capture and refresh, including the merge case (D6).
+   - The `kept` record (D8a per OD5). (Superseded by C1: the per-field outbox.)
+   - Base capture and refresh, including the merge case (D6). (Superseded by C2, C3 and C4: no refresh; bases are stamped per field.)
    - Stale handling (D2) and the `needsFullRead` mark, with Layout's handling of it and the `onEditBook` / language-guard marks (D7).
    - The disk-model helper, and the N5, Library-Edit, voice-override, N8, wipe, D2 and D6 client tests.
    - Park/restore stays in place during this task.
@@ -366,8 +366,8 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 - **#1 / #2 (Critical) — N5's reopen is revisions-only.** Added D7: the full-read mark, set by a stale refusal and by `onEditBook` / the language guard. `known` is learned from full reads only.
 - **#3 (Critical) — a re-parse resets `castConfirmed` to a value equal to many bases.** Added `editEpoch`, rotated by every wipe and minted by every import. D8b now drops nothing on the client.
 - **#4 (Critical) — the no-op rule must compare post-merge, post-transform values.** Now specified in D5.
-- **#5 — overlapping same-key sequences.** An older sequence's 200 refreshes the base of newer in-flight sequences (D6).
-- **#6 — a kept patch merged into a live build bypassed the check.** That send now carries the kept base (D6, Invariant 5).
+- **#5 — overlapping same-key sequences.** An older sequence's 200 refreshes the base of newer in-flight sequences (D6). (Superseded by C2 and C4: single flight; the refresh is deleted.)
+- **#6 — a kept patch merged into a live build bypassed the check.** That send now carries the kept base (D6, Invariant 5). (Superseded by C1 and C3: per-unit merge; no live field carries a kept base.)
 - **#7 — a silent drop on replay leaves redux showing a refused edit.** D2 is now one loud rule plus a re-read.
 - **#9 — replace keeps `manuscriptId`, and the bundle import keeps the bundle's.** Identity now comes from `editEpoch`, minted by both import paths.
 - **#11 — `book_busy` precedes the check on the moving branch,** and the resolve-time `projected` must not run it. Stated in the D3 table.
@@ -376,7 +376,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 - **#18 — `BookStateResponse` is hand-modelled.**
 - **Gaps:**
   - the rollback-to-a-stale-baseline problem: no rollback on a stale refusal;
-  - the GET-vs-PUT ordering of `known`: a learn sequence;
+  - the GET-vs-PUT ordering of `known`: a learn sequence (amended by C4: per field);
   - an absent `known`: the send is unconditional;
   - the absent-field token;
   - pruning kept entries for deleted books: a delete-success drop;
@@ -809,7 +809,7 @@ Ships with PR #3775 (branch `fix/frontend-3421-flush-retry`); closes #3421, #375
 
 - **Server:** `server/src/workspace/slice-revision.ts` (pure tokens and `staleFields`); `state.json.editEpoch`, minted by both import paths and rotated by re-parse, replace, Start fresh and backup restore; `GET /state` returns `sliceRevisions`; `PUT /state` takes an optional `baseRevision`, checks it inside each slice's existing lock span, answers `200 { revision }` and refuses a stale field with 409 `stale_revision` (fixed, path-free sentence). No new lock class.
 - **Contract:** `openapi.yaml`, `src/lib/api-types.ts`, the hand-modelled `BookStateResponse` / `PutStateRequest`, `realPutBookState` / `mockPutBookState` parity.
-- **Client:** a `known` map and a `kept` record (`{ patch, base, onSuccess? }`) in `persistence-middleware.ts`; conditional re-sends; a stale refusal toasts, is not kept and not rolled back, and marks the book for a full re-read (set by the middleware, `onEditBook` and the language guard). The park/restore machinery (`parked`, `sending`, `pendingWipes`, `retainedGen`, `supersedeBookSaves`, `restoreSupersededSaves`, `wipeSettled`) was deleted in 8b9e64f3.
+- **Client:** a `known` map and a `kept` record (`{ patch, base, onSuccess? }`) in `persistence-middleware.ts` (**superseded by C1 and C7:** the `kept` record was replaced by a per-field outbox in 8149095a; see "Client rework (pass 7), shipped"); conditional re-sends; a stale refusal toasts, is not kept and not rolled back, and marks the book for a full re-read (set by the middleware, `onEditBook` and the language guard). The park/restore machinery (`parked`, `sending`, `pendingWipes`, `retainedGen`, `supersedeBookSaves`, `restoreSupersededSaves`, `wipeSettled`) was deleted in 8b9e64f3.
 
 ### Deviations from the plan as written
 
