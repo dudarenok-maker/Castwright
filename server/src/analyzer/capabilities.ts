@@ -17,11 +17,12 @@ import { estimateInputTokens } from './runner/prompt.js';
 import { configValue } from '../config/resolver.js';
 /* #3192 moved the Ollama URL resolver into this leaf (not user-settings.ts). */
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
-import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
+import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
 import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
+import { resolveReasoningSetting, testableReasoningLevels, type ReasoningLevel, type ReasoningSelection } from './reasoning.js';
 import {
   emotionAnnotationSchema,
   escalationSchema,
@@ -304,6 +305,19 @@ export class ModelTestInconclusiveError extends Error {
   }
 }
 
+/** P7 — an inconclusive LEVEL step. It runs in `off` mode, but its copy names the level, never "The off check". */
+export class ReasoningLevelTestInconclusiveError extends ModelTestInconclusiveError {
+  constructor(
+    modelId: string,
+    readonly level: ReasoningLevel,
+    detail: string,
+  ) {
+    super(modelId, 'off', detail);
+    this.message = `The reasoning level "${level}" check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`;
+    this.name = 'ReasoningLevelTestInconclusiveError';
+  }
+}
+
 /* P7 — a 400 whose provider text names a context, token or length limit is about the request's
    size, not about the field the step changed, so it is inconclusive. The table and
    namesContextOrTokenLimit live in the leaf ./limit-400-patterns.ts (3b Task 3b.1), shared with
@@ -333,7 +347,9 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new AnalysisAbortedError('Model test cancelled: the client left.');
 }
 
-function isHttp400(err: unknown): boolean {
+/** A probe is `rejected` only on a 400 (AnalyzerHttpError from Ollama/OpenAI, or
+    the Gemini SDK's ApiError status 400). */
+export function isProbeRejected(err: unknown): boolean {
   if (err instanceof AnalyzerHttpError) return err.httpStatus === 400;
   return (err as { status?: unknown } | null)?.status === 400; // @google/genai ApiError
 }
@@ -378,7 +394,7 @@ async function modeStep(
     result = await sendStep(deps, format, cap);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
-    if (isHttp400(err)) {
+    if (isProbeRejected(err)) {
       if (!namesContextOrTokenLimit(providerText(err))) return 'rejected';
       throw new ModelTestInconclusiveError(modelId, mode, 'the provider refused the request size, not the mode');
     }
@@ -387,6 +403,63 @@ async function modeStep(
   /* Only a `stop` finish is evidence: a `length` or `blocked` finish says nothing about the mode. */
   if (result.finish !== 'stop') throw new ModelTestInconclusiveError(modelId, mode, `finish=${result.finish}`);
   return mode === 'schema' ? classifyMarkerProbe(result.text, marker) : 'accepted';
+}
+
+export function reasoningLevelsToProbe(
+  scope: 'configured' | 'all',
+  sel: ReasoningSelection,
+  configured: ReasoningLevel,
+): ReasoningLevel[] {
+  return scope === 'all' ? testableReasoningLevels(sel) : [configured];
+}
+
+export function plannedReasoningProbeCount(levels: readonly ReasoningLevel[], controlLevel: ReasoningLevel): number {
+  return levels.filter((l) => l !== controlLevel).length;
+}
+
+/** The level step (spec §2, P7): `send(level)` sends the control request with only `reasoning`
+    changed (runModelTest passes `sendStep(deps, { mode: 'off' }, cap, level)`). It proves
+    acceptance only, and classifies failures exactly as W3c's modeStep does. */
+export async function probeReasoningLevels(
+  levels: readonly ReasoningLevel[],
+  deps: {
+    modelId: string;
+    controlLevel: ReasoningLevel;
+    send: (level: ReasoningLevel) => Promise<TransportResult>;
+    redact?: (text: string) => string;
+  },
+): Promise<ModelCapabilityRecord['reasoning']> {
+  const redact = deps.redact ?? ((t: string) => t);
+  const out: ModelCapabilityRecord['reasoning'] = {};
+  for (const level of levels) {
+    if (level === deps.controlLevel) {
+      out[level] = 'accepted'; // the control request already ran at this level
+      continue;
+    }
+    try {
+      await deps.send(level);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      /* P20 — a GeminiContentBlockedError and an AnalyzerReasoningOverflowError are handled alike here,
+         as W3c's modeStep handles them: inconclusive, below. A transport returns `blocked` / `length` as a
+         finish (only the runner's mapFinish raises either error), and a Test is not a run to stop. */
+      if (isProbeRejected(err)) {
+        if (!namesContextOrTokenLimit(providerText(err))) {
+          out[level] = 'rejected';
+          continue;
+        }
+        /* P7: a 400 naming a context, token or length limit is about the request size, not the level. */
+        throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, 'the provider refused the request size, not the level');
+      }
+      /* P7: a 5xx after the transport's retries, a timeout or an unreachable server proves nothing about
+         the level. Inconclusive: nothing is recorded and the route answers 502. */
+      throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, redact(err instanceof Error ? err.message : String(err)).slice(0, 300));
+    }
+    /* P7: the provider accepted the request. Any finish counts, `length` and `blocked` included:
+       a thinking model spends the cap reasoning, which is the shape a level step expects. */
+    out[level] = 'accepted';
+  }
+  return out;
 }
 
 export async function runModelTest(
@@ -435,4 +508,48 @@ export async function runModelTest(
      letting a stale verdict refuse runs. Best-effort: no digest, no stamp. */
   const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;
   return { serverUrl: deps.serverUrl, testedAt, control: { ok: true }, structuredOutput, reasoning: {}, ...(digest ? { digest } : {}) };
+}
+
+/** Engine, bare model, saved endpoint and Test record for a model id. `engine` defaults to the id
+    inference; persona generation passes it, because a bare local tag (`llama2`) infers as Gemini.
+    `currentDigest` (A3) is the local engine's installed-model digest, threaded to `capabilityRecordFor`
+    exactly as W3c's own structured-output check already threads it, so the two checks discard the same
+    stale record instead of disagreeing about which one applies. Only `runAnalyzerPreflight` has a digest
+    to pass — it already resolved one per target before either check runs. Every other caller
+    (`modelTestDepsFor`, the catalog's `toEntry`, persona generation) omits it, which is `capabilityRecordFor`'s
+    own fail-open rule (kept when either digest is unknown), unchanged from 3c. Gemini and endpoints carry
+    no digest, so `currentDigest` is passed to `capabilityRecordFor` only when `engine === 'local'`. */
+export function reasoningSelectionFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningSelection & { endpoint?: AnalyzerEndpoint } {
+  if (engine !== 'openai') {
+    return {
+      engine,
+      model: modelId,
+      record: capabilityRecordFor(
+        settings,
+        modelId,
+        engine === 'local' ? getResolvedOllamaUrl() : 'gemini',
+        engine === 'local' ? currentDigest : undefined,
+      ),
+    };
+  }
+  const parsed = parseEndpointModelId(modelId);
+  const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+  return { engine, model: parsed?.model ?? modelId, endpoint, record: endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined };
+}
+
+/** The reasoning level the next run of this model would send. `currentDigest` passes through to
+    `reasoningSelectionFor` (A3). */
+export function configuredReasoningFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+  return resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
 }
