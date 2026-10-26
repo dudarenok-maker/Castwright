@@ -540,6 +540,33 @@ recite:
     bundle overwrite, sync) and confirm each mints a fresh one rather than
     spreading the incoming copy; test by restoring a snapshot taken before a
     rotation and asserting the epoch differs from the snapshot's.
+46. **A per-field fact (a revision token) applied per request: an older
+    request's success hands its whole revision to a newer partial send** — PR
+    #3775 pass 7, R1 (#3784, plan 289 C3, `persistence-middleware.ts`): on any
+    200, every newer retrying sequence of the key took `res.revision` as its
+    base. That revision holds the token of every state field as of the landed
+    write, so a `{castConfirmed}` write's revision also carried the title
+    token, including an outside title write the newer `{title}` retry had never
+    read. The retry was accepted and reverted the outside write and its folder
+    rename, with no toast. Checkable: wherever a token, version or other
+    per-field fact is copied from one request's response onto another request,
+    list the fields the source request actually carried and the fields the
+    target reads, and confirm only the intersection is copied. Test by
+    landing an outside write to a field the source did not carry between the
+    two requests and asserting the target is refused.
+47. **The user's own landed-but-unacknowledged save refuses their next edit** —
+    PR #3775 pass 7, R3 (#3784, plan 289 C3): a fresh edit was made conditional
+    on its first attempt, on a base learned before an earlier same-key send of
+    the user's own had landed (its 200 still in transit). The server answered
+    409 `stale_revision` against the user's own write, the toast blamed
+    "elsewhere", and the edit was discarded. `main` and the previous head both
+    sent that attempt unconditionally. Checkable: for every request that
+    carries a precondition, ask whether an earlier request of the same writer
+    could have landed without the client having seen its answer (a lost or slow
+    response, a retry in flight), and whether that write moved the token the
+    precondition names. A base is only valid if no such request is outstanding.
+    Test by holding the earlier request's response, landing the next edit, and
+    asserting it is neither refused nor sent against the stale base.
 
 ### Keeping the catalogue current
 
