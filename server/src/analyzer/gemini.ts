@@ -12,6 +12,8 @@ import type { StructuredOutputMode } from './runner/transport.js';
 import { GEMINI_RETRY_POLICY } from './runner/retry-policy.js';
 import { configValue } from '../config/resolver.js';
 import { resolveGeminiMaxOutputTokens } from './capacity.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
+import { resolveReasoningSetting } from './reasoning.js';
 
 /* Re-exports for backward compatibility — callers and tests that imported
    these from gemini.ts still resolve after the wave-1 extraction. */
@@ -43,6 +45,7 @@ export class GeminiAnalyzer extends TransportAnalyzer {
         settings: () => ({
           structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
           maxOutputTokens: resolveGeminiMaxOutputTokens(opts.model),
+          reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: opts.model }),
         }),
         adaptSchema: adaptSchemaForGemini,
       }),

@@ -518,3 +518,26 @@ describe('generateVoiceStylePersona gemini branch redaction (#3084 P22)', () => 
     await expect(generateVoiceStylePersona(CHAR)).rejects.toBe(upstream);
   });
 });
+
+describe("persona generation reads its own model's reasoning entry (#3084 wave 5, P18)", () => {
+  afterEach(() => {
+    delete process.env.PERSONA_GEN_ENGINE;
+    delete process.env.PERSONA_GEN_LOCAL_MODEL;
+    mockSettingsPatch = {};
+    vi.restoreAllMocks();
+  });
+
+  it("the persona local model sends its own entry, not another model's", async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    mockSettingsPatch = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on', 'qwen3.5:9b': 'model-default' } } };
+    const { OllamaTransport } = await import('./transports/ollama-transport.js');
+    const send = vi
+      .spyOn(OllamaTransport.prototype, 'send')
+      .mockResolvedValue({ text: 'A voice.', reasoningSeen: false, finish: 'stop', receivedBytes: 8 });
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    await generateVoiceStylePersona(CHAR);
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:4b';
+    await generateVoiceStylePersona(CHAR);
+    expect(send.mock.calls.map(([sent]) => sent.reasoning)).toEqual(['model-default', 'on']);
+  });
+});
