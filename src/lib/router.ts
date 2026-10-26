@@ -13,7 +13,8 @@ import type { Stage } from './types';
                                            (#/worktrees kept as an inbound alias)
      #/stats                             → { kind: 'stats' }
      #/help?code=                        → { kind: 'help', focusCode? }
-     #/advanced?focus=                   → { kind: 'advanced', focusKey? }
+     #/advanced?focus=&reasoningEngine=&reasoningModel=
+                                         → { kind: 'advanced', focusKey?, reasoningFocus? }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
                                              openProfileId }
@@ -61,6 +62,10 @@ export function stageToHash(stage: Stage | null | undefined): string {
     case 'advanced': {
       const q = new URLSearchParams();
       if (stage.focusKey) q.set('focus', stage.focusKey);
+      if (stage.reasoningFocus) {
+        q.set('reasoningEngine', stage.reasoningFocus.engine);
+        q.set('reasoningModel', stage.reasoningFocus.model);
+      }
       const s = q.toString();
       return s ? `#/advanced?${s}` : '#/advanced';
     }
@@ -113,10 +118,14 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
      `#/advanced?focus=<key>` link to a DIFFERENT key while already on the
      Advanced Settings view reads as "the same stage" (the fall-through
      `return true` below), so `useHydrateStage` never re-runs and the
-     scroll-and-highlight does not fire for the second link. Wave 5's Task
-     5.5c extends this SAME branch to compare `reasoningFocus` too. */
+     scroll-and-highlight does not fire for the second link. The same holds
+     for `reasoningFocus`, so this one branch compares both. */
   if (a.kind === 'advanced' && b.kind === 'advanced') {
-    return a.focusKey === b.focusKey;
+    return (
+      a.focusKey === b.focusKey &&
+      a.reasoningFocus?.engine === b.reasoningFocus?.engine &&
+      a.reasoningFocus?.model === b.reasoningFocus?.model
+    );
   }
   if (a.kind === 'model-manager' && b.kind === 'model-manager') {
     return a.endpointId === b.endpointId && a.endpointField === b.endpointField;
