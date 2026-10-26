@@ -27,10 +27,11 @@ beforeAll(async () => {
   process.env.WORKSPACE_DIR = workspaceRoot;
   delete process.env.GEMINI_API_KEY;
 
-  const [{ userSettingsRouter }, settings] = await Promise.all([
-    import('./user-settings.js'),
-    import('../workspace/user-settings.js'),
-  ]);
+  /* Sequential on purpose: the mock factory above is async (importOriginal). Importing the route
+     and the module concurrently (Promise.all) races it, and the route can resolve the REAL
+     isUserSettingsFileUnreadable, so the `unreadable` flag never reaches it (400 instead of 200). */
+  const { userSettingsRouter } = await import('./user-settings.js');
+  const settings = await import('../workspace/user-settings.js');
   userSettingsPath = settings.USER_SETTINGS_PATH;
   resetCache = settings._resetUserSettingsCache;
 
