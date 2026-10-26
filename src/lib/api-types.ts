@@ -4782,16 +4782,16 @@ export interface components {
          *     rendered as a deep link into that Advanced Settings row), a wiki link
          *     (`wikiPage`, always its OWN entry — it names a whole page, so it can
          *     never be a field tacked onto a setting-changing fix), or plain text
-         *     (neither, e.g. "switch model"). `endpointField` / `reasoningSetting`
-         *     are declared for the later waves that fill them (3b endpoints, 5a
-         *     reasoning level); nothing sends them yet.
+         *     (neither, e.g. "switch model"). `endpointField` (an OpenAI-compatible
+         *     endpoint's own field) and `reasoningSetting` (a Gemini or Ollama
+         *     model's reasoning level) are both emitted by `reasoningOverflowFixes`.
          */
         AnalysisFailureFix: {
             /** @description Human-readable action text, rendered verbatim (and as the link's text when the fix is a link). */
             label: string;
             /** @description Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix. */
             settingKey?: string;
-            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Not emitted yet. */
+            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields). */
             endpointField?: {
                 endpointId: string;
                 field: string;
@@ -4803,7 +4803,7 @@ export interface components {
              *     plain text instead of linking.
              */
             wikiPage?: string;
-            /** @description Wave 5 (#3084) — the reasoning-level control this fix should focus. Not emitted yet. */
+            /** @description Wave 5 (#3084) — the reasoning-level control this fix should focus. Emitted for a Gemini or Ollama model when a lower level exists. */
             reasoningSetting?: {
                 /** @enum {string} */
                 engine: "gemini" | "ollama";

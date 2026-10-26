@@ -2893,8 +2893,9 @@ async function realUploadManuscript({
    (the frontend deep-links it as `#/advanced?focus=<key>`); `wikiPage` is a
    docs wiki page NAME (never an anchor) that the renderer narrows with
    `isWikiPage` before building a URL; a fix with neither (e.g. "switch
-   model") is label-only. `endpointField` (wave 3) / `reasoningSetting`
-   (wave 5) are declared by the contract but not emitted yet. */
+   model") is label-only. `endpointField` (an endpoint's own field) and
+   `reasoningSetting` (a Gemini or Ollama model's reasoning level) are both
+   emitted by the server's `reasoningOverflowFixes`. */
 export type AnalysisFailureFix = ApiComponents['schemas']['AnalysisFailureFix'];
 
 interface AnalysisStreamEvent {

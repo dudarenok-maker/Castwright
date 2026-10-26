@@ -108,7 +108,7 @@ describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
     contextTokens: 32_768,
   };
 
-  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and only the trailing Read: entry links a page', () => {
+  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never payload, and no reasoning row for a not_controllable endpoint (5.5-D2), and only the trailing Read: entry links a page', () => {
     /* Structural, not an exact-count toEqual on the whole array: a later wave may
        append a `Read:` entry to any reasoningOverflowFixes result. This asserts the
        ACTIONABLE rows this branch contributes, exactly, and that every `Read:` entry
@@ -270,6 +270,23 @@ describe('reasoningOverflowFixes — reasoning-level fixes (#3084 wave 5a, F7, e
      (review pass 2, item 1). The endpoint case is 5.5b-ii's. */
   const overflow = (transport: TransportKind, model: string, reasoningLevel?: ReasoningLevel, endpointId?: string) =>
     classifyAnalysisFailure(new AnalyzerReasoningOverflowError(transport, model, 812, { endpointId, reasoningLevel }), model).fixes ?? [];
+
+  it('an endpoint gets a fix pointing at its own reasoning field only on a controllable style above its floor (5.5-D2)', () => {
+    const lab = (reasoningStyle: 'not_controllable' | 'enable_thinking' | 'reasoning_effort') =>
+      analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768, reasoningStyle });
+    const reasoningFix = (fixes: ReturnType<typeof overflow>) => fixes.find((f) => f.endpointField?.field === 'reasoning');
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('enable_thinking')] });
+    expect(reasoningFix(overflow('openai', 'm', 'on', 'lab'))).toEqual({ label: "Lower Lab box's reasoning level", endpointField: { endpointId: 'lab', field: 'reasoning' } });
+    expect(reasoningFix(overflow('openai', 'm', 'model-default', 'lab'))).toBeDefined();
+    expect(reasoningFix(overflow('openai', 'm', 'off', 'lab'))).toBeUndefined();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('reasoning_effort')] });
+    expect(reasoningFix(overflow('openai', 'm', 'low', 'lab'))).toBeDefined();
+    expect(reasoningFix(overflow('openai', 'm', 'none', 'lab'))).toBeUndefined();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('not_controllable')] });
+    expect(reasoningFix(overflow('openai', 'm', 'model-default', 'lab'))).toBeUndefined();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    expect(reasoningFix(overflow('openai', 'm', 'on', 'gone'))).toBeUndefined();
+  });
 
   /* Corrected, review pass 2, item 10a: 'model-default' also gets the fix (Ollama can still think
      with no `think` field sent), only an explicit 'off' or no level at all does not. */

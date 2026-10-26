@@ -51,7 +51,7 @@ import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 /* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
    names its endpoint by saved name without an import of workspace/user-settings.ts. */
 import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
-import { geminiReasoningRow, reasoningControlDescription, type ReasoningLevel } from '../analyzer/reasoning.js';
+import { geminiReasoningRow, levelsForReasoningStyle, reasoningControlDescription, type ReasoningLevel } from '../analyzer/reasoning.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -749,15 +749,26 @@ export function reasoningOverflowFixes(ctx: {
   } else if (ctx.transport === 'openai' && ctx.endpointId) {
     /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
        stage input fractions. Named by saved name, falling back to the id when the
-       endpoint was deleted after the failure. No reasoning or payload rows: those
-       are 5a and 5b. */
-    const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;
+       endpoint was deleted after the failure. A reasoning row only for a controllable
+       endpoint above its style's floor (5a, 5.5-D2); no payload rows (5b). */
+    const endpoint = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId);
+    const name = endpoint?.name ?? ctx.endpointId;
     fixes.push(
       { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
       { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
       { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
       { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
     );
+    /* #3084 wave 5a (5.5-D2) — a lower reasoning rung exists only on a controllable style, above that
+       style's floor (its lowest real level: `off` for enable_thinking, `none` for reasoning_effort).
+       A deleted endpoint (the lookup fails) gets no reasoning fix: its field is gone. */
+    if (
+      endpoint &&
+      endpoint.reasoningStyle !== 'not_controllable' &&
+      ctx.reasoningLevel !== levelsForReasoningStyle(endpoint.reasoningStyle)[1]
+    ) {
+      fixes.push({ label: `Lower ${name}'s reasoning level`, endpointField: { endpointId: ctx.endpointId, field: 'reasoning' } });
+    }
     /* #3084 P33 — the endpoints wiki page ships with this PR; this entry links it, and its label names the section. */
     reads.push({
       label: 'Read: When a model thinks past its output limit',
