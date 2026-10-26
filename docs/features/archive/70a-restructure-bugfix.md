@@ -6,6 +6,22 @@ owner: null
 
 # Plan 70a — Chapter restructure bug fix (orphan recovery + empty-chapter prune + generic-title renumber)
 
+> **Post-ship correction (2026-10-25, #3783):** this plan's prune rule was
+> wrong. It pruned every non-excluded chapter with zero sentences, but zero
+> sentences does not mean "no content": a never-analysed chapter has none yet
+> still has manuscript text, and the prune deleted that text and renumbered its
+> neighbours. The prune now drops a chapter only when it has zero sentences AND
+> an empty manuscript body (`isBodyEmpty`: blank, whitespace-only, or just its
+> own heading); a chapter with text, or with no hint entry, is kept. Read every
+> "prune zero-sentence chapters" statement below (Benefit item 2, the
+> automated-coverage bullet on the zero-sentence merge test — since renamed and
+> inverted as `keeps a zero-sentence chapter that still has manuscript text
+> after a merge (#3783)` — walkthrough steps
+> 3-4, and the Out-of-scope parser-oversplit rationale) against this
+> correction. The parser-oversplit rationale also no longer holds as written:
+> no parser emits an empty chapter body, so the prune no longer cleans that
+> symptom up, and the "reopen if the symptom returns" condition is live.
+
 > Status: stable
 > Key files: `server/src/workspace/restructure.ts`, `server/src/routes/chapters-restructure.ts`, `server/src/routes/chapters-restructure.test.ts`
 > URL surface: `#/books/<id>/restructure` (consumes the same `POST /api/books/:id/chapters/{merge,split,reorder}` endpoints — no new routes)

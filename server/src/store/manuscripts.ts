@@ -49,6 +49,19 @@ export interface ManuscriptRecord {
       THIS, never with whatever the file holds at restructure time. Absent when
       the record was not built from a book's on-disk file. */
   sourceSha256?: string;
+  /** Where `chapterHints` came from, set only by `hydrateFromDisk` (#3791):
+      `persisted` = a validated manuscript-hints.json (its id + uuid sequence
+      pairs with state.json), `parse` = the fallback fresh parse, which carries
+      no identity. Absent = built alongside state.json from one parse in this
+      process (import, sample, re-parse), so there is nothing to check.
+      Merge, split and reorder title-check a `parse` record (`parseTitles`). */
+  hintsSource?: 'persisted' | 'parse';
+  /** The parser's own chapter titles, by position, for a `parse` record only;
+      `null` where the parser made the title up (`Chapter N`), which says nothing
+      about which chapter it is. `hintsFromParse` re-titles the hints from
+      state.json, which hides a same-count mispairing, so the raw titles are kept
+      to compare against it. */
+  parseTitles?: Array<string | null>;
   /** Set when this manuscript was registered via POST /api/books (workspace
       flow). Lets the analysis route persist cast.json + state.json updates
       back into the on-disk book without scanning the whole workspace. */
@@ -158,6 +171,7 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
       );
     }
   }
+  const fromParse = !chapterHints;
   if (!chapterHints) chapterHints = hintsFromParse(book.state, parsed.chapters);
 
   const record: ManuscriptRecord = {
@@ -170,6 +184,8 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
     sourceText: parsed.sourceText,
     chapterHints,
     sourceSha256,
+    hintsSource: fromParse ? 'parse' : 'persisted',
+    ...(fromParse ? { parseTitles: parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)) } : {}),
     bookId: book.state.bookId,
     bookDir: book.bookDir,
   };

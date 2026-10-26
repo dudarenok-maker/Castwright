@@ -171,6 +171,9 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+  /* Cases below overwrite the manuscript; a later case's hydrate parses it, and (#3791) the
+     parse's titles are compared with state's, so every case starts from the shared body. */
+  writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
   seedState();
   seedManuscriptEdits();
   // Reset audio dir
@@ -308,6 +311,297 @@ describe('POST /:bookId/chapters/merge', () => {
       .post(`/api/books/no-such-book/chapters/merge`)
       .send({ chapterIds: [1, 2] });
     expect(res.status).toBe(404);
+  });
+});
+
+/* #3791 -- a merge/split/reorder rebuilds state.chapters from the manuscript
+   hints, so hints that do not pair one-to-one with state.json's chapters make it
+   delete a chapter's audio and orphan its sentences. Hints from a persisted
+   manuscript-hints.json pair by id + uuid; hints from a parse fallback carry no
+   identity, so they must also agree with state on count, ids and each position's
+   title. A mispaired book answers a curated 409 and writes nothing. */
+describe('merge/split/reorder refuse when hints do not pair with state.json (#3791)', () => {
+  const REFUSAL =
+    "This book's chapter list is out of date with its manuscript. Re-parse it from the book's menu in the Library to fix this — re-parsing discards its analysis, cast and audio.";
+
+  /* state.json, manuscript-edits.json and every audio file: the damage #3791
+     reported is a deleted/renamed audio file, so the audio dir is in the snapshot. */
+  function snapshotDisk(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const dir of [join(bookDir, '.audiobook'), audioRoot]) {
+      for (const f of readdirSync(dir).sort()) {
+        out[`${dir}/${f}`] = readFileSync(join(dir, f), 'utf8');
+      }
+    }
+    return out;
+  }
+
+  /* state.json holds `chapters` (all rendered, slugs 0N-<slug>) while the
+     manuscript still parses to Chapter One/Two/Three and no
+     manuscript-hints.json exists. Audio is seeded for EVERY state chapter, so a
+     refusal that regressed would delete or rename real files. */
+  function seedRenderedState(
+    chapters: Array<{ id: number; title: string; slug: string; uuid?: string; titleSynthesized?: boolean }>,
+  ): void {
+    const path = join(bookDir, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(path, 'utf8'));
+    /* Already in the shape the library scan's lazy migrations leave (uuid,
+       duration from the segments file, language, schema), so the scan that runs
+       before the refusal does not rewrite state.json and the snapshots compare. */
+    state.language = null;
+    state.schema = 1;
+    state.chapters = chapters.map((c) => ({
+      uuid: `u-${c.id}`,
+      ...c,
+      audioModelKey: 'kokoro-v1',
+      audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      duration: '00:05',
+    }));
+    writeFileSync(path, JSON.stringify(state));
+    rmSync(audioRoot, { recursive: true, force: true });
+    for (const c of chapters) seedAudio(c.slug);
+  }
+
+  /* A book reordered before #3703 and restarted: state is [Two, One, Three] but
+     the parse is [One, Two, Three], same count, same ids 1..3. */
+  function seedPreReorderedBook(): void {
+    seedRenderedState([
+      { id: 1, title: 'Chapter Two', slug: '01-chapter-two', uuid: 'u-two' },
+      { id: 2, title: 'Chapter One', slug: '02-chapter-one', uuid: 'u-one' },
+      { id: 3, title: 'Chapter Three', slug: '03-chapter-three', uuid: 'u-three' },
+    ]);
+  }
+
+  it('merge: 4 state chapters against a 3-chapter parse answers 409 hints_out_of_sync, nothing written', async () => {
+    seedRenderedState([
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+      { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+      { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+    ]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+    expect(res.body.error).not.toContain(workspaceRoot);
+    expect(snapshotDisk()).toEqual(before);
+    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+  });
+
+  it('merge: equal counts but a state chapter id the hints lack answers 409, nothing written', async () => {
+    seedRenderedState([
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+      { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+    ]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  it('split: equal counts but mismatched ids answers 409, nothing written', async () => {
+    seedRenderedState([
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+      { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+    ]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 2, afterSentenceId: 1 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  it('reorder: equal counts but mismatched ids answers 409 (on main: 200 and audio moved), nothing written', async () => {
+    seedRenderedState([
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+      { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+    ]);
+    const before = snapshotDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  describe('same count and ids, parse-fallback titles disagree with state (a pre-#3703 reorder)', () => {
+    it('merge answers 409, every file byte-identical', async () => {
+      seedPreReorderedBook();
+      const before = snapshotDisk();
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+      expect(snapshotDisk()).toEqual(before);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+    });
+
+    it('split answers 409, every file byte-identical', async () => {
+      seedPreReorderedBook();
+      const before = snapshotDisk();
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/split`)
+        .send({ chapterId: 1, afterSentenceId: 1 });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('hints_out_of_sync');
+      expect(snapshotDisk()).toEqual(before);
+    });
+
+    it('reorder answers 409, every file byte-identical', async () => {
+      seedPreReorderedBook();
+      const before = snapshotDisk();
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/reorder`)
+        .send({ order: [2, 1, 3] });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('hints_out_of_sync');
+      expect(snapshotDisk()).toEqual(before);
+    });
+
+    it('merge answers 409 when an app-titled chapter and a heading chapter were swapped (#3791 pass 2)', async () => {
+      /* MANUSCRIPT_BODY parses to [Chapter 1 (app-made: "# Chapter One" becomes the book
+         title), Chapter Two, Chapter Three]. Imported for real and reordered [2,1,3] before
+         #3703, state is [Chapter Two, Chapter 2 (renumbered, synthesized), Chapter Three]
+         with no hints file. Position 0 has no parse title and position 1 holds a synthesized
+         one, so a check that skipped synthesized state titles compared neither. */
+      seedRenderedState([
+        { id: 1, title: 'Chapter Two', slug: '01-chapter-two', uuid: 'u-two' },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-2', uuid: 'u-one', titleSynthesized: true },
+        { id: 3, title: 'Chapter Three', slug: '03-chapter-three', uuid: 'u-three' },
+      ]);
+      const before = snapshotDisk();
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+      expect(snapshotDisk()).toEqual(before);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+    });
+
+    it('rename answers the same 409 and writes nothing, so it cannot hide the mispairing from a later merge', async () => {
+      seedPreReorderedBook();
+      const before = snapshotDisk();
+      const merge1 = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(merge1.status).toBe(409);
+      const rename = await request(app)
+        .post(`/api/books/${bookId}/chapters/2/rename`)
+        .send({ title: 'Interlude' });
+      expect(rename.status).toBe(409);
+      expect(rename.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+      const merge2 = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(merge2.status).toBe(409);
+      expect(snapshotDisk()).toEqual(before);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+    });
+
+    it('refresh-titles answers the same 409 and writes nothing, so its parser-aligned pass cannot hide the mispairing', async () => {
+      seedRenderedState([
+        { id: 1, title: 'Chapter Two', slug: '01-chapter-two', uuid: 'u-two' },
+        { id: 2, title: 'Chapter 2', slug: '02-chapter-2', uuid: 'u-one', titleSynthesized: true },
+        { id: 3, title: 'Chapter Three', slug: '03-chapter-three', uuid: 'u-three' },
+      ]);
+      const before = snapshotDisk();
+      const refresh = await request(app).post(`/api/books/${bookId}/chapters/refresh-titles`).send({});
+      expect(refresh.status).toBe(409);
+      expect(refresh.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+      const merge = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [2, 3] });
+      expect(merge.status).toBe(409);
+      expect(snapshotDisk()).toEqual(before);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+    });
+
+    it('exclude still succeeds but writes no hints file, so the mispairing is not made `persisted`', async () => {
+      seedPreReorderedBook();
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/exclude`)
+        .send({ chapterIds: [3], excluded: true });
+      expect(res.status).toBe(200);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+      /* ... so a merge afterwards is still refused, not waved through. */
+      const { removeManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(MANUSCRIPT_ID);
+      const merge = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [1, 2] });
+      expect(merge.status).toBe(409);
+    });
+  });
+
+  describe('healthy books are not refused', () => {
+    it('a persisted hints file that pairs with state merges even though state titles differ from the parse (a reorder)', async () => {
+      /* Reorder writes manuscript-hints.json; after a restart the hydrate takes the
+         persisted hints, which are NOT title-checked: state is now [Two, One, Three]
+         against a parse of [One, Two, Three]. A hydrate that title-checked persisted
+         hints would refuse this merge. */
+      const reordered = await request(app)
+        .post(`/api/books/${bookId}/chapters/reorder`)
+        .send({ order: [2, 1, 3] });
+      expect(reordered.status).toBe(200);
+      expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(true);
+      const { removeManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(MANUSCRIPT_ID);
+
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [1, 2] });
+      expect(res.status).toBe(200);
+    });
+
+    it('rename and refresh-titles work freely on a persisted-hints book whose titles differ from the parse', async () => {
+      const reordered = await request(app)
+        .post(`/api/books/${bookId}/chapters/reorder`)
+        .send({ order: [2, 1, 3] });
+      expect(reordered.status).toBe(200);
+      const { removeManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(MANUSCRIPT_ID);
+
+      const rename = await request(app)
+        .post(`/api/books/${bookId}/chapters/2/rename`)
+        .send({ title: 'The Second Part' });
+      expect(rename.status).toBe(200);
+      const refresh = await request(app).post(`/api/books/${bookId}/chapters/refresh-titles`).send({});
+      expect(refresh.status).toBe(200);
+    });
+
+    it('rename and refresh-titles work on a healthy parse-fallback book (parse titles agree with state)', async () => {
+      const rename = await request(app)
+        .post(`/api/books/${bookId}/chapters/2/rename`)
+        .send({ title: 'The Second Part' });
+      expect(rename.status).toBe(200);
+      const refresh = await request(app).post(`/api/books/${bookId}/chapters/refresh-titles`).send({});
+      expect(refresh.status).toBe(200);
+    });
+
+    it('a parse-fallback book merges when only a titleOverridden chapter differs from the parse', async () => {
+      const path = join(bookDir, '.audiobook', 'state.json');
+      const state = JSON.parse(readFileSync(path, 'utf8'));
+      state.chapters[1].title = 'My own title';
+      state.chapters[1].titleOverridden = true;
+      writeFileSync(path, JSON.stringify(state));
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/merge`)
+        .send({ chapterIds: [1, 2] });
+      expect(res.status).toBe(200);
+    });
   });
 });
 
@@ -653,15 +947,13 @@ describe('plan 70a — orphan recovery (Part F)', () => {
 });
 
 describe('plan 70a — prune empty chapters (Part F)', () => {
-  it('drops chapters with zero sentences after merge and renumbers survivors', async () => {
+  it('keeps a zero-sentence chapter that still has manuscript text after a merge (#3783)', async () => {
     /* Seed a 4-chapter manuscript where chapter 3 ("Empty Phantom")
        has body content in the source but ZERO sentences in
-       manuscript-edits.json — mirrors the user's screenshot bug where
-       analysis state left a chapter with no attached sentences. After
-       any merge, the empty chapter should be auto-pruned and survivors
-       renumbered. (Body content is required because parseText drops
-       heading-only chapters; the sentence-count gap comes from the
-       edits.json side, not the parse side.) */
+       manuscript-edits.json — a never-analysed chapter. plan 70a pruned it
+       after any merge; #3783 keeps it, because pruning deleted real text and
+       renumbered its neighbours. Only a chapter whose body is empty is pruned
+       (see the hint-seeded case below). */
     writeFileSync(
       join(bookDir, 'manuscript.md'),
       '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Empty Phantom\n\nGamma.\n\n# Chapter Four\n\nDelta.\n',
@@ -706,30 +998,32 @@ describe('plan 70a — prune empty chapters (Part F)', () => {
       .send({ chapterIds: [1, 2] });
     expect(res.status).toBe(200);
 
-    const pruneWarning = (res.body.warnings as string[]).find((w) =>
-      /empty/i.test(w),
-    );
-    expect(pruneWarning).toBeDefined();
-    expect(pruneWarning).toMatch(/Empty Phantom/);
+    expect((res.body.warnings as string[]).some((w) => /empty/i.test(w))).toBe(false);
 
-    // Final chapters: merged (id 1) + Delta (id 2). Empty Phantom pruned.
+    // Final chapters: merged (id 1) + Empty Phantom (id 2) + Chapter Four (id 3).
     const state = readState();
     expect(state.chapters.map((c) => c.title)).toEqual([
       'Chapter One',
+      'Empty Phantom',
       'Chapter Four',
     ]);
-    expect(state.chapters.map((c) => c.id)).toEqual([1, 2]);
+    expect(state.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
 
-    // Sentences renumbered to point at the new chapter ids
+    // Delta follows its chapter to the new id 3; Empty Phantom stays sentence-less.
     const edits = readEdits();
-    const ch2Sentences = edits.sentences.filter((s) => s.chapterId === 2);
-    expect(ch2Sentences.map((s) => s.text)).toEqual(['Delta.']);
+    expect(edits.sentences.filter((s) => s.chapterId === 2)).toEqual([]);
+    expect(
+      edits.sentences.filter((s) => s.chapterId === 3).map((s) => s.text),
+    ).toEqual(['Delta.']);
   });
 
   it('preserves excluded chapters even when they have zero sentences (soft-hide invariant)', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
-      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Dedication\n\n# Chapter Four\n\nDelta.\n',
+      /* The Dedication's body is just its own heading text, so the prune pass
+         sees an EMPTY body and only `excluded` keeps it; the parse still yields
+         all four chapters and pairs with state.json (#3791). */
+      '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Dedication\n\nDedication\n\n# Chapter Four\n\nDelta.\n',
     );
     writeFileSync(
       join(bookDir, '.audiobook', 'state.json'),
@@ -899,9 +1193,48 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     writeFileSync(stPath, JSON.stringify(st));
   }
 
+  /* Persist a valid manuscript-hints.json whose chapter `emptyId` has an EMPTY
+     body (no parser emits one, so the file is the only way to seed it). Each
+     other chapter keeps its real parsed body; state chapters get the uuids the
+     file is paired against. */
+  async function seedHintsWithEmptyBody(emptyId: number): Promise<void> {
+    const { parseManuscript } = await import('../parsers/index.js');
+    const { sha256Hex } = await import('../workspace/manuscript-hints.js');
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    const buffer = readFileSync(join(bookDir, 'manuscript.md'));
+    const parsed = await parseManuscript({ buffer, fileName: 'manuscript.md' });
+    expect(parsed.chapters).toHaveLength(st.chapters.length);
+    st.chapters.forEach((c: { uuid?: string }, i: number) => {
+      c.uuid = `00000000-0000-4000-8000-00000000000${i + 1}`;
+    });
+    writeFileSync(stPath, JSON.stringify(st));
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-hints.json'),
+      JSON.stringify({
+        schema: 1,
+        entries: [
+          {
+            manuscriptId: MANUSCRIPT_ID,
+            manuscriptFile: 'manuscript.md',
+            sourceSha256: sha256Hex(buffer),
+            writtenAt: '2026-01-01T00:00:00.000Z',
+            chapters: st.chapters.map((c: { id: number; uuid: string }, i: number) => ({
+              id: c.id,
+              uuid: c.uuid,
+              body: c.id === emptyId ? '' : parsed.chapters[i]!.body,
+            })),
+          },
+        ],
+      }),
+    );
+  }
+
   it('merge [4,5] with an empty chapter 2: survivors keep their OWN audio, merged chapter gets none (#3400)', async () => {
     seedDigitTitledBook();
-    // plan 70a Part F's state: chapter 2 has no sentences, so the prune pass drops it.
+    // #3783: chapter 2 has no sentences AND an empty body (seeded through a valid
+    // manuscript-hints.json), so the prune pass drops it and renumbers the rest.
+    await seedHintsWithEmptyBody(2);
     writeFileSync(
       join(bookDir, '.audiobook', 'manuscript-edits.json'),
       JSON.stringify({
