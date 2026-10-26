@@ -389,12 +389,12 @@ export const dropRetainedSaves = (bookId: string) => ({ type: DROP_RETAINED, pay
 
 /* Plan 289 (D6) — a re-sent save carries the revision it was built against, so
    the server can refuse it if the book changed since. The middleware learns
-   each slice's revision from its own PUT 200s and from Layout's FULL reads
-   (a revisions-only read re-seeds none of these slices, so it teaches
-   nothing). Layout stamps a full read before issuing it: the dispatch returns
-   the read's sequence number, and its later `learnSliceRevisions` is ignored
-   for a slice a PUT has landed on since, because the read may predate that
-   write. Not reducer actions. */
+   each field's token from its own PUT 200s that carried the field and from
+   Layout's FULL reads (a revisions-only read re-seeds none of these slices, so
+   it teaches nothing). Layout stamps a full read before issuing it: the
+   dispatch returns the read's sequence number, and its later
+   `learnSliceRevisions` is ignored for a field a PUT has landed on since,
+   because the read may predate that write (pass 7, C4). Not reducer actions. */
 const BEGIN_FULL_READ = 'persistence/beginFullRead';
 export const beginFullRead = (bookId: string) => ({ type: BEGIN_FULL_READ, payload: bookId });
 const LEARN_REVISIONS = 'persistence/learnRevisions';
@@ -405,107 +405,50 @@ export const learnSliceRevisions = (
 ) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
-export const persistenceMiddleware: Middleware = (store) => {
-  const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
-  const pending = new Map<FlushKey, unknown>();
-  /* Slices whose currently-pending write was (at least once this debounce
-     window) triggered by a toast-worthy action. Last-wins on the patch means
-     the flush persists the latest slice state regardless, so if it fails that
-     action didn't land — toasting with the matching handler is correct even if
-     an unrelated edit also rode along in the same window. Carries the handler
-     so the toast text can be per-action (bulk-reassign copy vs the server's own
-     refused-rename sentence) and any rollback can fire. */
-  const toastPending = new Map<FlushKey, PersistFailureHandler>();
-  /* #3784 — the fields the pending write's rollback handler restores (the
-     book-meta fields of a `commitDraft`). A save that rolls back keeps the
-     rest of its patch — a `confirmCast` combined into it, or a kept save it
-     carried — for the book's next flush. */
-  const rollbackFields = new Map<FlushKey, Set<string>>();
-  /* #2230 — monotonically-increasing counter per key, bumped every time a
-     write is (re)scheduled. A flush captures the counter at fire time; its
-     success/failure effects (snapshot prune / rollback / toast) only run if it
-     is still the LATEST flush for the key. This prevents an OLDER in-flight
-     PUT from prematurely pruning or rolling back the shared rollback snapshot
-     that a NEWER in-flight PUT (started while the first was still pending) still
-     needs — closing the overlapping-in-flight-PUT data-loss race. */
-  const generation = new Map<FlushKey, number>();
-  /* #3395 pass 4, S3 — each key's writes still in flight, as settle-never-
-     reject promises, so `flushBookPersistence` can await them. Each entry
-     covers a whole send-and-retry sequence (#3421), not one PUT. */
-  const inFlight = new Map<FlushKey, Set<Promise<{ slice: StateSlice; ok: boolean }>>>();
-  /* #3421 — saves given up on after their retries, kept until the next flush of
-     their book re-sends them first, or until that book's slices are re-read
-     in full or it is deleted (`dropRetainedSaves`). A newer edit for the same key
-     merges over the kept patch when it is queued.
-     Plan 289 — each record carries the revision its write was built against
-     (`base`), which every re-send of it sends, and the success handler (D8a),
-     so a re-send that lands clears the rollback snapshot like a first-try
-     success would. Only `onSuccess` is kept: a re-send that fails again
-     behaves as a plain kept save, not a rename. */
-  type KeptSave = {
-    patch: Record<string, unknown>;
-    base?: SliceRevision;
-    onSuccess?: PersistFailureHandler['onSuccess'];
-  };
-  const kept = new Map<FlushKey, KeptSave>();
-  /* Plan 289 (D6) — the kept save a queued patch carries (re-sent as it is, or
-     merged into a newer build), so that send carries the kept base: without
-     it, the merge would carry the kept fields past the server's check. Taken
-     by the key's next `flush`; a later build of the key that merges over the
-     queued patch keeps it, since that build is made from a screen that still
-     shows the kept edit. */
-  const carriedKept = new Map<FlushKey, KeptSave>();
-  /* Plan 289 (D6) — each key's last-known revision, learned from PUT 200s and
-     full reads (see `beginFullRead`). Absent = unknown: the send is
-     unconditional. */
-  const known = new Map<FlushKey, SliceRevision>();
-  /* The `clock` reading of the key's latest PUT 200; a full read stamped
-     before it teaches nothing for the key. */
-  const landedAt = new Map<FlushKey, number>();
-  let clock = 0;
-  /* Plan 289 (D6) — every running send-and-retry sequence's generation and
-     base. An older sequence's 200 replaces the base of the newer ones, whose
-     patches were built after it and already include it.
-     P6-4 (#3784) — `covered` holds the fields of every build of the key made
-     since the sequence started. The `state` slice is partial, so a newer
-     build supersedes only the fields it carries; the rest of a superseded
-     sequence's patch is left behind for a later send (`leaveBehind`). Every
-     other slice builds its whole content, so a newer build covers it all. */
-  type Sequence = { gen: number; base?: SliceRevision; refreshable: boolean; covered: Set<string> };
-  const sequences = new Map<FlushKey, Set<Sequence>>();
+/* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
+const WHOLE = '*';
 
-  /* P6-4 — a kept save's base is read for its own fields: each field is checked
-     against the revision it was built against. Two saves of a key combine with
-     `newer`'s values winning; the send's other fields are checked against the
-     key's last-known revision (`sendBase`). */
-  const mergeSaves = (older: KeptSave | undefined, newer: KeptSave): KeptSave => {
-    if (!older) return newer;
-    const base: SliceRevision = {};
-    for (const [save, skip] of [
-      [older, newer.patch],
-      [newer, {}],
-    ] as const) {
-      for (const f of Object.keys(save.patch)) {
-        const token = save.base?.[f];
-        if (!(f in skip) && token !== undefined) base[f] = token;
-      }
-    }
-    return {
-      patch: { ...older.patch, ...newer.patch },
-      base: Object.keys(base).length > 0 ? base : undefined,
-      onSuccess: newer.onSuccess ?? older.onSuccess,
-    };
+export const persistenceMiddleware: Middleware = (store) => {
+  /* Plan 289 pass 7 (C1) — what is still to be saved, per `${bookId}:${slice}`
+     key: one entry per field on the partial `state` slice, and ONE entry for
+     the whole build (`WHOLE`) on cast, manuscript and changeLog, whose PUT
+     replaces the file — a manuscript send without `mergedAwayKeys` would wipe
+     the merge tombstones (fs-58). `base` is the revision a failed send of the
+     value was made against (C3); `handler` owns the unit's failure toast,
+     rollback and success prune. A KEPT save is a key's idle outbox: entries,
+     but no debounce timer and no flight (C7). */
+  type Entry = { value: unknown; base?: SliceRevision; handler?: PersistFailureHandler };
+  const outbox = new Map<FlushKey, Map<string, Entry>>();
+  const boxOf = (key: FlushKey) => {
+    let box = outbox.get(key);
+    if (!box) outbox.set(key, (box = new Map()));
+    return box;
   };
-  const sendBase = (carried: KeptSave, latest: SliceRevision | undefined): SliceRevision | undefined => {
-    if (!carried.base) return undefined;
-    const base: SliceRevision = { ...latest };
-    for (const f of Object.keys(carried.patch)) {
-      const token = carried.base[f];
-      if (token !== undefined) base[f] = token;
-      else delete base[f];
-    }
-    return base;
-  };
+  const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
+  /* C2 — each key's one running send loop, so at most one PUT per key is in
+     transit, and `flushBookPersistence` can await it. Settles, never rejects. */
+  const flights = new Map<FlushKey, Promise<{ slice: StateSlice; ok: boolean }>>();
+  /* Plan 289 (D6, C4) — each key's last-known token per field, learned from the
+     fields a PUT 200 carried and from full reads (see `beginFullRead`). An
+     absent field is unknown: a failed send of it stays unconditional. */
+  const known = new Map<FlushKey, SliceRevision>();
+  /* Per field, the `clock` reading of the latest PUT 200 that carried it; a full
+     read stamped before that teaches nothing for the field. */
+  const landedAt = new Map<FlushKey, Record<string, number>>();
+  let clock = 0;
+
+  /* The token fields a unit's value carries: its own name on `state`, the
+     build's defined fields on a whole-slice unit. An undefined value is not
+     sent (JSON drops it), so it carries nothing. */
+  const fieldsOf = (unit: string, value: unknown): string[] =>
+    value === undefined
+      ? []
+      : unit !== WHOLE
+        ? [unit]
+        : Object.keys(value as object).filter((f) => (value as Record<string, unknown>)[f] !== undefined);
+  const toast = (message: string, dedupeKey: string) =>
+    store.dispatch(notificationsActions.pushToast({ kind: 'error', message, dedupeKey }));
+
   /* The book the stage named after the previous action — when it changes,
      that book's queued writes are sent at once (S3). */
   let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
@@ -516,268 +459,189 @@ export const persistenceMiddleware: Middleware = (store) => {
      and keeps the user's unsaved draft. */
   let lastOpenBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
 
-  /* Send every queued write for `bookId` now instead of at the end of its
-     debounce. */
-  const flushBookNow = (bookId: string) => {
-    resendRetained(bookId);
-    for (const [key, timer] of Array.from(timers)) {
-      if (!key.startsWith(`${bookId}:`)) continue;
-      clearTimeout(timer);
-      flush(bookId, key.slice(bookId.length + 1) as StateSlice);
-    }
-  };
-
-  /* #3421 — re-send, now, every save of `bookId` that was given up on, ahead
-     of whatever the caller is about to send. Deleting from `kept` first
-     keeps `flush` from re-entering for the same key; an entry the nested
-     `flush` already sent is skipped, so each is sent once. */
-  const resendRetained = (bookId: string, exceptKey?: FlushKey) => {
-    for (const [key, save] of Array.from(kept)) {
-      if (!key.startsWith(`${bookId}:`) || key === exceptKey) continue;
-      /* The loop walks a snapshot, and the nested `flush` below has already
-         re-sent (and deleted) the later entries of this book. */
-      if (!kept.has(key)) continue;
-      kept.delete(key);
-      /* A queued patch of the key is newer: merged over the kept one, as at
-         every other merge site. */
-      const queuedCarry = carriedKept.get(key);
-      carriedKept.set(key, queuedCarry ? mergeSaves(save, queuedCarry) : save);
-      pending.set(key, { ...save.patch, ...(pending.get(key) as Record<string, unknown> | undefined) });
-      const timer = timers.get(key);
-      if (timer) clearTimeout(timer);
-      flush(bookId, key.slice(bookId.length + 1) as StateSlice);
-    }
-  };
-
-  const flush = (bookId: string, slice: StateSlice) => {
+  /* C2 — start a key's flight. Only a debounce timer and a book flush call
+     this; a flight's own end never does, so a give-up cannot restart itself. */
+  const pump = (bookId: string, slice: StateSlice) => {
     const key = flushKey(bookId, slice);
-    resendRetained(bookId, key);
-    const patch = pending.get(key);
-    pending.delete(key);
-    timers.delete(key);
-    const handler = toastPending.get(key);
-    toastPending.delete(key);
-    const ownFields = rollbackFields.get(key);
-    rollbackFields.delete(key);
-    const carried = carriedKept.get(key);
-    carriedKept.delete(key);
-    const onSuccess = handler?.onSuccess ?? carried?.onSuccess;
-    const gen = generation.get(key) ?? 0;
-    if (patch === undefined) return;
-    /* Plan 289 (D6) — the base is captured as the sequence's first attempt is
-       made: the kept save's own base when this send carries one, else the
-       key's last-known revision. Only a re-send carries it: every retry, and
-       a send carrying a kept save even on its first attempt. A plain first
-       attempt is a live edit built from the current screen, sent
-       unconditionally as before. The kept base applies to the kept fields;
-       the live fields merged with them are checked against the last-known
-       revision (P6-4). */
-    const seq: Sequence = {
-      gen,
-      base: carried ? sendBase(carried, known.get(key)) : known.get(key),
-      refreshable: !carried,
-      covered: new Set<string>(),
-    };
-    const seqs = sequences.get(key) ?? new Set<Sequence>();
-    seqs.add(seq);
-    sequences.set(key, seqs);
-    /* P6-4 — the fields of this patch no newer build of the key carries. */
-    const uncovered = () =>
-      Object.fromEntries(Object.entries(patch as Record<string, unknown>).filter(([f]) => !seq.covered.has(f)));
-    /* P6-4 — a superseded sequence's uncovered fields are not superseded: they
-       ride the newer send if it is still queued, else they are kept for the
-       book's next flush, with the base they were sent with either way, so the
-       server refuses them if the book moved on. The book-meta handler goes
-       with them when they include its fields. */
-    const leaveBehind = () => {
-      const rest = uncovered();
-      if (Object.keys(rest).length === 0) return;
-      const own = Object.keys(rest).filter((f) => ownFields?.has(f));
-      const save: KeptSave = {
-        patch: rest,
-        base: seq.base,
-        /* Only a save carrying the book-meta fields keeps the handler: the one
-           `onSuccess` (`commitDraftSucceeded`) prunes `lastCommitted`, which a
-           rollback has already cleared, and a newer build's own handler wins
-           at every merge site (M16, 6e936845). */
-        onSuccess: own.length > 0 ? onSuccess : undefined,
-      };
-      const queued = pending.get(key) as Record<string, unknown> | undefined;
-      if (!queued) {
-        kept.set(key, mergeSaves(kept.get(key), save));
-        return;
-      }
-      pending.set(key, { ...queued, ...rest });
-      carriedKept.set(key, mergeSaves(carriedKept.get(key), save));
-      if (handler && own.length > 0) {
-        if (!toastPending.has(key)) toastPending.set(key, handler);
-        const fields = rollbackFields.get(key) ?? new Set<string>();
-        for (const f of own) fields.add(f);
-        rollbackFields.set(key, fields);
-      }
-    };
-    const attemptSend = async (): Promise<{ slice: StateSlice; ok: boolean }> => {
-      /* #3421 — a failed PUT is re-sent with the patch captured above, never
-         one rebuilt from the store: by the time it fails the stage may name
-         another book (or none). */
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const conditional = (attempt > 0 || !!carried) && seq.base !== undefined;
-          const res = (await api.putBookState(
-            bookId,
-            conditional ? { slice, patch, baseRevision: seq.base } : { slice, patch },
-          )) as PutStateResponse | undefined;
-          /* Plan 289 (D6) — learn the slice's revision after this write. A
-             200 with no revision (an older server) leaves it unknown. The
-             newer running sequences of the key had their patch built after
-             this one, so they include it: their base becomes this revision,
-             or their retries would be refused for this very write. A sequence
-             carrying a kept save keeps the kept base, which must still refuse
-             the kept fields if the book changed since they were made. */
-          landedAt.set(key, ++clock);
-          if (res?.revision) known.set(key, res.revision);
-          else known.delete(key);
-          for (const other of sequences.get(key) ?? []) {
-            if (other.gen > gen && other.refreshable) other.base = res?.revision;
+    if (flights.has(key) || !outbox.get(key)?.size) return;
+    flights.set(key, run(bookId, slice));
+  };
+  /* C7 — send the book's kept saves (idle keys), in slice order. */
+  const pumpKept = (bookId: string) => {
+    for (const slice of LEARNED_SLICES) {
+      const key = flushKey(bookId, slice);
+      if (outbox.get(key)?.size && !timers.has(key) && !flights.has(key)) pump(bookId, slice);
+    }
+  };
+  /* Send every queued write for `bookId` now instead of at the end of its
+     debounce, kept saves first. A running flight carries what is queued on its
+     next attempt or its follow-up. */
+  const flushBookNow = (bookId: string) => {
+    pumpKept(bookId);
+    for (const slice of LEARNED_SLICES) {
+      const key = flushKey(bookId, slice);
+      const timer = timers.get(key);
+      if (!timer) continue;
+      clearTimeout(timer);
+      timers.delete(key);
+      pump(bookId, slice);
+    }
+  };
+
+  /* C2 / C5 / C6 — one key's send loop. Each attempt re-snapshots the outbox,
+     so a value built meanwhile rides it; after a server answer, what is left
+     goes at once unless a debounce timer is pending (that timer sends it, so
+     typing still coalesces). A transport failure (network / 5xx) is retried
+     at +1 s, +2 s, +4 s, then given up on. */
+  const run = async (bookId: string, slice: StateSlice): Promise<{ slice: StateSlice; ok: boolean }> => {
+    const key = flushKey(bookId, slice);
+    const box = boxOf(key);
+    let failures = 0;
+    let ok = true;
+    for (;;) {
+      const sent = new Map(Array.from(box, ([u, e]) => [u, { value: e.value, based: !!e.base, handler: e.handler }]));
+      const base: SliceRevision = Object.assign({}, ...Array.from(box.values(), (e) => e.base));
+      const knownAtSend = { ...known.get(key) };
+      const patch =
+        slice === 'state'
+          ? Object.fromEntries(Array.from(sent).flatMap(([u, s]) => (s.value === undefined ? [] : [[u, s.value]])))
+          : sent.get(WHOLE)?.value;
+      /* "Holds the sent value": no newer build replaced the unit meanwhile. */
+      const holds = (u: string) => box.has(u) && Object.is(box.get(u)!.value, sent.get(u)?.value);
+      try {
+        const res = (await api.putBookState(
+          bookId,
+          Object.keys(base).length > 0 ? { slice, patch, baseRevision: base } : { slice, patch },
+        )) as PutStateResponse | undefined;
+        failures = 0;
+        /* C4 — learn only the fields this request carried: the revision also
+           covers fields it did not write, which may hold an outside write the
+           screen never showed (R1). A 200 with no revision (an older server)
+           leaves them unknown. The units still holding the sent value are
+           saved; a book-meta commit's rollback baseline is pruned once no
+           entry of that handler is left (#2230, N7). */
+        const tick = ++clock;
+        const kn = { ...known.get(key) };
+        const la = landedAt.get(key) ?? {};
+        const saved = new Set<PersistFailureHandler>();
+        for (const [u, s] of sent) {
+          for (const f of fieldsOf(u, s.value)) {
+            la[f] = tick;
+            if (res?.revision?.[f] !== undefined) kn[f] = res.revision[f];
+            else delete kn[f];
           }
-          /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
-             newer write has since been scheduled (gen advanced), a fresh snapshot
-             belongs to it and must not be cleared by this older, superseded
-             flush. */
-          if (onSuccess && gen === (generation.get(key) ?? 0)) {
-            store.dispatch(onSuccess(bookId));
+          if (!holds(u)) continue;
+          const h = box.get(u)!.handler;
+          if (h?.onSuccess) saved.add(h);
+          box.delete(u);
+        }
+        known.set(key, kn);
+        landedAt.set(key, la);
+        for (const h of saved) {
+          if (!Array.from(box.values()).some((e) => e.handler === h)) store.dispatch(h.onSuccess!(bookId));
+        }
+      } catch (err) {
+        console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+        if (isStaleRefusal(err)) {
+          /* Plan 289 (D2, C6) — the server wrote nothing: a field it names was
+             changed elsewhere since this unit's base. Only a based unit can be
+             stale; a missing or useless `fields` reads as every based unit.
+             A refused unit is dropped (a 4xx is final) and not rolled back:
+             the baseline is older than disk, so restoring it would show the
+             user neither value. The book is marked for a full re-read (Layout
+             re-reads it now if open), with one toast naming it. A unit a newer
+             build replaced is left to that value: no toast, no re-read (P6-3,
+             OD-C3). Every other unit goes in the follow-up with its base. */
+          failures = 0;
+          const named = (err as { fields?: unknown }).fields;
+          const based = Array.from(sent.keys()).filter((u) => sent.get(u)!.based);
+          const hit = based.filter(
+            (u) => Array.isArray(named) && fieldsOf(u, sent.get(u)!.value).some((f) => named.includes(f)),
+          );
+          const dropped = (hit.length > 0 ? hit : based).filter(holds);
+          if (dropped.length > 0) {
+            const handler = dropped.map((u) => box.get(u)!.handler).find(Boolean);
+            for (const u of dropped) box.delete(u);
+            const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
+            toast(
+              handler ? handler.message(err, title) : title ? staleMessage(title) : STALE_MESSAGE,
+              `book-persist-stale:${bookId}`,
+            );
+            store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
+            ok = false;
           }
-          return { slice, ok: true };
-        } catch (err) {
-          console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-          const refused = PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err));
-          /* P6-4 — superseded only when the newer builds carry every field of
-             this patch; on the partial `state` slice they may not. */
-          const superseded = gen !== (generation.get(key) ?? 0);
-          const overtaken = superseded && Object.keys(uncovered()).length === 0;
-          /* Plan 289 (D2) — the book changed since this save was made, so the
-             server refused it and wrote nothing. It is not kept or re-sent
-             (it is a 4xx), and not rolled back: the rollback baseline is older
-             than disk, so restoring it would show the user neither value. The
-             book is marked for a full re-read instead, so the screen shows what
-             is on disk (Layout re-reads it now if it is open). The toast names
-             the book, once per book. A newer write that overtook this one owns
-             the outcome: no toast, and no re-read, which would discard the
-             draft and re-hydrate over edits the screen already shows (P6-3). */
-          if (isStaleRefusal(err)) {
-            if (!overtaken) {
-              const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
-              store.dispatch(
-                notificationsActions.pushToast({
-                  kind: 'error',
-                  message: handler
-                    ? handler.message(err, title)
-                    : title
-                      ? staleMessage(title)
-                      : STALE_MESSAGE,
-                  dedupeKey: `book-persist-stale:${bookId}`,
-                }),
-              );
-              store.dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
-            }
-            return { slice, ok: overtaken };
+        } else if (PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err))) {
+          /* A deliberate refusal (analysis running, path collision, consent): it
+             will not change on a re-send. A book-meta commit whose entries all
+             still hold their sent values is rolled back, restoring the draft
+             only while its book is open (P6-1, #3782); if a newer commit is
+             queued, that one owns the outcome. A unit with no rollback handler
+             that rode along stays, and goes in the follow-up (R2). A send with
+             no rollback handler is dropped, toasting only a toast handler's
+             message (bulk reassign). */
+          failures = 0;
+          const bookOpen = bookIdFromState(store.getState() as PersistableRootState) === bookId;
+          const rollbacks = new Set(Array.from(sent.values(), (s) => s.handler).filter((h) => h?.rollback));
+          if (rollbacks.size === 0) {
+            const dropped = Array.from(sent.keys()).filter(holds);
+            const handler = dropped.map((u) => box.get(u)!.handler).find(Boolean);
+            for (const u of dropped) box.delete(u);
+            if (handler) toast(handler.message(err), handler.dedupeKey);
+            if (dropped.length > 0) ok = false;
           }
-          /* A newer write for this key owns the outcome (and the user's
-             current draft); don't re-send the stale patch over it. The fields
-             it does not carry are left behind (P6-4). A refusal of fields it
-             does not carry is handled below like any refusal (#3784). */
-          if (superseded && (!refused || overtaken)) {
-            if (!refused) leaveBehind();
-            return { slice, ok: true };
+          for (const h of rollbacks) {
+            const owned = Array.from(box).flatMap(([u, e]) => (e.handler === h ? [u] : []));
+            if (!owned.every(holds)) continue;
+            for (const u of owned) box.delete(u);
+            toast(h!.message(err), h!.dedupeKey);
+            store.dispatch(h!.rollback!(bookId, bookOpen));
+            ok = false;
           }
-          if (!refused && attempt < FLUSH_RETRY_DELAYS_MS.length) {
-            await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[attempt]));
-            if (gen !== (generation.get(key) ?? 0)) {
-              leaveBehind();
-              return { slice, ok: true };
-            }
+        } else {
+          /* C3 — a re-send of a value is checked against the revision its first
+             failed send was made against, so the server refuses it if the book
+             moved on. A unit a newer build replaced is a live edit: no base. */
+          for (const [u, s] of sent) {
+            const e = box.get(u);
+            if (!e || e.base || !holds(u)) continue;
+            const b = Object.fromEntries(
+              fieldsOf(u, s.value).flatMap((f) => (knownAtSend[f] === undefined ? [] : [[f, knownAtSend[f]]])),
+            );
+            if (Object.keys(b).length > 0) e.base = b;
+          }
+          if (++failures <= FLUSH_RETRY_DELAYS_MS.length) {
+            await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[failures - 1]));
             continue;
           }
-          /* Final failure of the LATEST write (#2230), or a refusal of a
-             superseded one. The rollback restores a shared, book-agnostic
-             draft, and the retry window (#3421) lets the user open another
-             book first — applying it then would overlay this book's text on
-             that one, so it only runs while this book is open. A superseded
-             refusal answers for its handler only when the fields no newer
-             build carries include the handler's own (#3784). */
-          const bookOpen = bookIdFromState(store.getState() as PersistableRootState) === bookId;
-          const own = !superseded || Object.keys(uncovered()).some((f) => ownFields?.has(f));
-          const rolledBack = own && !!handler?.rollback && bookOpen;
-          /* Keep the patch for the book's next flush (#3421) — except a 4xx
-             (the server's answer, so re-sending repeats a refused write) and
-             the fields a rollback restores (the user's draft is restored for
-             them to save again). A save that gave up WITHOUT rolling back has
-             no draft left, so it is kept and re-sent. A save that rolled back
-             keeps its other fields (#3784), with the base they were sent with:
-             the screen still shows them, and the server refuses them if the
-             book moved on. They keep no success handler: the rollback already
-             cleared the snapshot it would prune, and the next commit that
-             makes a new one takes this save with its own handler. */
-          /* A field an older superseded send left behind (P6-4) is kept with it. */
-          if (!refused && !rolledBack) {
-            kept.set(
-              key,
-              mergeSaves(kept.get(key), { patch: patch as Record<string, unknown>, base: seq.base, onSuccess }),
-            );
-          } else if (!refused) {
-            const rest = Object.fromEntries(
-              Object.entries(patch as Record<string, unknown>).filter(([f]) => !ownFields?.has(f)),
-            );
-            if (Object.keys(rest).length > 0) {
-              kept.set(key, mergeSaves(kept.get(key), { patch: rest, base: seq.base }));
+          /* Given up on (#3421): the units stay, kept for the book's next
+             flush. The rollback restores a shared, book-agnostic draft, and the
+             retry window lets the user open another book first, so it only runs
+             while this book is open; after leaving, a book-meta save is kept
+             and re-sent too (f8871b1a). The toast fires seconds after the user
+             may have left, so it names the book. */
+          const s = store.getState() as PersistableRootState;
+          const title = savedTitleOf(s, bookId);
+          const handler = Array.from(sent.values(), (x) => x.handler).find(Boolean);
+          toast(
+            handler ? handler.message(err, title) : title ? flushFailedMessage(title) : FLUSH_FAILED_MESSAGE,
+            handler?.dedupeKey ?? `book-persist-failed:${bookId}`,
+          );
+          if (bookIdFromState(s) === bookId) {
+            for (const h of new Set(Array.from(sent.values(), (x) => x.handler))) {
+              if (!h?.rollback) continue;
+              for (const [u, e] of Array.from(box)) if (e.handler === h) box.delete(u);
+              store.dispatch(h.rollback(bookId, true));
             }
           }
-          if (handler && own) {
-            const bookTitle = refused
-              ? undefined
-              : savedTitleOf(store.getState() as PersistableRootState, bookId);
-            store.dispatch(
-              notificationsActions.pushToast({
-                kind: 'error',
-                message: handler.message(err, bookTitle),
-                dedupeKey: handler.dedupeKey,
-              }),
-            );
-            /* #2230 — a refused rename must not leave the persisted value claiming
-               a title the server rejected; roll the optimistic saved update back
-               (and restore the draft so the user's text is preserved for retry). */
-            /* A 4xx is final, so even after the book was left `saved` must stop
-               claiming the refused value: reverted, without the draft. */
-            if (rolledBack) store.dispatch(handler.rollback!(bookId, true));
-            else if (refused && handler.rollback) store.dispatch(handler.rollback(bookId, false));
-          } else if (!refused) {
-            /* Only a save that was retried and given up on (network / 5xx) gets
-               the generic toast; a 4xx is the server's deliberate refusal, which
-               stayed silent before #3421. It fires seconds after the user may
-               have left, so it names the book rather than saying "this book". */
-            const title = savedTitleOf(store.getState() as PersistableRootState, bookId);
-            store.dispatch(
-              notificationsActions.pushToast({
-                kind: 'error',
-                message: title ? flushFailedMessage(title) : FLUSH_FAILED_MESSAGE,
-                dedupeKey: `book-persist-failed:${bookId}`,
-              }),
-            );
-          }
-          return { slice, ok: false };
+          ok = false;
+          break;
         }
       }
-    };
-    const settled = attemptSend();
-    const set = inFlight.get(key) ?? new Set<Promise<{ slice: StateSlice; ok: boolean }>>();
-    set.add(settled);
-    inFlight.set(key, set);
-    void settled.then(() => {
-      seqs.delete(seq);
-      if (seqs.size === 0 && sequences.get(key) === seqs) sequences.delete(key);
-      set.delete(settled);
-      if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
-    });
+      if (box.size === 0 || timers.has(key)) break;
+    }
+    flights.delete(key);
+    if (box.size === 0 && outbox.get(key) === box) outbox.delete(key);
+    return { slice, ok };
   };
 
   return (next) => (action) => {
@@ -804,19 +668,27 @@ export const persistenceMiddleware: Middleware = (store) => {
         revisions?: Partial<Record<StateSlice, SliceRevision>>;
         readSeq: number;
       };
+      /* C4 — every field the read covers, except one a PUT landed on since the
+         read was stamped. */
       for (const slice of LEARNED_SLICES) {
         const key = flushKey(readBook, slice);
-        if ((landedAt.get(key) ?? 0) > readSeq) continue;
-        const revision = revisions?.[slice];
-        if (revision) known.set(key, revision);
-        else known.delete(key);
+        const la = landedAt.get(key) ?? {};
+        const kn = { ...known.get(key) };
+        for (const f of new Set([...Object.keys(kn), ...Object.keys(revisions?.[slice] ?? {})])) {
+          if ((la[f] ?? 0) > readSeq) continue;
+          const token = revisions?.[slice]?.[f];
+          if (token !== undefined) kn[f] = token;
+          else delete kn[f];
+        }
+        known.set(key, kn);
       }
       return result;
     }
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
-      for (const key of Array.from(kept.keys())) {
-        if (key.startsWith(`${a.payload}:`)) kept.delete(key);
+      for (const slice of LEARNED_SLICES) {
+        const key = flushKey(a.payload, slice);
+        if (!timers.has(key) && !flights.has(key)) outbox.delete(key);
       }
       return result;
     }
@@ -844,10 +716,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
       flushBookNow(target);
-      const waits: Promise<{ slice: StateSlice; ok: boolean }>[] = [];
-      for (const [key, set] of inFlight) {
-        if (key.startsWith(`${target}:`)) waits.push(...set);
-      }
+      const waits = LEARNED_SLICES.flatMap((slice) => flights.get(flushKey(target, slice)) ?? []);
       return waits.length > 0
         ? Promise.all(waits).then(
             (rs): BookFlushOutcome => ({
@@ -877,48 +746,38 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     const key = flushKey(bookId, rule.slice);
-    const built = rule.build(after, bookId);
-    /* #3421 — a save given up on is re-sent with this one: the newer fields win.
-       Plan 289 (D6) — the send carries the kept base (`carriedKept`). */
-    const keptHere = kept.get(key);
-    if (keptHere) {
-      kept.delete(key);
-      carriedKept.set(key, keptHere);
+    const built = rule.build(after, bookId) as Record<string, unknown>;
+    /* C1 — merge the build into the outbox, newest value per unit. A changed
+       unit is a live edit: it replaces the entry with no base. An unchanged
+       one keeps its entry, base included — `commitDraft` re-sends all eight
+       book-meta fields, and a notes-only commit must not strip a kept title's
+       base. `confirmCast` and `commitDraft` thereby combine (#3784). The
+       failure handler is sticky: a bulk reassignment still unsent owns the
+       unit's toast even when a plain edit rode along. */
+    const box = boxOf(key);
+    const handler = TOAST_ON_PERSIST_FAILURE[type];
+    const units: [string, unknown][] = rule.slice === 'state' ? Object.entries(built) : [[WHOLE, built]];
+    for (const [unit, value] of units) {
+      const prev = box.get(unit);
+      const same =
+        !!prev &&
+        (unit === WHOLE
+          ? Object.keys(built).every((f) => Object.is((prev.value as Record<string, unknown>)[f], built[f]))
+          : Object.is(prev.value, value));
+      box.set(unit, same ? { ...prev!, handler: handler ?? prev!.handler } : { value, handler: handler ?? prev?.handler });
     }
-    /* #3784 — a later build of the key in the same window merges over the
-       queued patch, newest value per field: `confirmCast` and `commitDraft`
-       combine. Every other slice builds its whole content, so the merge is a
-       replace there. A kept patch is merged in by the build that takes it;
-       later builds find its fields in the queued patch. */
-    pending.set(key, {
-      ...keptHere?.patch,
-      ...(pending.get(key) as Record<string, unknown> | undefined),
-      ...(built as Record<string, unknown>),
-    });
-    /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
-       write; in-flight older flushes keep their captured (lower) generation
-       and are therefore gated out of prune/rollback in flush. */
-    generation.set(key, (generation.get(key) ?? 0) + 1);
-    /* P6-4 — the running sequences of the key are superseded only in the
-       fields this build carries. */
-    for (const s of sequences.get(key) ?? []) {
-      for (const f of Object.keys(built as Record<string, unknown>)) s.covered.add(f);
-    }
-    const failHandler = TOAST_ON_PERSIST_FAILURE[type];
-    /* #3784 — a `confirmCast` merged after a `commitDraft` keeps the book-meta
-       handler: the send still carries the book-meta fields, so its failure
-       rolls them back and its success prunes their rollback baseline. */
-    if (failHandler) toastPending.set(key, failHandler);
-    if (failHandler?.rollback) {
-      const own = rollbackFields.get(key) ?? new Set<string>();
-      for (const f of Object.keys(built as Record<string, unknown>)) own.add(f);
-      rollbackFields.set(key, own);
-    }
+    /* C2 — a timer that fires sends the book's kept saves first, then this key;
+       while the key's flight runs it does nothing, and the flight's own end
+       sends what is queued. */
     const prev = timers.get(key);
     if (prev) clearTimeout(prev);
     timers.set(
       key,
-      setTimeout(() => flush(bookId, rule.slice), debounceMs(after)),
+      setTimeout(() => {
+        pumpKept(bookId);
+        timers.delete(key);
+        pump(bookId, rule.slice);
+      }, debounceMs(after)),
     );
     return result;
   };

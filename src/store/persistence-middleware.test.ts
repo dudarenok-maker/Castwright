@@ -911,13 +911,14 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(state.bookMeta.lastCommitted?.['b1']).toBeUndefined();
   });
 
-  it('a ui/confirmCast in the same window combines with the book-meta commits, and a refusal rolls back every committed field', async () => {
+  it('a ui/confirmCast in the same window combines with the book-meta commits; a refusal rolls back every committed field and re-sends castConfirmed', async () => {
     /* #3784 (owner decision) — ui/confirmCast and bookMeta/commitDraft share
        the `state` slice and combine in one send, newest value per field, so the
        book-meta handler still owns the send's failure. The rollback baseline
        covers both commits: a refusal restores title AND author, and gives the
        user both typed values back. (Replaces #2230's "confirmCast replaces the
-       pending write" test.) */
+       pending write" test.) Pass 7 (R2) — the castConfirmed that rode along has
+       no rollback, so it is not lost with the commit: it goes in a follow-up. */
     putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): cast refused'));
     const store = makeBookMetaStore();
     store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Book' }));
@@ -927,11 +928,12 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     store.dispatch({ type: 'ui/confirmCast' } as never);
     await vi.runAllTimersAsync();
 
-    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState).toHaveBeenCalledTimes(2);
     expect(putBookState.mock.calls[0][1]).toMatchObject({
       slice: 'state',
       patch: { title: 'Renamed Book', author: 'New Author', castConfirmed: true },
     });
+    expect(putBookState.mock.calls[1][1]).toEqual({ slice: 'state', patch: { castConfirmed: true } });
 
     const state = store.getState() as {
       notifications: { toasts: { dedupeKey?: string }[] };
@@ -966,16 +968,18 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(deferred).toHaveLength(1);
 
-    /* Save B before PUT_A resolves → a second flush fires, PUT_B in-flight. */
+    /* Save B before PUT_A resolves → its debounce fires, but it waits behind
+       PUT_A: one PUT per (book, slice) in transit (plan 289 pass 7, C2). */
     store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Edit B' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     await vi.advanceTimersByTimeAsync(500);
-    expect(deferred).toHaveLength(2);
+    expect(deferred).toHaveLength(1);
 
     /* The OLDER flush (A) succeeds first — it must NOT prune the snapshot that
-       the still-in-flight newer flush (B) depends on. */
+       the queued newer save (B, sent next) depends on. */
     deferred[0].resolve(undefined);
     await vi.runAllTimersAsync();
+    expect(deferred).toHaveLength(2);
     expect((store.getState() as { bookMeta: { lastCommitted?: Record<string, unknown> } }).bookMeta.lastCommitted?.['b1']).toBeDefined();
 
     /* The NEWER flush (B) now fails — its rollback must still run, restoring the
@@ -1265,13 +1269,13 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
   type Req = { slice: string; patch: Record<string, unknown>; baseRevision?: SliceRevision };
   const reqs = () => putBookState.mock.calls.map((c) => c[1] as Req);
 
-  function setup() {
+  function setup(manuscript?: Record<string, unknown>) {
     const disk = createBookStateDisk();
     disk.seed('b1', {
       state: { title: 'The Northern Star', author: 'Marin Vale', castConfirmed: false },
       cast: { characters: [eliza('Eliza')] },
     });
-    putBookState.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    putBookState.mockImplementation((id: string, req: never) => disk.serve(id, req));
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -1283,6 +1287,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       } as never,
       preloadedState: {
         ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+        ...(manuscript ? { manuscript: { ...manuscriptSlice.getInitialState(), ...manuscript } } : {}),
         bookMeta: {
           draft: null,
           saved: {
@@ -1343,25 +1348,35 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a live build a kept save was merged into carries the kept base, so an outside write refuses it', async () => {
+  /* Pass 7 (OD-C2) — only a kept field carries its base: an outside write to
+     it refuses it, while a live field sent beside it is unconditional, as on
+     `main`. */
+  it('a live build merged with a kept save: an outside write refuses the kept field, and the live field overwrites', async () => {
     const { disk, store, restore } = setup();
     const captured = disk.revision('b1', 'state');
+    /* Keep T1: its save is given up on after the user left the book. */
     disk.failNext(4, isState);
-    store.dispatch({ type: 'ui/confirmCast' });
-    void store.dispatch(flushBookPersistence('b1'));
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    store.dispatch(uiSlice.actions.goHome());
     await advance(8000);
 
-    /* Another writer renames the book; a live book-meta edit then merges the kept castConfirmed. */
-    disk.write('b1', 'state', { ...disk.books.get('b1')!.state, title: 'Elsewhere' });
+    /* Another writer renames the book and writes notes; back on the book, a
+       live notes commit merges with the kept book-meta fields. */
+    disk.write('b1', 'state', { ...disk.books.get('b1')!.state, title: 'Elsewhere', notes: 'theirs' });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
     store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'n' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     await advance(600);
 
-    const last = reqs().at(-1)!;
-    expect(last.patch).toMatchObject({ castConfirmed: true, title: 'The Northern Star', notes: 'n' });
-    expect(last.baseRevision).toEqual(captured);
-    expect(outcomes(disk).at(-1)).toBe('409');
-    expect(disk.books.get('b1')!.state.title).toBe('Elsewhere');
+    const refused = reqs().at(-2)!;
+    expect(refused.patch).toMatchObject({ title: 'T1', notes: 'n' });
+    expect(refused.baseRevision?.title).toBe(captured.title);
+    expect(refused.baseRevision).not.toHaveProperty('notes');
+    expect(outcomes(disk).slice(-2)).toEqual(['409', 'ok']);
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'Elsewhere', notes: 'n' });
+    expect(staleToasts(store)).toHaveLength(1);
+    expect(marks(store)).toBe(1);
     restore();
   });
 
@@ -1373,8 +1388,8 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     void store.dispatch(flushBookPersistence('b1'));
     await advance(8000);
 
-    /* Two book-meta commits inside one debounce window: the second build
-       replaces the queued patch the kept castConfirmed was merged into. */
+    /* Two book-meta commits inside one debounce window, after the kept
+       castConfirmed: the second build merges over the first. */
     store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'a' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'b' }));
@@ -1383,7 +1398,8 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
 
     const last = reqs().at(-1)!;
     expect(last.patch).toMatchObject({ castConfirmed: true, notes: 'b' });
-    expect(last.baseRevision).toEqual(captured);
+    /* Pass 7 (C1) — the base covers the kept field only; the live ones have none. */
+    expect(last.baseRevision).toEqual({ castConfirmed: captured.castConfirmed });
     expect(outcomes(disk).at(-1)).toBe('ok');
     expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, notes: 'b' });
     restore();
@@ -1409,7 +1425,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a confirmCast after a commit that carried a kept title sends the newer title, with the kept base', async () => {
+  it('a confirmCast after a commit that carried a kept title sends the newer title live, with the base of the kept fields it left unchanged', async () => {
     const { disk, store, restore } = setup();
     const captured = disk.revision('b1', 'state');
     /* Keep T1: its save is given up on after the user left the book. */
@@ -1430,7 +1446,10 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(reqs()).toHaveLength(5);
     const last = reqs().at(-1)!;
     expect(last.patch).toMatchObject({ title: 'T2', author: 'Marin Vale', castConfirmed: true });
-    expect(last.baseRevision).toEqual(captured);
+    /* Pass 7 (C1) — title and castConfirmed are live (no base); the seven kept
+       book-meta fields T2's commit did not change keep theirs. */
+    const kept = ['author', 'series', 'narratorCredit', 'genre', 'publicationDate', 'description', 'notes'];
+    expect(last.baseRevision).toEqual(Object.fromEntries(kept.map((f) => [f, captured[f]])));
     expect(outcomes(disk).at(-1)).toBe('ok');
     expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T2', castConfirmed: true });
     restore();
@@ -1454,35 +1473,8 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     await advance(0);
     const last = reqs().at(-1)!;
     expect(last.patch).toEqual({ castConfirmed: true });
-    expect(last.baseRevision).toEqual(captured);
+    expect(last.baseRevision).toEqual({ castConfirmed: captured.castConfirmed });
     expect(disk.books.get('b1')!.state).toMatchObject({ title: 'The Northern Star', castConfirmed: true });
-    restore();
-  });
-
-  it("an older same-key 200 refreshes the newer in-flight sequence's base", async () => {
-    const { disk, store, restore } = setup();
-    let release!: () => void;
-    let landed: SliceRevision | undefined;
-    putBookState.mockImplementationOnce(
-      (id: string, req: never) =>
-        new Promise((r) => {
-          release = () => {
-            const res = disk.put(id, req);
-            landed = res.revision;
-            r(res);
-          };
-        }),
-    );
-    rename(store, 'Eliza X');
-    await advance(500);
-    disk.failNext(1, isCast);
-    rename(store, 'Eliza Y');
-    await advance(500);
-    release();
-    await advance(1000);
-    expect(outcomes(disk)).toEqual(['503', 'ok', 'ok']);
-    expect(reqs()[2].baseRevision).toEqual(landed);
-    expect(castName(disk)).toBe('Eliza Y');
     restore();
   });
 
@@ -1534,7 +1526,11 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     await advance(2000);
 
-    expect(outcomes(disk)).toEqual(['503', '409']);
+    /* Pass 7 (C6) — only the stale title is dropped; the other based fields of
+       the commit go in a follow-up. */
+    expect(outcomes(disk)).toEqual(['503', '409', 'ok']);
+    expect(reqs().at(-1)!.patch).not.toHaveProperty('title');
+    expect(disk.books.get('b1')!.state.title).toBe('Elsewhere');
     expect(staleToasts(store)).toHaveLength(1);
     expect(staleToasts(store)[0].message).toContain('changed elsewhere');
     const meta = (store.getState() as { bookMeta: { saved: { b1: { title: string } }; draft: unknown } }).bookMeta;
@@ -1559,8 +1555,8 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  /* P6-3 (#3784) — X's attempt 0 fails and its retry is held; Y is sent and
-     lands; X's retry then answers 409 against Y's write. */
+  /* P6-3 (#3784) — X's attempt 0 fails and its retry is held while `overtake`
+     runs; X's retry then answers. */
   async function staleRetryAfter(store: S, disk: Disk, overtake: () => Promise<void>) {
     disk.failNext(1, isCast);
     rename(store, 'Eliza X');
@@ -1586,13 +1582,17 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
   }
   const draft = (store: S) => (store.getState() as { bookMeta: { draft: { notes?: string } | null } }).bookMeta.draft;
 
-  it('a stale refusal a newer save superseded neither toasts nor forces a re-read', async () => {
+  /* Pass 7 (C9, OD-C3) — single flight: Y waits behind X's held retry, and an
+     outside write makes that retry stale. Y already replaced X in the outbox,
+     so Y owns the outcome and is sent unconditionally. */
+  it('a stale refusal of a value a newer edit replaced neither toasts nor forces a re-read, and sends the newer value', async () => {
     const { disk, store, restore } = setup();
     await staleRetryAfter(store, disk, async () => {
       rename(store, 'Eliza Y');
+      disk.write('b1', 'cast', { characters: [eliza('Elsewhere')] });
       await advance(500);
     });
-    expect(outcomes(disk)).toEqual(['503', 'ok', '409']);
+    expect(outcomes(disk)).toEqual(['503', '409', 'ok']);
     expect(castName(disk)).toBe('Eliza Y');
     expect(staleToasts(store)).toHaveLength(0);
     expect(marks(store)).toBeUndefined();
@@ -1612,14 +1612,14 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  /* P6-4 (#3784) — the `state` slice is partial: a newer send of the key
-     supersedes only the fields it carries. A kept castConfirmed rides a
-     commit whose send fails; a title commit then lands inside its backoff. */
+  /* P6-4 (#3784), pass 7 (C5, OD-C1) — a kept castConfirmed rides a notes
+     commit whose send fails; a title commit made during the backoff rides the
+     scheduled retry, next to the failed fields with their bases. */
   const commit = (store: S, field: 'title' | 'notes', value: string) => {
     store.dispatch(bookMetaActions.setDraftField({ field, value }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
   };
-  async function supersedeKeptConfirm(store: S, disk: Disk) {
+  async function commitDuringKeptBackoff(store: S, disk: Disk) {
     disk.failNext(4, isState);
     store.dispatch({ type: 'ui/confirmCast' });
     void store.dispatch(flushBookPersistence('b1'));
@@ -1632,38 +1632,28 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(outcomes(disk).slice(-2)).toEqual(['503', 'ok']);
     expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T', notes: 'a' });
   }
-  const failToasts = (store: S) =>
-    (store.getState() as { notifications: { toasts: unknown[] } }).notifications.toasts.length;
 
-  it('a superseded state send keeps a carried kept field the newer send did not carry', async () => {
+  it("a commit during a kept castConfirmed's backoff rides its retry, and castConfirmed keeps its base", async () => {
     const { disk, store, restore } = setup();
-    await supersedeKeptConfirm(store, disk);
-    const toasts = failToasts(store);
-    const flushed = store.dispatch(flushBookPersistence('b1'));
-    expect(flushed).not.toBeNull();
-    await advance(0);
-    expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
-    expect(outcomes(disk).at(-1)).toBe('ok');
-    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
-    expect(failToasts(store)).toBe(toasts);
-    restore();
-  });
-
-  it("a later edit that takes the left-behind field is not refused for the user's own landed save", async () => {
-    const { disk, store, restore } = setup();
-    await supersedeKeptConfirm(store, disk);
-    commit(store, 'title', 'T2');
-    await advance(600);
-    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'T2' });
-    expect(outcomes(disk).at(-1)).toBe('ok');
-    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T2' });
+    const captured = disk.revision('b1', 'state');
+    await commitDuringKeptBackoff(store, disk);
+    const retry = reqs().at(-1)!;
+    expect(retry.patch).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
+    expect(retry.baseRevision?.castConfirmed).toBe(captured.castConfirmed);
+    expect(retry.baseRevision?.notes).toBe(captured.notes);
+    expect(retry.baseRevision).not.toHaveProperty('title');
+    expect(disk.books.get('b1')!.state.castConfirmed).toBe(true);
     expect(staleToasts(store)).toHaveLength(0);
+    expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
     restore();
   });
 
-  it('a left-behind field is refused once the book changed elsewhere: toast and re-read', async () => {
+  it('a kept castConfirmed is refused once the book changed elsewhere: toast and re-read', async () => {
     const { disk, store, restore } = setup();
-    await supersedeKeptConfirm(store, disk);
+    disk.failNext(4, isState);
+    store.dispatch({ type: 'ui/confirmCast' });
+    void store.dispatch(flushBookPersistence('b1'));
+    await advance(8000);
     disk.reparse('b1');
     store.dispatch(flushBookPersistence('b1'));
     await advance(0);
@@ -1675,21 +1665,22 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a newer save given up on after leaving the book keeps the field an older send left behind', async () => {
+  it('a save given up on after leaving the book keeps the kept field it carried and the edit that rode its retry', async () => {
     const { disk, store, restore } = setup();
     disk.failNext(4, isState);
     store.dispatch({ type: 'ui/confirmCast' });
     void store.dispatch(flushBookPersistence('b1'));
     await advance(8000);
-    /* The carried send fails once; the title commit, sent as the user leaves,
-       fails all four attempts. */
-    disk.failNext(5, isState);
+    /* The notes commit carrying the kept castConfirmed fails all four
+       attempts; the title commit, made during its backoff as the user leaves,
+       rides its retries. */
+    disk.failNext(4, isState);
     commit(store, 'notes', 'a');
     await advance(600);
     commit(store, 'title', 'T');
     store.dispatch(uiSlice.actions.goHome());
     await advance(8000);
-    expect(outcomes(disk).slice(-5)).toEqual(['503', '503', '503', '503', '503']);
+    expect(outcomes(disk).slice(-4)).toEqual(['503', '503', '503', '503']);
 
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
     store.dispatch(flushBookPersistence('b1'));
@@ -1732,8 +1723,11 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
+  /* Pass 7 (OD-C1, R2) — the confirmCast made while the commit's PUT is out
+     waits for the retry; the path-taken 4xx rolls the commit back, and
+     castConfirmed goes alone in the follow-up. */
   it('book-meta fields that ride a queued confirmCast keep their refusal toast and rollback', async () => {
-    const { store, restore } = setup();
+    const { disk, store, restore } = setup();
     let fail!: () => void;
     putBookState.mockImplementationOnce(
       () =>
@@ -1748,8 +1742,9 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     await advance(600);
     store.dispatch({ type: 'ui/confirmCast' });
     fail();
-    await advance(600);
-    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'Collides' });
+    await advance(1600);
+    expect(reqs().at(-2)!.patch).toMatchObject({ castConfirmed: true, title: 'Collides' });
+    expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
     const state = store.getState() as {
       bookMeta: { saved: { b1: { title: string } }; draft: { title?: string } | null };
       notifications: { toasts: { dedupeKey?: string }[] };
@@ -1757,32 +1752,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(state.notifications.toasts.map((t) => t.dedupeKey)).toContain('book-meta-persist-failed');
     expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
     expect(state.bookMeta.draft?.title).toBe('Collides');
-    restore();
-  });
-
-  it('a superseded state send whose newer edit is still queued rides along with it', async () => {
-    const { disk, store, restore } = setup();
-    disk.failNext(4, isState);
-    store.dispatch({ type: 'ui/confirmCast' });
-    void store.dispatch(flushBookPersistence('b1'));
-    await advance(8000);
-    /* The carried send's 503 arrives after the title commit was queued. */
-    let fail!: () => void;
-    putBookState.mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          fail = () => reject(new Error('Book state PUT failed (503): Service Unavailable'));
-        }),
-    );
-    commit(store, 'notes', 'a');
-    await advance(600);
-    commit(store, 'title', 'T');
-    fail();
-    await advance(600);
-    expect(reqs().at(-1)!.patch).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
-    expect(outcomes(disk).at(-1)).toBe('ok');
-    expect(disk.books.get('b1')!.state).toMatchObject({ castConfirmed: true, title: 'T', notes: 'a' });
-    expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+    expect(disk.books.get('b1')!.state).toMatchObject({ title: 'The Northern Star', castConfirmed: true });
     restore();
   });
 
@@ -1859,6 +1829,164 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     expect(metaToasts(store)).toHaveLength(0);
     expect(state.bookMeta.saved.b1.title).toBe('Other');
     expect(disk.books.get('b1')!.state).toMatchObject({ title: 'Other' });
+    /* R2 (c, pass 7) — the castConfirmed the refused send carried is not lost. */
+    expect(disk.books.get('b1')!.state.castConfirmed).toBe(true);
     restore();
+  });
+
+  /* Plan 289 pass 7 (C) — one request in flight per (book, slice), and a
+     per-field outbox. Each test seeds `known` with setup()'s full read. */
+  describe('single-flight outbox (pass 7, C)', () => {
+    type R = { slice: string; patch?: unknown };
+    const carries = (req: R, f: string) => req.slice === 'state' && f in ((req.patch ?? {}) as object);
+    const isTitle = (_id: string, req: R) => carries(req, 'title');
+    const isConfirm = (_id: string, req: R) => carries(req, 'castConfirmed');
+    const toastKeys = (store: S) =>
+      (store.getState() as MetaState).notifications.toasts.map((t) => t.dedupeKey);
+    const stateOnDisk = (disk: Disk) => disk.books.get('b1')!.state;
+    /* A kept castConfirmed: its four attempts fail while the book stays open. */
+    async function keepConfirm(store: S, disk: Disk) {
+      disk.failNext(4, isState);
+      store.dispatch({ type: 'ui/confirmCast' });
+      void store.dispatch(flushBookPersistence('b1'));
+      await advance(8000);
+    }
+
+    it('R1: a 200 for an in-flight confirmCast does not lend its title token to a queued rename', async () => {
+      const { disk, store, restore } = setup();
+      const release = disk.hold(isConfirm);
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(500);
+      disk.failNext(1, isTitle);
+      commit(store, 'title', 'Mine');
+      disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'Theirs' });
+      await advance(500);
+      release();
+      await advance(3000);
+      expect(stateOnDisk(disk).title).toBe('Theirs');
+      expect(staleToasts(store)).toHaveLength(1);
+      expect(marks(store)).toBe(1);
+      restore();
+    });
+
+    it('R1-learn: a landed confirmCast teaches only castConfirmed, so a retried rename is refused', async () => {
+      const { disk, store, restore } = setup();
+      disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'Theirs' });
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(500);
+      disk.failNext(1, isTitle);
+      commit(store, 'title', 'Mine');
+      await advance(3000);
+      expect(outcomes(disk)).toContain('409');
+      expect(stateOnDisk(disk).title).toBe('Theirs');
+      restore();
+    });
+
+    it.each([
+      { name: '(a) book open', leave: false },
+      { name: '(b) book left', leave: true },
+    ])('R2 $name: a refused rename rolls back, and the kept castConfirmed it carried lands in a follow-up', async ({ leave }) => {
+      const { disk, store, restore } = setup();
+      await keepConfirm(store, disk);
+      const before = toastKeys(store).length;
+      disk.refuseNext('book_path_taken', isTitle);
+      commit(store, 'title', 'Collides');
+      if (leave) store.dispatch(uiSlice.actions.goHome());
+      await advance(600);
+      const meta = (store.getState() as MetaState).bookMeta;
+      expect(meta.saved.b1.title).toBe('The Northern Star');
+      expect(meta.draft?.title).toBe(leave ? undefined : 'Collides');
+      expect(reqs().at(-1)!.patch).toEqual({ castConfirmed: true });
+      expect(stateOnDisk(disk)).toMatchObject({ title: 'The Northern Star', castConfirmed: true });
+      expect(toastKeys(store).slice(before)).toEqual(['book-meta-persist-failed']);
+      restore();
+    });
+
+    it("R3: a rename riding confirmCast's retry is not refused for its own unacknowledged write", async () => {
+      const { disk, store, restore } = setup();
+      disk.failNext(1, isState);
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(600);
+      const release = disk.hold(isTitle, { afterWrite: true });
+      commit(store, 'title', 'T1');
+      await advance(900);
+      commit(store, 'title', 'T2');
+      await advance(600);
+      release();
+      await advance(2000);
+      expect(stateOnDisk(disk)).toMatchObject({ title: 'T2', castConfirmed: true });
+      expect(staleToasts(store)).toHaveLength(0);
+      expect(marks(store)).toBeUndefined();
+      restore();
+    });
+
+    it('single flight: overlapping state and cast saves keep one PUT in transit per key, newest value wins', async () => {
+      const { disk, store, restore } = setup();
+      const releaseState = disk.hold(isState);
+      commit(store, 'title', 'A');
+      await advance(600);
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(600);
+      const releaseCast = disk.hold(isCast);
+      rename(store, 'Eliza X');
+      await advance(600);
+      rename(store, 'Eliza Y');
+      await advance(600);
+      commit(store, 'title', 'B');
+      await advance(600);
+      releaseState();
+      releaseCast();
+      await advance(3000);
+      expect(disk.maxInTransit('b1', 'state')).toBe(1);
+      expect(disk.maxInTransit('b1', 'cast')).toBe(1);
+      expect(stateOnDisk(disk)).toMatchObject({ title: 'B', castConfirmed: true });
+      expect(castName(disk)).toBe('Eliza Y');
+      restore();
+    });
+
+    it('a sentence edit made while a merge is in flight keeps the tombstone in the follow-up (fs-58)', async () => {
+      const { disk, store, restore } = setup({
+        sentences: [
+          { id: 1, chapterId: 1, text: 'One.', characterId: 'narrator' },
+          { id: 2, chapterId: 1, text: 'Two.', characterId: 'narrator' },
+        ],
+        mergedAwayKeys: [],
+      });
+      const release = disk.hold((_id, req) => req.slice === 'manuscript');
+      store.dispatch(manuscriptActions.mergeSentences({ chapterId: 1, sentenceIds: [1, 2] }));
+      await advance(500);
+      store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'eliza' }));
+      await advance(600);
+      release();
+      await advance(100);
+      expect(reqs().at(-1)!.patch).toMatchObject({ mergedAwayKeys: ['1:2'] });
+      const onDisk = disk.books.get('b1')!.manuscript!;
+      expect(onDisk.mergedAwayKeys).toEqual(['1:2']);
+      expect((onDisk.sentences[0] as { characterId: string }).characterId).toBe('eliza');
+      restore();
+    });
+
+    it('a full read is ignored only for the fields a PUT landed on since it was stamped', async () => {
+      const { disk, store, restore } = setup();
+      disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'X' });
+      const seq = store.dispatch(beginFullRead('b1')) as unknown as number;
+      const read = disk.revisions('b1');
+      store.dispatch({ type: 'ui/confirmCast' });
+      await advance(500);
+      learn(store, read, seq);
+      store.dispatch(
+        bookMetaActions.hydrateFromBookState({
+          bookId: 'b1',
+          state: { title: 'X', author: 'Marin Vale', series: '', prosodyEnabled: false } as never,
+        }),
+      );
+      disk.failNext(1, isTitle);
+      commit(store, 'title', 'Y');
+      await advance(2000);
+      const retry = reqs().find((r, i) => i > 0 && 'title' in r.patch && r.baseRevision);
+      expect(retry?.baseRevision?.title).toBe(read.state.title);
+      expect(stateOnDisk(disk).title).toBe('Y');
+      restore();
+    });
   });
 });
