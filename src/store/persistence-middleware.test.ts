@@ -45,6 +45,18 @@ const advance = async (ms: number) => {
   await vi.advanceTimersByTimeAsync(ms);
 };
 
+/* A persistent rejection, capped (review catalogue 28): past `cap` sends the
+   mock answers a 200 instead. A 4xx is never re-sent and a 5xx gives up after
+   four sends, so a correct engine never reaches the cap; a mutant that loops on
+   the rejection then fails its assertions rather than hanging the whole file. */
+const rejectCapped = (err: Error, cap = 6) => {
+  let sends = 0;
+  putBookState.mockImplementation(() => {
+    sends += 1;
+    return sends > cap ? Promise.resolve(undefined) : Promise.reject(err);
+  });
+};
+
 beforeEach(() => {
   vi.useFakeTimers();
   /* mockReset (not mockClear): the #3421 retry tests install persistent
@@ -512,7 +524,7 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
   });
 
   it('a 4xx refusal on a slice with no failure handler raises no generic save toast (#3421 F3)', async () => {
-    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): refused'));
+    rejectCapped(new Error('Book state PUT failed (409): refused'));
     const state: Record<string, unknown> = baseState();
     const store = makeStore(state);
     const mw = persistenceMiddleware(store)(vi.fn((x) => x));
@@ -522,6 +534,7 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
     const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
     await advance(20000);
     await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+    expect(putBookState).toHaveBeenCalledTimes(1);
     expect(
       (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.some(
         (c) => c[0]?.payload?.dedupeKey === 'book-persist-failed:book-1',
@@ -855,7 +868,7 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
 
     /* A colliding rename is then refused: the rollback must land on T1, not T0. */
     putBookState.mockReset();
-    putBookState.mockRejectedValue(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'));
+    rejectCapped(new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'));
     store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Collides' }));
     store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
     await vi.advanceTimersByTimeAsync(20000);
@@ -1173,7 +1186,7 @@ describe("a handler's given-up save toast names the book (#3421 N4)", () => {
   /* Edit a book, leave it for another before the retries run out, and return
      the toast raised under `dedupeKey`. */
   const givenUpToast = async (actionType: string, dedupeKey: string, error: Error) => {
-    putBookState.mockRejectedValue(error);
+    rejectCapped(error);
     const state: Record<string, unknown> = baseState({
       bookMeta: { draft: null, saved: { 'book-1': { title: 'The Northern Star' } } },
     });
@@ -2212,6 +2225,106 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       store.dispatch(dropRetainedSaves('b1', true));
       expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
       expect(castName(disk)).toBe('Eliza');
+      restore();
+    });
+
+    /* Review pass 8, C1 — five correct engine rules that no test could fail. */
+
+    /* C3 — a unit a newer build replaced during the flight is not stamped: the
+       flight's 200 for V1 is lost, and V2 is a live edit, not a re-send. */
+    it('C1-1: a value replaced mid-flight goes unbased after a lost response', async () => {
+      const { disk, store, restore } = setup();
+      disk.loseResponse(1, isTitle);
+      const release = disk.hold(isTitle, { afterWrite: true });
+      commit(store, 'title', 'V1');
+      await advance(600);
+      commit(store, 'title', 'V2');
+      await advance(600);
+      release();
+      await advance(2000);
+      expect(outcomes(disk)).toEqual(['lost', 'ok']);
+      expect(reqs().at(-1)!.baseRevision).not.toHaveProperty('title');
+      expect(stateOnDisk(disk).title).toBe('V2');
+      expect(staleToasts(store)).toHaveLength(0);
+      restore();
+    });
+
+    /* C3 — the base is the revision of the FIRST failed send, never re-stamped:
+       a full read during the backoff must not re-base the value on disk the
+       user never saw. */
+    it('C1-2: a full read during the backoff does not re-base a failed value', async () => {
+      const { disk, store, restore } = setup();
+      disk.failNext(2, isTitle);
+      commit(store, 'title', 'Mine');
+      await advance(600);
+      disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'Theirs' });
+      learn(store, disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number);
+      await advance(8000);
+      expect(outcomes(disk)).toEqual(['503', '503', '409']);
+      expect(stateOnDisk(disk).title).toBe('Theirs');
+      expect(staleToasts(store)).toHaveLength(1);
+      restore();
+    });
+
+    /* C7 — a full read drops only idle keys: an edit queued inside the read's
+       window (its debounce timer still pending) is the user's newest, and goes. */
+    it('C1-3: a full read leaves an edit queued inside its window, which is then sent', async () => {
+      const { disk, store, restore } = setup();
+      rename(store, 'Eliza X');
+      store.dispatch(dropRetainedSaves('b1', true));
+      await advance(600);
+      expect(castName(disk)).toBe('Eliza X');
+      restore();
+    });
+
+    /* C4 — a 200 teaches only the fields it carried with a defined value: a
+       `series: undefined` that JSON dropped did not write the series, so its
+       token may hold another tab's write the screen never showed. */
+    it('C1-4: an undefined field a 200 did not carry teaches nothing, so a retried edit of it is refused', async () => {
+      const { disk, store, restore } = setup();
+      store.dispatch(
+        bookMetaActions.hydrateFromBookState({
+          bookId: 'b1',
+          state: { title: 'The Northern Star', author: 'Marin Vale', prosodyEnabled: false } as never,
+        }),
+      );
+      disk.write('b1', 'state', { ...stateOnDisk(disk), series: 'Theirs' });
+      commit(store, 'title', 'X');
+      await advance(600);
+      expect(reqs().at(-1)!.patch).not.toHaveProperty('series');
+      disk.failNext(1, (_id, req) => carries(req, 'series'));
+      store.dispatch(bookMetaActions.setDraftField({ field: 'series', value: 'Mine' }));
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+      await advance(2000);
+      expect(outcomes(disk)).toEqual(['ok', '503', '409']);
+      expect(stateOnDisk(disk).series).toBe('Theirs');
+      expect(staleToasts(store)).toHaveLength(1);
+      restore();
+    });
+
+    /* Give-up — a rolled-back handler takes ALL its entries, including one
+       built during the final attempt: the restored draft carries that typing,
+       so a kept copy would land behind the user's back. */
+    it('C1-5: a give-up with the book open keeps no entry typed during the final attempt', async () => {
+      const { disk, store, restore } = setup();
+      disk.failNext(4, isState);
+      commit(store, 'title', 'T1');
+      await advance(5000);
+      expect(outcomes(disk)).toEqual(['503', '503', '503']);
+      const release = disk.hold(isState);
+      await advance(3000);
+      commit(store, 'title', 'T2');
+      await advance(600);
+      release();
+      await advance(0);
+      expect(outcomes(disk)).toEqual(['503', '503', '503', '503']);
+      const meta = (store.getState() as MetaState).bookMeta;
+      expect(meta.saved.b1.title).toBe('The Northern Star');
+      expect(meta.draft?.title).toBe('T2');
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      await advance(10_000);
+      expect(reqs()).toHaveLength(4);
+      expect(stateOnDisk(disk).title).toBe('The Northern Star');
       restore();
     });
   });
