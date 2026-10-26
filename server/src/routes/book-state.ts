@@ -1496,9 +1496,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const refusal = bookOpRefusal(e, 'rename');
     if (refusal) return res.status(refusal.status).json(refusal.body);
     /* Plan 289 -- a conditional write carrying a stale field. Fixed, path-free
-       sentence; nothing was written. */
+       sentence; nothing was written. `fields` are names from the slice's fixed
+       field list (they come from `staleFields`), never values, paths or lock text. */
     if (e instanceof StaleRevisionError) {
-      return res.status(409).json({ error: STALE_REVISION_SENTENCE, code: 'stale_revision' });
+      return res
+        .status(409)
+        .json({ error: STALE_REVISION_SENTENCE, code: 'stale_revision', fields: e.fields });
     }
     /* GATE 2 (owner-directed) — a deliberate consent refusal from the cast
        guards is a 409, not a 500: a client's retry/telemetry logic must be

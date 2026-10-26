@@ -144,6 +144,7 @@ export function createBookStateDisk() {
           entry('409');
           throw Object.assign(new Error(`Book state PUT failed (409): ${STALE_SENTENCE}`), {
             code: 'stale_revision',
+            fields: stale,
           });
         }
       }

@@ -1437,7 +1437,7 @@ export async function mockPutBookState(
         new Error(
           'Book state PUT failed (409): This book was changed elsewhere since your edit was made, so the edit was not saved.',
         ),
-        { code: 'stale_revision' },
+        { code: 'stale_revision', fields: stale },
       );
     }
   }
@@ -2649,16 +2649,21 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<P
     const body = await res.text();
     let detail = body || res.statusText;
     let code: string | undefined;
+    let fields: string[] | undefined;
     try {
-      const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
+      const parsed = JSON.parse(body) as { error?: unknown; code?: unknown; fields?: unknown };
       if (typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
       if (typeof parsed.code === 'string') code = parsed.code;
+      if (Array.isArray(parsed.fields) && parsed.fields.every((f) => typeof f === 'string')) {
+        fields = parsed.fields as string[];
+      }
     } catch {
       /* not JSON — keep the raw body */
     }
     /* Plan 289 — `code` (409 `stale_revision`) lets the persistence layer tell
-       a refused-because-stale save from a transport failure. */
-    throw Object.assign(new Error(`Book state PUT failed (${res.status}): ${detail}`), { code });
+       a refused-because-stale save from a transport failure; `fields` names the
+       stale ones (absent or malformed reads as undefined). */
+    throw Object.assign(new Error(`Book state PUT failed (${res.status}): ${detail}`), { code, fields });
   }
   return (await res.json()) as PutStateResponse;
 }

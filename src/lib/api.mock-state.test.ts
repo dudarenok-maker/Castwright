@@ -148,6 +148,18 @@ describe('mock book-state revision tokens (plan 289)', () => {
     expect((await mockGetBookState('rev-c'))!.state.title).toBe('T2');
   });
 
+  it('names the stale fields on the refusal, and only those', async () => {
+    await mockPutBookState('rev-c2', { slice: 'state', patch: { title: 'T0', notes: 'N0' } });
+    const base = (await mockGetBookState('rev-c2'))!.sliceRevisions!.state;
+    await mockPutBookState('rev-c2', { slice: 'state', patch: { title: 'T2' } });
+    const err = await mockPutBookState('rev-c2', {
+      slice: 'state',
+      patch: { title: 'T1', notes: 'N1' },
+      baseRevision: base,
+    }).catch((e: Error & { fields?: string[] }) => e);
+    expect((err as Error & { fields?: string[] }).fields).toEqual(['title']);
+  });
+
   it('accepts a base for a field another writer did not change (disjoint fields)', async () => {
     await mockPutBookState('rev-d', { slice: 'state', patch: { title: 'T0' } });
     const base = (await mockGetBookState('rev-d'))!.sliceRevisions!.state;

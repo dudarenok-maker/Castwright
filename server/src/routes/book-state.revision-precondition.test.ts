@@ -14,7 +14,13 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { ZipFile } from 'yazl';
-import { sliceRevision } from '../workspace/slice-revision.js';
+import {
+  CAST_REVISION_FIELDS,
+  CHANGELOG_REVISION_FIELDS,
+  MANUSCRIPT_REVISION_FIELDS,
+  STATE_REVISION_FIELDS,
+  sliceRevision,
+} from '../workspace/slice-revision.js';
 
 const AUTHOR = 'Precondition Test';
 const SERIES = 'Standalones';
@@ -425,5 +431,77 @@ describe('backup restore — editEpoch (P6-2 b)', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('stale_revision');
     expect(readState()).toEqual(before);
+  });
+});
+
+/* Plan 289 pass 7 (C9) -- the 409 names the stale fields so the client can drop
+   only those. Field names only, never values, paths or lock text. */
+describe('PUT /:bookId/state -- 409 stale_revision names the stale fields', () => {
+  const FIELD_LISTS: Record<string, readonly string[]> = {
+    state: STATE_REVISION_FIELDS,
+    cast: CAST_REVISION_FIELDS,
+    manuscript: MANUSCRIPT_REVISION_FIELDS,
+    changeLog: CHANGELOG_REVISION_FIELDS,
+  };
+  const expectFields = (body: Record<string, unknown>, slice: string, expected: string[]) => {
+    expect(Object.keys(body).sort()).toEqual(['code', 'error', 'fields']);
+    expect(body.code).toBe('stale_revision');
+    expect(body.error).toBe(STALE_ERROR);
+    const fields = body.fields as string[];
+    expect([...fields].sort()).toEqual([...expected].sort());
+    for (const f of fields) expect(FIELD_LISTS[slice]).toContain(f);
+  };
+
+  it('state, non-moving branch: only the stale carried field is named', async () => {
+    const b = seed('FieldsState');
+    expect((await put(b.bookId, 'state', { notes: 'N0', description: 'D0' })).status).toBe(200);
+    const base = await getRevs(b.bookId);
+    expect((await put(b.bookId, 'state', { notes: 'N2' })).status).toBe(200);
+    const res = await put(b.bookId, 'state', { notes: 'N1', description: 'D1' }, base.state);
+    expect(res.status).toBe(409);
+    expectFields(res.body, 'state', ['notes']);
+  });
+
+  it('state, moving branch: the carried title is not named when only description is stale', async () => {
+    const b = seed('FieldsMove');
+    const base = await getRevs(b.bookId);
+    expect((await put(b.bookId, 'state', { description: 'D2' })).status).toBe(200);
+    const res = await put(b.bookId, 'state', { title: `${b.title} Renamed`, description: 'D1' }, base.state);
+    expect(res.status).toBe(409);
+    expectFields(res.body, 'state', ['description']);
+  });
+
+  it('cast: names characters', async () => {
+    const b = seed('FieldsCast', { cast: [{ id: 'wren', name: 'Wren', role: 'character', color: 'unset' }] });
+    const base = await getRevs(b.bookId);
+    writeFileSync(b.ab('cast.json'), JSON.stringify({ characters: [{ id: 'wren', name: 'Elsewhere', role: 'character', color: 'unset' }] }));
+    const res = await put(b.bookId, 'cast', { characters: [{ id: 'wren', name: 'Mine', role: 'character', color: 'unset' }] }, base.cast);
+    expect(res.status).toBe(409);
+    expectFields(res.body, 'cast', ['characters']);
+  });
+
+  it('manuscript: both stale fields are listed', async () => {
+    const b = seed('FieldsMs');
+    writeFileSync(b.ab('manuscript-edits.json'), JSON.stringify({ sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'A.' }], mergedAwayKeys: ['a'] }));
+    const base = await getRevs(b.bookId);
+    writeFileSync(b.ab('manuscript-edits.json'), JSON.stringify({ sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Elsewhere.' }], mergedAwayKeys: ['b'] }));
+    const res = await put(
+      b.bookId,
+      'manuscript',
+      { sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Mine.' }], mergedAwayKeys: ['c'] },
+      base.manuscript,
+    );
+    expect(res.status).toBe(409);
+    expectFields(res.body, 'manuscript', ['sentences', 'mergedAwayKeys']);
+  });
+
+  it('changeLog: names events', async () => {
+    const b = seed('FieldsLog');
+    writeFileSync(b.ab('change-log.json'), JSON.stringify({ events: [{ type: 'a' }] }));
+    const base = await getRevs(b.bookId);
+    writeFileSync(b.ab('change-log.json'), JSON.stringify({ events: [{ type: 'elsewhere' }] }));
+    const res = await put(b.bookId, 'changeLog', { events: [{ type: 'mine' }] }, base.changeLog);
+    expect(res.status).toBe(409);
+    expectFields(res.body, 'changeLog', ['events']);
   });
 });

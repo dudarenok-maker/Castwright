@@ -12171,6 +12171,8 @@ export interface operations {
                         error: string;
                         /** @enum {string} */
                         code?: "book_busy" | "book_path_taken" | "book_folder_in_use" | "stale_revision";
+                        /** @description Present only with `code: stale_revision`: the carried fields whose base revision is stale (names from the slice's fixed field list). Never a path or lock text. */
+                        fields?: string[];
                     };
                 };
             };

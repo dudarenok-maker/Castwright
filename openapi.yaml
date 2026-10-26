@@ -4237,6 +4237,13 @@ paths:
                   code:
                     type: string
                     enum: [book_busy, book_path_taken, book_folder_in_use, stale_revision]
+                  fields:
+                    type: array
+                    items: { type: string }
+                    description: >-
+                      Present only with `code: stale_revision`: the carried fields
+                      whose base revision is stale (names from the slice's fixed
+                      field list). Never a path or lock text.
 
   /api/books/{bookId}:
     delete:
