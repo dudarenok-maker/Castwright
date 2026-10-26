@@ -3,7 +3,9 @@
    endpoint, a key still bound to that endpoint's origin, and no Test record that rejected
    the configured structured-output mode at the level the run sends. Env and per-run picks
    cannot be blocked at settings-save time, so this is where they fail — as
-   analyzer-endpoint-missing / auth / analyzer-request-rejected. Each target is checked as
+   analyzer-endpoint-missing / auth / analyzer-request-rejected. The same check refuses a
+   stored reasoning level the rules no longer offer for the model, or one this version does not
+   know (P17, N10), before the run's first call. Each target is checked as
    the engine selection will build, so the check never passes a run selection then refuses. */
 import { configValue } from '../config/resolver.js';
 import { getResolvedAnalysisEngine, type UserSettings } from '../workspace/user-settings.js';

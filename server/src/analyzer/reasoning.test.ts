@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import styleLevels from './__fixtures__/reasoning-style-levels.json' with { type: 'json' };
 import { REASONING_STYLES } from '../workspace/analyzer-endpoints.js';
 import { geminiModelThinks } from './catalog/gemini-catalog.js';
+import { AnalyzerReasoningUnavailableError } from './errors.js';
 import {
   GEMINI_REASONING_TABLE,
   REASONING_LEVELS,
@@ -105,10 +106,10 @@ describe('GEMINI_REASONING_TABLE — 3.x Flash family only (F2, 2026-09-13); 2.5
   });
 
   it('refuses a level the model does not offer instead of downgrading it', () => {
-    expect(() => reasoningWireFragment('gemini', { model: 'gemini-3.8-flash' }, 'minimal')).toThrow(/"minimal" is not available/);
-    expect(() => reasoningWireFragment('gemini', { model: 'gemini-9-ultra' }, 'low')).toThrow(/"low" is not available/);
+    expect(() => reasoningWireFragment('gemini', { model: 'gemini-3.8-flash' }, 'minimal')).toThrow(AnalyzerReasoningUnavailableError);
+    expect(() => reasoningWireFragment('gemini', { model: 'gemini-9-ultra' }, 'low')).toThrow(AnalyzerReasoningUnavailableError);
     /* F2 — a 2.5 id has no row, so any non-default level is refused the same way an unknown id's would be. */
-    expect(() => reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'high')).toThrow(/"high" is not available/);
+    expect(() => reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'high')).toThrow(AnalyzerReasoningUnavailableError);
   });
 });
 
@@ -153,7 +154,7 @@ describe('Ollama', () => {
     expect(reasoningWireFragment('ollama', { model: 'q:4b' }, 'off')).toEqual({ think: false });
     expect(reasoningWireFragment('ollama', { model: 'q:4b' }, 'on')).toEqual({ think: true });
     expect(reasoningWireFragment('ollama', { model: 'q:4b' }, 'medium')).toEqual({ think: 'medium' });
-    expect(() => reasoningWireFragment('ollama', { model: 'q:4b' }, 'none')).toThrow(/"none" is not available/);
+    expect(() => reasoningWireFragment('ollama', { model: 'q:4b' }, 'none')).toThrow(AnalyzerReasoningUnavailableError);
   });
 });
 
@@ -168,7 +169,7 @@ describe('endpoint wire fragments', () => {
   });
   it('not_controllable refuses anything but model-default', () => {
     expect(reasoningWireFragment('openai', { model: 'm', endpoint: endpoint('not_controllable') }, 'model-default')).toEqual({});
-    expect(() => reasoningWireFragment('openai', { model: 'm', endpoint: endpoint('not_controllable') }, 'on')).toThrow(/"on" is not available/);
+    expect(() => reasoningWireFragment('openai', { model: 'm', endpoint: endpoint('not_controllable') }, 'on')).toThrow(AnalyzerReasoningUnavailableError);
   });
 });
 
@@ -220,5 +221,23 @@ describe('reasoningControlDescription', () => {
     expect(reasoningControlDescription('openai', { model: 'm', endpoint: endpoint('enable_thinking') })).toMatch(/chat_template_kwargs\.enable_thinking/);
     expect(reasoningControlDescription('openai', { model: 'm', endpoint: endpoint('not_controllable') })).toMatch(/"not controllable"/);
     expect(reasoningControlDescription('openai', { model: 'm' })).toMatch(/this endpoint's Reasoning setting/);
+  });
+});
+
+describe('a level that reaches a call anyway is coded, not a bare Error (N10)', () => {
+  it('reasoningWireFragment throws AnalyzerReasoningUnavailableError marked mid-run, with the engine of its transport', () => {
+    const err = (() => {
+      try {
+        reasoningWireFragment('ollama', { model: 'q:4b' }, 'xhigh' as ReasoningLevel);
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'q:4b', level: 'xhigh', engine: 'local', when: 'mid-run' });
+    expect(() => reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'off')).toThrow(
+      expect.objectContaining({ engine: 'gemini', when: 'mid-run' }),
+    );
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
 import {
   ALL_STRUCTURED_OUTPUT_MODES,
+  assertAnalyzerTargetUsable,
   assertConfiguredCapabilitiesAllowed,
   capabilityRecordFor,
   capabilityRecordKey,
@@ -17,7 +18,13 @@ import {
   type ModelCapabilityRecord,
   type ModelTestDeps,
 } from './capabilities.js';
-import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from './errors.js';
+import {
+  AnalysisAbortedError,
+  AnalyzerHttpError,
+  AnalyzerReasoningOverflowError,
+  AnalyzerReasoningUnavailableError,
+  GeminiContentBlockedError,
+} from './errors.js';
 import { structuredOutputLabel } from './runner/schema-adapters.js';
 import type { ChatTransport, TransportRequest, TransportResult } from './runner/transport.js';
 import type { ReasoningLevel } from './reasoning.js';
@@ -226,5 +233,25 @@ describe('label reflects the configured level', () => {
     expect(structuredOutputLabel('schema', [], r, 'on')).toBe('schema (not enforced)');
     expect(structuredOutputLabel('schema', [], r, 'off')).toBe('schema');
     expect(structuredOutputLabel('schema', [], r, 'low')).toBe('schema');
+  });
+});
+
+describe('assertAnalyzerTargetUsable marks when a stale reasoning level is refused (P17, N10)', () => {
+  const stale = { ...DEFAULT_USER_SETTINGS, analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } } as UserSettings;
+  const target = { modelId: 'gemini-3.8-flash', source: 'settings' as const, engine: 'gemini' as const };
+  const thrown = (fn: () => void): unknown => {
+    try {
+      fn();
+    } catch (e) {
+      return e;
+    }
+    return undefined;
+  };
+
+  it("a fallback target's first call refuses mid-run; the pre-run check refuses before the start", () => {
+    const midRun = thrown(() => assertAnalyzerTargetUsable(target, stale, undefined, 'mid-run'));
+    expect(midRun).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(midRun).toMatchObject({ when: 'mid-run' });
+    expect(thrown(() => assertAnalyzerTargetUsable(target, stale))).toMatchObject({ when: 'before-start' });
   });
 });

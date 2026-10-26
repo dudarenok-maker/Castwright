@@ -11,7 +11,7 @@ import {
   AnalyzerCapabilityRejectedError,
   AnalyzerEndpointMissingError,
   AnalyzerHttpError,
-  type TransportKind,
+  AnalyzerReasoningUnavailableError,
 } from './errors.js';
 import { estimateInputTokens } from './runner/prompt.js';
 import { configValue } from '../config/resolver.js';
@@ -24,6 +24,7 @@ import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
 import {
   defaultReasoningLevel,
+  offeredReasoningLevels,
   resolveReasoningSetting,
   testableReasoningLevels,
   type ReasoningLevel,
@@ -89,14 +90,6 @@ export interface ModelTestDeps {
 }
 
 export const ALL_STRUCTURED_OUTPUT_MODES: readonly StructuredOutputMode[] = ['schema', 'json', 'off'];
-
-/** The reasoning level every W3 request is sent at, and so the key a Test record is filed
-    under (P7). Ollama sends `think: false` on every analyzer call (`ollama.ts:652`), so
-    `off`; Gemini and endpoints send no reasoning field, so `model-default`. W5 replaces this
-    with reasoning.ts `defaultReasoningLevel`, which returns the same values. */
-export function defaultReasoningKey(kind: TransportKind): string {
-  return kind === 'ollama' ? 'off' : 'model-default';
-}
 
 export const STAGE_GRAMMAR_SCHEMAS: ReadonlyArray<{ name: string; schema: z.ZodType<unknown> }> = [
   { name: 'stage1GrammarSchema', schema: stage1GrammarSchema },
@@ -255,6 +248,9 @@ export function assertAnalyzerTargetUsable(
   target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine },
   settings: UserSettings,
   digest?: string,
+  /** P17/N10 — 'mid-run' when a fallback target's first call runs this (index.ts checkedTarget):
+      the run has started, so Task 5.5's copy must not say it was not started. */
+  when: 'before-start' | 'mid-run' = 'before-start',
 ): void {
   if (target.engine === 'openai') {
     const parsed = parseEndpointModelId(target.modelId);
@@ -263,19 +259,19 @@ export function assertAnalyzerTargetUsable(
     resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
-      { structuredOutput: endpoint.structuredOutput, reasoning: defaultReasoningKey('openai') },
+      { structuredOutput: endpoint.structuredOutput, reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
       target.modelId,
     );
   } else if (target.engine === 'gemini') {
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, 'gemini'),
-      { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: defaultReasoningKey('gemini') },
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
       target.modelId,
     );
   } else {
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digest),
-      { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: defaultReasoningKey('ollama') },
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, digest, when) },
       target.modelId,
     );
   }
@@ -591,4 +587,23 @@ export function configuredReasoningFor(
 ): ReasoningLevel {
   const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
   return resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+}
+
+/** P17 — the level the next run would send, refused when the current rules no longer offer it (a Gemini
+    table change, an Ollama named level without its accepted Test record, an endpoint level saved under
+    another control style, or a stored value this version does not know, N10). Returns the level, so a
+    caller can hand it straight to `assertConfiguredCapabilitiesAllowed`. `when` is 'mid-run' for a
+    fallback target's first call. */
+export function assertConfiguredReasoningOffered(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+  when: 'before-start' | 'mid-run' = 'before-start',
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+  const level = resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+  /* N10: an unknown stored value (e.g. `xhigh`) is never offered, so it is refused here too. */
+  if (!offeredReasoningLevels(sel).includes(level)) throw new AnalyzerReasoningUnavailableError(modelId, level, sel.engine, when);
+  return level;
 }

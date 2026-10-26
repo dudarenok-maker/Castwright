@@ -29,7 +29,7 @@
      §3, §11). Help text must say a server may accept a level and ignore it. */
 
 import type { AnalysisEngine } from './model-id.js';
-import type { TransportKind } from './errors.js';
+import { AnalyzerReasoningUnavailableError, type TransportKind } from './errors.js';
 import { geminiModelThinks } from './catalog/gemini-catalog.js';
 import { entryForModelTag } from './ollama-tag.js';
 export { REASONING_LEVELS, type ReasoningLevel } from './reasoning-level.js'; // review pass 3, item 2 — moved to a leaf so errors.ts can import it with no cycle back through here
@@ -121,14 +121,13 @@ export function testableReasoningLevels(sel: ReasoningSelection): ReasoningLevel
   return sel.engine === 'local' ? [...OLLAMA_BASE_LEVELS, ...OLLAMA_NAMED_LEVELS] : offeredReasoningLevels(sel);
 }
 
-/* The last-resort guard: a level only reaches it when a value slipped past every save rule and the
-   pre-run check. Task 5.4 replaces this body so that throw is the coded AnalyzerReasoningUnavailableError
-   marked `mid-run` (N10) — the class does not exist until that task, so PR 5a lands it in two steps. */
-function unavailable(kind: TransportKind, model: string, level: ReasoningLevel): Error {
-  return new Error(
-    `Reasoning level "${level}" is not available for ${kind} model ${model}. ` +
-      'Change the reasoning setting to a level this model offers.',
-  );
+/* N10 — the guard `reasoningWireFragment` falls back on. A level only reaches it when a value slipped
+   past every save rule AND the pre-run check (a hand-edited user-settings.json), so it is reported as
+   the same coded refusal, marked `mid-run`: the failure taxonomy then names the setting instead of
+   surfacing an uncoded throw from inside a request. `modelId` is the model the transport holds (for an
+   endpoint, its bare model name). */
+function unavailable(kind: TransportKind, model: string, level: ReasoningLevel): AnalyzerReasoningUnavailableError {
+  return new AnalyzerReasoningUnavailableError(model, level, kind === 'ollama' ? 'local' : kind, 'mid-run');
 }
 
 export function reasoningWireFragment(

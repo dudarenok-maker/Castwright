@@ -10,7 +10,6 @@ import {
   capabilityRecordFor,
   assertConfiguredCapabilitiesAllowed,
   plannedTestRequestCount,
-  defaultReasoningKey,
   ALL_STRUCTURED_OUTPUT_MODES,
   type ModelCapabilityRecord,
 } from './capabilities.js';
@@ -88,14 +87,6 @@ describe('classifyMarkerProbe — the runner extraction and repair chain before 
       ),
     ).toBe('enforced');
     expect(classifyMarkerProbe(`[THINK]plan the object[/THINK]{"${MARKER_KEY}":"mk-1"} Done.`, 'mk-1')).toBe('enforced');
-  });
-});
-
-describe('defaultReasoningKey (P7: records are keyed by the level actually sent)', () => {
-  it('Ollama sends think:false → off; Gemini and endpoints send no reasoning field → model-default', () => {
-    expect(defaultReasoningKey('ollama')).toBe('off');
-    expect(defaultReasoningKey('gemini')).toBe('model-default');
-    expect(defaultReasoningKey('openai')).toBe('model-default');
   });
 });
 

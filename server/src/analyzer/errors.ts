@@ -416,3 +416,24 @@ export class AnalyzerInvalidOutputError extends Error {
     this.name = 'AnalyzerInvalidOutputError';
   }
 }
+
+/** #3084 wave 5 (P17) — a stored reasoning level the current rules no longer offer for this model
+    (a Gemini table change, an Ollama named level without its accepted Test record, an endpoint level
+    saved under another control style), or a stored value this version does not know (N10). Normally
+    thrown before the run's first call; a fallback target's first call throws it with `when: 'mid-run'`
+    (the run has started, so its copy must not say it was not started), and `reasoningWireFragment`
+    throws it the same way for a value that reached a call anyway (a hand-edited file), so those throws
+    are coded too. Task 5.5 maps it to `analyzer-request-rejected`, and `engine` names where the setting
+    lives. `level` and `when` are plain strings and `engine` spells out AnalysisEngine, so errors.ts needs
+    nothing beyond its type-only `./reasoning-level.js` import. */
+export class AnalyzerReasoningUnavailableError extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly level: string,
+    readonly engine: 'local' | 'gemini' | 'openai',
+    readonly when: 'before-start' | 'mid-run' = 'before-start',
+  ) {
+    super(`Reasoning level "${level}" is not offered for ${modelId}.`);
+    this.name = 'AnalyzerReasoningUnavailableError';
+  }
+}
