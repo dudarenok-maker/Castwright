@@ -9,8 +9,8 @@
 
    #3711 — the bundle is staged under `<workspace>/.staging/<nonce>/` (not as
    `.tmp-*` siblings of the live files) and the staging dir is removed in a
-   `finally`, so "nothing leaked" now means no staging dir survives and no
-   staged file reached the target. */
+   `finally`, so "nothing leaked" now means this import's staging dir does not
+   survive and no staged file reached the target. */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
