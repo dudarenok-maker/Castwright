@@ -30,6 +30,7 @@ import {
   AnalyzerCapabilityRejectedError,
   AnalyzerKeyOriginError,
   AnalyzerReasoningOverflowError,
+  AnalyzerReasoningUnavailableError,
   AnalyzerTimeoutError,
   AnalyzerEndpointMissingError,
   AnalyzerInvalidOutputError,
@@ -50,6 +51,7 @@ import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 /* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
    names its endpoint by saved name without an import of workspace/user-settings.ts. */
 import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
+import { geminiReasoningRow, reasoningControlDescription } from '../analyzer/reasoning.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -586,6 +588,22 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string, remed
   return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
 
+/* #3084 wave 5 — the remediation lead naming the setting that controls reasoning for the model
+   that overflowed. An endpoint is resolved from the id OpenAIAnalyzer stamped on the error, through
+   the leaf gate (A9). "Lower reasoning in …" only where a control exists: a Gemini id with no table
+   row (2.5, unknown) and a not_controllable endpoint get the description alone. */
+function reasoningRemediationLead(err: AnalyzerReasoningOverflowError): string {
+  const endpoint = err.transport === 'openai' && err.endpointId
+    ? listAnalyzerEndpoints().find((e) => e.id === err.endpointId)
+    : undefined;
+  const control = reasoningControlDescription(err.transport, { model: err.model, endpoint });
+  const controllable =
+    err.transport === 'ollama' ||
+    (err.transport === 'gemini' && geminiReasoningRow(err.model) !== undefined) ||
+    (err.transport === 'openai' && endpoint?.reasoningStyle !== 'not_controllable');
+  return controllable ? `Lower reasoning in ${control}.` : `Reasoning: ${control}.`;
+}
+
 /* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
 
    A per-instance, machine-readable companion to the static per-code
@@ -737,21 +755,24 @@ export function reasoningOverflowAdvice(ctx: Parameters<typeof reasoningOverflow
 }
 
 /* #3084 PR 3b — the settings that shape a request, per transport, named in an
-   analyzer-request-rejected remediation. Wave 5 adds the reasoning and
-   custom-payload settings when they exist. */
+   analyzer-request-rejected remediation. Wave 5b adds the custom-payload
+   settings. */
 const REQUEST_SHAPING_SETTINGS: Record<TransportKind, string[]> = {
   ollama: [
     'Ollama structured output (analyzer.ollama.structuredOutput)',
     'Ollama num_ctx (analyzer.ollama.numCtx)',
     'Ollama num_predict (analyzer.ollama.numPredict)',
+    'the Ollama reasoning setting (Advanced settings → Analyzer request controls)',
   ],
   gemini: [
     'Gemini structured output (analyzer.gemini.structuredOutput)',
     'Gemini max output tokens (analyzer.gemini.maxOutputTokens)',
+    'the Gemini reasoning setting (Advanced settings → Analyzer request controls)',
   ],
   openai: [
     "the endpoint's Structured output field",
     "the endpoint's Context size field",
+    "the endpoint's Reasoning setting",
   ],
 };
 
@@ -944,6 +965,9 @@ export function classifyAnalysisFailure(
         'analyzer-reasoning-overflow',
         `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped.`,
         `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
+        /* #3084 wave 5a (5.5-D1) — per-instance remediation: name the reasoning control that governs
+           THIS model, then the static per-code steps. userMessage stays the F7 headline. */
+        `${reasoningRemediationLead(err)} ${FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation}`,
       ),
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called
@@ -1059,7 +1083,7 @@ export function classifyAnalysisFailure(
     };
   }
   /* #3084 PR 3c — the Test action recorded that this model refuses the configured
-     structured-output mode (or, from wave 5, the reasoning level), so the run stops
+     structured-output mode (or the reasoning level), so the run stops
      before its first request. Nothing was sent, so there is no HTTP status anywhere in
      this copy, and the branch must sit above the ApiError / bare-status checks: without
      it a status-less error falls through to `unknown`. The shape follows the 400 branch
@@ -1076,6 +1100,18 @@ export function classifyAnalysisFailure(
         `Change the setting, then run Test again — a new test re-records what ${err.modelId} accepts.`,
       detail: redactKnownSecrets(err.message, knownAnalyzerSecrets()),
     };
+  }
+  if (err instanceof AnalyzerReasoningUnavailableError) {
+    const where =
+      err.engine === 'openai' ? "the endpoint's Reasoning setting" : 'Advanced settings → Analyzer request controls';
+    /* N10 — the same refusal can arrive from the pre-run check or, for a value no save could produce,
+       from the call itself. The copy must not claim a run never started when it did. */
+    const outcome = err.when === 'mid-run' ? 'stopped' : 'was not started';
+    return withCopy(
+      'analyzer-request-rejected',
+      `${modelLabel} ${outcome}: its saved reasoning level "${err.level}" is not offered for this model. Choose an offered level in ${where}, or run Test again.`,
+      `setting=reasoning value=${err.level} engine=${err.engine} when=${err.when}`,
+    );
   }
   if (err instanceof AnalyzerEndpointMissingError) {
     if (err.reason === 'engine-mismatch') {
