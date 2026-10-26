@@ -76,6 +76,16 @@ beforeEach(async () => {
   await settings.writeUserSettings({ defaultAnalysisModel: 'q:4b' });
 });
 
+function findModelEntry(node: unknown, id: string): Record<string, unknown> | undefined {
+  if (Array.isArray(node)) { for (const n of node) { const hit = findModelEntry(n, id); if (hit) return hit; } return undefined; }
+  if (node && typeof node === 'object') {
+    const o = node as Record<string, unknown>;
+    if (o.id === id) return o;
+    for (const v of Object.values(o)) { const hit = findModelEntry(v, id); if (hit) return hit; }
+  }
+  return undefined;
+}
+
 describe('Test action — reasoning', () => {
   it('scope all records named levels rejected by a non-thinking Ollama model, only after a successful control', async () => {
     const res = await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'all' });
@@ -90,6 +100,19 @@ describe('Test action — reasoning', () => {
     const res = await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'configured' });
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.structuredOutput.schema ?? {})).toEqual(['model-default']);
+  });
+
+  it('the catalog offers named Ollama levels only after a Test accepted them', async () => {
+    const before = await request(app).get('/api/analyzer/models?refresh=1');
+    expect(findModelEntry(before.body, 'q:4b')?.offeredReasoningLevels).toEqual(['model-default', 'off', 'on']);
+    settings._setUserSettingsCacheForTest({
+      ...settings.getCachedUserSettings(),
+      analyzerCapabilitiesByModel: {
+        'q:4b': { serverUrl: ollamaUrl, testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted', high: 'rejected' } },
+      },
+    });
+    const after = await request(app).get('/api/analyzer/models?refresh=1');
+    expect(findModelEntry(after.body, 'q:4b')?.offeredReasoningLevels).toEqual(['model-default', 'off', 'on', 'low']);
   });
 
   it('a configured Test merges its verdicts into the record an earlier all Test wrote for the same server (N14)', async () => {

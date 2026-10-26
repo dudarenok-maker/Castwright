@@ -5909,6 +5909,11 @@ components:
                 says "rejected" by design (P7) — a refused mode still shows its plain
                 structured-output label there — so a surface that must tell a rejection
                 apart from a pass (the Settings Test result line) reads this instead.
+            outcomeTestedAt:
+              type: string
+              description: >-
+                ISO date of the Test that recorded `outcome` (A2: a merged record holds
+                verdicts from more than one Test). Absent when `outcome` is absent.
         testPlan:
           type: object
           required: [configured, all, attempts]

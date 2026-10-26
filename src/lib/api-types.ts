@@ -4091,6 +4091,8 @@ export interface components {
                  * @enum {string}
                  */
                 outcome?: "enforced" | "ignored" | "rejected" | "accepted";
+                /** @description ISO date of the Test that recorded `outcome` (A2: a merged record holds verdicts from more than one Test). Absent when `outcome` is absent. */
+                outcomeTestedAt?: string;
             };
             testPlan: {
                 configured: number;

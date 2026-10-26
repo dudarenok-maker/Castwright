@@ -9334,13 +9334,14 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
    __SEED_ANALYZER_CATALOG__ (whole response), __SEED_ENDPOINT_MODELS__ (endpointId →
    model names), __SEED_ANALYZER_CAPABILITIES__ (modelId → Test record),
    __SEED_TEST_OUTCOME__ (schema outcome mockTestAnalyzerModel records). testPlan mirrors
-   the server's plannedTestRequestCount for W3: configured = the off-mode control + 1 (just the
-   control for an `off` model), all = control + the schema and json checks. Group statuses
-   follow the contract: Gemini without a key is `fallback`. */
+   the server's plannedTestRequestCount: configured = the control + 1 when the configured level
+   differs from the control's + 1 when the mode is not `off`; all = the control + one request per
+   other testable level + the schema and json checks. The mock's configured level is the control's.
+   Group statuses follow the contract: Gemini without a key is `fallback`. */
 type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
 
-/* The level a W3 request is sent at, and so the record key (server capabilities.ts
-   defaultReasoningKey, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
+/* The level a W3 request is sent at, and so the record key (server capabilities.ts →
+   reasoning.ts defaultReasoningLevel, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
 function mockLevelKey(modelId: string): string {
   return engineForModelId(modelId) === 'local' ? 'off' : 'model-default';
 }
@@ -9366,6 +9367,9 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
     const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
     const dropped = mode === 'schema' ? droppedIfSchema : [];
     const level = mockLevelKey(id);
+    /* The levels the Test probes besides the control's: Ollama tests all six (named ones included);
+       Gemini and endpoints test what they offer, less `model-default`. */
+    const otherTestableLevels = engine === 'local' ? 5 : offered.filter((l) => l !== 'model-default').length;
     const outcome = record?.structuredOutput[mode]?.[level] ?? (mode === 'off' && record?.control.ok ? 'accepted' : undefined);
     return {
       id,
@@ -9373,8 +9377,14 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       ...(record ? { capability: record } : {}),
       engine,
       model,
-      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, level), ...(outcome ? { outcome } : {}) },
-      testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
+      structuredOutput: {
+        mode,
+        dropped,
+        label: structuredOutputLabel(mode, dropped, record, level),
+        ...(outcome ? { outcome } : {}),
+        ...(outcome && record ? { outcomeTestedAt: record.testedAt } : {}),
+      },
+      testPlan: { configured: mode === 'off' ? 1 : 2, all: 1 + otherTestableLevels + 2, attempts: engine === 'local' ? 1 : 3 },
       offeredReasoningLevels: [...offered],
     };
   };
@@ -9411,7 +9421,7 @@ export async function mockTestAnalyzerModel(body: AnalyzerModelTestRequest): Pro
       body.scope === 'all'
         ? { schema: { [level]: seeded }, json: { [level]: 'accepted' }, off: { [level]: 'accepted' } }
         : { [mode]: { [level]: mode === 'schema' ? seeded : 'accepted' } },
-    reasoning: {},
+    reasoning: { [level]: 'accepted' },
   };
   Object.assign(MOCK_USER_SETTINGS, {
     analyzerCapabilitiesByModel: { ...(MOCK_USER_SETTINGS.analyzerCapabilitiesByModel ?? {}), [body.modelId]: record },
