@@ -667,8 +667,10 @@ describe('post-process passes move audio with the slug (#3400)', () => {
       rendered(2, 'Chapter 2'),
       rendered(3, 'Chapter 3'),
     ]);
-    const hints = makeHints(state.chapters.map((c) => ({ id: c.id, title: c.title, body: 'b' })));
-    // chapter 2 has no sentences → pruned; chapter 3 becomes id 2
+    const hints = makeHints(
+      state.chapters.map((c) => ({ id: c.id, title: c.title, body: c.id === 2 ? '' : 'b' })),
+    );
+    // chapter 2 has no sentences AND an empty body (#3783) → pruned; chapter 3 becomes id 2
     const sentences: RestructureSentence[] = [
       { id: 1, chapterId: 1, characterId: 'n', text: 'a' },
       { id: 1, chapterId: 3, characterId: 'n', text: 'c' },
@@ -702,6 +704,133 @@ describe('post-process passes move audio with the slug (#3400)', () => {
     ]);
     expect(r.hints.map((h) => h.id)).toEqual([1, 2, 3]);
     expect(r.audioOps).toEqual([]);
+  });
+});
+
+/* -- #3783: prune ONLY a chapter with no manuscript text ------------ */
+
+describe('prune only a chapter with no manuscript text (#3783)', () => {
+  const four = () => {
+    const state = makeState([
+      { id: 1, title: 'Chapter 1', titleSynthesized: true },
+      { id: 2, title: 'Chapter 2', titleSynthesized: true, excluded: true },
+      { id: 3, title: 'Chapter 3', titleSynthesized: true, excluded: true },
+      { id: 4, title: 'Chapter 4', titleSynthesized: true },
+    ]);
+    const hints = makeHints(
+      state.chapters.map((c) => ({ id: c.id, title: c.title, body: `body ${c.id}`, excluded: c.excluded })),
+    );
+    // chapters 2 and 3 were never analysed: zero sentences.
+    const sentences = [s(1, 1, 'n', 'a'), s(1, 4, 'n', 'd')];
+    return { state, hints, sentences };
+  };
+
+  it('including chapter A then (a separate op) chapter B keeps A', () => {
+    const { state, hints, sentences } = four();
+    const afterA = applyExclude(state, hints, sentences, { chapterIds: [2], excluded: false });
+    const afterB = applyExclude(afterA.state, afterA.hints, afterA.sentences, {
+      chapterIds: [3],
+      excluded: false,
+    });
+    expect(afterB.state.chapters.map((c) => [c.id, c.excluded])).toEqual([
+      [1, undefined],
+      [2, undefined],
+      [3, undefined],
+      [4, undefined],
+    ]);
+    expect(afterB.hints.map((h) => h.body)).toEqual(['body 1', 'body 2', 'body 3', 'body 4']);
+    expect(afterB.audioOps).toEqual([]);
+  });
+
+  it('a merge of unrelated chapters leaves a zero-sentence included chapter intact', () => {
+    const { state, hints, sentences } = four();
+    const included = applyExclude(state, hints, sentences, { chapterIds: [2, 3], excluded: false });
+    const merged = applyMerge(included.state, included.hints, included.sentences, { chapterIds: [3, 4] });
+    expect(merged.state.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    expect(merged.hints.find((h) => h.id === 2)?.body).toBe('body 2');
+  });
+
+  it('a reorder leaves a zero-sentence included chapter intact', () => {
+    const { state, hints, sentences } = four();
+    const included = applyExclude(state, hints, sentences, { chapterIds: [2, 3], excluded: false });
+    const reordered = applyReorder(included.state, included.hints, included.sentences, {
+      order: [4, 3, 2, 1],
+    });
+    expect(reordered.state.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+    expect(reordered.hints.map((h) => h.body)).toEqual(['body 4', 'body 3', 'body 2', 'body 1']);
+  });
+
+  // Included (not excluded) chapters 2 and 3 with zero sentences; `bodies` sets
+  // each hint's text (omit an id for no hint entry).
+  const withBody = (bodies: Record<number, string | undefined>) => {
+    const { state: base, sentences } = four();
+    const state = {
+      ...base,
+      chapters: base.chapters.map(({ excluded: _e, ...c }) => c),
+    };
+    const hints = state.chapters
+      .filter((c) => bodies[c.id] !== undefined)
+      .map((c) => ({ id: c.id, title: c.title, body: bodies[c.id]! }));
+    return { state, hints, sentences };
+  };
+
+  it.each([
+    ['whitespace-only', '  \n\n \t'],
+    ['heading-only', '# Chapter 2\n'],
+    ['empty', ''],
+  ])('a merge prunes a zero-sentence chapter whose body is %s', (_n, body) => {
+    const { state, hints, sentences } = withBody({ 1: 'b1', 2: body, 3: 'b3', 4: 'b4' });
+    const merged = applyMerge(state, hints, sentences, { chapterIds: [3, 4] });
+    // chapter 2 pruned: chapter 1 + (old 3+4 merged) remain
+    expect(merged.state.chapters.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  it('a reorder prunes a zero-sentence chapter whose body is empty', () => {
+    const { state, hints, sentences } = withBody({ 1: 'b1', 2: '', 3: 'b3', 4: 'b4' });
+    const reordered = applyReorder(state, hints, sentences, { order: [4, 3, 2, 1] });
+    expect(reordered.state.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    expect(reordered.hints.map((h) => h.body)).toEqual(['b4', 'b3', 'b1']);
+  });
+
+  it('a chapter that has sentences is kept even if its hint body is empty', () => {
+    const { state, hints, sentences } = withBody({ 1: '', 2: 'b2', 3: 'b3', 4: 'b4' });
+    const r = applyExclude(state, hints, sentences, { chapterIds: [4], excluded: true });
+    expect(r.state.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('a zero-sentence chapter with no hint entry is kept (text cannot be judged)', () => {
+    // exclude keeps state.chapters as-is, so a chapter can lack a hint entry
+    const { state, hints, sentences } = withBody({ 1: 'b1', 3: 'b3', 4: 'b4' });
+    const r = applyExclude(state, hints, sentences, { chapterIds: [4], excluded: true });
+    expect(r.state.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('including an excluded zero-sentence chapter whose body is empty prunes it and renumbers later audio', () => {
+    const rendered = { audioModelKey: 'kokoro-v1', audioRenderedAt: '2026-01-01T00:00:00.000Z' };
+    const state = makeState([
+      { id: 1, title: 'Alpha' },
+      { id: 2, title: 'Beta', excluded: true },
+      { id: 3, title: 'Gamma', ...rendered },
+      { id: 4, title: 'Delta', ...rendered },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'Alpha', body: 'b1' },
+      { id: 2, title: 'Beta', body: '', excluded: true },
+      { id: 3, title: 'Gamma', body: 'b3' },
+      { id: 4, title: 'Delta', body: 'b4' },
+    ]);
+    const sentences = [s(1, 1, 'n', 'a'), s(1, 3, 'n', 'c'), s(1, 4, 'n', 'd')];
+    const r = applyExclude(state, hints, sentences, { chapterIds: [2], excluded: false });
+    expect(r.state.chapters.map((c) => [c.id, c.title])).toEqual([
+      [1, 'Alpha'],
+      [2, 'Gamma'],
+      [3, 'Delta'],
+    ]);
+    expect(r.audioOps.map((o) => [o.kind, o.from, o.kind === 'rename' ? o.to : undefined])).toEqual([
+      ['rename', '03-gamma', '02-gamma'],
+      ['rename', '04-delta', '03-delta'],
+    ]);
+    expect(r.warnings.some((w) => /Beta/.test(w))).toBe(true);
   });
 });
 

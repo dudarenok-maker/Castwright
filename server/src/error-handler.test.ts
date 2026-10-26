@@ -37,6 +37,16 @@ describe('errorHandler (Express 5 global error backstop)', () => {
     expect(res.body).toEqual({ error: 'Internal server error.' });
   });
 
+  it('keeps a 4xx-shaped error that is NOT a body-parser one at 500 (#3793)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = appThatThrows(() => {
+      throw Object.assign(new Error('teapot'), { status: 418, expose: true });
+    });
+    const res = await request(app).get('/boom');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Internal server error.' });
+  });
+
   it('delegates (does not write a 500 body) when the response already started', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     // Once headers are sent (e.g. an SSE generation route mid-stream), writing

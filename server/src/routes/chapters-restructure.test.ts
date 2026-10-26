@@ -653,15 +653,13 @@ describe('plan 70a — orphan recovery (Part F)', () => {
 });
 
 describe('plan 70a — prune empty chapters (Part F)', () => {
-  it('drops chapters with zero sentences after merge and renumbers survivors', async () => {
+  it('keeps a zero-sentence chapter that still has manuscript text after a merge (#3783)', async () => {
     /* Seed a 4-chapter manuscript where chapter 3 ("Empty Phantom")
        has body content in the source but ZERO sentences in
-       manuscript-edits.json — mirrors the user's screenshot bug where
-       analysis state left a chapter with no attached sentences. After
-       any merge, the empty chapter should be auto-pruned and survivors
-       renumbered. (Body content is required because parseText drops
-       heading-only chapters; the sentence-count gap comes from the
-       edits.json side, not the parse side.) */
+       manuscript-edits.json — a never-analysed chapter. plan 70a pruned it
+       after any merge; #3783 keeps it, because pruning deleted real text and
+       renumbered its neighbours. Only a chapter whose body is empty is pruned
+       (see the hint-seeded case below). */
     writeFileSync(
       join(bookDir, 'manuscript.md'),
       '# Chapter One\n\nAlpha.\n\n# Chapter Two\n\nBeta.\n\n# Empty Phantom\n\nGamma.\n\n# Chapter Four\n\nDelta.\n',
@@ -706,24 +704,23 @@ describe('plan 70a — prune empty chapters (Part F)', () => {
       .send({ chapterIds: [1, 2] });
     expect(res.status).toBe(200);
 
-    const pruneWarning = (res.body.warnings as string[]).find((w) =>
-      /empty/i.test(w),
-    );
-    expect(pruneWarning).toBeDefined();
-    expect(pruneWarning).toMatch(/Empty Phantom/);
+    expect((res.body.warnings as string[]).some((w) => /empty/i.test(w))).toBe(false);
 
-    // Final chapters: merged (id 1) + Delta (id 2). Empty Phantom pruned.
+    // Final chapters: merged (id 1) + Empty Phantom (id 2) + Chapter Four (id 3).
     const state = readState();
     expect(state.chapters.map((c) => c.title)).toEqual([
       'Chapter One',
+      'Empty Phantom',
       'Chapter Four',
     ]);
-    expect(state.chapters.map((c) => c.id)).toEqual([1, 2]);
+    expect(state.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
 
-    // Sentences renumbered to point at the new chapter ids
+    // Delta follows its chapter to the new id 3; Empty Phantom stays sentence-less.
     const edits = readEdits();
-    const ch2Sentences = edits.sentences.filter((s) => s.chapterId === 2);
-    expect(ch2Sentences.map((s) => s.text)).toEqual(['Delta.']);
+    expect(edits.sentences.filter((s) => s.chapterId === 2)).toEqual([]);
+    expect(
+      edits.sentences.filter((s) => s.chapterId === 3).map((s) => s.text),
+    ).toEqual(['Delta.']);
   });
 
   it('preserves excluded chapters even when they have zero sentences (soft-hide invariant)', async () => {
@@ -899,9 +896,48 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     writeFileSync(stPath, JSON.stringify(st));
   }
 
+  /* Persist a valid manuscript-hints.json whose chapter `emptyId` has an EMPTY
+     body (no parser emits one, so the file is the only way to seed it). Each
+     other chapter keeps its real parsed body; state chapters get the uuids the
+     file is paired against. */
+  async function seedHintsWithEmptyBody(emptyId: number): Promise<void> {
+    const { parseManuscript } = await import('../parsers/index.js');
+    const { sha256Hex } = await import('../workspace/manuscript-hints.js');
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    const buffer = readFileSync(join(bookDir, 'manuscript.md'));
+    const parsed = await parseManuscript({ buffer, fileName: 'manuscript.md' });
+    expect(parsed.chapters).toHaveLength(st.chapters.length);
+    st.chapters.forEach((c: { uuid?: string }, i: number) => {
+      c.uuid = `00000000-0000-4000-8000-00000000000${i + 1}`;
+    });
+    writeFileSync(stPath, JSON.stringify(st));
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-hints.json'),
+      JSON.stringify({
+        schema: 1,
+        entries: [
+          {
+            manuscriptId: MANUSCRIPT_ID,
+            manuscriptFile: 'manuscript.md',
+            sourceSha256: sha256Hex(buffer),
+            writtenAt: '2026-01-01T00:00:00.000Z',
+            chapters: st.chapters.map((c: { id: number; uuid: string }, i: number) => ({
+              id: c.id,
+              uuid: c.uuid,
+              body: c.id === emptyId ? '' : parsed.chapters[i]!.body,
+            })),
+          },
+        ],
+      }),
+    );
+  }
+
   it('merge [4,5] with an empty chapter 2: survivors keep their OWN audio, merged chapter gets none (#3400)', async () => {
     seedDigitTitledBook();
-    // plan 70a Part F's state: chapter 2 has no sentences, so the prune pass drops it.
+    // #3783: chapter 2 has no sentences AND an empty body (seeded through a valid
+    // manuscript-hints.json), so the prune pass drops it and renumbers the rest.
+    await seedHintsWithEmptyBody(2);
     writeFileSync(
       join(bookDir, '.audiobook', 'manuscript-edits.json'),
       JSON.stringify({

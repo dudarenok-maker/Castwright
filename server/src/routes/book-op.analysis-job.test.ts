@@ -21,6 +21,7 @@ import request from 'supertest';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { AnalysisJob } from './analysis.js';
+import { expectMatchesAnalysisStateSchema } from '../test-utils/openapi-analysis-state.js';
 
 type G = Record<string, unknown>;
 const g = globalThis as G;
@@ -766,6 +767,12 @@ describe('GET /analysis/state reports the live subset run\'s origin (#3774)', ()
     const state = await stateWhileSubsetRuns('origin-include', { origin: 'include' });
     expect(state.status).toBe(200);
     expect(state.body).toMatchObject({ state: 'running', kind: 'subset', subsetChapterIds: [1], subsetOrigin: 'include' });
+  });
+
+  it('the live subset answer honours the openapi AnalysisState schema (#3787)', async () => {
+    const state = await stateWhileSubsetRuns('schema-live', { origin: 'include' });
+    expect(state.status).toBe(200);
+    expectMatchesAnalysisStateSchema(state.body);
   });
 
   it('no origin on the start POST -> state answers subsetOrigin reanalyse (backward compatible default)', async () => {

@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { expectMatchesAnalysisStateSchema } from '../test-utils/openapi-analysis-state.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -1877,6 +1878,27 @@ describe('book-state router — GET /:bookId/analysis/state', () => {
     expect(res.body.state).toBe('halted');
     expect(res.body.haltCode).toBe('attribution_drift');
     expect(res.body.haltReason).toContain('Phase 1 demoted 412');
+  });
+
+  it('a persisted answer honours the openapi AnalysisState schema (#3787)', async () => {
+    await seedColdBootBook();
+    const { writeAnalysisState } = await import('../store/analysis-state.js');
+    await writeAnalysisState(coldBootBookDir, {
+      manuscriptId: COLD_BOOT_MANUSCRIPT_ID,
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.7,
+      state: 'halted',
+      engine: 'local',
+      kind: 'subset',
+      subsetChapterIds: [1],
+      haltCode: 'attribution_drift',
+      haltReason: 'demoted to narrator',
+      lastTickAt: 1_700_000_000_000,
+    });
+    const res = await request(app).get(`/api/books/${coldBootBookId}/analysis/state`);
+    expect(res.status).toBe(200);
+    expectMatchesAnalysisStateSchema(res.body);
   });
 
   it('coerces running on disk → paused in the response when there is no live job', async () => {

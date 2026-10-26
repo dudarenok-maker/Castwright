@@ -23,6 +23,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { expectMatchesSchema } from '../test-utils/openapi-analysis-state.js';
 
 let workspaceRoot: string;
 let scanActiveAnalyses: typeof import('./active-analyses.js').scanActiveAnalyses;
@@ -122,6 +123,25 @@ beforeEach(() => {
 });
 
 describe('scanActiveAnalyses', () => {
+  it('every summary honours the openapi ActiveAnalysisSummary schema (#3787)', async () => {
+    bookSkeleton('Halted Full', {
+      snapshot: {
+        state: 'halted',
+        kind: 'subset',
+        subsetChapterIds: [1],
+        haltCode: 'attribution_drift',
+        haltReason: 'demoted to narrator',
+        engine: 'local',
+        writtenAt: 200,
+      },
+    });
+    bookSkeleton('Paused Legacy', { snapshot: { state: 'paused', writtenAt: 100 } });
+    const snaps = await scanActiveAnalyses();
+    expect(snaps).toHaveLength(2);
+    /* The route sends res.json({ snapshots }): JSON drops the undefined optionals. */
+    for (const snap of JSON.parse(JSON.stringify(snaps))) expectMatchesSchema('ActiveAnalysisSummary', snap);
+  });
+
   it('returns an empty list when no books have analysis-state.json on disk', async () => {
     bookSkeleton('Fresh Book');
     /* Book exists with state.json but no snapshot — should be silently

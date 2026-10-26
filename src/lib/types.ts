@@ -1,5 +1,4 @@
-import type { components } from './api-types';
-import type { AnalysisEngine } from './model-id';
+import type { components, paths as ApiPaths } from './api-types';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -589,12 +588,6 @@ export interface DroppedQuotesResponse {
   batches: DroppedQuotesBatch[];
 }
 
-/* Cold-boot rehydration payload for the AnalysisPill across browser
-   reload + server restart. Matches the on-disk
-   .audiobook/analysis-state.json shape one-for-one (the server
-   returns it verbatim once the running→paused coercion has been
-   applied). See docs/features/archive/32-sticky-analysis.md "Cold-boot
-   rehydration". */
 /** Wire shape for `GET /api/library/active-analyses` — every book in the
     workspace whose `.audiobook/analysis-state.json` snapshot resolves to
     `paused` or `halted`, sorted by `writtenAt` DESC (freshest first).
@@ -608,61 +601,18 @@ export interface DroppedQuotesResponse {
     in-flight job means the analyzer didn't survive the restart), so the
     `state` field never contains `'running'` over the wire from this
     endpoint. */
-export interface ActiveAnalysisSummary {
-  bookId: string;
-  bookTitle: string;
-  manuscriptId: string;
-  phaseId: number;
-  phaseLabel: string;
-  phaseProgress: number;
-  state: 'paused' | 'halted';
-  engine?: AnalysisEngine;
-  kind?: 'main' | 'subset';
-  subsetChapterIds?: number[];
-  haltCode?: string;
-  haltReason?: string;
-  lastTickAt: number;
-  writtenAt: number;
-}
+export type ActiveAnalysisSummary = components['schemas']['ActiveAnalysisSummary'];
 
-export interface ActiveAnalysesResponse {
-  snapshots: ActiveAnalysisSummary[];
-}
+export type ActiveAnalysesResponse =
+  ApiPaths['/api/library/active-analyses']['get']['responses']['200']['content']['application/json'];
 
-export interface AnalysisStateResponse {
-  manuscriptId: string;
-  phaseId: number;
-  phaseLabel: string;
-  phaseProgress: number;
-  /** `running` never appears on the wire from the cold-boot endpoint
-      UNLESS a live in-flight job is still serving from memory. The
-      server coerces disk-`running` to `paused` when no live job is
-      present. */
-  state: 'running' | 'paused' | 'halted';
-  /** Engine the analyzer was using when this snapshot was written.
-      Carried so the reverse-direction local-analyzer guard
-      (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
-      right engine on a cold-boot rehydrated pill. Undefined for
-      pre-E1 snapshots — guard defaults to "do not prompt". */
-  engine?: AnalysisEngine;
-  /** Discriminator for the in-flight job's shape (plan 32 D1).
-      `'main'` = full-book sticky run; `'subset'` = per-chapter retry
-      via POST /:id/analysis/chapters. Optional — pre-D1 snapshots
-      omit it and the pill falls back to main semantics. */
-  kind?: 'main' | 'subset';
-  /** Set only when `kind === 'subset'`. The chapter ids being
-      retried, used by the AnalysisPill to render "Retrying N
-      chapters" copy. */
-  subsetChapterIds?: number[];
-  /** Set only on a live `kind === 'subset'` answer (#3774): what started the run.
-      `'include'` is the Generate view's Include in book; the snapshot rebuilt from
-      this answer keeps it so the job-start block survives a book switch / reload. */
-  subsetOrigin?: 'include' | 'reanalyse';
-  haltCode?: string;
-  haltReason?: string;
-  lastTickAt: number;
-  writtenAt?: number;
-}
+/* Cold-boot rehydration payload for the AnalysisPill across browser reload + server
+   restart (`GET /api/books/:bookId/analysis/state`, generated from openapi.yaml, #3787).
+   Either the live in-flight job's snapshot (`running`, may carry the live-only
+   `subsetOrigin`) or the persisted .audiobook/analysis-state.json with a stored
+   `running` coerced to `paused`. See docs/features/archive/32-sticky-analysis.md
+   "Cold-boot rehydration". */
+export type AnalysisStateResponse = components['schemas']['AnalysisState'];
 
 export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 

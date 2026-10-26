@@ -38,7 +38,8 @@
    an orphan `.staging/<nonce>` which the startup sweep removes after an hour. */
 
 import { existsSync } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { nanoid } from 'nanoid';
 import { dirname, join, relative } from 'node:path';
 import { fromBuffer as yauzlFromBuffer, type ZipFile, type Entry } from 'yauzl';
 import {
@@ -58,8 +59,11 @@ import {
   BOOK_GONE,
   BookBusyError,
   bookJobKinds,
-  isBookIdTaken,
-  mintBookId,
+  bookIdTakenIn,
+  manuscriptIdTakenIn,
+  mintBookIdFrom,
+  takenBookIds,
+  type TakenIds,
   readBookStateOrThrow,
   withBookOp,
   withBookPathClaim,
@@ -342,27 +346,73 @@ export async function importPortableBundle(
        stateRaw verbatim, so the decided bookId / title actually land on disk. A
        bundle state.json with no `language` lands as an explicit `language: null`
        (key present); a bundle that carries a language round-trips unchanged. */
-    const writeStagedState = (bookId: string, title: string): Promise<void> =>
+    const writeStagedState = (
+      bookId: string,
+      title: string,
+      manuscriptId: string | undefined = state.manuscriptId,
+    ): Promise<void> =>
       writeFile(
         stateJsonPath(stage),
         JSON.stringify(
           /* Plan 289 — the bundle's own editEpoch is overwritten, never kept: an
              export/delete/re-import of the same book must move every revision
-             token, though the bundle carries the old manuscriptId. */
-          { ...state, title, bookId, language: state.language ?? null, editEpoch: mintEditEpoch() },
+             token, even when the bundle's manuscriptId is kept. */
+          { ...state, title, bookId, manuscriptId, language: state.language ?? null, editEpoch: mintEditEpoch() },
           null,
           2,
         ),
         'utf8',
       );
 
+    /* #3823 -- a book whose manuscriptId ANOTHER book already carries (a renamed
+       copy, an id-taken re-import into a free folder, an overwrite of a different
+       book) gets its own: one in-memory ManuscriptRecord per id, so a shared id
+       lets restructuring one twin rewrite the hints the other reads. An unused id
+       is kept. The staged hints entries are keyed by the id they were written
+       under, so re-key them to the fresh one or the copy's own hints stop
+       validating (`manuscriptId` mismatch -> re-parse). A hints file the reader
+       would reject anyway (unparseable, no `entries` array) is dropped instead:
+       the copy re-parses, as it would have; a non-object entry is left alone.
+       Analysis state / edits / the analyzer cache are not in a bundle. */
+    const freshManuscriptId = async (
+      ids: TakenIds,
+    ): Promise<string | undefined> => {
+      if (!state.manuscriptId || !manuscriptIdTakenIn(ids, state.manuscriptId)) {
+        return state.manuscriptId;
+      }
+      const manuscriptId = 'mns_' + nanoid(10);
+      const hintsPath = manuscriptHintsJsonPath(stage);
+      if (existsSync(hintsPath)) {
+        let file: { entries?: unknown } | null = null;
+        try {
+          file = JSON.parse(await readFile(hintsPath, 'utf8')) as { entries?: unknown } | null;
+        } catch {
+          /* unparseable: dropped below */
+        }
+        if (file && typeof file === 'object' && Array.isArray(file.entries)) {
+          for (const entry of file.entries) {
+            if (entry && typeof entry === 'object') {
+              (entry as { manuscriptId?: string }).manuscriptId = manuscriptId;
+            }
+          }
+          await writeFile(hintsPath, JSON.stringify(file, null, 2), 'utf8');
+        } else {
+          await rm(hintsPath, { force: true });
+          const rel = relative(stage, hintsPath);
+          const at = stagedRel.indexOf(rel);
+          if (at >= 0) stagedRel.splice(at, 1);
+        }
+      }
+      return manuscriptId;
+    };
+
     /* The id a NEW book gets: the bundle's own when nothing in the workspace
        carries it, else a minted one (never two books with one id). Called under
        the claim. */
-    const idForNewBook = async (title: string, keepBundleId: boolean): Promise<string> =>
-      keepBundleId && state.bookId && !(await isBookIdTaken(state.bookId))
+    const idForNewBook = (ids: TakenIds, title: string, keepBundleId: boolean): string =>
+      keepBundleId && state.bookId && !bookIdTakenIn(ids, state.bookId)
         ? state.bookId
-        : mintBookId(author, series, title);
+        : mintBookIdFrom(ids, author, series, title);
 
     /* Fresh / `rename` import. Under the claim ONLY: collision check -> bookId ->
        mkdir the parents -> one directory rename of the staged tree into place. */
@@ -379,8 +429,11 @@ export async function importPortableBundle(
           title = renamed.title;
           renamedTo = bookDir;
         }
-        const bookId = await idForNewBook(title, renamedTo === undefined);
-        await writeStagedState(bookId, title);
+        /* ONE walk under the claim answers the bookId and manuscriptId decisions. */
+        const ids = await takenBookIds();
+        const bookId = idForNewBook(ids, title, renamedTo === undefined);
+        const manuscriptId = await freshManuscriptId(ids);
+        await writeStagedState(bookId, title, manuscriptId);
         await mkdir(dirname(bookDir), { recursive: true });
         /* Placed under the target's state-json lock too (#3625: every bundle
            promotion holds it), so no state.json writer of that path interleaves. */
@@ -409,8 +462,18 @@ export async function importPortableBundle(
         if (!existsSync(targetDir) || (live?.bookId ?? null) !== expectedId) {
           throw new BundleConflictError(targetDir);
         }
-        const bookId = expectedId ?? (await idForNewBook(baseTitle, true));
-        await writeStagedState(bookId, baseTitle);
+        /* #3823 -- mint a fresh manuscriptId only when this write would ADD a
+           carrier of an id another book holds. A target that already carries the
+           bundle's id keeps it, whatever twins or unreadable siblings exist (it
+           adds no carrier, and its id-keyed ledger / analyzer cache stay attached);
+           pre-existing twins are not repaired here. */
+        const ids = await takenBookIds();
+        const bookId = expectedId ?? idForNewBook(ids, baseTitle, true);
+        const manuscriptId =
+          state.manuscriptId && live?.manuscriptId === state.manuscriptId
+            ? state.manuscriptId
+            : await freshManuscriptId(ids);
+        await writeStagedState(bookId, baseTitle, manuscriptId);
         /* #3703 -- the manuscript on disk is becoming the bundle's, so a local
            restructure's hints describe another book's bodies and can still
            validate (same uuid sequence, same manuscript bytes). The hints file
@@ -439,12 +502,12 @@ export async function importPortableBundle(
           });
         } finally {
           /* PR #3714 review pass 5 -- the manuscript on disk was replaced, so a
-             warm ManuscriptRecord for either id is now another book's text: drop
-             both, and the next reader (a restructure, an analysis start)
-             re-hydrates from disk. In a `finally`: an overwrite that fails part-way
+             warm ManuscriptRecord for the old id or the id now written is stale: drop
+             both (a minted id's other carrier is untouched), and the next reader
+             (a restructure, an analysis start) re-hydrates from disk. In a `finally`: an overwrite that fails part-way
              has still replaced some files, so the warm record is stale either way. */
           if (live?.manuscriptId) removeManuscript(live.manuscriptId);
-          if (state.manuscriptId) removeManuscript(state.manuscriptId);
+          if (manuscriptId) removeManuscript(manuscriptId);
         }
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });
