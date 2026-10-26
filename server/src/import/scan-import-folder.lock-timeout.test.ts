@@ -12,7 +12,7 @@
    `finally`, so "nothing leaked" now means no staging dir survives and no
    staged file reached the target. */
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ZipFile } from 'yazl';
@@ -70,9 +70,12 @@ function bundle(title: string): Promise<Buffer> {
 const tmpFilesUnder = (dir: string): string[] =>
   readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => f.includes('.tmp-'));
 
-const stagedFiles = (): string[] => {
+/* Top-level entries of the GLOBAL staging root (one `<nonce>/` per import). The
+   server test forks share one workspace, so a concurrent import test's dir can
+   be here too; callers diff against a pre-import snapshot. */
+const stagingDirs = (): string[] => {
   try {
-    return readdirSync(STAGING_ROOT, { recursive: true, encoding: 'utf8' });
+    return readdirSync(STAGING_ROOT, { encoding: 'utf8' });
   } catch {
     return [];
   }
@@ -92,10 +95,11 @@ describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
     );
     /* The overwrite takes the target's state lock ONCE, for the promote, after
        every entry is staged; that call times out. */
+    const before = new Set(stagingDirs());
     let stagedAtTimeout: string[] = [];
     vi.mocked(withStateJsonLock)
       .mockImplementationOnce(async (p, fn) => {
-        stagedAtTimeout = stagedFiles();
+        stagedAtTimeout = stagingDirs().filter((d) => !before.has(d));
         /* A REAL acquisition timeout: a holder queued on the same key, then the
            call with a 50ms budget (the curated error comes from the real lock). */
         const holder = actual.withStateJsonLock(p, () => new Promise<void>((r) => setTimeout(r, 400)));
@@ -110,17 +114,17 @@ describe('importPortableBundle — lock-acquisition timeout (#3625)', () => {
         (e: unknown) => e,
       );
       expect(isLockAcquisitionTimeout(err)).toBe(true);
-      /* Positive control: staging really left files to be cleaned up. */
+      /* Positive control: this import really staged a dir to be cleaned up. */
       expect(stagedAtTimeout.length).toBeGreaterThan(0);
       /* The seam fired, the live file was never promoted... */
       expect(readFileSync(stateJsonPath(target), 'utf8')).toBe(existing);
       /* ...and the staged files (state.json, manuscript, audio) are gone: none
-         reached the target, and no staging dir survives. */
+         reached the target, and none of THIS import's staging dirs survives. */
       expect(tmpFilesUnder(target)).toEqual([]);
       expect(readdirSync(target, { recursive: true, encoding: 'utf8' }).sort()).toEqual(
         ['.audiobook', 'audio', join('.audiobook', 'state.json')].sort(),
       );
-      expect(stagedFiles()).toEqual([]);
+      expect(stagedAtTimeout.filter((d) => existsSync(join(STAGING_ROOT, d)))).toEqual([]);
     } finally {
       rmSync(target, { recursive: true, force: true });
     }
