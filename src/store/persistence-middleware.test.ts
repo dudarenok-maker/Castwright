@@ -2147,6 +2147,26 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       restore();
     });
 
+    /* P1 — without the hold inside the send loop, the follow-up after the 409
+       fails, a notes commit coalesces into its retry, and the retry carries the
+       refused title back with no base. */
+    it('P1: a notes commit made after a stale refusal does not ride a retry before the read', async () => {
+      const { disk, store, restore } = setup();
+      disk.failNext(1, isTitle);
+      commit(store, 'title', 'Mine');
+      await advance(600);
+      disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'Theirs' });
+      disk.failNext(1, (_id, req) => req.slice === 'state' && !carries(req, 'title'));
+      await advance(1000);
+      commit(store, 'notes', 'a note');
+      await advance(5000);
+      expect(stateOnDisk(disk).title).toBe('Theirs');
+      fullRead(store, disk);
+      await advance(600);
+      expect(stateOnDisk(disk)).toMatchObject({ title: 'Theirs', notes: 'a note' });
+      restore();
+    });
+
     it('P1 control: a mark on another book holds nothing', async () => {
       const { disk, store, restore } = setup();
       store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'b2' }));
