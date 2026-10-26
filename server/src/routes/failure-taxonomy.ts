@@ -51,7 +51,7 @@ import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 /* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
    names its endpoint by saved name without an import of workspace/user-settings.ts. */
 import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
-import { geminiReasoningRow, reasoningControlDescription } from '../analyzer/reasoning.js';
+import { geminiReasoningRow, reasoningControlDescription, type ReasoningLevel } from '../analyzer/reasoning.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -615,8 +615,9 @@ function reasoningRemediationLead(err: AnalyzerReasoningOverflowError): string {
    a `wikiPage` names a whole PAGE (`wiki-links.ts`'s "no anchors" rule), so it
    cannot point at the section a specific fix is about — the wiki link is
    therefore its OWN entry, never a field tacked onto a setting-changing one.
-   `endpointField` (wave 3) and `reasoningSetting` (wave 5) are declared now so
-   those waves write into this same shape; nothing in 2b sets them. */
+   `endpointField` (an endpoint's own field) and `reasoningSetting` (a per-model
+   reasoning entry in `analyzerReasoningByEngine`) are the two non-registry
+   pointers; `reasoningOverflowFixes` sets both. */
 export interface AnalysisFailureFix {
   label: string;
   settingKey?: string;
@@ -628,9 +629,9 @@ export interface AnalysisFailureFix {
 
 /** #3084 F7 — the fixes for a reasoning overflow, per transport. The ctx is the
     SAME shape `AnalyzerReasoningOverflowError.transport`/`.model` already carry,
-    so the classify branch below passes them without a cast. `endpointId` is
-    declared now and unused in 2b (3b starts passing it); `reasoningLevel` is
-    5a's addition to this same ctx type, not this task's.
+    so the classify branch below passes them without a cast. `endpointId` names
+    the endpoint that overflowed; `reasoningLevel` is the level that request ran
+    at, read from the error and never re-derived from live settings.
 
     Two local arrays, concatenated on return: `fixes` (actionable) and `reads`
     (`Read: …` wiki-link entries). That split — rather than ordering each
@@ -642,6 +643,8 @@ export function reasoningOverflowFixes(ctx: {
   model: string;
   /** The endpoint whose request overflowed (set by OpenAIAnalyzer; 3b). */
   endpointId?: string;
+  /** The level the overflowing request actually ran at (set at throw time; never re-derived from settings). */
+  reasoningLevel?: ReasoningLevel;
 }): AnalysisFailureFix[] {
   const fixes: AnalysisFailureFix[] = []; // actionable — settingKey or label-only
   const reads: AnalysisFailureFix[] = []; // wiki-link entries only ("Read: …")
@@ -665,6 +668,39 @@ export function reasoningOverflowFixes(ctx: {
         settingKey: 'analyzer.gemini.maxOutputTokens',
       });
     }
+    /* #3084 wave 5a (F7) — a lower reasoning rung, only when the level the request ACTUALLY ran at
+       (ctx.reasoningLevel, else the row's documented default) has one. Never a wikiPage here: the
+       list-level Read: entry below is the only page link. */
+    const row = geminiReasoningRow(ctx.model);
+    if (row) {
+      if (row.control === 'gemmaOnOff') {
+        if (ctx.reasoningLevel === 'on') {
+          fixes.push({
+            label: `Turn reasoning off for ${ctx.model}`,
+            reasoningSetting: { engine: 'gemini', model: ctx.model },
+          });
+        }
+        /* 'off' or unset (model-default): outside the thinking rule at default (P27); no fix. */
+      } else {
+        const explicit = ctx.reasoningLevel && ctx.reasoningLevel !== 'model-default' ? ctx.reasoningLevel : undefined;
+        const effective = explicit ?? row.defaultLevel;
+        if (effective) {
+          const idx = row.levels.indexOf(effective);
+          if (idx > 1) {
+            fixes.push({
+              label: `Set a lower reasoning level (try "${row.levels[idx - 1]}") for ${ctx.model}`,
+              reasoningSetting: { engine: 'gemini', model: ctx.model },
+            });
+          }
+        } else if (!explicit) {
+          /* No defaultLevel known for this row (none exist today); fall back to the lowest real rung. */
+          fixes.push({
+            label: `Set a lower reasoning level (try "${row.levels[1]}") for ${ctx.model}`,
+            reasoningSetting: { engine: 'gemini', model: ctx.model },
+          });
+        }
+      }
+    }
     /* F13 — label-only: no settingKey (and no wikiPage), so the renderer shows
        plain text rather than a link to a setting that cannot fix this. */
     fixes.push({ label: 'Switch to a different analyzer model' });
@@ -677,6 +713,20 @@ export function reasoningOverflowFixes(ctx: {
        default). A positive num_predict bounds the reply first — raising num_ctx
        would change nothing — so name it first and drop the "binding" claim. */
     const numPredictPinned = configValue<number>('analyzer.ollama.numPredict') > 0;
+    /* #3084 wave 5a (F7) — offered at on, a named level, or model-default (no `think` field is sent
+       there, so the model can still think); never at an explicit off or when no level was set. */
+    if (
+      ctx.reasoningLevel === 'on' ||
+      ctx.reasoningLevel === 'model-default' ||
+      ctx.reasoningLevel === 'low' ||
+      ctx.reasoningLevel === 'medium' ||
+      ctx.reasoningLevel === 'high'
+    ) {
+      fixes.push({
+        label: `Turn reasoning off for ${ctx.model}`,
+        reasoningSetting: { engine: 'ollama', model: ctx.model },
+      });
+    }
     if (numPredictPinned) {
       fixes.push({
         label: 'Raise Ollama num_predict (or set it back to -1, unlimited)',
@@ -972,7 +1022,7 @@ export function classifyAnalysisFailure(
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called
          with no cast. */
-      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId }),
+      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel }),
     };
   }
   if (err instanceof AnalyzerTimeoutError) {

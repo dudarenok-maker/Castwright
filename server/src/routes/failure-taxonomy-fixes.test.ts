@@ -17,7 +17,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
 import { reasoningOverflowFixes, targetInputTooLargeFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
 import { allKnobs, getKnob } from '../config/registry.js';
-import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, type TransportKind } from '../analyzer/errors.js';
+import { GEMINI_REASONING_TABLE, geminiReasoningRow } from '../analyzer/reasoning.js';
+import type { ReasoningLevel } from '../analyzer/reasoning-level.js';
 import { analyzerEndpointSchema, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { _seedGeminiCatalogForTest, _resetGeminiCatalogForTest } from '../analyzer/catalog/gemini-catalog.js';
@@ -33,6 +35,8 @@ const CONTEXTS = [
   { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
   { transport: 'ollama' as const, model: 'qwen3.5:9b' },
   { transport: 'openai' as const, model: 'm', endpointId: 'lab' },
+  { transport: 'ollama' as const, model: 'qwen3.5:9b', reasoningLevel: 'on' as const },
+  { transport: 'gemini' as const, model: 'gemma-4-31b-it', reasoningLevel: 'on' as const },
 ];
 
 describe('reasoningOverflowFixes — every settingKey/wikiPage is real (#3084 wave 2b, F7)', () => {
@@ -254,5 +258,121 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
       expect(fix.wikiPage, fix.label).toMatch(/^[A-Za-z0-9-]+$/);
       expect(existsSync(fileURLToPath(new URL(`../../../docs/wiki/${fix.wikiPage}.md`, import.meta.url))), fix.wikiPage).toBe(true);
     }
+  });
+});
+
+describe('reasoningOverflowFixes — reasoning-level fixes (#3084 wave 5a, F7, extension accepted 2026-09-13)', () => {
+  afterEach(() => _resetUserSettingsCache());
+
+  /* err.reasoningLevel is set by Task 5.1 at the actual throw site (mapFinish / runFreeText); this
+     test drives reasoningOverflowFixes the same way classifyAnalysisFailure's real call site does —
+     through the error instance, never a hand-built ctx — so the opts-object shape cannot drift
+     (review pass 2, item 1). The endpoint case is 5.5b-ii's. */
+  const overflow = (transport: TransportKind, model: string, reasoningLevel?: ReasoningLevel, endpointId?: string) =>
+    classifyAnalysisFailure(new AnalyzerReasoningOverflowError(transport, model, 812, { endpointId, reasoningLevel }), model).fixes ?? [];
+
+  /* Corrected, review pass 2, item 10a: 'model-default' also gets the fix (Ollama can still think
+     with no `think` field sent), only an explicit 'off' or no level at all does not. */
+  it('Ollama at on, a named level, or model-default gets a fix; at off or unset it does not', () => {
+    expect(overflow('ollama', 'q:4b', 'on').find((f) => f.reasoningSetting)?.reasoningSetting).toEqual({ engine: 'ollama', model: 'q:4b' });
+    expect(overflow('ollama', 'q:4b', 'medium').some((f) => f.reasoningSetting)).toBe(true);
+    expect(overflow('ollama', 'q:4b', 'model-default').some((f) => f.reasoningSetting)).toBe(true);
+    expect(overflow('ollama', 'q:4b', 'off').some((f) => f.reasoningSetting)).toBe(false);
+    expect(overflow('ollama', 'q:4b', undefined).some((f) => f.reasoningSetting)).toBe(false);
+  });
+
+  it('Gemini at an explicit level with a lower rung gets a fix naming it; at the lowest rung it does not', () => {
+    const medium = overflow('gemini', 'gemini-3.6-flash', 'medium');
+    const fix = medium.find((f) => f.reasoningSetting);
+    expect(fix?.reasoningSetting).toEqual({ engine: 'gemini', model: 'gemini-3.6-flash' });
+    expect(fix?.label).toContain('"low"');
+    expect(fix?.wikiPage).toBeUndefined(); // review pass 2, item 10b
+    expect(overflow('gemini', 'gemini-3.8-flash', 'low').some((f) => f.reasoningSetting)).toBe(false);
+  });
+
+  it('Gemma 4 at explicit on gets the fix (lower to off); at off or model-default it does not', () => {
+    expect(overflow('gemini', 'gemma-4-31b-it', 'on').some((f) => f.reasoningSetting)).toBe(true);
+    expect(overflow('gemini', 'gemma-4-31b-it', 'off').some((f) => f.reasoningSetting)).toBe(false);
+    expect(overflow('gemini', 'gemma-4-31b-it', undefined).some((f) => f.reasoningSetting)).toBe(false);
+  });
+
+  it('a 2.5 id (no row, F2) never gets a reasoning-level fix, at any level', () => {
+    expect(overflow('gemini', 'gemini-2.5-flash', 'high').some((f) => f.reasoningSetting)).toBe(false);
+  });
+
+  /* Review pass 1 (2026-09-13) — the level actually run, via defaultLevel, decides model-default cases. */
+  it('Flash-Lite at model-default (defaultLevel minimal) gets no level fix — already at the lowest rung', () => {
+    expect(overflow('gemini', 'gemini-3.5-flash-lite', undefined).some((f) => f.reasoningSetting)).toBe(false);
+  });
+
+  it('3.8 Flash at model-default (defaultLevel medium) suggests trying low', () => {
+    const fix = overflow('gemini', 'gemini-3.8-flash', undefined).find((f) => f.reasoningSetting);
+    expect(fix?.label).toContain('"low"');
+  });
+
+  it('3.1 Pro at model-default (defaultLevel high) suggests trying medium', () => {
+    const fix = overflow('gemini', 'gemini-3.1-pro-preview', undefined).find((f) => f.reasoningSetting);
+    expect(fix?.label).toContain('"medium"');
+  });
+
+  /* review pass 2, item 7: 3 Flash (bare, no dot-version) has its own defaultLevel (high), distinct
+     from 3.5/3.6 Flash's medium. */
+  it('3 Flash (gemini-3-flash-preview) at model-default (defaultLevel high) suggests trying medium', () => {
+    const fix = overflow('gemini', 'gemini-3-flash-preview', undefined).find((f) => f.reasoningSetting);
+    expect(fix?.label).toContain('"medium"');
+  });
+});
+
+describe('reasoningOverflowFixes — reasoningSetting guards (#3084 wave 5a, F7)', () => {
+  it('every reasoningSetting.engine is gemini or ollama', () => {
+    for (const ctx of CONTEXTS) {
+      for (const fix of reasoningOverflowFixes(ctx)) {
+        if (fix.reasoningSetting) expect(['gemini', 'ollama']).toContain(fix.reasoningSetting.engine);
+      }
+    }
+  });
+
+  /* Corrected, review pass 2, item 3: one real, verified model id per table row, in the SAME order
+     as GEMINI_REASONING_TABLE (a regex-source-derived id matched no row and checked nothing). */
+  const ROW_FIXTURE_IDS = [
+    'gemini-3.5-flash-lite', // Flash-Lite (minimal/low/medium/high, defaultLevel minimal)
+    'gemini-3-flash-preview', // 3 Flash, bare (minimal/low/medium/high, defaultLevel high)
+    'gemini-3.6-flash', // 3.5/3.6 Flash (minimal/low/medium/high, defaultLevel medium)
+    'gemini-3.8-flash', // 3.7/3.8 Flash (low/medium/high, defaultLevel medium)
+    'gemini-3.1-pro', // 3.1 Pro (low/medium/high, defaultLevel high)
+    'gemma-4-31b-it', // Gemma 4 (off/on, gemmaOnOff)
+  ] as const;
+
+  describe('ROW_FIXTURE_IDS — one real id per GEMINI_REASONING_TABLE row', () => {
+    it('the fixture has exactly one id per table row', () => {
+      expect(ROW_FIXTURE_IDS.length).toBe(GEMINI_REASONING_TABLE.length);
+    });
+    it('every fixture id resolves back to its own row, by identity, in table order', () => {
+      ROW_FIXTURE_IDS.forEach((id, i) => {
+        expect(geminiReasoningRow(id), id).toBe(GEMINI_REASONING_TABLE[i]);
+      });
+    });
+  });
+
+  /* Review pass 1 (2026-09-13) — the guard checks the RULE: exhaustively, for every (row, level) the
+     table can produce, a Gemini fix exists iff there is a strictly lower real rung to name, and never
+     for gemmaOnOff at model-default. */
+  it('a Gemini reasoning fix exists iff a strictly lower rung is available for the level actually run', () => {
+    GEMINI_REASONING_TABLE.forEach((row, i) => {
+      const model = ROW_FIXTURE_IDS[i];
+      const levelsToCheck: (ReasoningLevel | undefined)[] =
+        row.control === 'gemmaOnOff' ? ['on', 'off', undefined] : [...row.levels.filter((l) => l !== 'model-default'), undefined];
+      for (const level of levelsToCheck) {
+        const fixes = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('gemini', model, 812, { reasoningLevel: level }), model).fixes ?? [];
+        const hasFix = fixes.some((f) => f.reasoningSetting);
+        if (row.control === 'gemmaOnOff') {
+          expect(hasFix, `${model} at ${level}`).toBe(level === 'on');
+        } else {
+          const effective = level && level !== 'model-default' ? level : row.defaultLevel;
+          const expectFix = effective !== undefined && row.levels.indexOf(effective) > 1;
+          expect(hasFix, `${model} at ${level ?? 'model-default'}`).toBe(expectFix);
+        }
+      }
+    });
   });
 });
