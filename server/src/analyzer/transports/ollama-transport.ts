@@ -43,6 +43,7 @@ import { getLastKnownVram } from '../../gpu/vram-state.js';
 import type { RawEvalTiming } from '../analyzer-eval-stats.js';
 import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
+import { reasoningWireFragment } from '../reasoning.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
@@ -129,7 +130,7 @@ export class OllamaTransport implements ChatTransport {
   private async sendFreeText(req: TransportRequest, freeText: FreeTextOptions): Promise<TransportResult> {
     const onCpu = freeText.onCpu === true;
     const url = this.url; // CHANGED: was getResolvedOllamaUrl() — voice-style.ts resolves it into the analyzer
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.model, // CHANGED: was the `model` parameter
       /* CHANGED: was [{ role: 'user', content: prompt }]. A persona passes system '' and one user
          turn, so the wire is identical. */
@@ -138,7 +139,6 @@ export class OllamaTransport implements ChatTransport {
         ...req.messages,
       ],
       stream: false,
-      think: false,
       /* Pin during an active analysis run (same rationale as keepAliveFor); the
          caller-supplied keepAlive is the post-run idle window otherwise. */
       keep_alive: isAnyAnalyzerRunBusy() ? -1 : (freeText.keepAlive ?? 0), // CHANGED: opts → freeText
@@ -147,6 +147,16 @@ export class OllamaTransport implements ChatTransport {
         ...(onCpu ? { num_gpu: 0 } : {}),
       },
     };
+    /* #3084 wave 5 — reasoning. `undefined` = a caller that predates reasoning
+       settings (the Test action's direct transport.send): keep today's think:false
+       (qwen3.5's <think> tokens break the parser; Ollama accepts false on
+       non-thinking models). A defined level sends exactly its fragment;
+       'model-default' sends no `think` at all. */
+    if (req.reasoning === undefined) {
+      body.think = false;
+    } else {
+      Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
+    }
 
     /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
        else must bound this call — and unlike chat() (whose StageCall carries the
@@ -269,7 +279,7 @@ export class OllamaTransport implements ChatTransport {
     const onChunk = req.call.onChunk;
     const onEvalTiming = req.call.onEvalTiming;
     const signal = req.signal;
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.model,
       messages: req.system ? [{ role: 'system' as const, content: req.system }, ...req.messages] : req.messages,
       stream: true,
@@ -286,10 +296,6 @@ export class OllamaTransport implements ChatTransport {
          above; a user override in analyzerKeepAliveByModel wins over the flat
          DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback. */
       keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
-      /* Suppress qwen3.5's thinking tokens — they'd appear as
-         `thinking…` ahead of the JSON and break the parser. Ollama
-         silently ignores this flag on non-thinking models. */
-      think: false,
       options: {
         /*Caller-controlled temperature — DEFAULT_TEMPERATURE for the first
            attempt and schema-validation retries, INVALID_JSON_RETRY_TEMPERATURE
@@ -313,6 +319,12 @@ export class OllamaTransport implements ChatTransport {
         num_predict: req.maxOutputTokens ?? resolveNumPredict(),
       },
     };
+    /* #3084 wave 5 — reasoning: same rule as the free-text body above. */
+    if (req.reasoning === undefined) {
+      body.think = false;
+    } else {
+      Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
+    }
 
     /* Short-circuit if the caller has already aborted (e.g. the SSE client
        disconnected while a previous chapter was still running). Saves a

@@ -51,6 +51,7 @@ import type { AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { allowlistedFetch } from './allowlisted-fetch.js';
 import { redactKnownSecrets } from '../redact.js';
+import { reasoningWireFragment } from '../reasoning.js';
 import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
@@ -277,7 +278,7 @@ export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, serve
   return servedOutputLimit !== undefined ? Math.min(servedOutputLimit, contextBound) : contextBound;
 }
 
-/** Reasoning / extraParams: wave 5. */
+/** #3084 — reasoning: wave 5a (Task 5.3); extraParams: wave 5b (Task 5.10). */
 export function buildOpenAIRequestBody(
   endpoint: AnalyzerEndpoint,
   model: string,
@@ -306,6 +307,10 @@ export function buildOpenAIRequestBody(
     ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
     ...(req.freeText && req.maxOutputTokens === undefined ? {} : { max_tokens: maxTokens }),
     ...openAIResponseFormat(req.structuredOutput),
+    /* #3084 wave 5 — `undefined` keeps the pre-W5 wire (no reasoning field); a level sends exactly
+       its fragment ('model-default' sends nothing). Free-text (persona) requests use this same
+       builder, so they carry the level too. */
+    ...(req.reasoning !== undefined ? reasoningWireFragment('openai', { model, endpoint }, req.reasoning) : {}),
   };
 }
 
