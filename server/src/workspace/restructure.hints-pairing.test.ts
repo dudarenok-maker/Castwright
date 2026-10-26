@@ -17,7 +17,7 @@ import type { BookStateJson } from './scan.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 
 function stateOf(
-  chapters: Array<{ id: number; title: string; titleOverridden?: boolean }>,
+  chapters: Array<{ id: number; title: string; titleOverridden?: boolean; titleSynthesized?: boolean }>,
 ): BookStateJson {
   return { chapters: chapters.map((c) => ({ ...c, slug: `s${c.id}` })) } as unknown as BookStateJson;
 }
@@ -62,6 +62,29 @@ describe('assertHintsPairWithState', () => {
       { id: 2, title: 'Alpha' },
     ]);
     expect(parseTitlesPairWithState(s, ['Beta', 'Alpha'])).toBe(true);
+  });
+});
+
+describe('a synthesized state title is compared, not skipped', () => {
+  /* Reorder renumbers an app-made title, so a swap between an app-titled chapter and a
+     heading chapter leaves a null parse title at one position and a synthesized state
+     title at the other; skipping both compared neither. */
+  const swapped = stateOf([
+    { id: 1, title: 'Chapter Two' },
+    { id: 2, title: 'Chapter 2', titleSynthesized: true },
+    { id: 3, title: 'Chapter Three' },
+  ]);
+
+  it('flags the swap', () => {
+    expect(parseTitlesPairWithState(swapped, [null, 'Chapter Two', 'Chapter Three'])).toBe(false);
+  });
+
+  it('still passes a book whose app-made titles sit where the parse made them up', () => {
+    const healthy = stateOf([
+      { id: 1, title: 'Chapter 1', titleSynthesized: true },
+      { id: 2, title: 'Chapter Two' },
+    ]);
+    expect(parseTitlesPairWithState(healthy, [null, 'Chapter Two'])).toBe(true);
   });
 });
 

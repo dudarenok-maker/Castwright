@@ -1112,7 +1112,7 @@ paths:
         '404':
           description: Book or chapter not found
         '409':
-          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.'
+          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written.'
           content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } }
 
   /api/books/{bookId}/chapters/merge:
@@ -1268,7 +1268,7 @@ paths:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (missing / empty chapterIds, non-boolean excluded)' }
         '404': { description: Book or chapter not found }
-        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written.', content: { application/json: { schema: { $ref: '#/components/schemas/RestructureConflictError' } } } }
 
   /api/books/{bookId}/chapters/refresh-titles:
     post:
@@ -5210,7 +5210,7 @@ components:
         bulk exclude, rename, refresh-titles). `analysis_running`: an analysis
         job holds the book (or a restructure already claimed it). `book_busy`
         (#3774): ANY long job (render, analysis, scoring, voice design, script
-        review or export) is registered for the book. `hints_out_of_sync` (#3791, merge, split and reorder only): the manuscript hints do not pair one-to-one with state.json's chapters; re-parse the book first. `error` is a curated
+        review or export) is registered for the book. `hints_out_of_sync` (#3791, merge, split and reorder; rename and refresh-titles too, but only for a title mismatch on a parse-fallback book): the manuscript hints do not pair one-to-one with state.json's chapters; re-parse the book first. `error` is a curated
         sentence with no filesystem path.
       required: [error, code]
       properties:

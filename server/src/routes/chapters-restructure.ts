@@ -204,6 +204,9 @@ async function applyRestructure(
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
+  /* Rename and refresh-titles rewrite the very titles the pairing check reads, so on a
+     book it already flags they would hide the mispairing from the next merge (#3791). */
+  refuseWhenMispaired = false,
 ): Promise<{
   status: number;
   body: unknown;
@@ -248,7 +251,9 @@ async function applyRestructure(
     };
   }
   try {
-    return await withBookLock(book.bookId, () => applyRestructureClaimed(book, prep, manuscriptId, transform));
+    return await withBookLock(book.bookId, () =>
+      applyRestructureClaimed(book, prep, manuscriptId, transform, refuseWhenMispaired),
+    );
   } finally {
     endRestructure(manuscriptId);
   }
@@ -265,6 +270,7 @@ async function applyRestructureClaimed(
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
+  refuseWhenMispaired: boolean,
 ): Promise<{
   status: number;
   body: unknown;
@@ -341,6 +347,11 @@ async function applyRestructureClaimed(
       record.hintsSource === 'parse' &&
       record.parseTitles !== undefined &&
       !parseTitlesPairWithState(state, record.parseTitles);
+    /* Nothing is written yet: the refusal is the same 409 merge, split and reorder answer. */
+    if (refuseWhenMispaired && hintsMispaired) {
+      const e = new HintsOutOfSyncError();
+      return { early: { status: 409, body: { error: e.message, code: e.code } } };
+    }
     let result: RestructureResult;
     try {
       result = transform(
@@ -625,6 +636,7 @@ chaptersRestructureRouter.post(
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,
           }),
+          true,
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -698,6 +710,7 @@ chaptersRestructureRouter.post(
       const result = await withBookOp(req.params.bookId, (book) =>
         applyRestructure(book, prep, (state, hints, sentences) =>
           applyRename(state, hints, sentences, op),
+          true,
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });

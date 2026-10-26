@@ -701,15 +701,18 @@ export class HintsOutOfSyncError extends Error {
     parse verbatim (import, re-parse, title refresh). Two kinds of position are
     skipped because their title is not evidence of which chapter it is: a
     `titleOverridden` chapter (the user's own wording) and one the parser made up
-    (`null`, or `titleSynthesized` in state: "Chapter N" renumbers with position).
-    So a book whose every title is app-made cannot be caught by this check. */
+    (`null` in the parse: "Chapter N" renumbers with position). A state title that
+    is app-made is NOT skipped: reorder renumbers it, so skipping it let a swap
+    between an app-titled and a heading chapter through, and on a book never
+    restructured the parse is `null` at that position anyway. The blind spot is a
+    reorder that only permutes app-titled chapters among themselves. */
 export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
 ): boolean {
   return state.chapters.every((c, i) => {
     const parsed = parseTitles[i];
-    return c.titleOverridden === true || c.titleSynthesized === true || parsed == null || c.title === parsed;
+    return c.titleOverridden === true || parsed == null || c.title === parsed;
   });
 }
 
