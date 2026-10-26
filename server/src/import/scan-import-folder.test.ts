@@ -1099,6 +1099,58 @@ describe('importPortableBundle', () => {
         }
       });
 
+      /* The keep rule keys on the target carrying the bundle's MANUSCRIPT id, not
+         on sharing its bookId: pinned both ways. */
+      it("same bookId, another manuscriptId in the target: mints when a third book holds the bundle's", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const target = targetDirFor(state);
+        const holder = join(BOOKS_ROOT, state.author, state.series, 'Keep Rule Holder');
+        rmSync(target, { recursive: true, force: true });
+        try {
+          mkdirSync(dotAudiobook(target), { recursive: true });
+          writeFileSync(stateJsonPath(target), JSON.stringify({ ...state, manuscriptId: 'mns_localT' }, null, 2));
+          writeFileSync(join(target, 'manuscript.txt'), manuscript);
+          mkdirSync(dotAudiobook(holder), { recursive: true });
+          writeFileSync(
+            stateJsonPath(holder),
+            JSON.stringify({ ...state, bookId: 'demo__standalones__keep-rule-holder' }, null, 2),
+          );
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          const t = readState(target);
+          expect(t.bookId).toBe(state.bookId);
+          expect(t.manuscriptId).not.toBe(state.manuscriptId);
+          expect(t.manuscriptId).not.toBe('mns_localT');
+          expect(readHints(target).entries[0].manuscriptId).toBe(t.manuscriptId);
+          expect(readState(holder).manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(holder, { recursive: true, force: true });
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
+      it("an overwrite keeps the id when the target already carries the bundle's manuscriptId under another bookId", async () => {
+        const state = hintsState();
+        const bundle = await bundleWithHints(state);
+        const target = targetDirFor(state);
+        rmSync(target, { recursive: true, force: true });
+        try {
+          mkdirSync(dotAudiobook(target), { recursive: true });
+          writeFileSync(
+            stateJsonPath(target),
+            JSON.stringify({ ...state, bookId: 'demo__standalones__keep-rule-other' }, null, 2),
+          );
+          writeFileSync(join(target, 'manuscript.txt'), manuscript);
+          await importPortableBundle(bundle, { onConflict: 'overwrite' });
+          const t = readState(target);
+          expect(t.bookId).toBe('demo__standalones__keep-rule-other');
+          expect(t.manuscriptId).toBe(state.manuscriptId);
+          expect(readHints(target).entries[0].manuscriptId).toBe(state.manuscriptId);
+        } finally {
+          rmSync(target, { recursive: true, force: true });
+        }
+      });
+
       /* NTFS / default APFS: the bundle's title differs from the folder's only in
          case, yet `existsSync` finds it. It is still the same book, so the id is kept. */
       it(
