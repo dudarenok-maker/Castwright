@@ -558,7 +558,9 @@ export const persistenceMiddleware: Middleware = (store) => {
           const hit = based.filter(
             (u) => Array.isArray(named) && fieldsOf(u, sent.get(u)!.value).some((f) => named.includes(f)),
           );
-          const dropped = (hit.length > 0 ? hit : based).filter(holds);
+          /* No unit carried a base (the server cannot send this): the refusal is
+             final for the whole send, or the same send would repeat forever. */
+          const dropped = (hit.length > 0 ? hit : based.length > 0 ? based : Array.from(sent.keys())).filter(holds);
           if (dropped.length > 0) {
             const handler = dropped.map((u) => box.get(u)!.handler).find(Boolean);
             for (const u of dropped) box.delete(u);

@@ -1966,6 +1966,28 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       restore();
     });
 
+    it('a stale refusal of a send that carried no base is final: one send, one toast, one mark, no loop', async () => {
+      const { disk, store, restore } = setup();
+      /* The server only names fields that had a base, so this is a mock or a
+         future server. It is capped: a loop would otherwise never yield. */
+      let sends = 0;
+      putBookState.mockImplementation(() => {
+        sends += 1;
+        return Promise.reject(
+          sends > 6
+            ? new Error('Book state PUT failed (400): loop cap')
+            : Object.assign(new Error('Book state PUT failed (409): stale'), { code: 'stale_revision', fields: ['title'] }),
+        );
+      });
+      commit(store, 'title', 'Mine');
+      await advance(10_000);
+      expect(sends).toBe(1);
+      expect(staleToasts(store)).toHaveLength(1);
+      expect(marks(store)).toBe(1);
+      expect(stateOnDisk(disk).title).toBe('The Northern Star');
+      restore();
+    });
+
     it('a full read is ignored only for the fields a PUT landed on since it was stamped', async () => {
       const { disk, store, restore } = setup();
       disk.write('b1', 'state', { ...stateOnDisk(disk), title: 'X' });
