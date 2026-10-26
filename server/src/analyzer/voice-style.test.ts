@@ -541,3 +541,58 @@ describe("persona generation reads its own model's reasoning entry (#3084 wave 5
     expect(send.mock.calls.map(([sent]) => sent.reasoning)).toEqual(['model-default', 'on']);
   });
 });
+
+describe('persona generation refuses a stored reasoning level no longer offered (#3084 wave 5, P17)', () => {
+  afterEach(() => {
+    delete process.env.PERSONA_GEN_ENGINE;
+    delete process.env.PERSONA_GEN_LOCAL_MODEL;
+    mockSettingsPatch = {};
+    vi.restoreAllMocks();
+  });
+
+  it('a named Ollama level with no accepted Test record refuses before any call', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    mockSettingsPatch = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:9b': 'low' } } };
+    const { OllamaTransport } = await import('./transports/ollama-transport.js');
+    const { AnalyzerReasoningUnavailableError } = await import('./errors.js');
+    const send = vi.spyOn(OllamaTransport.prototype, 'send');
+    const err = await generateVoiceStylePersona(CHAR).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'qwen3.5:9b', level: 'low', engine: 'local' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('an endpoint persona whose saved level its control style does not offer refuses before any call', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'openai:lab::qwen3';
+    mockSettingsPatch = { analyzerEndpoints: [ENDPOINT({ reasoning: 'high' })] };
+    const { OpenAITransport } = await import('./transports/openai-transport.js');
+    const { AnalyzerReasoningUnavailableError } = await import('./errors.js');
+    const send = vi.spyOn(OpenAITransport.prototype, 'send');
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a level the endpoint model's own Test recorded rejected refuses before any call (5.4-D1)", async () => {
+    process.env.PERSONA_GEN_ENGINE = 'openai:lab::qwen3';
+    mockSettingsPatch = {
+      analyzerEndpoints: [ENDPOINT({ reasoningStyle: 'enable_thinking', reasoning: 'on' })],
+      analyzerCapabilitiesByModel: {
+        'openai:lab::qwen3': {
+          serverUrl: ENDPOINT().baseUrl,
+          testedAt: '2026-09-11T10:00:00.000Z',
+          control: { ok: true },
+          structuredOutput: {},
+          reasoning: { on: 'rejected' },
+        },
+      },
+    };
+    const { OpenAITransport } = await import('./transports/openai-transport.js');
+    const { AnalyzerCapabilityRejectedError } = await import('./errors.js');
+    const send = vi.spyOn(OpenAITransport.prototype, 'send');
+    const err = await generateVoiceStylePersona(CHAR).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+    expect(err).toMatchObject({ setting: 'reasoning', value: 'on' });
+    expect(send).not.toHaveBeenCalled();
+  });
+});

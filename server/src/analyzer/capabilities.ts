@@ -607,3 +607,29 @@ export function assertConfiguredReasoningOffered(
   if (!offeredReasoningLevels(sel).includes(level)) throw new AnalyzerReasoningUnavailableError(modelId, level, sel.engine, when);
   return level;
 }
+
+/** #3084 wave 5 (5.4-D1) — persona generation's pre-run reasoning check. A persona request sends a
+    reasoning level and no structured output, so only the reasoning half applies: the level must still be
+    offered (P17, AnalyzerReasoningUnavailableError) and must not be one this model's own Test recorded
+    `rejected` (AnalyzerCapabilityRejectedError, citing that verdict's own date, A2). No digest: persona
+    keeps capabilityRecordFor's fail-open rule. */
+export function assertPersonaReasoningAllowed(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+): ReasoningLevel {
+  const level = assertConfiguredReasoningOffered(settings, modelId, engine);
+  /* The full record, not reasoningSelectionFor's `record` (typed as reasoning.ts's narrow view). */
+  let record: ModelCapabilityRecord | undefined;
+  if (engine === 'openai') {
+    const parsed = parseEndpointModelId(modelId);
+    const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+    record = endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined;
+  } else {
+    record = capabilityRecordFor(settings, modelId, engine === 'local' ? getResolvedOllamaUrl() : 'gemini');
+  }
+  if (record?.control.ok && record.reasoning[level] === 'rejected') {
+    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', level, verdictTestedAtFor(record, { setting: 'reasoning', reasoning: level }));
+  }
+  return level;
+}
