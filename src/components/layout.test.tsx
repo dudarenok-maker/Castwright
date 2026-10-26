@@ -2914,7 +2914,7 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
   it('exhausted, then the server recovers: the reverted edit is not silently re-sent on the next leave', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     /* The confirm-stage voice match PUTs the cast it re-reads, and that newer
-       edit would itself supersede the kept save. Hold it back so the kept save
+       edit would itself replace the kept save. Hold it back so the kept save
        is the only thing that could reach disk. */
     matchVoicesMock.mockReturnValue(new Promise(() => {}));
     const store = makeStoreWithScopeAndPersistence();

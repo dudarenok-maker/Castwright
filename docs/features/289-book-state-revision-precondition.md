@@ -591,7 +591,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
   *Why (a):* the server is already failing, and (b) compresses the outage window, so the save gives up sooner. It also adds a cancellable sleep.
 - **OD-C2 — Consequence of "a live build carries no base" (confirm).** When a live commit is combined with a kept field, only the kept field carries its base, and the live fields go unconditionally.
   - **(a) Recommended: accept.** D6 chose differently: it based every field of such a send (test :1346, "a live build a kept save was merged into carries the kept base, so an outside write refuses it"). That test is rewritten to: an outside write *to the kept field* refuses the send; an outside write to a live field is overwritten, as on `main`.
-  - **(b)** Base every field of a send that carries a kept field. This is exactly R3's mechanism: it refuses the user's own unacknowledged write.
+  - **(b)** Base every field of a send that carries a kept field. This is one ingredient of R3: it can refuse the user's own unacknowledged write. Under the outbox it does not reproduce R3 alone (single flight leaves no older same-key request to have already landed the write); R3 is pinned by C3's "a live build carries no base", and the red-first R3 test is red only when that rule is broken.
 
   *Why (a):* this is `main` parity for live edits. Same-tab outside writers are covered by D7's full read.
 - **OD-C3 — A field the server refused as stale whose value a newer edit already replaced.**

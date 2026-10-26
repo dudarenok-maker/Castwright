@@ -530,7 +530,7 @@ describe('persistenceMiddleware — leaving a book flushes, and a re-read can aw
     err.mockRestore();
   });
 
-  it('a newer write supersedes a pending retry (#3421)', async () => {
+  it('a newer write made during a backoff rides the scheduled retry (#3421, OD-C1)', async () => {
     putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (503): down'));
     const state: Record<string, unknown> = baseState();
     const store = makeStore(state);
@@ -951,8 +951,9 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     /* Two saves whose debounced PUTs OVERLAP in flight: the older PUT resolving
        after a newer one is scheduled must NOT prune the shared rollback
        snapshot, and the newer PUT's failure must still recover the newest edit.
-       Before the generation-token gate, the older flush's onSuccess would wipe
-       the snapshot the newer flush's rollback needs → the newer edit was lost. */
+       A landed save prunes the snapshot only when no entry of its handler is
+       still queued; otherwise the older onSuccess would wipe the snapshot the
+       newer save's rollback needs → the newer edit was lost. */
     const deferred: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
     putBookState.mockImplementation(
       () =>
@@ -1057,7 +1058,7 @@ describe('a given-up save is kept and re-sent on the next flush (#3421)', () => 
     err.mockRestore();
   });
 
-  it('(iii-a) a newer edit to the same fields supersedes the kept ones', async () => {
+  it('(iii-a) a newer edit to the same fields replaces the kept ones', async () => {
     putBookState.mockRejectedValue(down());
     const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'old' }] } });
     const mw = persistenceMiddleware(makeStore(state))(vi.fn((x) => x));
@@ -1600,7 +1601,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a stale refusal nothing superseded still toasts and forces a re-read', async () => {
+  it('a stale refusal no newer edit replaced still toasts and forces a re-read', async () => {
     const { disk, store, restore } = setup();
     await staleRetryAfter(store, disk, async () => {
       disk.write('b1', 'cast', { characters: [eliza('Elsewhere')] });
@@ -1776,7 +1777,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
   const metaToasts = (store: S) =>
     (store.getState() as MetaState).notifications.toasts.filter((t) => t.dedupeKey === 'book-meta-persist-failed');
 
-  it('a refused superseded save rolls back and toasts for the book-meta fields no newer build carries', async () => {
+  it('a refused send rolls back and toasts the book-meta fields no newer build replaced', async () => {
     const { disk, store, restore } = setup();
     const refuse = refuseLater();
     commit(store, 'title', 'Collides');
@@ -1797,7 +1798,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a refused save a newer commit fully overtook neither rolls back nor toasts', async () => {
+  it('a refused send whose every book-meta field a newer commit replaced neither rolls back nor toasts', async () => {
     const { disk, store, restore } = setup();
     const refuse = refuseLater();
     commit(store, 'title', 'Collides');
@@ -1814,7 +1815,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
     restore();
   });
 
-  it('a refused superseded save whose book-meta fields a newer commit carries does not roll them back', async () => {
+  it('a refused send whose book-meta fields a newer commit replaced does not roll them back, and re-sends castConfirmed', async () => {
     const { disk, store, restore } = setup();
     const refuse = refuseLater();
     commit(store, 'title', 'Collides');
@@ -1963,6 +1964,98 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       const onDisk = disk.books.get('b1')!.manuscript!;
       expect(onDisk.mergedAwayKeys).toEqual(['1:2']);
       expect((onDisk.sentences[0] as { characterId: string }).characterId).toBe('eliza');
+      restore();
+    });
+
+    const sentences = (text = 'One.') => [
+      { id: 1, chapterId: 1, text, characterId: 'narrator' },
+      { id: 2, chapterId: 1, text: 'Two.', characterId: 'narrator' },
+    ];
+
+    /* C1 / C6 — a manuscript build is ONE unit: the refused `sentences` takes
+       `mergedAwayKeys` with it, so nothing is re-sent (a split send would write
+       the file without its tombstones, fs-58). */
+    it('a manuscript 409 naming only sentences drops the whole build: nothing is re-sent', async () => {
+      const { disk, store, restore } = setup({ sentences: sentences(), mergedAwayKeys: [] });
+      disk.write('b1', 'manuscript', { sentences: sentences(), mergedAwayKeys: [] });
+      learn(store, disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number);
+      disk.failNext(1, (_id, req) => req.slice === 'manuscript');
+      store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'eliza' }));
+      await advance(600);
+      disk.write('b1', 'manuscript', { sentences: sentences('Theirs.'), mergedAwayKeys: [] });
+      await advance(5000);
+      expect(outcomes(disk)).toEqual(['503', '409']);
+      expect(reqs().filter((r) => r.slice === 'manuscript')).toHaveLength(2);
+      expect((disk.books.get('b1')!.manuscript!.sentences[0] as { text: string }).text).toBe('Theirs.');
+      expect(staleToasts(store)).toHaveLength(1);
+      expect(marks(store)).toBe(1);
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      restore();
+    });
+
+    /* C2 — a bulk reassignment still unsent owns the unit's failure toast even
+       when a plain edit rode along in the same window. */
+    it('a plain manuscript edit made after a bulk reassignment keeps the bulk toast on a refusal', async () => {
+      const { disk, store, restore } = setup({ sentences: sentences(), mergedAwayKeys: [] });
+      disk.refuseNext('book_busy', (_id, req) => req.slice === 'manuscript');
+      store.dispatch(
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 1 }],
+          characterId: 'eliza',
+          targetLabel: 'Eliza',
+        }),
+      );
+      store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 2, characterId: 'eliza' }));
+      await advance(600);
+      expect(outcomes(disk)).toEqual(['refused']);
+      expect(toastKeys(store)).toContain('bulk-reassign-persist-failed');
+      expect(toastKeys(store)).not.toContain('book-persist-failed:b1');
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      restore();
+    });
+
+    /* C6 — a 409 with no usable `fields` reads as "every based unit": the kept
+       castConfirmed (which has a base) is dropped, the live commit that rode
+       beside it (no base) is not, and the flight ends after the follow-up. */
+    it.each([
+      { name: 'missing', fields: undefined },
+      { name: 'empty', fields: [] },
+    ])('a stale 409 with $name fields drops the based unit only, and the live fields go in a follow-up', async ({ fields }) => {
+      const { disk, store, restore } = setup();
+      await keepConfirm(store, disk);
+      putBookState.mockImplementationOnce(() =>
+        Promise.reject(
+          Object.assign(new Error('Book state PUT failed (409): stale'), { code: 'stale_revision', fields }),
+        ),
+      );
+      commit(store, 'title', 'T');
+      await advance(5000);
+      expect(reqs().at(-2)!.patch).toMatchObject({ castConfirmed: true, title: 'T' });
+      expect(reqs().at(-1)!.patch).toMatchObject({ title: 'T' });
+      expect(reqs().at(-1)!.patch).not.toHaveProperty('castConfirmed');
+      expect(stateOnDisk(disk)).toMatchObject({ title: 'T', castConfirmed: false });
+      expect(staleToasts(store)).toHaveLength(1);
+      expect(marks(store)).toBe(1);
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      restore();
+    });
+
+    /* C6 / termination — a 4xx on a send with no rollback handler is final: its
+       entries go, nothing is kept, and the flight ends. (Capped, as below: a
+       loop would otherwise never yield.) */
+    it('a 404 drops the key’s outbox and ends the flight: one send, nothing kept', async () => {
+      const { disk, store, restore } = setup();
+      let sends = 0;
+      putBookState.mockImplementation(() => {
+        sends += 1;
+        return sends > 6 ? Promise.resolve(undefined) : Promise.reject(new Error('Book state PUT failed (404): Book not found'));
+      });
+      rename(store, 'Eliza X');
+      await advance(10_000);
+      expect(sends).toBe(1);
+      expect(castName(disk)).toBe('Eliza');
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      expect(sends).toBe(1);
       restore();
     });
 

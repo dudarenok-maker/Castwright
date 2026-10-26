@@ -1177,8 +1177,9 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     /* Plan 289, N6 / N7 — PR #3775 pass 5's sequences: two overlapping wipes
        of one book that both fail, with edits made while they run. Nothing in
        them is stale, so every save the user made must reach disk, and the
-       book-details rollback must keep its baseline. The park / restore
-       bookkeeping got each of them wrong. */
+       book-details rollback must keep its baseline. The single-flight outbox
+       (pass 7) holds this by construction: nothing is parked, so there is
+       nothing to restore. These stay as end-state regressions. */
     describe('overlapping failed wipes keep the latest edit (plan 289 N6 / N7)', () => {
       const named = (name: string) => [{ id: 'c1', name, voiceState: 'generated' } as Character];
       function setupDisk() {
