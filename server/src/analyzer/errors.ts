@@ -3,6 +3,8 @@
 
    Lives in its own module (not on an engine) so both engines + the route layer
    can import these without a circular dependency. */
+import type { ReasoningLevel } from './reasoning-level.js';
+
 /** Every transport the stage runner can drive. Wave 1 uses 'ollama' and 'gemini'. */
 export type TransportKind = 'ollama' | 'gemini' | 'openai';
 
@@ -224,11 +226,14 @@ export class AnalyzerReasoningOverflowError extends Error {
      existing 3-arg call site (Ollama/Gemini paths, mapFinish) compiles and behaves
      unchanged, and `endpointId` stays `undefined` for them. */
   endpointId?: string;
+  /** #3084 wave 5 — the level the overflowing request was sent at, set at the throw site
+      (mapFinish's ctx, runFreeText's inline check). Never re-derived from live settings. */
+  readonly reasoningLevel?: ReasoningLevel;
   constructor(
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
-    opts?: { endpointId?: string; persona?: boolean },
+    opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
@@ -239,6 +244,7 @@ export class AnalyzerReasoningOverflowError extends Error {
     );
     this.name = 'AnalyzerReasoningOverflowError';
     this.endpointId = opts?.endpointId;
+    this.reasoningLevel = opts?.reasoningLevel;
   }
 }
 
