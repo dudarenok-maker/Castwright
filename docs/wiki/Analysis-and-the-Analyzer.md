@@ -83,6 +83,17 @@ is highlighted for you):
   help here: Gemini's input and output limits are separate, so a smaller body
   buys no extra room for the answer.) On Auto there's nothing to raise, so
   switch model.
+- **Reasoning level (all three engines):** the fix opens that model's row under
+  **Advanced Settings → Analyzer request controls** (the row is highlighted).
+  - **Ollama:** **Turn reasoning off for <model>**, offered when the model's level is `on`, a
+    named level (`low`, `medium`, `high`) or Model default; not when it is already `off`.
+  - **Gemini / Gemma:** **Set a lower reasoning level (try "<level>") for <model>**, offered when
+    the level the request ran at has a real level below it. At Model default on a model with
+    levels it suggests that model's lowest level by name. Gemma 4 at its default gets none;
+    Gemma at `on` gets **Turn reasoning off for <model>**.
+  - **OpenAI-compatible endpoints:** **Lower <name>'s reasoning level**, only for an endpoint with
+    a Reasoning control whose level is above its lowest one (`off` for `enable_thinking`, `none`
+    for `reasoning_effort`).
 - **Any engine:** **switch to a different analyzer model**. Some models simply
   think too long to finish a chunked pass, and no budget tweak fixes that. This
   entry is advice rather than a link — there's nothing to open.

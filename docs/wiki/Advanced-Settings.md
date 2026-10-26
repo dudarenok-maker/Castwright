@@ -49,6 +49,23 @@ the Python virtual environment — not instant). A **.env** pill instead of any
 of these means the value is locked by an environment variable and the field
 is disabled.
 
+
+### Analyzer request controls
+
+Above the numbered groups, a card of its own sets how hard each analyzer model thinks. It lists
+every Ollama model and, when a Gemini key is set, every Gemini model, each with a **Reasoning**
+level. Only the levels that model can take are offered:
+
+- **Gemini:** the 3.x Flash family uses `minimal`, `low`, `medium` and `high` (3.5 and 3.6 Flash,
+  3.5 and 3.1 Flash-Lite) or `low`, `medium` and `high` (3.7 and 3.8 Flash, 3.1 Pro). Gemma 4 is on
+  or off. Gemini 2.5 and models Castwright does not know offer Model default only.
+- **Ollama:** `off`, `on` and Model default, plus `low`, `medium` and `high` once that model's own
+  **Test** accepted them. A level the Test refused stops a run before it starts.
+
+Nothing changes until you pick a level: Ollama keeps thinking off and Gemini keeps its own default.
+A failure's "How to fix" list can link straight to a model's row here, scrolled into view and
+highlighted. This card adds no setting to the groups below, so their knob count is unchanged.
+
 ## 1. LLM sampling parameters
 
 <picture>
