@@ -967,9 +967,11 @@ export function Layout() {
           if (!revisionsOnly) {
             /* #3421 — the flush above already re-sent any kept save of this book;
                one still kept was given up on again and its edit is reverted by
-               this re-read, so it must not land later behind the user's back. A
-               book-meta save held for this read (#3784 P1) is not dropped: it
-               is sent once the read hydrates. */
+               this re-read, so it must not land later behind the user's back.
+               Two kinds of book-details (`state`) save are not dropped: one held
+               for this read (#3784 P1) is sent once the read hydrates, and one
+               that carries a base (P2) stays for the server to judge. Based
+               whole-slice saves (cast, manuscript, changeLog) are dropped. */
             dispatch(dropRetainedSaves(bookId, true));
             if (typeof readSeq === 'number') {
               dispatch(learnSliceRevisions(bookId, res.sliceRevisions, readSeq));
