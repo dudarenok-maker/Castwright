@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register row: A109 (§10 below, rewritten by #3777; the id is unchanged).
+> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), B107 (§12, Ollama reasoning levels and Test attribution) and E114 (§13, Gemini reasoning levels).
 
 ---
 

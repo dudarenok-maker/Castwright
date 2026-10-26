@@ -55,7 +55,7 @@ _Checked against llama.cpp server README (master) on 2026-10-17._
 - **GPU card:** the card llama-server runs on, as `cuda:N`.
 - **Unload URL:** none — llama-server serves the model it was started with, and its README documents no unload endpoint. <!-- README checked 2026-10-17: no unload endpoint documented -->
 - **Structured output:** `schema`, then run **Test**. Schema enforcement while a model is thinking cannot be assumed: ggml-org/llama.cpp#20345 was closed by a fix, and later reports say it recurs on Qwen3.6 and gpt-oss. <!-- §B5 -->
-- **Reasoning:** pick `reasoning_effort`: `none` turns thinking off, and any other string is passed to the model's chat template. `enable_thinking` also works for templates that key on it. Thinking streams as `reasoning_content`. A request body carrying it: `{"reasoning_effort": "none"}`. <!-- Source: planning facts B3-B4 (llama.cpp server). Tool version not re-verified for this section: verify at implementation. -->
+- **Reasoning:** pick `reasoning_effort`: `none` turns thinking off, and any other string is passed to the model's chat template. `enable_thinking` also works for templates that key on it. Thinking streams as `reasoning_content`. A request body carrying it: `{"reasoning_effort": "none"}`. <!-- Source: planning facts B3-B4 (llama.cpp server). Tool version not re-verified for this section. -->
 - **Pitfalls:**
   - A request waiting for a busy slot gets no reply headers until a slot frees. It counts against the request ceiling and fails as a timeout, not as unreachable. Set **Concurrent requests** to the server's slot count. <!-- §B1 -->
   - 401: the key is missing or wrong. Re-enter it on the endpoint.
@@ -86,7 +86,7 @@ _Checked against llama-swap v265 on 2026-10-17._
 - **GPU card:** the card the models run on. If models run on different cards, add one endpoint per card, each with its own models, or use `any`.
 - **Unload URL:** `http://127.0.0.1:8080/api/models/unload/{model}` unloads one model (200, or 404 if it is not loaded). `POST /api/models/unload` and `GET /unload` unload **every** model: do not use them on a shared server. Each call waits until the process stops, and needs the key when `apiKeys` is set. <!-- §B8; README lists POST /api/models/unload and POST /api/models/unload/:model_id, checked 2026-10-17 -->
 - **Structured output:** as llama.cpp: `schema`, then **Test**.
-- **Reasoning:** llama-swap passes the request body to the model's own server, so choose the control that server's template honours (usually the llama.cpp row above). <!-- UNVERIFIED for llama-swap v265: verify at implementation. -->
+- **Reasoning:** llama-swap passes the request body to the model's own server, so choose the control that server's template honours (usually the llama.cpp row above). <!-- UNVERIFIED for llama-swap v265. -->
 - **Pitfalls:** List models shows no context when `capabilities.context` is not set and the upstream does not report one; add it or Detect.
 
 ### LM Studio
@@ -106,7 +106,7 @@ _Checked against LM Studio docs (lms CLI; API tokens need 0.4.0 or newer) on 202
 - **GPU card:** the card LM Studio loads onto.
 - **Unload URL:** none usable. LM Studio unloads with `POST /api/v1/models/unload` and a JSON body `{"instance_id": …}`, and Castwright's Unload URL sends no body, so leave it empty. <!-- https://lmstudio.ai/docs/developer/rest/unload checked 2026-10-17 -->
 - **Structured output:** `schema` or `off`, **never `json`**: LM Studio answers `response_format: {"type": "json_object"}` with 400 `'response_format.type' must be 'json_schema' or 'text'` (reported through 0.4.21). <!-- §B13 -->
-- **Reasoning:** leave Reasoning control on Not controllable unless you have confirmed the loaded model reads `reasoning_effort` or `enable_thinking` from the request. <!-- UNVERIFIED: LM Studio's reasoning request fields were not checked; verify at implementation. -->
+- **Reasoning:** leave Reasoning control on Not controllable unless you have confirmed the loaded model reads `reasoning_effort` or `enable_thinking` from the request. <!-- UNVERIFIED: LM Studio's reasoning request fields were not checked. -->
 
 ### vLLM
 
@@ -153,7 +153,7 @@ Start it with `litellm --config /path/to/config.yaml`.
 - **GPU card:** the backend's card if the backend runs on this machine, otherwise `none`.
 - **Unload URL:** none: the unload URL must share the gateway's host and port.
 - **Structured output:** depends on the backend; run **Test**.
-- **Reasoning:** LiteLLM forwards the field to the backend behind it, so choose the control that backend honours. <!-- UNVERIFIED: verify at implementation. -->
+- **Reasoning:** LiteLLM forwards the field to the backend behind it, so choose the control that backend honours. <!-- UNVERIFIED. -->
 
 ### OpenRouter
 
@@ -164,7 +164,7 @@ Start it with `litellm --config /path/to/config.yaml`.
 - **Context size:** `/api/v1/models` → `context_length`, and `top_provider.context_length`; **List models** fills it. <!-- §B12; live response on 2026-10-17 carries both fields -->
 - **GPU card:** `none`. **Unload URL:** none.
 - **Max output tokens:** `top_provider.max_completion_tokens` is the provider's limit. <!-- §B12; live response on 2026-10-17 -->
-- **Reasoning:** pick `reasoning_effort`; OpenRouter documents `reasoning_effort` as a top-level field and a nested `reasoning: {effort, ...}` object, and Castwright sends the top-level form. Hosted models differ in which levels they honour. <!-- Source: planning facts B12. Not re-verified: verify at implementation. -->
+- **Reasoning:** pick `reasoning_effort`; OpenRouter documents `reasoning_effort` as a top-level field and a nested `reasoning: {effort, ...}` object, and Castwright sends the top-level form. Hosted models differ in which levels they honour. <!-- Source: planning facts B12. Not re-verified. -->
 - **Pitfalls:** an output cap larger than what is left of the context is a 400; **Test** records it as inconclusive, and a run shows which limit to lower.
 
 ## Fallback
