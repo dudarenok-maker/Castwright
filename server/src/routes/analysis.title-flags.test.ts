@@ -271,7 +271,10 @@ describe('#3628 — merge after an analysis renumbers like a merge without one',
       { title: 'Chapter 2', titleSynthesized: true },
       { title: 'Chapter 3', titleSynthesized: true },
     ];
-    const ms = `# Prologue\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
+    /* The headings read "Chapter 1".."Chapter 3", so the parse's titles equal state's: a
+       merge on a parse-fallback book title-checks them (#3791), and a heading of other
+       wording against a synthesized state title is a state no current import produces. */
+    const ms = `# Prologue\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n\n# Chapter 3\n\n${LINE}\n`;
     const control = await seedBook('merge-control', ms, book);
     const analysed = await seedBook('merge-analysed', ms, book);
     await runAnalysis(analysed.manuscriptId, 'main');
