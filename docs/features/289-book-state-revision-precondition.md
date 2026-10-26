@@ -167,7 +167,7 @@ The fix uses one mechanism:
 - **Who marks a book:**
   - the middleware, on every `stale_revision` refusal (D2);
   - **`onEditBook` and the language-guard modal, after a successful direct `PUT`.** They are writers the middleware never sees, and the book's slices may be in memory.
-- **F1 stays:** `dropRetainedSaves(bookId)` on a **full** read still drops kept saves, because the user has now seen disk. Revisions-only reads do not drop. (**Amended by C7:** a kept save is now the idle outbox entries of a key.)
+- **F1 stays:** `dropRetainedSaves(bookId)` on a **full** read still drops kept saves, because the user has now seen disk. Revisions-only reads do not drop. (**Amended by C7:** a kept save is now the idle outbox entries of a key; since pass 8 a full read keeps held (P1) and based (P2) `state` entries.)
 
 ### D8 — What the client stops doing
 
@@ -406,7 +406,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 
 **Why.** Passes 1–7 kept finding the same family: facts that belong to one field were tracked per send or per sequence, in maps that disagreed (`covered`, `refreshable`, the whole-slice refresh, per-send keep and rollback). R1–R3 are its latest members. A per-field outbox with one request in flight holds each fact once, on the field it belongs to, so there is nothing to disagree with.
 
-**Size.** `persistence-middleware.ts` is 925 lines at 11a2509f (511 on `main`). Expected after the rework: **700–780**. The rules table, handlers and exports (lines 1–407) change only in comments. The unchanged tail of the action handler (the gate, S3, the draft clear, LEARN / DROP / FLUSH) is about 95 lines. The new engine (maps, `pump`/`run`, four outcome handlers, the build merge) is about 250 lines at this file's comment density. **Above 800 lines, stop and simplify before review.** The test file grows on net (five red-first tests plus about nine pins, minus four deleted); the shrink is in the engine, not in the tests. *(Revised after the checker; the first draft said about 650 lines, and a test-file shrink.)*
+**Size.** `persistence-middleware.ts` is 925 lines at 11a2509f (511 on `main`). Expected after the rework: **700–780**. The rules table, handlers and exports (lines 1–407) change only in comments. The unchanged tail of the action handler (the gate, S3, the draft clear, LEARN / DROP / FLUSH) is about 95 lines. The new engine (maps, `pump`/`run`, four outcome handlers, the build merge) is about 250 lines at this file's comment density. **Above 800 lines, stop and simplify before review.** The test file grows on net (five red-first tests plus about nine pins, minus four deleted); the shrink is in the engine, not in the tests. *(Revised after the checker; the first draft said about 650 lines, and a test-file shrink.) Outcome: 786 at pass 7; 865 after the pass-8 fixes, over this ceiling — see Ship notes, "Review pass 8 fixes".*
 
 ### Decisions
 
