@@ -4040,6 +4040,17 @@ export interface components {
             testedAt: string;
             /** @description #3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded. */
             digest?: string;
+            /** @description #3084 — each verdict's own Test date, keyed like the verdicts. A verdict with no entry was recorded by the Test the record's testedAt names. */
+            verdictTestedAt?: {
+                reasoning?: {
+                    [key: string]: string;
+                };
+                structuredOutput?: {
+                    [key: string]: {
+                        [key: string]: string;
+                    };
+                };
+            };
             control: {
                 ok: boolean;
                 error?: string;

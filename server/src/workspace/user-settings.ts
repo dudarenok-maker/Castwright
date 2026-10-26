@@ -27,6 +27,8 @@ import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-i
 import { analyzerEndpointSchema } from './analyzer-endpoints.js';
 import { registerKnownSecretsProvider } from '../analyzer/known-secrets-gate.js';
 import { registerAnalyzerEndpointsProvider } from '../analyzer/analyzer-endpoints-gate.js';
+import { mergeCapabilityRecords } from '../analyzer/capability-record-merge.js';
+import { normalizeModelTag } from '../analyzer/ollama-tag.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -264,8 +266,16 @@ export const modelCapabilityRecordSchema = z.object({
      in that interface with this non-optional `z.record`, which is not mutually assignable, so
      capabilities.ts drops the `Partial` and both sides are the plain record. */
   reasoning: z.record(z.string(), z.enum(['accepted', 'rejected'])),
-  /* 3c (A3): Ollama digest at Test time; 5a adds verdictTestedAt beside it. */
+  /* 3c (A3): Ollama digest at Test time; verdictTestedAt sits beside it. */
   digest: z.string().optional(),
+  /* #3084 wave 5 (A2) — each verdict's own Test date, keyed like the verdicts, because a merged record
+     carries verdicts from more than one Test. A verdict with no entry takes the record's testedAt. */
+  verdictTestedAt: z
+    .object({
+      reasoning: z.record(z.string(), z.string()).optional(),
+      structuredOutput: z.record(z.string(), z.record(z.string(), z.string())).optional(),
+    })
+    .optional(),
 });
 
 export const userSettingsSchema = z.object({
@@ -1930,18 +1940,26 @@ export async function mutateUserSettings(
   return next;
 }
 
-/** #3084 — persist one Test-action record, replacing any earlier record for the id.
-    Goes through mutateUserSettings so it serialises with endpoint and key writes. Only a
-    completed test calls it: a failed control or an inconclusive step writes nothing, so the
-    previous record stays (P7). */
+/** #3084 — persist one Test-action record, merging the verdicts this Test probed into the model's earlier
+    record for the same server and the same model build (N14, A2; mergeCapabilityRecords). Goes through
+    mutateUserSettings so it serialises with endpoint and key writes. Only a completed test calls it: a
+    failed control or an inconclusive step writes nothing, so the previous record stays (P7). Callers pass
+    capabilityRecordKey(modelId) (N7) and `sameModel`, which accepts every saved key naming this same
+    model — an Ollama tag in its other form (`qwen3` / `qwen3:latest`), an endpoint id exactly. Those keys
+    are merged into and then removed, so one model keeps one record, under the canonical key. */
 export async function writeAnalyzerCapabilityRecord(
   modelId: string,
   record: z.infer<typeof modelCapabilityRecordSchema>,
+  sameModel: (savedKey: string) => boolean = (savedKey) => normalizeModelTag(savedKey) === normalizeModelTag(modelId),
 ): Promise<UserSettings> {
   const validated = modelCapabilityRecordSchema.parse(record);
-  return mutateUserSettings((current) => ({
-    analyzerCapabilitiesByModel: { ...current.analyzerCapabilitiesByModel, [modelId]: validated },
-  }));
+  return mutateUserSettings((current) => {
+    const stored = current.analyzerCapabilitiesByModel;
+    const alias = Object.keys(stored).find((key) => key !== modelId && sameModel(key));
+    const previous = stored[modelId] ?? (alias !== undefined ? stored[alias] : undefined);
+    const kept = Object.fromEntries(Object.entries(stored).filter(([key]) => key !== modelId && !sameModel(key)));
+    return { analyzerCapabilitiesByModel: { ...kept, [modelId]: mergeCapabilityRecords(previous, validated) } };
+  });
 }
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:

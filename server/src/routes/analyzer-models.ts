@@ -5,7 +5,12 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { Request, Response } from '../http.js';
 import { buildAnalyzerCatalog, previewEndpointModels } from '../analyzer/catalog/analyzer-catalog.js';
-import { ModelTestControlFailedError, runModelTest } from '../analyzer/capabilities.js';
+import {
+  ModelTestControlFailedError,
+  capabilityRecordKey,
+  runModelTest,
+  sameCapabilityRecordModel,
+} from '../analyzer/capabilities.js';
 import { modelTestDepsFor, GeminiKeyMissingForTestError } from '../analyzer/model-test-deps.js';
 import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from '../analyzer/errors.js';
 import { keyOriginMatches, httpUrlSchema } from '../workspace/analyzer-endpoints.js';
@@ -65,7 +70,9 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
     });
     try {
       const record = await runModelTest({ modelId, scope }, { ...deps, signal: controller.signal });
-      await writeAnalyzerCapabilityRecord(modelId, record);
+      await writeAnalyzerCapabilityRecord(capabilityRecordKey(modelId), record, (savedKey) =>
+        sameCapabilityRecordModel(savedKey, modelId),
+      );
       return res.json(record);
     } catch (err) {
       if (controller.signal.aborted) return; // the client left: nothing to answer, nothing written

@@ -5842,6 +5842,22 @@ components:
         digest:
           type: string
           description: '#3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded.'
+        verdictTestedAt:
+          type: object
+          properties:
+            reasoning:
+              type: object
+              additionalProperties:
+                type: string
+                format: date-time
+            structuredOutput:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: date-time
+          description: '#3084 — each verdict''s own Test date, keyed like the verdicts. A verdict with no entry was recorded by the Test the record''s testedAt names.'
         control:
           type: object
           required: [ok]

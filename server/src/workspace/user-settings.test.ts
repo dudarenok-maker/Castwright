@@ -31,6 +31,9 @@ import {
   _resetUserSettingsCache,
   _setUserSettingsCacheForTest,
   _setExplicitlySetKeysForTest,
+  modelCapabilityRecordSchema,
+  readUserSettings,
+  writeAnalyzerCapabilityRecord,
 } from './user-settings.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 
@@ -1983,5 +1986,54 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     } finally {
       delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
     }
+  });
+});
+
+describe('writeAnalyzerCapabilityRecord — merges each Test into one record per model (N14, A2, N7)', () => {
+  const URL_A = 'http://127.0.0.1:11434';
+  const T1 = '2026-09-10T10:00:00.000Z';
+  const T2 = '2026-09-12T09:00:00.000Z';
+  const rec = (over: Record<string, unknown> = {}) =>
+    ({ serverUrl: URL_A, testedAt: T2, control: { ok: true as const }, structuredOutput: {}, reasoning: {}, ...over }) as Parameters<
+      typeof writeAnalyzerCapabilityRecord
+    >[1];
+
+  beforeEach(() => {
+    _resetUserSettingsCache();
+  });
+  afterEach(() => {
+    _resetUserSettingsCache();
+  });
+
+  it('the schema keeps verdictTestedAt on parse', () => {
+    const dates = { reasoning: { on: T1 }, structuredOutput: { schema: { on: T1 } } };
+    expect(modelCapabilityRecordSchema.parse(rec({ verdictTestedAt: dates })).verdictTestedAt).toEqual(dates);
+  });
+
+  it('a configured Test merges its verdicts into the earlier record for the same server (N14)', async () => {
+    await writeAnalyzerCapabilityRecord('q:4b', rec({ testedAt: T1, reasoning: { on: 'rejected', low: 'accepted' } }));
+    await writeAnalyzerCapabilityRecord('q:4b', rec({ reasoning: { off: 'accepted' } }));
+    const stored = (await readUserSettings()).analyzerCapabilitiesByModel['q:4b'];
+    expect(stored.reasoning).toEqual({ on: 'rejected', low: 'accepted', off: 'accepted' });
+    expect(stored.testedAt).toBe(T2);
+    expect(stored.verdictTestedAt?.reasoning).toEqual({ on: T1, low: T1, off: T2 });
+  });
+
+  it('a record W3c saved under :latest is found, merged into and rewritten under the canonical tag (A2, N7)', async () => {
+    /* Seed the pre-N7 shape through the writer itself, with an exact-match predicate so it stays under :latest. */
+    await writeAnalyzerCapabilityRecord('qwen3:latest', rec({ testedAt: T1, reasoning: { on: 'rejected' } }), (key) => key === 'qwen3:latest');
+    await writeAnalyzerCapabilityRecord('qwen3', rec({ reasoning: { off: 'accepted' } }));
+    const records = (await readUserSettings()).analyzerCapabilitiesByModel;
+    expect(Object.keys(records).filter((key) => key.startsWith('qwen3'))).toEqual(['qwen3']);
+    expect(records.qwen3.reasoning).toEqual({ on: 'rejected', off: 'accepted' });
+    expect(records.qwen3.verdictTestedAt?.reasoning?.on).toBe(T1);
+  });
+
+  it('a Test whose digest differs replaces the record instead of merging it (A2)', async () => {
+    await writeAnalyzerCapabilityRecord('q:4b', rec({ testedAt: T1, reasoning: { on: 'rejected' }, digest: 'sha256-old' }));
+    await writeAnalyzerCapabilityRecord('q:4b', rec({ reasoning: { off: 'accepted' }, digest: 'sha256-new' }));
+    const stored = (await readUserSettings()).analyzerCapabilitiesByModel['q:4b'];
+    expect(stored.reasoning).toEqual({ off: 'accepted' });
+    expect(stored.digest).toBe('sha256-new');
   });
 });
