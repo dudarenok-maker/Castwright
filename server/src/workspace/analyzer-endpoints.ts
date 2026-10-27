@@ -93,6 +93,8 @@ export class AnalyzerEndpointRefusal extends Error {
     /* #3084 F5 — {path, message} pairs the route echoes verbatim as the response's
        `issues`. Never a field or key value: a route renders these inline next to
        the named field, so a value here would leak it into a save-time error body.
+       The one exception is the submitted `reasoning` level (the PR 5a offered-level
+       check echoes it): a reasoning level is not a secret, so echoing it leaks nothing.
        path is [] for a refusal that names no single field (duplicate-id,
        not-found, referenced). */
     readonly issues: { path: string[]; message: string }[] = [],

@@ -147,8 +147,10 @@ export class OllamaTransport implements ChatTransport {
         ...(onCpu ? { num_gpu: 0 } : {}),
       },
     };
-    /* #3084 wave 5 — reasoning. `undefined` = a caller that predates reasoning
-       settings (the Test action's direct transport.send): keep today's think:false
+    /* #3084 wave 5 — reasoning. `undefined` = a caller that sends no level; no
+       production caller does now (the stage runner and the Test action's probe
+       steps both send one), so this is the legacy default for any direct
+       transport.send that omits it: keep today's think:false
        (qwen3.5's <think> tokens break the parser; Ollama accepts false on
        non-thinking models). A defined level sends exactly its fragment;
        'model-default' sends no `think` at all. */
