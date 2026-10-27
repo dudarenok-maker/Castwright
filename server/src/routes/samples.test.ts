@@ -88,6 +88,18 @@ describe('samples router', () => {
     expect(record?.sourceSha256).toBe(createHash('sha256').update(onDisk).digest('hex'));
   });
 
+  it('the registered record stamps every hint with the parse index it came from (#3828)', async () => {
+    if (!bundleReady()) return;
+    const res = await request(app).post(`/api/samples/${SLUG}/load`);
+    expect(res.status).toBe(200);
+    const dir = join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+    const state = JSON.parse(readFileSync(join(dir, '.audiobook', 'state.json'), 'utf8'));
+    const { getManuscript } = await import('../store/manuscripts.js');
+    const hints = getManuscript(state.manuscriptId)!.chapterHints;
+    expect(hints.length).toBeGreaterThan(0);
+    expect(hints.map((h) => h.parseIndex)).toEqual(hints.map((_, i) => i));
+  });
+
   it('is idempotent — a second load is a no-op 200', async () => {
     if (!bundleReady()) return;
     const a = await request(app).post(`/api/samples/${SLUG}/load`);
