@@ -439,6 +439,8 @@ a day, and §1 and §2 also use it; run this on a different day.
 3. Analyse on `gemma-4-31b-it` at `off`, then at `on`. Record thought tokens, and whether the `on` step
    of the Test was `accepted` (A8: whether `thinkingLevel: HIGH` takes `includeThoughts`).
 4. G1: on the long chapter, run Gemma at `on` and at its default level; record each outcome.
+5. Stale `minimal`: with no analysis running, hand-set `minimal` for `gemini-3.8-flash` in `user-settings.json`.
+   Start an analysis and record the refusal copy and the Advanced settings row. Restore the saved level.
 
 ### Pass
 
@@ -461,5 +463,7 @@ Thought tokens (`model-default` / `high`; Gemma `off` / `on`): ___ Result:
 A8, Gemma `on` step: ___ Result:
 
 G1, `on` vs default: ___ Result:
+
+Stale `minimal` refusal and row: ___ Result:
 
 Run by / date / SHA:
