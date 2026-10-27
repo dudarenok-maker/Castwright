@@ -322,13 +322,15 @@ function countRawStateWrites(
    (its in-lock read) and scan-import-folder.ts 6 -> 4 (the overwrite's two id
    reads) -- reads only, no write site moved; the fs-error curation pass then
    routed the listen-progress GET/PUT's uuid reads through it too, taking
-   book-state.ts 11 -> 9 -- reads only. Asserted BOTH
+   book-state.ts 11 -> 9 -- reads only; #3829 added routes/analysis.ts's start-route
+   refusal read of state.json (`hintsOutOfSyncRefusal`), 1 -> 2 -- a read, not a write
+   site. Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'import/scan-import-folder.ts': 4,
-  'routes/analysis.ts': 1,
+  'routes/analysis.ts': 2,
   'routes/book-state.ts': 9,
   'routes/chapters-restructure.ts': 2,
   'routes/generation.ts': 1,

@@ -922,8 +922,8 @@ paths:
                 type: object
                 required: [error]
                 properties:
-                  error: { type: string, description: 'The refusal code, or for `hints_out_of_sync` the curated sentence.' }
-                  code: { type: string, enum: [hints_out_of_sync], description: 'Present only on `hints_out_of_sync` (#3829).' }
+                  error: { type: string }
+                  code: { type: string, enum: [hints_out_of_sync], description: 'Present only on `hints_out_of_sync` (#3829); then `error` holds the curated sentence rather than a code.' }
                   message: { type: string, description: 'User-facing reason (both #3435 refusals).' }
                   draining:
                     type: boolean

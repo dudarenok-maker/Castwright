@@ -8423,10 +8423,9 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        /** @description The refusal code, or for `hints_out_of_sync` the curated sentence. */
                         error: string;
                         /**
-                         * @description Present only on `hints_out_of_sync` (#3829).
+                         * @description Present only on `hints_out_of_sync` (#3829); then `error` holds the curated sentence rather than a code.
                          * @enum {string}
                          */
                         code?: "hints_out_of_sync";
