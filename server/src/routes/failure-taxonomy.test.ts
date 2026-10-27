@@ -1391,6 +1391,21 @@ describe('AnalyzerReasoningUnavailableError copy (#3084 PR 5a)', () => {
     const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local'), 'Analyzer');
     expect(r.userMessage).toMatch(/or run Test again\.$/);
   });
+
+  /* N10 — a refusal from the call itself must not claim the run never started. */
+  it("a 'mid-run' refusal says the run stopped, not that it was not started", () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local', 'mid-run'), 'Analyzer');
+    expect(r.userMessage).toContain('stopped');
+    expect(r.userMessage).not.toContain('was not started');
+    expect(r.detail).toContain('when=mid-run');
+  });
+
+  it("a 'before-start' refusal says the run was not started, not that it stopped", () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local', 'before-start'), 'Analyzer');
+    expect(r.userMessage).toContain('was not started');
+    expect(r.userMessage).not.toContain('stopped');
+    expect(r.detail).toContain('when=before-start');
+  });
 });
 
 describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
