@@ -366,6 +366,16 @@ describe('endpoint form — reasoning fields', () => {
     expect((screen.getByTestId('endpoint-reasoning') as HTMLSelectElement).value).toBe('model-default');
   });
 
+  it('a stored level the control style does not offer is shown and can be changed to Model default', async () => {
+    renderSection({ endpoints: [{ ...LAB, reasoningStyle: 'enable_thinking', reasoning: 'high' }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    const reasoning = screen.getByTestId('endpoint-reasoning') as HTMLSelectElement;
+    expect(reasoning.value).toBe('high');
+    expect([...reasoning.options].map((o) => o.value)).toEqual(['model-default', 'off', 'on', 'high']);
+    fireEvent.change(reasoning, { target: { value: 'model-default' } });
+    expect(reasoning.value).toBe('model-default');
+  });
+
   it('a reasoning-overflow fix deep link focuses the endpoint reasoning field (#3084 wave 5a)', async () => {
     const store = renderSection({ endpoints: [LAB] });
     store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'reasoning' }));

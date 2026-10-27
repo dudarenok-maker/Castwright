@@ -479,8 +479,12 @@ export function AnalyzerEndpointsSection() {
                 onChange={(e) => set('reasoning', e.target.value as ReasoningLevel)}
                 className={INPUT}
               >
-                {levelsForEndpointStyle(draft.reasoningStyle).map((l) => (
-                  <option key={l} value={l}>{REASONING_LEVEL_LABELS[l]}</option>
+                {/* A stored level this style doesn't offer stays visible, so it can be changed (mirrors the Ollama rows). */}
+                {[
+                  ...levelsForEndpointStyle(draft.reasoningStyle),
+                  ...(levelsForEndpointStyle(draft.reasoningStyle).includes(draft.reasoning) ? [] : [draft.reasoning]),
+                ].map((l) => (
+                  <option key={l} value={l}>{REASONING_LEVEL_LABELS[l] ?? l}</option>
                 ))}
               </select>
               {errors.reasoning && <p className="mt-1 text-xs text-rose-700">{errors.reasoning}</p>}

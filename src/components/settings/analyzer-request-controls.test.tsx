@@ -90,6 +90,26 @@ describe('AnalyzerRequestControls — reasoning', () => {
     expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'low' }, gemini: { 'gemini-3.8-flash': 'low' } } });
   });
 
+  it('keeps a saved Gemini level the model no longer offers selected, and Model default clears it on save', async () => {
+    mockPut.mockResolvedValue({} as never);
+    renderControls({ analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } });
+    const select = (await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash')) as HTMLSelectElement;
+    expect(optionValues('analyzer-reasoning-gemini-gemini-3.8-flash')).toEqual(['model-default', 'low', 'medium', 'high', 'minimal']);
+    expect(select.value).toBe('minimal');
+    fireEvent.change(select, { target: { value: 'model-default' } });
+    fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: {}, gemini: {} } });
+  });
+
+  it('renders a Gemini row for a saved key even when the model offers one level or is not in the catalog', async () => {
+    renderControls({ analyzerReasoningByEngine: { gemini: { 'gemini-9-ultra': 'high', 'gemini-gone': 'low' } } });
+    const ultra = (await screen.findByTestId('analyzer-reasoning-gemini-gemini-9-ultra')) as HTMLSelectElement;
+    expect(ultra.value).toBe('high');
+    expect(optionValues('analyzer-reasoning-gemini-gemini-9-ultra')).toEqual(['model-default', 'high']);
+    expect((screen.getByTestId('analyzer-reasoning-gemini-gemini-gone') as HTMLSelectElement).value).toBe('low');
+  });
+
   it('shows the server validation messages when the save is refused', async () => {
     mockPut.mockRejectedValue(
       new Error('User settings save failed (400): {"error":"Invalid user settings.","issues":[{"message":"Gemini reasoning \\"minimal\\" is not available for gemini-3.8-flash (offered: model-default, low, medium, high)."}]}'),

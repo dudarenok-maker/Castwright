@@ -47,10 +47,24 @@ export function AnalyzerRequestControls() {
 
   /* P18: one row per Ollama model, each offering only ITS OWN levels; the current analysis model first. */
   const ollamaRows = useMemo(() => ollamaReasoningRows(models, currentModel, ollama), [models, currentModel, ollama]);
-  const geminiModels = useMemo(
-    () => models.filter((m) => m.kind === 'gemini' && m.offeredReasoningLevels.length > 1),
-    [models],
-  );
+  /* A row per Gemini model offering more than one level, plus one for every saved key (a stale level must
+     stay visible and changeable even when the model now offers none, or has left the catalog). The saved
+     value joins its row's options, like an Ollama row's. */
+  const geminiModels = useMemo(() => {
+    const listed = models.filter((m) => m.kind === 'gemini');
+    const rows = [
+      ...listed.filter((m) => m.offeredReasoningLevels.length > 1 || m.id in gemini),
+      ...Object.keys(gemini)
+        .filter((id) => !listed.some((m) => m.id === id))
+        .map((id) => ({ id, label: id, kind: 'gemini' as const, offeredReasoningLevels: ['model-default'] as ReasoningLevel[] })),
+    ];
+    return rows.map((m) => {
+      const saved = gemini[m.id] as ReasoningLevel | undefined;
+      const levels: string[] = [...m.offeredReasoningLevels];
+      if (saved !== undefined && !levels.includes(saved)) levels.push(saved);
+      return { id: m.id, label: m.label, levels };
+    });
+  }, [models, gemini]);
 
   /* F7 deep link: scroll to and briefly highlight the row a reasoning-overflow fix names, once per focus value.
      The rows arrive after the catalog loads, so this re-runs when they do. No cleanup here: it would run before
@@ -145,9 +159,9 @@ export function AnalyzerRequestControls() {
                 onChange={(e) => setGemini((g) => ({ ...g, [m.id]: e.target.value }))}
                 className={`mt-1 ${SELECT_CLASS}`}
               >
-                {m.offeredReasoningLevels.map((l) => (
+                {m.levels.map((l) => (
                   <option key={l} value={l}>
-                    {REASONING_LEVEL_LABELS[l]}
+                    {REASONING_LEVEL_LABELS[l as ReasoningLevel] ?? l}
                   </option>
                 ))}
               </select>
