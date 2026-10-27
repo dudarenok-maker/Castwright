@@ -1172,9 +1172,12 @@ export function classifyAnalysisFailure(
     /* N10 — the same refusal can arrive from the pre-run check or, for a value no save could produce,
        from the call itself. The copy must not claim a run never started when it did. */
     const outcome = err.when === 'mid-run' ? 'stopped' : 'was not started';
+    /* Only an Ollama model's named levels are re-recorded by a Test; a Gemini model's and an endpoint
+       style's offered levels never change with one. */
+    const retry = err.engine === 'local' ? ', or run Test again' : '';
     return withCopy(
       'analyzer-request-rejected',
-      `${modelLabel} ${outcome}: its saved reasoning level "${err.level}" is not offered for this model. Choose an offered level in ${where}, or run Test again.`,
+      `${modelLabel} ${outcome}: its saved reasoning level "${err.level}" is not offered for this model. Choose an offered level in ${where}${retry}.`,
       `setting=reasoning value=${err.level} engine=${err.engine} when=${err.when}`,
     );
   }

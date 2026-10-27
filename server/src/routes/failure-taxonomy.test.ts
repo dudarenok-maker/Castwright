@@ -14,6 +14,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
   AnalyzerCapabilityRejectedError,
+  AnalyzerReasoningUnavailableError,
   AnalyzerReasoningOverflowError,
   AnalyzerTimeoutError,
   AnalyzerTruncatedError,
@@ -1373,6 +1374,22 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.userMessage).toContain('high');
     expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
+  });
+});
+
+/* A Test only re-records what an Ollama model accepts; a Gemini model's or an endpoint's offered
+   levels never change with a Test, so "run Test again" is wrong advice there. */
+describe('AnalyzerReasoningUnavailableError copy (#3084 PR 5a)', () => {
+  it.each(['gemini', 'openai'] as const)('%s refusal does not advise running Test again', (engine) => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('m', 'xhigh', engine), 'Analyzer');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toContain('Choose an offered level in');
+    expect(r.userMessage).not.toMatch(/run Test again/i);
+  });
+
+  it('Ollama refusal still advises running Test again', () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local'), 'Analyzer');
+    expect(r.userMessage).toMatch(/or run Test again\.$/);
   });
 });
 
