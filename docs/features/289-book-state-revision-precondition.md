@@ -167,7 +167,7 @@ The fix uses one mechanism:
 - **Who marks a book:**
   - the middleware, on every `stale_revision` refusal (D2);
   - **`onEditBook` and the language-guard modal, after a successful direct `PUT`.** They are writers the middleware never sees, and the book's slices may be in memory.
-- **F1 stays:** `dropRetainedSaves(bookId)` on a **full** read still drops kept saves, because the user has now seen disk. Revisions-only reads do not drop. (**Amended by C7:** a kept save is now the idle outbox entries of a key; since pass 8 a full read keeps held (P1) and based (P2) `state` entries.)
+- **F1 stays:** `dropRetainedSaves(bookId)` on a **full** read still drops kept saves, because the user has now seen disk. Revisions-only reads do not drop. (**Amended by C7:** a kept save is now the idle outbox entries of a key; since pass 8 a full read keeps based (P2) `state` entries. Pass 9 removed the held-key (P1) exception.)
 
 ### D8 — What the client stops doing
 
@@ -406,7 +406,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
 
 **Why.** Passes 1–7 kept finding the same family: facts that belong to one field were tracked per send or per sequence, in maps that disagreed (`covered`, `refreshable`, the whole-slice refresh, per-send keep and rollback). R1–R3 are its latest members. A per-field outbox with one request in flight holds each fact once, on the field it belongs to, so there is nothing to disagree with.
 
-**Size.** `persistence-middleware.ts` is 925 lines at 11a2509f (511 on `main`). Expected after the rework: **700–780**. The rules table, handlers and exports (lines 1–407) change only in comments. The unchanged tail of the action handler (the gate, S3, the draft clear, LEARN / DROP / FLUSH) is about 95 lines. The new engine (maps, `pump`/`run`, four outcome handlers, the build merge) is about 250 lines at this file's comment density. **Above 800 lines, stop and simplify before review.** The test file grows on net (five red-first tests plus about nine pins, minus four deleted); the shrink is in the engine, not in the tests. *(Revised after the checker; the first draft said about 650 lines, and a test-file shrink.) Outcome: 786 at pass 7; 865 after the pass-8 fixes, over this ceiling — see Ship notes, "Review pass 8 fixes".*
+**Size.** `persistence-middleware.ts` is 925 lines at 11a2509f (511 on `main`). Expected after the rework: **700–780**. The rules table, handlers and exports (lines 1–407) change only in comments. The unchanged tail of the action handler (the gate, S3, the draft clear, LEARN / DROP / FLUSH) is about 95 lines. The new engine (maps, `pump`/`run`, four outcome handlers, the build merge) is about 250 lines at this file's comment density. **Above 800 lines, stop and simplify before review.** The test file grows on net (five red-first tests plus about nine pins, minus four deleted); the shrink is in the engine, not in the tests. *(Revised after the checker; the first draft said about 650 lines, and a test-file shrink.) Outcome: 786 at pass 7; 865 after the pass-8 fixes, over this ceiling; 803 after the pass-9 fix (33 lines over 100 characters) — see Ship notes, "Review pass 8 fixes" and "Review pass 9 fixes".*
 
 ### Decisions
 
@@ -422,7 +422,7 @@ Per key `${bookId}:${slice}` the middleware holds `outbox: Map<unit, Entry>`, wh
 - **The send's `baseRevision` is the union of its entries' `base` maps** (omitted when empty).
 - **A build merges per unit, newest value wins:**
   - **Changed** (any of the unit's fields is not `Object.is` equal to the entry's, or there is no entry): the entry is replaced by `{ value: built, handler }` with **no base**. A live edit is unconditional, as on `main`.
-  - **Unchanged** (every field `Object.is` equal): the entry is kept as it is, base and all. This matters because `commitDraft` re-sends all eight book-meta fields on every commit. Without it, a commit that only touched `notes` would strip the base from a kept `title` and send it unconditionally.
+  - **Unchanged** (every field `Object.is` equal): the entry is kept as it is, base and all. This mattered when `commitDraft` re-sent all eight book-meta fields on every commit (before review pass 9; it now sends only the typed fields, see C7). It still applies when a later build carries the same value for a field: a kept `title` keeps its base rather than being sent unconditionally.
     - Immer keeps an untouched array reference-equal, so `Object.is` is cheap.
     - Some cast reducers re-map `characters` even when nothing changes (`cast-slice.ts:179`, `:793`). A dispatch of one then reads as "changed" and makes a kept cast save unconditional (C11). That fails open, at `main` parity, and needs no deep compare.
   - **Handler is sticky:** `entry.handler = buildHandler ?? previous?.handler`. A bulk reassignment still unsent in the unit owns the unit's failure toast even when a plain edit rode along. That is correct: the send still carries the reassignment, and it is today's `toastPending` behaviour. **Its pin is new work (T3)**: `"a non-bulk manuscript edit PUT failure raises the generic save toast"` does not exercise stickiness.
@@ -507,8 +507,8 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **Leaving a book** (S3): `flushBookNow(bookId)` clears every debounce timer of that book and pumps every key. A running flight continues, and what was queued rides its next attempt or its follow-up. **This changes timing:** at head, an edit sent on leaving goes at once as its own sequence. Under C it waits behind the in-flight request or backoff (up to 4 s, OD-C1). That is within the owner's accepted cost. There is no unload flush (pre-existing), so a tab closed inside that window loses the edit, as it would during a debounce today.
 - **`flushBookPersistence(bookId)`** (Layout's flush-before-re-read, and restructure) calls `flushBookNow`, then resolves when every flight of the book has ended, follow-ups included (they are in the same loop). It resolves `null` when none ran. The outcome shape is unchanged.
 - **Kept and re-sent after leaving (owner decision, 2026-10-25):** natural. A give-up with the book not open removes nothing, so the entries stay idle, and the book's next flush or next edit sends them with their bases.
-- **Full read (F1, amended by P1 and P2 of review pass 8):** `dropRetainedSaves(bookId, true)` removes the outbox of every key of the book that is idle, except two kinds of `state` entry. (P1) A `state` key held for the read (the book is marked `needsFullRead`) stays. (P2) A `state` entry that carries a base stays, and goes with the book's next send for the server to judge. Cast, manuscript and changeLog entries are still dropped, based or not: the read puts the screen back to disk, and a kept whole-slice save landing later would leave screen and disk disagreeing (fa0d78e2). Entries with a live timer or a flight are live edits and stay. **Delete success** dispatches `dropRetainedSaves(bookId)`, which drops everything (D8b hygiene).
-- **A marked book's `state` sends wait for the full read (P1).** While a book is marked `needsFullRead`, its `state`-slice sends (first send, retry and follow-up) are held, so a refused value left in `saved` cannot ride a later `commitDraft`'s eight-field snapshot back to disk. At the read's hydrate, held unbased book-meta entries are rebuilt by re-committing the typed draft (`lastCommitted.draft`) on the read's values, with the fields the 409 refused pruned via `markNeedsFullRead`'s `refused`; based entries go as they are. A failed read keeps the save held, and Layout retries the read until it lands.
+- **Full read (F1, amended by P2 of review pass 8):** `dropRetainedSaves(bookId, true)` removes the outbox of every key of the book that is idle, except one kind of `state` entry: (P2) a `state` entry that carries a base stays, and goes with the book's next send for the server to judge. Cast, manuscript and changeLog entries are still dropped, based or not: the read puts the screen back to disk, and a kept whole-slice save landing later would leave screen and disk disagreeing (fa0d78e2). Entries with a live timer or a flight are live edits and stay. **Delete success** dispatches `dropRetainedSaves(bookId)`, which drops everything (D8b hygiene). (Pass 8's second exception, a `state` key held for the read (P1), was removed in pass 9.)
+- **A book-details save sends only the fields typed since the last accepted save (P1, redone in pass 9).** A `bookMeta/commitDraft` sends the keys of `lastCommitted[bookId].draft`, which is exactly what a rollback reverts, not all eight `saved` fields. A value refused as stale and still on screen therefore cannot ride a later commit back to disk. `markNeedsFullRead`'s `refused` list prunes a stale-refused field from that set, so a rollback does not restore it and a later commit does not send it again. Nothing is held: pass 8's hold of a marked book's `state` sends until the read (bbb9f733, 8a316704, and the P1 half of ca09d9ad) was removed in ae6bb325 after review pass 9 found it unsafe (P9-1, P9-2, P9-3). A failed full read is retried by Layout only while the book stays open; if the user leaves first, nothing waits for it.
 - **Does the outbox just persist per book?** Yes. It is keyed per (book, slice) and never cleared by navigation, only by an answer, a full read, or a delete.
 
 #### C8 — Book-meta rollback and drafts: what is now natural, what needs code
@@ -565,7 +565,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 | #3755 restructure abort | `flushBookPersistence` keeps `{ failedSlices }` (C2 `ok`). A kept save is re-sent first by the next flush (C7). |
 | #3624 stage/slice gate, `BOOK_KEYED_RULES`, #3754 draft clear, per-key debounce (S4), leave-flush (S3), revisions never PUT | Unchanged code paths. |
 | Retry schedule, 4xx final, named give-up toast, `savedTitleOf` | Unchanged (C5, C6). |
-| Exports `flushBookPersistence`, `BookFlushOutcome`, `dropRetainedSaves`, `beginFullRead`, `learnSliceRevisions`, `PERSISTED_ACTION_TYPES` | Names and signatures unchanged, so `layout.tsx`, `routes/index.tsx`, `restructure.tsx` and `account.tsx` need no edit. |
+| Exports `flushBookPersistence`, `BookFlushOutcome`, `dropRetainedSaves`, `beginFullRead`, `learnSliceRevisions`, `PERSISTED_ACTION_TYPES` | Names unchanged; `dropRetainedSaves` gained an optional `onFullRead` parameter, which `layout.tsx` passes on a full hydrate. `routes/index.tsx`, `restructure.tsx` and `account.tsx` need no edit. |
 
 #### C11 — Residuals (stated, not fixed)
 
@@ -581,7 +581,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
   - Such a dispatch reads as a changed value (C1), so it replaces a kept cast entry with an unbased one.
   - This fails open, at `main` parity. A deep compare of the roster would close it; it is not worth it for a cast-only, fail-open case.
 - **A 200 can teach a token for a value the client did not write.** `pickString` keeps disk's title when the sent title is empty (`book-state.ts:~1256`). This fails open, and is unreachable from the Listen editor's normal path.
-- **A stale screen re-asserted by `commitDraft`'s eight-field snapshot.** This happens when another tab writes the book while this tab shows it. `main` has the same behaviour, and it is out of scope (cross-tab); D7's marks cover every same-tab outside writer.
+- **A stale screen re-asserted by a book-details commit.** (Before pass 9 this was an eight-field snapshot; `commitDraft` now sends only the typed fields, but a typed field is still sent unconditionally over another tab's newer value.) This happens when another tab writes the book while this tab shows it. `main` has the same behaviour, and it is out of scope (cross-tab); D7's marks cover every same-tab outside writer.
 
 ### OWNER DECISIONS
 
@@ -615,8 +615,8 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **C-I5.** A stale 409 removes only based units that are refused and still hold the value sent (a whole-slice build is one unit). It never rolls back. It toasts and marks the book only when it removed one. Everything else goes in the follow-up.
 - **C-I6.** A non-stale 4xx rolls back a handler only when every entry the handler owns still holds its sent value, restoring the draft only if the book is open. Entries with no rollback handler that rode alongside stay; a send with no rollback handler loses its sent-valued entries.
 - **C-I7.** A give-up rolls back only while the book is open; everything else stays as kept.
-- **C-I8.** A kept save is a key's idle outbox. A timer-fired send or a flush of the book sends it first; a delete removes it, and a full read removes it except held `state` keys (P1) and based `state` entries (P2). A marked book's `state` sends wait for the full read. A flight's settle never starts a flight.
-- **C-I9.** The middleware holds none of `pending`, `toastPending`, `rollbackFields`, `generation`, `kept`, `carriedKept`, `sequences`, `mergeSaves`, `sendBase`, `resendRetained` or `leaveBehind`. Its exports are unchanged.
+- **C-I8.** A kept save is a key's idle outbox. A timer-fired send or a flush of the book sends it first; a delete removes it, and a full read removes it except based `state` entries (P2). A `commitDraft` sends only the typed fields (the keys of `lastCommitted.draft`, less any `refused` by a stale 409). A flight's settle never starts a flight.
+- **C-I9.** The middleware holds none of `pending`, `toastPending`, `rollbackFields`, `generation`, `kept`, `carriedKept`, `sequences`, `mergeSaves`, `sendBase`, `resendRetained` or `leaveBehind`. The export names are unchanged, but `dropRetainedSaves` gained an `onFullRead` parameter (P2), which Layout's full hydrate passes.
 
 ### Test plan (C)
 
@@ -871,13 +871,24 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
 
 ### Review pass 8 fixes (PR #3775, all #3784)
 
-- **P1, bbb9f733:** a marked book's `state` sends wait for the full read; held unbased book-meta entries are rebuilt from the typed draft at the read's hydrate (see C7).
+- **P1, bbb9f733:** a marked book's `state` sends wait for the full read; held unbased book-meta entries are rebuilt from the typed draft at the read's hydrate (see C7). **Superseded by ae6bb325 (review pass 9): the hold was removed.**
 - **P2, 7aa43755:** a based kept save is kept across a full read for the server to judge.
 - **8a316704:** pins the P1 hold inside the send loop for a stale-refused retry.
 - **P2 narrowed, fa0d78e2:** only `state` entries stay across a full read; based cast, manuscript and changeLog saves are dropped again (F1).
 - **ca09d9ad:** the P1/P2 one-liners are unpacked into readable statements, with no behaviour change.
 - **C1, d7977f75:** five outbox rules that survived mutation each get a test that goes red under its mutant; the persistent 4xx and 5xx mocks are capped.
 - **Size, honestly:** `persistence-middleware.ts` is now **865 lines, over the plan's 800 hard stop.** It went over the cap because P1 and P2 added real logic. An earlier attempt that met the cap by compressing code into dense one-liners was reverted (ca09d9ad): gaming the cap defeats its purpose. The owner is told.
+
+### Review pass 9 fixes (PR #3775, all #3784)
+
+- **ae6bb325:** owner decision on #3784, from review pass 9: P1 becomes typed-fields-only saves, and P2 stays `state`-only (a based kept `state` entry survives a full read; based cast, manuscript and changeLog saves are still dropped).
+  - **Reverted:** pass 8's P1 hold. bbb9f733 and 8a316704 (and the P1 half of ca09d9ad) are superseded. Removed: `holdForRead`, `waiting`, the hydrate-time release and re-commit, the drop's held-key skip, and the pre-action `lastCommitted` capture.
+  - **Now:** a `bookMeta/commitDraft` sends only the fields typed since the last accepted save (the keys of `lastCommitted[bookId].draft`), not all eight `saved` fields. `markNeedsFullRead`'s `refused` pruning stays: it keeps a stale-refused field out of that set. This closes P9-1 (the release rebuilt held entries on the read's `saved`), P9-2 (a second mark while the read was in flight dropped held commits) and P9-3 (the unbounded hold replayed a live edit unbased after the user left and returned) by construction.
+  - **Tests:** new P9-1, P9-2 and P9-3 pins, red at d80157b2; tests that asserted the eight-field send now assert the typed fields.
+- **Size, honestly:** `persistence-middleware.ts` is **803 lines, 33 of them over 100 characters**, down from 865. It is 3 lines over the plan's 800 ceiling, and was not compressed to meet it.
+- **Fuzz:** the reviewer's model-based fuzz of the P1 window, oracles O1 to O4, gives 0 on each over 3,000 runs against this engine.
+- **Routed to #3827:** a field the user typed that already landed can be sent again by a later commit while it is still in `lastCommitted.draft`. Whether to prune `lastCommitted` per field is the open question on #3827; it is not changed here.
+- **Corrections to earlier text (pass-9 C1):** C-I9 said the exports are unchanged, but `dropRetainedSaves` gained `onFullRead`; and "Layout retries the read until it lands" holds only while the book stays open. Both are fixed above. The two code comments that called P2's kept entry a "book-details field" (its case is `castConfirmed`) were already reworded in ae6bb325.
 
 ### Not owed
 

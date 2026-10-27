@@ -567,6 +567,39 @@ recite:
     precondition names. A base is only valid if no such request is outstanding.
     Test by holding the earlier request's response, landing the next edit, and
     asserting it is neither refused nor sent against the stale base.
+48. **A hold-and-rebuild release that re-commits only part of what it held, or
+    keys its release on a snapshot every hydrate wipes** — PR #3775 pass 9,
+    P9-1 and P9-2 (#3784, plan 289 C7, `persistence-middleware.ts`): sends of a
+    book marked for a full re-read were held and released at the read's
+    hydrate. The release re-committed only the unbased entries, on the read's
+    values, so a based entry landed later was never shown (the screen kept the
+    read's value) and the user's next commit sent that stale value back; when
+    the release did re-commit, the eight-field build replaced a based entry
+    with the read's value, so it never landed. The release also read the typed
+    draft from `lastCommitted`, which every hydrate deletes, so a second mark
+    while the read was in flight made the next release find nothing and drop
+    the held commits with no toast. Checkable: for any code that holds a client
+    write and later releases it, list every entry in the held set and confirm
+    the release handles each kind (based and unbased) the same way, and
+    identify what state it reads at release time and whether a hydrate, a
+    second mark or a book switch can reset that state before the release runs.
+    Test by holding two entries of different kinds, forcing a second mark
+    during the read, and asserting every held value reaches disk or is
+    reported, and that the screen shows what is on disk.
+49. **An unbounded hold on a client write, released after the user left and
+    came back, replays it unbased past writes the client never saw** — PR #3775
+    pass 9, P9-3 (#3784, plan 289 C7): the hold had no bound, and the full read
+    that releases it runs only for the open book, so a live edit made in the
+    marked window waited until the book was reopened and was then sent with no
+    base. A Library Edit made in between was reverted, and a held
+    `confirmCast` landed on a re-parsed book the edit epoch could not guard,
+    since the replay carried no base. A tab closed first lost the edit
+    silently. This specialises 43. Checkable: for every hold, find its release
+    condition and ask what happens if the user leaves before it fires; a held
+    live edit that is released later must either carry the base it was made
+    against or never be held. Test by holding an edit, leaving the book, making
+    an outside write to the same field, reopening, and asserting the outside
+    write survives.
 
 ### Keeping the catalogue current
 
