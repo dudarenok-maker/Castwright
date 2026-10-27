@@ -600,6 +600,31 @@ recite:
     against or never be held. Test by holding an edit, leaving the book, making
     an outside write to the same field, reopening, and asserting the outside
     write survives.
+50. **A refused optimistic value stays in the client store and is re-sent
+    unbased by the next whole-snapshot build** — PR #3775 review pass 8
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
+    P1 (#3784, plan 289): a save refused for an outside write left the user's
+    optimistic value in the store, so the next send, which rebuilt the whole
+    snapshot, carried it with no base and reverted the very outside write the
+    refusal protected. A hold until re-read was tried first and failed (see 48
+    and 49). The remedy that shipped sends only the fields the user typed
+    (ae6bb325). Checkable: for every refusal path, ask what the client store
+    holds afterwards and whether any later build re-sends it; a rebuild from
+    the whole slice must not carry a value the server refused. Test by
+    refusing a save, making an outside write to the same field, triggering
+    the next send from another edit, and asserting the outside write survives.
+51. **A combined send gives up with the book open, and a later cleanup discards
+    a unit that rode in the same send** — PR #3775 review pass 8
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
+    P2 (#3784, plan 289): when a send combining several handlers' units gave
+    up, the toast named one handler's fields, and the cleanup that followed
+    (the full-read drop) silently discarded another handler's unit that had
+    gone in the same send. Checkable: for every give-up of a combined send,
+    list each handler whose unit rode in it and confirm the toast, the
+    rollback and every later cleanup cover all of them, not the first. Test by
+    combining two handlers' edits in one send, forcing the give-up with the
+    book open, and asserting both are reported and neither is dropped
+    unannounced.
 
 ### Keeping the catalogue current
 
