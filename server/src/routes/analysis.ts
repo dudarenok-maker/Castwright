@@ -165,6 +165,7 @@ import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { assertHintsPairWithState, HintsOutOfSyncError } from '../workspace/restructure.js';
 import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
@@ -3940,6 +3941,28 @@ function releaseBusyAndPin(job: AnalysisJob): void {
   }
 }
 
+/** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs with
+    state.json (a merged/split/reordered book before #3703 persisted its hints) would rebuild
+    `state.chapters` from the parse: chapters reappear, a uuid lands on another chapter and rendered
+    audio is orphaned. Answered before the SSE headers open, with the 409 the restructure routes
+    use. Fail-open on an unreadable or foreign state.json, like the `loadState` read in the runners.
+    Persisted hints are not checked here: they carry their own staleness check. */
+async function hintsOutOfSyncRefusal(
+  manuscriptId: string,
+  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1]; parseTitles?: Parameters<typeof assertHintsPairWithState>[2] },
+): Promise<{ error: string; code: string } | null> {
+  if (record.hintsSource !== 'parse' || !record.bookDir) return null;
+  const state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
+  if (!state || state.manuscriptId !== manuscriptId) return null;
+  try {
+    assertHintsPairWithState(state, record.chapterHints, record.parseTitles);
+  } catch (e) {
+    if (e instanceof HintsOutOfSyncError) return { error: e.message, code: e.code };
+    throw e;
+  }
+  return null;
+}
+
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
   /* D2 (#3169) — `requestedModel` / `requestedFresh` used to be parsed much
@@ -3999,6 +4022,20 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     if (refusal) {
       console.log(`[analysis] refused ${refusal.error} manuscript=${JSON.stringify(manuscriptId)}`);
       return res.status(409).json(refusal);
+    }
+  }
+
+  /* #3829 -- a START (not a join of a live run) on a book with out-of-sync chapter hints is
+     refused before the stream opens. Hydrating here is not new work: the later lookup is a hit. */
+  {
+    const live = inFlightAnalysisByManuscript.get(manuscriptId);
+    if (!(live && !live.controller.signal.aborted && !requestedFresh)) {
+      const rec = await getOrHydrateManuscript(manuscriptId);
+      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
+      if (refusal) {
+        console.log(`[analysis] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json(refusal);
+      }
     }
   }
 
@@ -7792,6 +7829,20 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     if (refusal) {
       console.log(`[analysis-subset] refused main_analysis_running manuscript=${JSON.stringify(manuscriptId)}`);
       return res.status(409).json(refusal);
+    }
+  }
+
+  /* #3829 -- same refusal as the main POST, for a subset START (a join of a live subset run is
+     not one). */
+  {
+    const live = inFlightSubsetByManuscript.get(manuscriptId);
+    if (!(live && !live.controller.signal.aborted)) {
+      const rec = await getOrHydrateManuscript(manuscriptId);
+      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
+      if (refusal) {
+        console.log(`[analysis-subset] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json(refusal);
+      }
     }
   }
 

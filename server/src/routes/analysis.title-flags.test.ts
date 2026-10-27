@@ -305,9 +305,21 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
 });
 
 describe.each(['main', 'subset'] as const)(
-  '#3703 — titleOverridden does not land on a different chapter after a restart (%s persist)',
+  '#3829 — a %s analysis start is refused on a book whose chapter hints are out of sync with state.json',
   (kind) => {
-  it('carries the flag only while the persisted title is unchanged', async () => {
+  const start = (app: express.Express, manuscriptId: string) =>
+    kind === 'main'
+      ? request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({})
+      : request(app).post(`/api/manuscripts/${manuscriptId}/analysis/chapters`).send({ chapterIds: [1] });
+  const analysisApp = async () => {
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+    return app;
+  };
+
+  it('answers 409 hints_out_of_sync and leaves state.json byte-identical', async () => {
     // Chapter 2 is a merge the user titled "Part Two"; the manuscript still has four headings.
     const ms = `# Prologue\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
     const { manuscriptId, bookDir } = await seedBook(`misaligned-${kind}`, ms, [
@@ -317,11 +329,22 @@ describe.each(['main', 'subset'] as const)(
     ]);
     const { removeManuscript } = await import('../store/manuscripts.js');
     removeManuscript(manuscriptId); // a restart: hints come from a fresh parse of the 4 headings
-    await runAnalysis(manuscriptId, kind);
-    const ch = readState(bookDir).chapters;
-    expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
-    expect(ch.length).toBe(4);
-    expect(ch.filter((c) => c.titleOverridden)).toEqual([]);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(res.body.error).toMatch(/Re-parse/);
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(readState(bookDir).chapters.length).toBe(3);
+  }, 60_000);
+
+  it('does not refuse a healthy fresh import', async () => {
+    const { manuscriptId } = await seedBook(`healthy-${kind}`, FLAGGED_MANUSCRIPT, FLAGGED_BOOK);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
   }, 60_000);
   },
 );
