@@ -157,7 +157,7 @@ describe('AnalyzerRequestControls — deep-linked reasoning row (5.6b)', () => {
     renderControls({}, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } });
     await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.6-flash');
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
-    expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.6-flash')?.className).toMatch(/ring-2/);
+    expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.6-flash')?.className).toMatch(/(^| )ring-magenta\/60( |$)/);
   });
 
   it('matches an Ollama row by its normalised tag, not the raw URL value', async () => {
@@ -200,7 +200,7 @@ describe('AnalyzerRequestControls — deep-linked reasoning row (5.6b)', () => {
       renderControls({ defaultAnalysisModel: 'q:9b' }, { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.8-flash' } });
       await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash');
       await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
-      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).toMatch(/ring-2/);
+      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).toMatch(/(^| )ring-magenta\/60( |$)/);
       // An unrelated edit re-runs the highlight effect (ollamaRows/geminiModels change identity)
       // while the removal timer is still pending.
       act(() => {
@@ -209,7 +209,7 @@ describe('AnalyzerRequestControls — deep-linked reasoning row (5.6b)', () => {
       act(() => {
         vi.advanceTimersByTime(2400);
       });
-      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).not.toMatch(/ring-2/);
+      expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash')?.className).not.toMatch(/(^| )ring-magenta\/60( |$)/);
     } finally {
       vi.useRealTimers();
     }
