@@ -85,7 +85,7 @@ import {
   removeManuscriptHints,
   sha256Hex,
 } from '../workspace/manuscript-hints.js';
-import { parseIndexByBody } from '../workspace/title-align.js';
+import { pairWithParse } from '../workspace/title-align.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -102,6 +102,7 @@ import {
   getManuscript,
   getOrHydrateManuscript,
   type ManuscriptRecord,
+  withParseOrigin,
 } from '../store/manuscripts.js';
 import {
   analysisCompleteFor,
@@ -251,11 +252,16 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
 
    How chapters pair with the fresh parse depends on what the book proves
    about its structure (#3828):
-   - A valid manuscript-hints.json (a restructure after #3703): pair BY BODY,
-     since a reorder moves bodies and a merge changes the count. A chapter
-     whose body matches exactly one parse chapter with a real heading adopts
-     that heading; zero or several matches, or a made-up parse title ("Chapter
-     N" renumbers with position), keep the current title. No chapter-count gate.
+   - A valid manuscript-hints.json (a restructure after #3703): pair by the
+     parse index each hint recorded (`parseIndex`, with the parse's chapter
+     count), since a reorder moves bodies and a merge changes the count, and a
+     parser change moves text between a title and its body, so body text is no
+     key. A chapter with an origin and a real parse heading adopts that
+     heading; one without an origin (merge, split), or paired with a made-up
+     parse title ("Chapter N" renumbers with position), keeps its title. A
+     parse whose chapter count differs from the recorded one skips, version
+     not bumped. A file written before origins existed pairs by exact body
+     instead (no match keeps the title). No state-vs-parse count gate.
    - A hints file that is corrupt or does not belong to this state.json and
      manuscript: skip, version not bumped (as for a count mismatch).
    - No hints file: pair by position, behind the count gate. KNOWN GAP: a book
@@ -267,7 +273,8 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
    - State is already at the current parser version.
    - Source manuscript file missing on disk.
    - parseManuscript throws (corrupt file, etc.).
-   - The hints file is present but not valid for this state/manuscript.
+   - The hints file is present but not valid for this state/manuscript, or
+     records a parse chapter count the parse no longer has.
    - No hints file and the new chapter count differs from the existing count —
      splitting logic itself changed; aligning titles by index would silently
      mislabel chapters. Leave the version field as-is so a future fix can retry. */
@@ -316,23 +323,36 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       if (!(err instanceof SyntaxError)) throw err;
       hintsCorrupt = true;
     }
-    const alignByBody = hintsFile !== null;
-    if (hintsCorrupt || (alignByBody && !hintsFromPersisted(hintsFile, state, sourceSha256).ok)) {
+    const hasHints = hintsFile !== null;
+    const parsedBodies = parsed.chapters.map((p) => p.body);
+    /* The pairing is decided on the caller's snapshot here and again on the
+       fresh read inside the lock. */
+    const pairingFor = (s: BookStateJson) => {
+      const checked = hintsFromPersisted(hintsFile, s, sourceSha256);
+      return checked.ok ? pairWithParse(checked.hints, parsedBodies, checked.parseChapterCount) : null;
+    };
+    if (hintsCorrupt || (hasHints && !pairingFor(state))) {
       console.warn(
         `[book-state] title-refresh skipped for ${state.bookId}: manuscript-hints.json is corrupt or does not belong to this book's chapters and manuscript.`,
       );
       return state;
     }
+    if (hasHints && pairingFor(state)!.mode === 'skip') {
+      console.warn(
+        `[book-state] title-refresh skipped for ${state.bookId}: the manuscript now parses to ${parsed.chapters.length} chapters, not the count its hints recorded. Chapter split logic changed — won't risk misalignment.`,
+      );
+      return state;
+    }
 
-    if (!alignByBody && parsed.chapters.length !== state.chapters.length) {
+    if (!hasHints && parsed.chapters.length !== state.chapters.length) {
       console.warn(
         `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
       );
       return state;
     }
 
-    /* Replace titles in order; everything else (slug, excluded, audio
-       state) stays put. Skip the write when nothing actually changed
+    /* Replace titles (in order, or via the hints' pairing); everything else
+       (slug, excluded, audio state) stays put. Skip the write when nothing actually changed
        to avoid touching mtime / triggering watchers.
 
        Chapters with `titleOverridden: true` are pass-through — the user
@@ -345,13 +365,10 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
     return (await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
       if ((fresh.chapterTitleParserVersion ?? 1) >= CHAPTER_TITLE_PARSER_VERSION) return null;
       let parseIndex: Array<number | null> | null = null;
-      if (alignByBody) {
-        const checked = hintsFromPersisted(hintsFile, fresh, sourceSha256);
-        if (!checked.ok) return null;
-        parseIndex = parseIndexByBody(
-          checked.hints.map((h) => h.body),
-          parsed.chapters.map((p) => p.body),
-        );
+      if (hasHints) {
+        const pairing = pairingFor(fresh);
+        if (!pairing || pairing.mode === 'skip') return null;
+        parseIndex = pairing.index;
       } else if (parsed.chapters.length !== fresh.chapters.length) {
         return null;
       }
@@ -360,7 +377,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
         const match = parseIndex ? parseIndex[i] : i;
         const p = match == null ? undefined : parsed.chapters[match];
         if (!p) return c;
-        /* By body, a made-up parse title ("Chapter N") is position-dependent, so
+        /* Through the hints, a made-up parse title ("Chapter N") is position-dependent, so
            it says nothing about this chapter: keep the one it has. */
         if (parseIndex && p.titleSynthesized) return c;
         const { titleSynthesized: _stale, ...rest } = c;
@@ -1692,7 +1709,7 @@ async function applyReparse(
       byteSize: Buffer.byteLength(sourceText, 'utf8'),
       uploadedAt: nextState.createdAt,
       sourceText,
-      chapterHints: parsed.chapters.map((c) => ({
+      chapterHints: withParseOrigin(parsed.chapters).map((c) => ({
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),

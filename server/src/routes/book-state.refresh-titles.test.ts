@@ -325,8 +325,8 @@ describe('GET /:bookId/state — titleSynthesized through the title refresh (#36
 });
 
 /* #3828 -- on a book restructured after #3703 (a valid manuscript-hints.json), the
-   GET title refresh aligns each chapter to its parse chapter by BODY, not by
-   position: a reorder moves bodies, a merge changes the count. The restructure
+   GET title refresh pairs each chapter with its parse chapter through the hints
+   (origin, or body for a file without origins), not by position: a reorder moves bodies, a merge changes the count. The restructure
    is driven through the real router so the persisted bodies are the ones a real
    reorder / merge writes (reorder keeps each body verbatim; merge joins them with
    a blank line, so a merged body equals no parse chapter). */
@@ -335,7 +335,7 @@ describe('GET /:bookId/state — title refresh aligns by body on a restructured 
   /* Parses to [Chapter 1 (app-made: prose before any heading), Prologue]. */
   const REORDER_MANUSCRIPT = `Opening words before any heading.\n\n## Prologue\n\n${PROLOGUE_BODY}\n`;
   /* Parses to [Alpha, Beta, Gamma]. */
-  const MERGE_MANUSCRIPT = '# Alpha\n\nAlpha body line.\n\n# Beta\n\nBeta body line.\n\n# Gamma\n\nGamma body line.\n';
+  const MERGE_MANUSCRIPT = '## Alpha\n\nAlpha body line.\n\n## Beta\n\nBeta body line.\n\n## Gamma\n\nGamma body line.\n';
   const hintsPath = (): string => join(bookDir, '.audiobook', 'manuscript-hints.json');
 
   let restructureApp: Express;
@@ -521,5 +521,154 @@ describe('GET /:bookId/state — title refresh aligns by body on a restructured 
     expect(readFileSync(statePath).equals(before)).toBe(true);
     expect(readState().chapterTitleParserVersion).toBeUndefined();
     expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
+  });
+});
+
+/* #3828 review pass 1 -- the refresh pairs a restructured book's chapters with the
+   fresh parse by the parse index each hint RECORDED (`parseIndex`, with the parse's
+   chapter count), not by body text: the hint bodies are frozen at restructure
+   time and a title-parser bump is exactly when bodies move (v1 -> v2 merged the
+   subtitle line out of the body). A hints file written before origins existed
+   keeps the body pairing. */
+describe('title refresh pairs by recorded parse origin (#3828 pass 1)', () => {
+  /* `##`: a leading single `#` is read as the book's title, not a chapter. */
+  const ABC = '## Alpha\n\nAlpha body line.\n\n## Beta\n\nBeta body line.\n\n## Gamma\n\nGamma body line.\n';
+  const hintsPath = (): string => join(bookDir, '.audiobook', 'manuscript-hints.json');
+  let app2: Express;
+
+  beforeAll(async () => {
+    const [{ chaptersRestructureRouter }, { bookStateRouter }] = await Promise.all([
+      import('./chapters-restructure.js'),
+      import('./book-state.js'),
+    ]);
+    app2 = express();
+    app2.use(express.json());
+    app2.use('/api/books', bookStateRouter);
+    app2.use('/api/books', chaptersRestructureRouter);
+  });
+
+  beforeEach(async () => {
+    rmSync(hintsPath(), { force: true });
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript('m_refresh_test');
+  });
+
+  type S = {
+    chapters: Array<{ title: string; titleSynthesized?: boolean }>;
+    chapterTitleParserVersion?: number;
+  };
+  const readS = (): S => JSON.parse(readFileSync(statePath, 'utf8'));
+  async function dropRecord(): Promise<void> {
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript('m_refresh_test');
+  }
+  /* The book as an older release left it: old titles, no version stamp. */
+  function backToOwing(titles: string[], synthesized = true): void {
+    const s = readS();
+    delete s.chapterTitleParserVersion;
+    s.chapters.forEach((c, i) => {
+      c.title = titles[i]!;
+      if (synthesized) c.titleSynthesized = true;
+    });
+    writeFileSync(statePath, JSON.stringify(s));
+  }
+  type HintsFile = {
+    entries: Array<{ parseChapterCount?: number; chapters: Array<{ body: string; parseIndex?: number }> }>;
+  };
+  function editHints(fn: (f: HintsFile) => void): void {
+    const f = JSON.parse(readFileSync(hintsPath(), 'utf8')) as HintsFile;
+    fn(f);
+    writeFileSync(hintsPath(), JSON.stringify(f));
+  }
+  /* What an older parser left in the bodies: the subtitle line is still in them. */
+  function oldParserBodies(): void {
+    editHints((f) => {
+      for (const e of f.entries) {
+        e.chapters[0]!.body = `The Beginning\n\n${e.chapters[0]!.body}`;
+        e.chapters[1]!.body = `A Manifest\n\n${e.chapters[1]!.body}`;
+      }
+    });
+  }
+  async function seedAndRestructure(
+    manuscript: string,
+    titles: string[],
+    route: string,
+    payload: object,
+  ): Promise<void> {
+    writeFileSync(join(bookDir, 'manuscript.md'), manuscript);
+    writeState({
+      chapters: titles.map((t, i) => ({ id: i + 1, title: t, slug: `0${i + 1}-x` })),
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    const r = await request(app2).post(`/api/books/${bookId}/chapters/${route}`).send(payload);
+    expect(r.status).toBe(200);
+  }
+  const NEW_TITLES = ['Chapter 1 — The Beginning', 'Chapter 2 — A Manifest'];
+
+  it('GET: an exclude-only book whose hint bodies are from the OLD parser still adopts the new titles', async () => {
+    await seedAndRestructure(MANUSCRIPT_BODY, NEW_TITLES, 'exclude', { chapterIds: [2], excluded: true });
+    oldParserBodies();
+    backToOwing(['Chapter 1', 'Chapter 2']);
+    await dropRecord();
+
+    const res = await request(app2).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(readS().chapters.map((c) => c.title)).toEqual(NEW_TITLES);
+    expect(readS().chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
+  it('POST: the same old-parser book adopts the new titles', async () => {
+    await seedAndRestructure(MANUSCRIPT_BODY, NEW_TITLES, 'exclude', { chapterIds: [2], excluded: true });
+    oldParserBodies();
+    backToOwing(['Chapter 1', 'Chapter 2']);
+    await dropRecord();
+
+    const res = await request(app2)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+    expect(readS().chapters.map((c) => c.title)).toEqual(NEW_TITLES);
+  });
+
+  it('GET: a reorder under a changed parser still gives each chapter its own title', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'reorder', { order: [3, 1, 2] });
+    editHints((f) => {
+      for (const e of f.entries) for (const c of e.chapters) c.body = `${c.body} (older parser)`;
+    });
+    backToOwing(['Chapter 1', 'Chapter 2', 'Chapter 3'], false);
+    await dropRecord();
+
+    await request(app2).get(`/api/books/${bookId}/state`);
+    expect(readS().chapters.map((c) => c.title)).toEqual(['Gamma', 'Alpha', 'Beta']);
+    expect(readS().chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
+  it('GET: a recorded parse count that no longer matches skips the refresh without a bump', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'reorder', { order: [3, 1, 2] });
+    editHints((f) => {
+      for (const e of f.entries) e.parseChapterCount = 5;
+    });
+    backToOwing(['Chapter 1', 'Chapter 2', 'Chapter 3'], false);
+    await dropRecord();
+    const before = readFileSync(statePath);
+
+    await request(app2).get(`/api/books/${bookId}/state`);
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(readS().chapterTitleParserVersion).toBeUndefined();
+  });
+
+  it('GET: a hints file without origin data (written before this change) takes the body pairing', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'reorder', { order: [3, 1, 2] });
+    editHints((f) => {
+      for (const e of f.entries) {
+        delete e.parseChapterCount;
+        for (const c of e.chapters) delete c.parseIndex;
+      }
+    });
+    backToOwing(['Chapter 1', 'Chapter 2', 'Chapter 3'], false);
+    await dropRecord();
+
+    await request(app2).get(`/api/books/${bookId}/state`);
+    expect(readS().chapters.map((c) => c.title)).toEqual(['Gamma', 'Alpha', 'Beta']);
   });
 });
