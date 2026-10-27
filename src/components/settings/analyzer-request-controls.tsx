@@ -81,8 +81,12 @@ export function AnalyzerRequestControls() {
     if (!el) return;
     scrolledForRef.current = key;
     el.scrollIntoView?.({ block: 'center' });
+    /* A second deep link inside the window must not strand the first row lit. */
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current.timer);
+      highlightTimerRef.current.el.classList.remove('ring-2', 'ring-magenta/60');
+    }
     el.classList.add('ring-2', 'ring-magenta/60');
-    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current.timer);
     const timer = setTimeout(() => {
       el.classList.remove('ring-2', 'ring-magenta/60');
     }, 2400);
@@ -91,7 +95,10 @@ export function AnalyzerRequestControls() {
 
   useEffect(() => {
     return () => {
-      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current.timer);
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current.timer);
+        highlightTimerRef.current.el.classList.remove('ring-2', 'ring-magenta/60');
+      }
     };
   }, []);
 

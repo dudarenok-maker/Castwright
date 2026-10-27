@@ -204,4 +204,39 @@ describe('AnalyzerRequestControls — deep-linked reasoning row (5.6b)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('clears the first row highlight when a second deep link lands inside the window', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      Element.prototype.scrollIntoView = vi.fn();
+      mockModels.mockResolvedValue(CATALOG as never);
+      const focusA: Stage = { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.8-flash' } };
+      const focusB: Stage = { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemma-4-31b-it' } };
+      // The slice has no action that sets reasoningFocus, so a test-only action swaps the stage.
+      const store = configureStore({
+        reducer: combineReducers({
+          account: accountSlice.reducer,
+          ui: (state: ReturnType<typeof uiSlice.reducer> | undefined, action: { type: string; stage?: Stage }) =>
+            action.type === 'test/setStage' ? { ...uiSlice.reducer(state, action), stage: action.stage as Stage } : uiSlice.reducer(state, action),
+        }),
+        preloadedState: {
+          account: accountSlice.reducer(undefined, { type: '@@INIT' }),
+          ui: { ...uiSlice.reducer(undefined, { type: '@@INIT' }), stage: focusA },
+        } as never,
+      });
+      render(<Provider store={store}><AnalyzerRequestControls /></Provider>);
+      await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash');
+      // Look rows up by id: the highlight lands on the id'd element, not the select carrying the test id.
+      const rowA = document.getElementById('analyzer-reasoning-gemini-gemini-3.8-flash') as HTMLElement;
+      await waitFor(() => expect(rowA.className).toMatch(/(^| )ring-2( |$)/));
+      act(() => {
+        store.dispatch({ type: 'test/setStage', stage: focusB });
+      });
+      const rowB = document.getElementById('analyzer-reasoning-gemini-gemma-4-31b-it') as HTMLElement;
+      await waitFor(() => expect(rowB.className).toMatch(/(^| )ring-2( |$)/));
+      expect(rowA.className).not.toMatch(/(^| )ring-2( |$)/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
