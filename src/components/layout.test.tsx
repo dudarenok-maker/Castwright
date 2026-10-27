@@ -3067,11 +3067,13 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       expect(stale).toHaveLength(1);
       expect(stale[0].message).toContain('changed elsewhere');
 
-      /* The next book-meta commit is built from T2, not T1. */
+      /* The next book-meta commit sends only the notes the user typed, not T1
+         (#3784 review pass 9: typed fields only), so the title stays T2. */
       commit(store, 'notes', 'A note');
       await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-      expect(titlePuts(disk).at(-1)).toBe('ok T2');
+      expect(titlePuts(disk)).toHaveLength(6);
       expect(disk.books.get('A')!.state).toMatchObject({ title: 'T2', notes: 'A note' });
+      expect(savedTitle(store)).toBe('T2');
     } finally {
       vi.useRealTimers();
     }
@@ -3285,6 +3287,74 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
       expect(disk.books.get('A')!.state.castConfirmed).toBe(true);
       expect(disk.books.get('A')!.state.title).toBe('T0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P9-1 (review pass 9) — the author that rode a title refused as stale
+     is not refused itself. It lands before the re-read, so the read shows it,
+     and a later notes commit sends only the notes, leaving it on disk. */
+  it('P9-1: a field that rode a stale-refused save is shown after the re-read, and a later commit keeps it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      act(() => {
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Mine' }));
+        store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(store.getState().bookMeta.saved.A?.author).toBe(disk.books.get('A')!.state.author);
+
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'Theirs', author: 'New Author', notes: 'A note' });
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', author: 'New Author' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P9-2 (review pass 9) — a second mark while the re-read is in flight
+     (Account's restore, the language guard, a cast save refused as stale) must
+     not lose a details commit made after the stale refusal. */
+  it('P9-2: a second mark while the re-read is in flight loses no notes commit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        await gate;
+        return read(id);
+      });
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      releaseRead();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'Theirs', notes: 'A note' });
+      expect(store.getState().bookMeta.saved.A?.notes).toBe('A note');
     } finally {
       vi.useRealTimers();
     }

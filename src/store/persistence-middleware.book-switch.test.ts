@@ -40,7 +40,16 @@ const state = (stageBookId: string, heldBookId: string | null) => ({
     mergedAwayKeys: ['B-KEY'],
   },
   changeLog: { events: [{ id: 'b-ev' }] },
-  bookMeta: { draft: null, saved: { A: meta('A title'), B: meta('B title') } },
+  bookMeta: {
+    draft: null,
+    saved: { A: meta('A title'), B: meta('B title') },
+    /* A details commit sends the fields typed since the last accepted save
+       (#3784 review pass 9), keyed by book like `saved`. */
+    lastCommitted: {
+      A: { saved: meta('A old'), draft: { title: 'A title' } },
+      B: { saved: meta('B old'), draft: { title: 'B title' } },
+    },
+  },
 });
 
 const fire = async (s: Record<string, unknown>, type: string) => {
@@ -88,7 +97,7 @@ describe('persistenceMiddleware — book-switch gate (#3624)', () => {
     const calls = callsTo('A');
     expect(calls).toHaveLength(1);
     expect(calls[0][1].slice).toBe('state');
-    expect(calls[0][1].patch).toMatchObject({ title: 'A title' });
+    expect(calls[0][1].patch).toEqual({ title: 'A title' });
   });
 
   it('(c) control: matching book persists every type without a warning', async () => {

@@ -13,7 +13,8 @@
 
    Persistence: `commitDraft` is the only mutation that writes through to
    disk — the persistence-middleware watches that action and PUTs a single
-   `state` slice patch containing all six fields. */
+   `state` slice patch containing the fields typed since the last accepted
+   save (`lastCommitted[bookId].draft`). */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { BookStateJson } from '../lib/types';
@@ -212,8 +213,8 @@ export const bookMetaSlice = createSlice({
     /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`).
        #3784 P1 — `refused` names book-meta fields the server refused as
        stale: they stop being the user's pending edit, so a rollback does not
-       restore them and the persistence middleware does not re-commit them
-       after the re-read. */
+       restore them and a later commit does not send them again (the
+       persistence middleware sends only the pending edit's fields). */
     markNeedsFullRead: (s, a: PayloadAction<{ bookId: string; refused?: string[] }>) => {
       const marks = (s.needsFullRead ??= {});
       marks[a.payload.bookId] = (marks[a.payload.bookId] ?? 0) + 1;

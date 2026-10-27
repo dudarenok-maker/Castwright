@@ -63,6 +63,13 @@ const readyStage = (bookId: string): Stage => ({
   openProfileId: null,
 });
 
+/* A commit on A with something typed, so a save to A is sent (#3784 review pass 9:
+   a details save carries only the typed fields; an empty commit sends nothing). */
+const commitOnA = (store: Store) => {
+  store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'A note' }));
+  store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+};
+
 const putsTo = (bookId: string) => putBookState.mock.calls.filter((c) => c[0] === bookId);
 
 describe('persistenceMiddleware — meta draft clear on book switch (#3754, #3624)', () => {
@@ -76,7 +83,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     typeDraftOnB(store);
     openBook(store, 'A');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -90,7 +97,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     store.dispatch(uiActions.goHome());
     openBook(store, 'A');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -103,7 +110,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     typeDraftOnB(store);
     store.dispatch(uiActions.hydrateFromUrl(readyStage('A')));
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -167,7 +174,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     /* Not rolled back: saved[B] keeps the value its kept save will write. */
     expect(store.getState().bookMeta.saved.B?.title).toBe('B DRAFT');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     const flushedA = store.dispatch(flushBookPersistence('A') as never);
     await vi.advanceTimersByTimeAsync(1000);
     await flushedA;
