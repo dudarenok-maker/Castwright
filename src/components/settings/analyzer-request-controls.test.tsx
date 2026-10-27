@@ -48,7 +48,7 @@ function renderControls(account: Record<string, unknown> = {}, stage: Stage = { 
   const store = configureStore({
     reducer: combineReducers({ account: accountSlice.reducer, ui: uiSlice.reducer }),
     preloadedState: {
-      account: { ...accountSlice.reducer(undefined, { type: '@@INIT' }), ...account },
+      account: { ...accountSlice.reducer(undefined, { type: '@@INIT' }), hydrated: true, ...account },
       ui: { ...uiSlice.reducer(undefined, { type: '@@INIT' }), stage },
     } as never,
   });
@@ -129,6 +129,16 @@ describe('AnalyzerRequestControls — reasoning', () => {
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     expect(mockPut).not.toHaveBeenCalled();
     expect(screen.getByTestId('analyzer-request-controls-unreadable')).toBeInTheDocument();
+  });
+
+  it('blocks the save before account settings have hydrated, so default rows cannot wipe saved levels', async () => {
+    renderControls({ hydrated: false });
+    await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-ollama-q:4b')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:4b'), { target: { value: 'low' } });
+    expect(screen.getByTestId('analyzer-request-controls-save')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(screen.getByTestId('analyzer-request-controls-unreadable')).toHaveTextContent(/haven.t loaded yet/);
   });
 });
 

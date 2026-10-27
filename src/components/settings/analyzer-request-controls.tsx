@@ -29,8 +29,11 @@ export function AnalyzerRequestControls() {
   /* Holds the pending highlight-removal timer (with its element) across re-runs of the highlight effect. */
   const highlightTimerRef = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
   /* #3625 — while the settings file is unreadable the slice holds boot defaults; a save sends the whole
-     analyzerReasoningByEngine key, which would replace the user's real maps. */
-  const blocked = useAppSelector((s) => !!s.account.settingsFileUnreadable);
+     analyzerReasoningByEngine key, which would replace the user's real maps. Likewise before the first
+     hydration (boot fetch failed or pending): the rows show defaults, not the saved levels. */
+  const unreadable = useAppSelector((s) => !!s.account.settingsFileUnreadable);
+  const hydrated = useAppSelector((s) => s.account.hydrated);
+  const blocked = unreadable || !hydrated;
   const models = useMemo(() => collectCatalogModels(catalog), [catalog]);
   /* N10: saved levels are strings; N7: Ollama rows and their state are keyed by the normalised tag. */
   const [ollama, setOllama] = useState<Record<string, string>>(normalizeOllamaReasoningMap(savedOllama));
@@ -197,7 +200,9 @@ export function AnalyzerRequestControls() {
         </button>
         {blocked && (
           <span data-testid="analyzer-request-controls-unreadable" className="text-xs text-rose-700">
-            Your settings can&apos;t be read right now, so saving is off until they load.
+            {unreadable
+              ? 'Your settings can’t be read right now, so saving is off until they load.'
+              : 'Your settings haven’t loaded yet, so saving is off until they do.'}
           </span>
         )}
         {showSaved && <span className="text-xs text-magenta font-semibold">Saved.</span>}
