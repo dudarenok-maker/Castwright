@@ -89,7 +89,8 @@ is highlighted for you):
     named level (`low`, `medium`, `high`) or Model default; not when it is already `off`.
   - **Gemini / Gemma:** **Set a lower reasoning level (try "<level>") for <model>**, offered when
     the level the request ran at has a real level below it. At Model default on a model with
-    levels it suggests that model's lowest level by name. Gemma 4 at its default gets none;
+    levels it counts from that model's documented default and suggests the level one step below
+    it by name (nothing, if the default is already the lowest). Gemma 4 at its default gets none;
     Gemma at `on` gets **Turn reasoning off for <model>**.
   - **OpenAI-compatible endpoints:** **Lower <name>'s reasoning level**, only for an endpoint with
     a Reasoning control whose level is above its lowest one (`off` for `enable_thinking`, `none`
