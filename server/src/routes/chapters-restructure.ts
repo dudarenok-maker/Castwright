@@ -608,6 +608,7 @@ chaptersRestructureRouter.post(
       // manuscript, and is dropped inside the lock if that has changed.
       let parsedTitles: string[] = [];
       let parsedTitleSynthesized: boolean[] = [];
+      let parsedBodies: string[] = [];
       const manuscriptPath = join(bookDir, state.manuscriptFile);
       if (existsSync(manuscriptPath)) {
         try {
@@ -619,6 +620,7 @@ chaptersRestructureRouter.post(
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
           parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);
+          parsedBodies = parsed.chapters.map((c) => c.body);
         } catch (parseErr) {
           console.warn(
             `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
@@ -632,6 +634,7 @@ chaptersRestructureRouter.post(
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles: advisoryValid ? parsedTitles : [],
             parsedTitleSynthesized: advisoryValid ? parsedTitleSynthesized : [],
+            parsedBodies: advisoryValid ? parsedBodies : [],
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

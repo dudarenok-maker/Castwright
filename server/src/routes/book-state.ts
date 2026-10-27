@@ -79,7 +79,13 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
-import { removeManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
+import {
+  hintsFromPersisted,
+  readManuscriptHints,
+  removeManuscriptHints,
+  sha256Hex,
+} from '../workspace/manuscript-hints.js';
+import { parseIndexByBody } from '../workspace/title-align.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -243,13 +249,28 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
    revisions.json, analysis cache, manuscript-edits.json. Bumps
    `state.chapterTitleParserVersion` so the next read short-circuits.
 
+   How chapters pair with the fresh parse depends on what the book proves
+   about its structure (#3828):
+   - A valid manuscript-hints.json (a restructure after #3703): pair BY BODY,
+     since a reorder moves bodies and a merge changes the count. A chapter
+     whose body matches exactly one parse chapter with a real heading adopts
+     that heading; zero or several matches, or a made-up parse title ("Chapter
+     N" renumbers with position), keep the current title. No chapter-count gate.
+   - A hints file that is corrupt or does not belong to this state.json and
+     manuscript: skip, version not bumped (as for a count mismatch).
+   - No hints file: pair by position, behind the count gate. KNOWN GAP: a book
+     restructured BEFORE #3703 has no hints file and so lands here, where a
+     reorder is indistinguishable from a healthy book (a title-permutation
+     heuristic was tried in #3822 and reverted: it regressed healthy books).
+
    Skips refresh (returns state unchanged) when ANY of:
    - State is already at the current parser version.
    - Source manuscript file missing on disk.
    - parseManuscript throws (corrupt file, etc.).
-   - New chapter count differs from the existing count — splitting logic
-     itself changed; aligning titles by index would silently mislabel
-     chapters. Leave the version field as-is so a future fix can retry. */
+   - The hints file is present but not valid for this state/manuscript.
+   - No hints file and the new chapter count differs from the existing count —
+     splitting logic itself changed; aligning titles by index would silently
+     mislabel chapters. Leave the version field as-is so a future fix can retry. */
 async function refreshChapterTitles(state: BookStateJson, bookDir: string): Promise<BookStateJson> {
   const currentVersion = state.chapterTitleParserVersion ?? 1;
   if (currentVersion >= CHAPTER_TITLE_PARSER_VERSION) return state;
@@ -284,7 +305,26 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
           sourcePath: manuscriptPath,
         });
 
-    if (parsed.chapters.length !== state.chapters.length) {
+    /* #3828 — the hints read is write-free and, like the parse, outside the
+       state-json leaf lock; the merge below re-validates it against the fresh read. */
+    const sourceSha256 = sha256Hex(buffer);
+    let hintsFile: unknown = null;
+    let hintsCorrupt = false;
+    try {
+      hintsFile = await readManuscriptHints(bookDir);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+      hintsCorrupt = true;
+    }
+    const alignByBody = hintsFile !== null;
+    if (hintsCorrupt || (alignByBody && !hintsFromPersisted(hintsFile, state, sourceSha256).ok)) {
+      console.warn(
+        `[book-state] title-refresh skipped for ${state.bookId}: manuscript-hints.json is corrupt or does not belong to this book's chapters and manuscript.`,
+      );
+      return state;
+    }
+
+    if (!alignByBody && parsed.chapters.length !== state.chapters.length) {
       console.warn(
         `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
       );
@@ -304,14 +344,30 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        sibling chapter render's stamp is never reverted by this write. */
     return (await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
       if ((fresh.chapterTitleParserVersion ?? 1) >= CHAPTER_TITLE_PARSER_VERSION) return null;
-      if (parsed.chapters.length !== fresh.chapters.length) return null;
+      let parseIndex: Array<number | null> | null = null;
+      if (alignByBody) {
+        const checked = hintsFromPersisted(hintsFile, fresh, sourceSha256);
+        if (!checked.ok) return null;
+        parseIndex = parseIndexByBody(
+          checked.hints.map((h) => h.body),
+          parsed.chapters.map((p) => p.body),
+        );
+      } else if (parsed.chapters.length !== fresh.chapters.length) {
+        return null;
+      }
       const newChapters = fresh.chapters.map((c, i) => {
         if (c.titleOverridden) return c;
+        const match = parseIndex ? parseIndex[i] : i;
+        const p = match == null ? undefined : parsed.chapters[match];
+        if (!p) return c;
+        /* By body, a made-up parse title ("Chapter N") is position-dependent, so
+           it says nothing about this chapter: keep the one it has. */
+        if (parseIndex && p.titleSynthesized) return c;
         const { titleSynthesized: _stale, ...rest } = c;
         return {
           ...rest,
-          title: parsed.chapters[i].title,
-          titleSynthesized: parsed.chapters[i].titleSynthesized || undefined,
+          title: p.title,
+          titleSynthesized: p.titleSynthesized || undefined,
         };
       });
       const titlesChanged = newChapters.some((c, i) => c.title !== fresh.chapters[i].title);

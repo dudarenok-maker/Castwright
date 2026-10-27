@@ -13,7 +13,7 @@
    server/src/parsers/version.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -321,5 +321,169 @@ describe('GET /:bookId/state — titleSynthesized through the title refresh (#36
     expect(onDisk.chapters[2].title).toBe('My Sticky Name');
     expect(onDisk.chapters[2].titleOverridden).toBe(true);
     expect(onDisk.chapters[2].titleSynthesized).toBe(true);
+  });
+});
+
+/* #3828 -- on a book restructured after #3703 (a valid manuscript-hints.json), the
+   GET title refresh aligns each chapter to its parse chapter by BODY, not by
+   position: a reorder moves bodies, a merge changes the count. The restructure
+   is driven through the real router so the persisted bodies are the ones a real
+   reorder / merge writes (reorder keeps each body verbatim; merge joins them with
+   a blank line, so a merged body equals no parse chapter). */
+describe('GET /:bookId/state — title refresh aligns by body on a restructured book (#3828)', () => {
+  const PROLOGUE_BODY = 'The prologue body has a few sentences of narrative content in it.';
+  /* Parses to [Chapter 1 (app-made: prose before any heading), Prologue]. */
+  const REORDER_MANUSCRIPT = `Opening words before any heading.\n\n## Prologue\n\n${PROLOGUE_BODY}\n`;
+  /* Parses to [Alpha, Beta, Gamma]. */
+  const MERGE_MANUSCRIPT = '# Alpha\n\nAlpha body line.\n\n# Beta\n\nBeta body line.\n\n# Gamma\n\nGamma body line.\n';
+  const hintsPath = (): string => join(bookDir, '.audiobook', 'manuscript-hints.json');
+
+  let restructureApp: Express;
+
+  beforeAll(async () => {
+    const [{ chaptersRestructureRouter }, { bookStateRouter }] = await Promise.all([
+      import('./chapters-restructure.js'),
+      import('./book-state.js'),
+    ]);
+    restructureApp = express();
+    restructureApp.use(express.json());
+    restructureApp.use('/api/books', bookStateRouter);
+    restructureApp.use('/api/books', chaptersRestructureRouter);
+  });
+
+  async function removeRecord(): Promise<void> {
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript('m_refresh_test');
+  }
+
+  function readState(): {
+    chapters: Array<{ title: string; titleSynthesized?: boolean }>;
+    chapterTitleParserVersion?: number;
+  } {
+    return JSON.parse(readFileSync(statePath, 'utf8'));
+  }
+
+  /* Back to "owes a title refresh": the restructure stamps nothing, but a
+     book restructured before the parser version bumped is exactly this. */
+  function markOwingRefresh(patch?: (s: ReturnType<typeof readState>) => void): void {
+    const s = readState();
+    delete s.chapterTitleParserVersion;
+    patch?.(s);
+    writeFileSync(statePath, JSON.stringify(s));
+  }
+
+  beforeEach(async () => {
+    rmSync(hintsPath(), { force: true });
+    await removeRecord();
+  });
+
+  it('a reordered book keeps each chapter\'s own title (body B is not relabelled "Chapter 1", body A not "Prologue")', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), REORDER_MANUSCRIPT);
+    writeState({
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+        { id: 2, title: 'Prologue', slug: '02-prologue' },
+      ],
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    const reorder = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(200);
+    /* The app-made title renumbered with its new position. */
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
+    expect(existsSync(hintsPath())).toBe(true);
+    markOwingRefresh();
+    await removeRecord();
+
+    const res = await request(restructureApp).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+
+    const onDisk = readState();
+    expect(onDisk.chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
+    expect(onDisk.chapters[1].titleSynthesized).toBe(true);
+    expect(onDisk.chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
+  it('POST /chapters/refresh-titles on a reordered book does not relabel the app-made chapter "Prologue" or "Chapter 1"', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), REORDER_MANUSCRIPT);
+    writeState({
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+        { id: 2, title: 'Prologue', slug: '02-prologue' },
+      ],
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    const reorder = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(200);
+    await removeRecord();
+
+    const res = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
+  });
+
+  it('a merged book keeps the merged chapter\'s title and still refreshes its neighbour', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), MERGE_MANUSCRIPT);
+    writeState({
+      chapters: [
+        { id: 1, title: 'Alpha', slug: '01-alpha' },
+        { id: 2, title: 'Beta', slug: '02-beta' },
+        { id: 3, title: 'Gamma', slug: '03-gamma' },
+      ],
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    const merge = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2], mergedTitle: 'Alpha and Beta' });
+    expect(merge.status).toBe(200);
+    /* Gamma carries a stale title, as a book imported by an older parser would. */
+    markOwingRefresh((s) => {
+      s.chapters[1].title = 'Chapter 2';
+    });
+    await removeRecord();
+
+    const res = await request(restructureApp).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+
+    const onDisk = readState();
+    expect(onDisk.chapters.map((c) => c.title)).toEqual(['Alpha and Beta', 'Gamma']);
+    expect(onDisk.chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
+  it('a stale hints file skips the refresh: nothing written, version not bumped', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), REORDER_MANUSCRIPT);
+    writeState({
+      chapters: [
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+        { id: 2, title: 'Prologue', slug: '02-prologue' },
+      ],
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    const reorder = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 1] });
+    expect(reorder.status).toBe(200);
+    /* The manuscript bytes changed since the restructure wrote the file. */
+    const file = JSON.parse(readFileSync(hintsPath(), 'utf8')) as {
+      entries: Array<{ sourceSha256: string }>;
+    };
+    for (const e of file.entries) e.sourceSha256 = 'deadbeef';
+    writeFileSync(hintsPath(), JSON.stringify(file));
+    markOwingRefresh();
+    await removeRecord();
+    const before = readFileSync(statePath);
+
+    const res = await request(restructureApp).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(readState().chapterTitleParserVersion).toBeUndefined();
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
   });
 });
