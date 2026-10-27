@@ -28,7 +28,7 @@ import { analyzerEndpointSchema } from './analyzer-endpoints.js';
 import { registerKnownSecretsProvider } from '../analyzer/known-secrets-gate.js';
 import { registerAnalyzerEndpointsProvider } from '../analyzer/analyzer-endpoints-gate.js';
 import { mergeCapabilityRecords } from '../analyzer/capability-record-merge.js';
-import { normalizeModelTag } from '../analyzer/ollama-tag.js';
+import { sameCapabilityRecordModel } from '../analyzer/ollama-tag.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -1950,7 +1950,7 @@ export async function mutateUserSettings(
 export async function writeAnalyzerCapabilityRecord(
   modelId: string,
   record: z.infer<typeof modelCapabilityRecordSchema>,
-  sameModel: (savedKey: string) => boolean = (savedKey) => normalizeModelTag(savedKey) === normalizeModelTag(modelId),
+  sameModel: (savedKey: string) => boolean = (savedKey) => sameCapabilityRecordModel(savedKey, modelId),
 ): Promise<UserSettings> {
   const validated = modelCapabilityRecordSchema.parse(record);
   return mutateUserSettings((current) => {

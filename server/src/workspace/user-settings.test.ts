@@ -2029,6 +2029,19 @@ describe('writeAnalyzerCapabilityRecord — merges each Test into one record per
     expect(records.qwen3.verdictTestedAt?.reasoning?.on).toBe(T1);
   });
 
+  it('the default matcher compares an endpoint id exactly: `:latest` is a different model there (A2, N7)', async () => {
+    const ENDPOINT_URL = 'https://lab.example';
+    await writeAnalyzerCapabilityRecord('openai:lab::qwen3', rec({ serverUrl: ENDPOINT_URL, testedAt: T1, reasoning: { on: 'rejected' } }));
+    await writeAnalyzerCapabilityRecord('openai:lab::qwen3:latest', rec({ serverUrl: ENDPOINT_URL, reasoning: { off: 'accepted' } }));
+    const records = (await readUserSettings()).analyzerCapabilitiesByModel;
+    expect(Object.keys(records).filter((key) => key.startsWith('openai:')).sort()).toEqual([
+      'openai:lab::qwen3',
+      'openai:lab::qwen3:latest',
+    ]);
+    expect(records['openai:lab::qwen3'].reasoning).toEqual({ on: 'rejected' });
+    expect(records['openai:lab::qwen3:latest'].reasoning).toEqual({ off: 'accepted' });
+  });
+
   it('a Test whose digest differs replaces the record instead of merging it (A2)', async () => {
     await writeAnalyzerCapabilityRecord('q:4b', rec({ testedAt: T1, reasoning: { on: 'rejected' }, digest: 'sha256-old' }));
     await writeAnalyzerCapabilityRecord('q:4b', rec({ reasoning: { off: 'accepted' }, digest: 'sha256-new' }));

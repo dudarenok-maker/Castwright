@@ -19,7 +19,7 @@ import { configValue } from '../config/resolver.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
-import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
+import { entryForModelTag } from './ollama-tag.js';
 import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
 import {
@@ -173,18 +173,7 @@ export function classifyMarkerProbe(text: string, marker: string): 'enforced' | 
   return 'ignored';
 }
 
-/** N7 — the key a Test record is saved under: an Ollama tag through normalizeModelTag, so `qwen3` and
-    `qwen3:latest` are one model; any other id (an endpoint id, a Gemini id) as is. */
-export function capabilityRecordKey(modelId: string): string {
-  return inferEngineFromModelId(modelId) === 'openai' ? modelId : normalizeModelTag(modelId);
-}
-
-/** A2 — whether two record keys name the same model, so the write can merge into the record saved under
-    the other tag form and leave one key behind (an endpoint id is compared exactly; capabilityRecordKey
-    leaves it as is). */
-export function sameCapabilityRecordModel(a: string, b: string): boolean {
-  return capabilityRecordKey(a) === capabilityRecordKey(b);
-}
+export { capabilityRecordKey, sameCapabilityRecordModel } from './ollama-tag.js';
 
 /** A2 — the date of the Test that recorded one verdict: its own `verdictTestedAt` entry, else the
     record's `testedAt` (a record written before per-verdict dates existed). The pre-run refusal cites
