@@ -442,8 +442,12 @@ a day, and §1 and §2 also use it; run this on a different day.
 
 ### Pass
 
-- Every offered level `accepted` (a `length` stop on a level step still counts); `gemini-3.8-flash`
-  refuses `minimal`.
+- Every offered level `accepted` (a `length` stop on a level step still counts). The `gemini-3.8-flash`
+  result lists `model-default`, `low`, `medium` and `high` with no `minimal` step, and its Advanced
+  settings reasoning row does not offer `minimal`.
+- With `minimal` hand-set for `gemini-3.8-flash` in `user-settings.json`, starting an analysis is refused
+  before it starts ("is not offered for this model"), and the row shows `minimal` selected so it can be
+  changed.
 - `high` reports a larger `thoughtsTokenCount` than `model-default`; Gemma `on` differs from `off`.
 - Gemma `on` with an empty `MAX_TOKENS` answer fails as `analyzer-reasoning-overflow`; at its default
   level the chunk splits and recovers (#528).
