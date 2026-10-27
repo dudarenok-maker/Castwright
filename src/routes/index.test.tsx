@@ -234,6 +234,19 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
   );
 }
 
+/* A disk-backed PUT, capped (review catalogue 28): past `cap` sends it answers
+   a 200 without touching the disk. A refusal or a 404 is never re-sent, and a
+   503 gives up after four sends, so a correct engine never reaches the cap; a
+   mutant that loops on a refusal then fails its assertions on the disk log
+   rather than running the worker out of heap. */
+const cappedDiskPut = (disk: ReturnType<typeof createBookStateDisk>, cap = 12) => {
+  let sends = 0;
+  return async (id: string, req: never) => {
+    sends += 1;
+    return sends > cap ? undefined : disk.put(id, req);
+  };
+};
+
 beforeEach(() => {
   analyseMock.mockClear();
   analyseResult = undefined;
@@ -1016,7 +1029,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         state: { title: 'the Coalfall Commission', castConfirmed: true },
         cast: { characters: [{ id: 'c1', name: 'Eliza', voiceState: 'generated' }] },
       });
-      putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+      putBookStateMock.mockImplementation(cappedDiskPut(disk));
       store.dispatch(
         learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
       );
@@ -1150,7 +1163,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       const disk = createBookStateDisk();
       const stale = [{ id: 'c1', name: 'Stale1', voiceState: 'generated' } as Character];
       disk.seed('b1', { state: { title: 'the Coalfall Commission' }, cast: { characters: stale } });
-      putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+      putBookStateMock.mockImplementation(cappedDiskPut(disk));
       const store = makePopulatedStore({ persist: true });
       /* The full read Layout made when the book was last opened. */
       store.dispatch(
@@ -1185,7 +1198,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       function setupDisk() {
         const disk = createBookStateDisk();
         disk.seed('b1', { state: { title: 'T0' }, cast: { characters: named('Eliza') } });
-        putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+        putBookStateMock.mockImplementation(cappedDiskPut(disk, 40));
         return disk;
       }
       const diskName = (disk: ReturnType<typeof createBookStateDisk>) =>
