@@ -1106,7 +1106,9 @@ export function applyRefreshTitles(
     : opts.parsedTitles.length === state.chapters.length;
   if (!parsedAligned && opts.parsedTitles.length > 0) {
     warnings.push(
-      `Manuscript parses to ${opts.parsedTitles.length} chapters but state has ${state.chapters.length} — parser-aligned title refresh skipped (chapters have been restructured since import, or the parser now splits the manuscript differently).`,
+      pairing
+        ? `Manuscript now parses to ${opts.parsedTitles.length} chapters but this book's chapters were recorded against a parse of ${opts.parseChapterCount} — parser-aligned title refresh skipped (the parser now splits the manuscript differently).`
+        : `Manuscript parses to ${opts.parsedTitles.length} chapters but state has ${state.chapters.length} — parser-aligned title refresh skipped (chapters have been restructured since import).`,
     );
   }
 

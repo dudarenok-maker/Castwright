@@ -1082,3 +1082,30 @@ describe('backfillTitleSynthesized (#3628)', () => {
     expect(out.chapters[2].titleSynthesized).toBe(true);
   });
 });
+
+describe('applyRefreshTitles warning when the parse no longer has the recorded count (#3828)', () => {
+  it('names the recorded count, not a state-vs-parse count that may agree', () => {
+    /* A merged book: state has 2 chapters, its hints were recorded against a parse of 3,
+       and the parser now yields 2 -- the counts "parse 2 / state 2" agree, so a
+       state-vs-parse message would contradict itself. */
+    const state = makeState([
+      { id: 1, title: 'Chapter 1', titleSynthesized: true },
+      { id: 2, title: 'Chapter 2', titleSynthesized: true },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'Chapter 1', body: 'a' },
+      { id: 2, title: 'Chapter 2', body: 'b' },
+    ]);
+    const result = applyRefreshTitles(state, hints, [], {
+      parsedTitles: ['One', 'Two'],
+      parsedBodies: ['a', 'b'],
+      parseChapterCount: 3,
+      useFirstLine: false,
+      looksLikeTitle: () => true,
+      maxLen: 80,
+    });
+    expect(result.state.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Chapter 2']);
+    expect(result.warnings.join(' ')).toContain('recorded against a parse of 3');
+    expect(result.warnings.join(' ')).not.toContain('but state has 2');
+  });
+});

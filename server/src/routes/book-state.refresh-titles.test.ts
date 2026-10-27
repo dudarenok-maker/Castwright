@@ -330,7 +330,7 @@ describe('GET /:bookId/state — titleSynthesized through the title refresh (#36
    is driven through the real router so the persisted bodies are the ones a real
    reorder / merge writes (reorder keeps each body verbatim; merge joins them with
    a blank line, so a merged body equals no parse chapter). */
-describe('GET /:bookId/state — title refresh aligns by body on a restructured book (#3828)', () => {
+describe('GET /:bookId/state — title refresh pairs through the hints on a restructured book (#3828)', () => {
   const PROLOGUE_BODY = 'The prologue body has a few sentences of narrative content in it.';
   /* Parses to [Chapter 1 (app-made: prose before any heading), Prologue]. */
   const REORDER_MANUSCRIPT = `Opening words before any heading.\n\n## Prologue\n\n${PROLOGUE_BODY}\n`;

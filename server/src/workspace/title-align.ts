@@ -8,10 +8,13 @@
    (`parseIndexByBody`). Pure: no I/O, no lock. */
 
 /** For each body in `bodies`, the index of the parse chapter whose body is
-    IDENTICAL (exact string equality: a reorder keeps each body verbatim and the
-    persisted file stores it as parsed), or `null` when none or several match --
-    two chapters with the same text cannot be told apart, so neither is paired.
-    A `undefined` body (no hint for that chapter) is `null`. */
+    IDENTICAL (exact string equality, no trimming), or `null` when none or several
+    match -- two chapters with the same text cannot be told apart, so neither is
+    paired. A `undefined` body (no hint for that chapter) is `null`. This is the
+    fallback for a hints file without origins, and it only errs safe: a body that
+    no longer equals the parse's -- a changed parser, or an analysed book, whose
+    cached record has had its front matter stripped before the next restructure
+    persisted it -- finds no match, and that chapter keeps its title. */
 export function parseIndexByBody(
   bodies: ReadonlyArray<string | undefined>,
   parsedBodies: ReadonlyArray<string>,
