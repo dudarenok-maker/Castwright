@@ -69,12 +69,13 @@ test.describe('#3084 wave 5a — analyzer reasoning editor', () => {
     await expect(card).toBeVisible();
 
     /* The editor is its own card above the settings groups (5.6-D1). */
+    const firstGroup = page.locator('section[id^="cfg-section-"]').first();
+    await expect(firstGroup).toBeVisible();
     const cardBox = await card.boundingBox();
-    const firstOtherSection = page.locator('section:not([data-testid="analyzer-request-controls"])').first();
-    if (await firstOtherSection.count()) {
-      const otherBox = await firstOtherSection.boundingBox();
-      if (cardBox && otherBox) expect(cardBox.y).toBeLessThanOrEqual(otherBox.y);
-    }
+    const groupBox = await firstGroup.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(groupBox).not.toBeNull();
+    expect(cardBox!.y).toBeLessThan(groupBox!.y);
 
     const row = page.locator(`[id="${ROW_ID}"]`);
     await expect(row).toBeInViewport({ timeout: 5_000 });
