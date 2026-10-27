@@ -1392,6 +1392,12 @@ describe('AnalyzerReasoningUnavailableError copy (#3084 PR 5a)', () => {
     expect(r.userMessage).toMatch(/or run Test again\.$/);
   });
 
+  it('Ollama refusal of a level no Test probes does not advise running Test again', () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'xhigh', 'local'), 'Analyzer');
+    expect(r.userMessage).toContain('Choose an offered level in');
+    expect(r.userMessage).not.toMatch(/run Test again/i);
+  });
+
   /* N10 — a refusal from the call itself must not claim the run never started. */
   it("a 'mid-run' refusal says the run stopped, not that it was not started", () => {
     const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local', 'mid-run'), 'Analyzer');

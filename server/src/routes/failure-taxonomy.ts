@@ -51,7 +51,13 @@ import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 /* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
    names its endpoint by saved name without an import of workspace/user-settings.ts. */
 import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
-import { geminiReasoningRow, levelsForReasoningStyle, reasoningControlDescription, type ReasoningLevel } from '../analyzer/reasoning.js';
+import {
+  geminiReasoningRow,
+  levelsForReasoningStyle,
+  OLLAMA_NAMED_LEVELS,
+  reasoningControlDescription,
+  type ReasoningLevel,
+} from '../analyzer/reasoning.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -1172,9 +1178,10 @@ export function classifyAnalysisFailure(
     /* N10 — the same refusal can arrive from the pre-run check or, for a value no save could produce,
        from the call itself. The copy must not claim a run never started when it did. */
     const outcome = err.when === 'mid-run' ? 'stopped' : 'was not started';
-    /* Only an Ollama model's named levels are re-recorded by a Test; a Gemini model's and an endpoint
-       style's offered levels never change with one. */
-    const retry = err.engine === 'local' ? ', or run Test again' : '';
+    /* Only an Ollama model's named levels are re-recorded by a Test (a level outside them is never
+       probed); a Gemini model's and an endpoint style's offered levels never change with one. */
+    const retry =
+      err.engine === 'local' && (OLLAMA_NAMED_LEVELS as readonly string[]).includes(err.level) ? ', or run Test again' : '';
     return withCopy(
       'analyzer-request-rejected',
       `${modelLabel} ${outcome}: its saved reasoning level "${err.level}" is not offered for this model. Choose an offered level in ${where}${retry}.`,
