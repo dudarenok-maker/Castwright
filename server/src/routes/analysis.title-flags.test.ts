@@ -31,6 +31,9 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       if (opts.phase === 'phase1' && g.__analyzer_device_test_phase1_selection) {
         return g.__analyzer_device_test_phase1_selection;
       }
+      if (opts.phase === 'phase0' && g.__analyzer_device_test_phase0_selection) {
+        return g.__analyzer_device_test_phase0_selection;
+      }
       return actual.selectAnalyzerForPhase(
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
       );
@@ -64,6 +67,7 @@ afterAll(() => {
 
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase0_selection;
 });
 
 function phase1Selection(): AnalyzerSelection {
@@ -307,10 +311,15 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
 describe.each(['main', 'subset'] as const)(
   '#3829 — a %s analysis start is refused on a book whose chapter hints are out of sync with state.json',
   (kind) => {
-  const start = (app: express.Express, manuscriptId: string) =>
-    kind === 'main'
+  /* Both phases get the stub analyzer, so a start that is NOT refused never reaches Ollama. */
+  const start = (app: express.Express, manuscriptId: string) => {
+    const g = globalThis as Record<string, unknown>;
+    g.__analyzer_device_test_phase0_selection = phase1Selection();
+    g.__analyzer_device_test_phase1_selection = phase1Selection();
+    return kind === 'main'
       ? request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({})
       : request(app).post(`/api/manuscripts/${manuscriptId}/analysis/chapters`).send({ chapterIds: [1] });
+  };
   const analysisApp = async () => {
     const { analysisRouter } = await import('./analysis.js');
     const app = express();
@@ -352,6 +361,37 @@ describe.each(['main', 'subset'] as const)(
     expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('persisted');
     const res = await start(await analysisApp(), manuscriptId);
     expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('does not refuse a never-restructured book whose state title is an older parser form', async () => {
+    // Same ids and count as the parse; chapter 2's title was written before the parser decoded entities.
+    const { manuscriptId } = await seedBook(`drift-${kind}`, FLAGGED_MANUSCRIPT, [
+      { title: 'Alpha' },
+      { title: 'Prologue&rsquo;' },
+      { title: 'Epilogue' },
+    ]);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('refuses a same-count book whose headings were reordered before hints were persisted', async () => {
+    // Same ids and count; state is [Prologue, Alpha, Epilogue] against a parse of [Alpha, Prologue, Epilogue].
+    const { manuscriptId, bookDir } = await seedBook(`reordered-${kind}`, FLAGGED_MANUSCRIPT, [
+      { title: 'Prologue' },
+      { title: 'Alpha' },
+      { title: 'Epilogue' },
+    ]);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(readFileSync(statePath).equals(before)).toBe(true);
   }, 60_000);
 
   it('does not refuse a healthy fresh import', async () => {

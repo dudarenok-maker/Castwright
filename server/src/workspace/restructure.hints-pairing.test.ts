@@ -88,6 +88,46 @@ describe('a synthesized state title is compared, not skipped', () => {
   });
 });
 
+describe('title drift is not a mispairing (#3829)', () => {
+  /* Parser changes (entity decoding, heading normalisation) alter a title after state.json
+     was written. A drifted title matches no OTHER position's parse title; a pre-#3703 reorder
+     puts a heading at another position. */
+  it('pairs a position whose state title is an older parser form of its own heading', () => {
+    const s = stateOf([
+      { id: 1, title: 'Alpha' },
+      { id: 2, title: 'The Wizard&rsquo;s Tower' },
+    ]);
+    expect(parseTitlesPairWithState(s, ['Alpha', 'The Wizard’s Tower'])).toBe(true);
+  });
+
+  it('mispairs headings reordered among themselves', () => {
+    const s = stateOf([
+      { id: 1, title: 'Gamma' },
+      { id: 2, title: 'Alpha' },
+      { id: 3, title: 'Beta' },
+    ]);
+    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Gamma'])).toBe(false);
+  });
+
+  it('pairs drift next to a titleOverridden chapter', () => {
+    const s = stateOf([
+      { id: 1, title: 'Alpha' },
+      { id: 2, title: 'Mine', titleOverridden: true },
+      { id: 3, title: 'Caf&eacute;' },
+    ]);
+    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Café'])).toBe(true);
+  });
+
+  it('still mispairs a reorder when another position has also drifted', () => {
+    const s = stateOf([
+      { id: 1, title: 'Beta' },
+      { id: 2, title: 'Alpha' },
+      { id: 3, title: 'Caf&eacute;' },
+    ]);
+    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Café'])).toBe(false);
+  });
+});
+
 describe('every shipped sample pairs with its state under the title check', () => {
   const samplesRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'samples');
   const names = readdirSync(samplesRoot);

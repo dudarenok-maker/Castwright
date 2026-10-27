@@ -529,6 +529,20 @@ describe('merge/split/reorder refuse when hints do not pair with state.json (#37
       expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
     });
 
+    it('rename succeeds on a never-restructured book whose state title is an older parser form (#3829)', async () => {
+      /* Same ids and count as the parse; chapter 2's title was written before the parser decoded
+         entities. No other position carries that title, so it is drift, not a reorder. */
+      seedRenderedState([
+        { id: 1, title: 'Chapter 1', slug: '01-chapter-1', uuid: 'u-1', titleSynthesized: true },
+        { id: 2, title: 'Chapter Two&rsquo;', slug: '02-chapter-two', uuid: 'u-2' },
+        { id: 3, title: 'Chapter Three', slug: '03-chapter-three', uuid: 'u-3' },
+      ]);
+      const res = await request(app)
+        .post(`/api/books/${bookId}/chapters/3/rename`)
+        .send({ title: 'Interlude' });
+      expect(res.status).toBe(200);
+    });
+
     it('exclude still succeeds but writes no hints file, so the mispairing is not made `persisted`', async () => {
       seedPreReorderedBook();
       const res = await request(app)

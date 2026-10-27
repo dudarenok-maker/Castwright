@@ -697,22 +697,25 @@ export class HintsOutOfSyncError extends Error {
 }
 
 /** Whether a fresh parse's titles agree with state.json's, position by position.
-    Exact comparison, like `backfillTitleSynthesized`: state titles come from the
-    parse verbatim (import, re-parse, title refresh). Two kinds of position are
-    skipped because their title is not evidence of which chapter it is: a
-    `titleOverridden` chapter (the user's own wording) and one the parser made up
-    (`null` in the parse: "Chapter N" renumbers with position). A state title that
-    is app-made is NOT skipped: reorder renumbers it, so skipping it let a swap
-    between an app-titled and a heading chapter through, and on a book never
-    restructured the parse is `null` at that position anyway. The blind spot is a
-    reorder that only permutes app-titled chapters among themselves. */
+    A position mispairs only when its state title is the parse's title at a
+    DIFFERENT position: a pre-#3703 reorder moves headings, so each moved title
+    reappears elsewhere in the parse. A title that matches no other position is
+    parser drift (entity decoding, heading normalisation changed after state.json
+    was written; the title parser's version stays put, so nothing re-syncs it) and
+    pairs, however it differs from the parse at its own position (#3829).
+    A `titleOverridden` position is skipped (the user's own wording). A `null`
+    parse title (the parser made it up: "Chapter N" renumbers with position) is not
+    a mismatch by itself, but the state title there is still checked against the
+    other positions, so a swap between an app-titled and a heading chapter is
+    caught. Blind spots: a reorder in which every moved title has also drifted, and
+    a reorder that only permutes app-titled chapters among themselves. */
 export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
 ): boolean {
   return state.chapters.every((c, i) => {
-    const parsed = parseTitles[i];
-    return c.titleOverridden === true || parsed == null || c.title === parsed;
+    if (c.titleOverridden === true || c.title === parseTitles[i]) return true;
+    return !parseTitles.some((t, j) => j !== i && t === c.title);
   });
 }
 
