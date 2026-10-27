@@ -501,6 +501,33 @@ recite:
     Then test by gating the fill between its read and its write, landing the
     invalidation, releasing, and asserting the cache holds the new value.
 
+43. **An exact comparison against a value re-derived from a producer that has
+    changed since the stored copy was made** — PR #3835 pass 1 (#3829,
+    `workspace/restructure.ts` `parseTitlesPairWithState`): state.json holds
+    chapter titles as the parser wrote them at import; the check compared each
+    to what TODAY's parser produces, position by position. Every unversioned
+    parser change (entity decoding, heading normalisation) then read as a
+    mismatch, and the refusal's advice (re-parse) destroys analysis, cast and
+    audio, so a never-restructured book was locked out of work that was harmless
+    before. Checkable: for every guard that recomputes a value and compares it
+    to a stored one, has the producer changed since the oldest stored copy
+    (git log on the producer, and whether its version constant moved)? If so,
+    the comparison must test the property that matters (here: does this title
+    belong to ANOTHER position) rather than equality. Then test with a stored
+    value in an older producer's form and assert the guard passes.
+44. **An app-made placeholder compared as identity evidence** — PR #3835 pass 2
+    (#3829, same function): the parser's fallback title for an untitled
+    section is `Chapter N` (a position number), and a real heading elsewhere can
+    carry the same text, so an untouched import was read as a reorder. Any
+    placeholder the app invents (a position-numbered title, a default name, a
+    synthesized id) collides with real data of the same text. Checkable: for
+    each value used as evidence of which item something is, can the app itself
+    have produced it? If so, exclude it (the `titleSynthesized` flag, or, for
+    data from before the flag, the producer's own output for that position)
+    and test the collision: a placeholder that equals a real value elsewhere
+    must pair, and a real value that moved onto the placeholder's position must
+    still be refused.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
