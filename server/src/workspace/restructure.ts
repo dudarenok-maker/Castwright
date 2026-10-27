@@ -705,16 +705,30 @@ export class HintsOutOfSyncError extends Error {
     pairs, however it differs from the parse at its own position (#3829).
     A `titleOverridden` position is skipped (the user's own wording). A `null`
     parse title (the parser made it up: "Chapter N" renumbers with position) is not
-    a mismatch by itself, but the state title there is still checked against the
-    other positions, so a swap between an app-titled and a heading chapter is
-    caught. Blind spots: a reorder in which every moved title has also drifted, and
-    a reorder that only permutes app-titled chapters among themselves. */
+    a mismatch by itself, but a REAL heading that moved onto it is evidence, so the
+    state title there is checked against the other positions, unless it is the
+    app's own made-up title: `titleSynthesized`, or (a book from before #3628,
+    which carries no flag) equal to `parseMadeUp[i]`, the title the parser itself
+    produces there. That fallback is `Chapter N`, and an untitled lead section
+    followed by a bare "Chapter 1" heading repeats it, which is not a reorder.
+    Blind spots, all accepted: a reorder in which every moved title has also
+    drifted; a reorder that only permutes app-titled chapters among themselves;
+    and a same-count merge then split (the UI titles the second half
+    "<title> (cont.)", which no parse contains), which moves a break and no
+    heading. A title cannot tell any of these from drift. */
 export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
+  parseMadeUp?: ReadonlyArray<string | null>,
 ): boolean {
   return state.chapters.every((c, i) => {
     if (c.titleOverridden === true || c.title === parseTitles[i]) return true;
+    if (
+      parseTitles[i] === null &&
+      (c.titleSynthesized === true || (c.titleSynthesized === undefined && c.title === parseMadeUp?.[i]))
+    ) {
+      return true;
+    }
     return !parseTitles.some((t, j) => j !== i && t === c.title);
   });
 }
@@ -722,17 +736,19 @@ export function parseTitlesPairWithState(
 /** Hints pair with state when both hold the same chapter ids (so the same
     count). Hints carry no uuid, so for hints from a persisted file that is all
     there is to check. Hints from a parse fallback (`parseTitles` given) carry no
-    identity at all, so each position's parsed title must also match state's: a
-    same-count mispairing (a reorder from before #3703) fails here. */
+    identity at all, so `parseTitlesPairWithState` also runs: a same-count
+    mispairing (a reorder from before #3703) fails there, while a title an older
+    parser wrote differently does not. */
 export function assertHintsPairWithState(
   state: BookStateJson,
   hints: readonly ChapterHint[],
   parseTitles?: ReadonlyArray<string | null>,
+  parseMadeUp?: ReadonlyArray<string | null>,
 ): void {
   if (hints.length !== state.chapters.length) throw new HintsOutOfSyncError();
   const stateIds = new Set(state.chapters.map((c) => c.id));
   if (!hints.every((h) => stateIds.has(h.id))) throw new HintsOutOfSyncError();
-  if (parseTitles && !parseTitlesPairWithState(state, parseTitles)) throw new HintsOutOfSyncError();
+  if (parseTitles && !parseTitlesPairWithState(state, parseTitles, parseMadeUp)) throw new HintsOutOfSyncError();
 }
 
 /* -- merge ---------------------------------------------------------- */
@@ -743,8 +759,9 @@ export function applyMerge(
   sentences: readonly RestructureSentence[],
   op: MergeOp,
   parseTitles?: ReadonlyArray<string | null>,
+  parseMadeUp?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints, parseTitles);
+  assertHintsPairWithState(state, hints, parseTitles, parseMadeUp);
   if (!Array.isArray(op.chapterIds) || op.chapterIds.length < 2) {
     throw new Error('Merge requires at least 2 chapter ids.');
   }
@@ -902,8 +919,9 @@ export function applySplit(
   sentences: readonly RestructureSentence[],
   op: SplitOp,
   parseTitles?: ReadonlyArray<string | null>,
+  parseMadeUp?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints, parseTitles);
+  assertHintsPairWithState(state, hints, parseTitles, parseMadeUp);
   const sortedHints = sortById(hints);
   const sortedHintsIds = sortedHints.map((h) => h.id);
   const targetIdx = sortedHintsIds.indexOf(op.chapterId);
@@ -1397,8 +1415,9 @@ export function applyReorder(
   sentences: readonly RestructureSentence[],
   op: ReorderOp,
   parseTitles?: ReadonlyArray<string | null>,
+  parseMadeUp?: ReadonlyArray<string | null>,
 ): RestructureResult {
-  assertHintsPairWithState(state, hints, parseTitles);
+  assertHintsPairWithState(state, hints, parseTitles, parseMadeUp);
   if (!Array.isArray(op.order)) {
     throw new Error('Reorder requires an order array.');
   }

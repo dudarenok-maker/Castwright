@@ -3949,13 +3949,13 @@ function releaseBusyAndPin(job: AnalysisJob): void {
     Persisted hints are not checked here: they carry their own staleness check. */
 async function hintsOutOfSyncRefusal(
   manuscriptId: string,
-  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1]; parseTitles?: Parameters<typeof assertHintsPairWithState>[2] },
+  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1]; parseTitles?: Parameters<typeof assertHintsPairWithState>[2]; parseMadeUpTitles?: Parameters<typeof assertHintsPairWithState>[3] },
 ): Promise<{ error: string; code: string } | null> {
   if (record.hintsSource !== 'parse' || !record.bookDir) return null;
   const state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
   if (!state || state.manuscriptId !== manuscriptId) return null;
   try {
-    assertHintsPairWithState(state, record.chapterHints, record.parseTitles);
+    assertHintsPairWithState(state, record.chapterHints, record.parseTitles, record.parseMadeUpTitles);
   } catch (e) {
     if (e instanceof HintsOutOfSyncError) return { error: e.message, code: e.code };
     throw e;

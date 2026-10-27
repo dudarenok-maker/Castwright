@@ -62,6 +62,10 @@ export interface ManuscriptRecord {
       state.json, which hides a same-count mispairing, so the raw titles are kept
       to compare against it. */
   parseTitles?: Array<string | null>;
+  /** The parser's own fallback title at each position `parseTitles` has `null`
+      (`Chapter N`), `null` elsewhere. Lets the pairing check tell an app-made
+      title in an unflagged (pre-#3628) state.json from a heading that moved. */
+  parseMadeUpTitles?: Array<string | null>;
   /** Set when this manuscript was registered via POST /api/books (workspace
       flow). Lets the analysis route persist cast.json + state.json updates
       back into the on-disk book without scanning the whole workspace. */
@@ -185,7 +189,12 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
     chapterHints,
     sourceSha256,
     hintsSource: fromParse ? 'parse' : 'persisted',
-    ...(fromParse ? { parseTitles: parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)) } : {}),
+    ...(fromParse
+      ? {
+          parseTitles: parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)),
+          parseMadeUpTitles: parsed.chapters.map((c) => (c.titleSynthesized ? c.title : null)),
+        }
+      : {}),
     bookId: book.state.bookId,
     bookDir: book.bookDir,
   };

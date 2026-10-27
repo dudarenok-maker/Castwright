@@ -203,6 +203,7 @@ async function applyRestructure(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    parseMadeUp: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
   /* Rename and refresh-titles rewrite the very titles the pairing check reads, so on a
      book it already flags they would hide the mispairing from the next merge (#3791). */
@@ -269,6 +270,7 @@ async function applyRestructureClaimed(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    parseMadeUp: ReadonlyArray<string | null> | undefined,
   ) => RestructureResult,
   refuseWhenMispaired: boolean,
 ): Promise<{
@@ -346,7 +348,7 @@ async function applyRestructureClaimed(
     const hintsMispaired =
       record.hintsSource === 'parse' &&
       record.parseTitles !== undefined &&
-      !parseTitlesPairWithState(state, record.parseTitles);
+      !parseTitlesPairWithState(state, record.parseTitles, record.parseMadeUpTitles);
     /* Nothing is written yet: the refusal is the same 409 merge, split and reorder answer. */
     if (refuseWhenMispaired && hintsMispaired) {
       const e = new HintsOutOfSyncError();
@@ -360,6 +362,7 @@ async function applyRestructureClaimed(
         sentences,
         advisoryValid,
         record.hintsSource === 'parse' ? record.parseTitles : undefined,
+        record.hintsSource === 'parse' ? record.parseMadeUpTitles : undefined,
       );
     } catch (e) {
       /* #3791 -- nothing is written: this is before the hints/state/edits writes. */
@@ -478,7 +481,7 @@ async function applyRestructureClaimed(
      moves that (#3703). The spread keeps `sourceSha256` and every other field. */
   /* Once the file is written these hints are what a restart hydrates, so the
      record is `persisted` and no longer carries the parser's raw titles. */
-  const { parseTitles: _parseTitles, ...recordRest } = record;
+  const { parseTitles: _parseTitles, parseMadeUpTitles: _parseMadeUp, ...recordRest } = record;
   putManuscript(
     hintsWritten
       ? { ...recordRest, chapterHints: result.hints, hintsSource: 'persisted' }
@@ -542,8 +545,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
-          applyMerge(state, hints, sentences, op, parseTitles),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles, parseMadeUp) =>
+          applyMerge(state, hints, sentences, op, parseTitles, parseMadeUp),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -575,8 +578,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
-          applySplit(state, hints, sentences, op, parseTitles),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles, parseMadeUp) =>
+          applySplit(state, hints, sentences, op, parseTitles, parseMadeUp),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -766,8 +769,8 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
-          applyReorder(state, hints, sentences, op, parseTitles),
+        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles, parseMadeUp) =>
+          applyReorder(state, hints, sentences, op, parseTitles, parseMadeUp),
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
