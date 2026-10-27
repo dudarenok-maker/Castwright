@@ -339,6 +339,21 @@ describe.each(['main', 'subset'] as const)(
     expect(readState(bookDir).chapters.length).toBe(3);
   }, 60_000);
 
+  it('does not refuse a restructured book whose persisted hints pair with state.json', async () => {
+    const { manuscriptId, bookId, bookDir } = await seedBook(`persisted-${kind}`, FLAGGED_MANUSCRIPT, FLAGGED_BOOK);
+    // A real merge: state now has 2 chapters, the manuscript still parses to 3, and the merge persists its hints.
+    const merge = await request(await restructureApp())
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(merge.status).toBe(200);
+    expect(readState(bookDir).chapters.length).toBe(2);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId); // a restart: the next lookup re-hydrates from disk
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('persisted');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
   it('does not refuse a healthy fresh import', async () => {
     const { manuscriptId } = await seedBook(`healthy-${kind}`, FLAGGED_MANUSCRIPT, FLAGGED_BOOK);
     const { removeManuscript } = await import('../store/manuscripts.js');
