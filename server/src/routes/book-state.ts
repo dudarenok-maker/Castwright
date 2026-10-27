@@ -81,6 +81,7 @@ import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } fr
 import { withLocatedBook } from '../workspace/book-state-update.js';
 import {
   hintsFromPersisted,
+  hintsShareNoUuidWith,
   readManuscriptHints,
   removeManuscriptHints,
   sha256Hex,
@@ -262,8 +263,11 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
      parse whose chapter count differs from the recorded one skips, version
      not bumped. A file written before origins existed pairs by exact body
      instead (no match keeps the title). No state-vs-parse count gate.
-   - A hints file that is corrupt or does not belong to this state.json and
-     manuscript: skip, version not bumped (as for a count mismatch).
+   - A hints file that is corrupt, or is a stale restructure (it shares some
+     chapter uuid with this state.json but does not validate against it and the
+     manuscript): skip, version not bumped (as for a count mismatch).
+   - A hints file sharing NO chapter uuid with state.json is a reparse's
+     leftover (its best-effort delete failed) and counts as absent.
    - No hints file: pair by position, behind the count gate. KNOWN GAP: a book
      restructured BEFORE #3703 has no hints file and so lands here, where a
      reorder is indistinguishable from a healthy book (a title-permutation
@@ -322,6 +326,15 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
     } catch (err) {
       if (!(err instanceof SyntaxError)) throw err;
       hintsCorrupt = true;
+    }
+    /* A file sharing no chapter uuid with the book is a reparse's leftover (the
+       best-effort delete failed), not a stale restructure: the reparsed chapters
+       are a fresh parse, so it counts as absent and they pair by position. */
+    if (hintsFile !== null && hintsShareNoUuidWith(hintsFile, state)) {
+      console.warn(
+        `[book-state] ${state.bookId}: ignoring a manuscript-hints.json that shares no chapter uuid with the book (a reparse's leftover).`,
+      );
+      hintsFile = null;
     }
     const hasHints = hintsFile !== null;
     const parsedBodies = parsed.chapters.map((p) => p.body);
@@ -1688,9 +1701,11 @@ async function applyReparse(
        write: deleting first would leave a failed state write holding the old
        (restructured) chapter list with no file to hydrate it from. The delete
        protects nothing the write does not already cover -- reparsed chapters
-       carry no uuid, so a leftover file can never validate against them -- so it
-       is housekeeping: best-effort, logged and swallowed, never failing a reparse
-       whose cast / audio / cache wipe already happened. Not in the destructive
+       carry no uuid, so a leftover file can never validate against them, and the
+       title refresh treats a file sharing no uuid with the book as absent
+       (`hintsShareNoUuidWith`, #3828) -- so it is housekeeping: best-effort,
+       logged and swallowed, never failing a reparse whose cast / audio / cache
+       wipe already happened. Not in the destructive
        arms above: they run before the moved-book check. */
     await removeManuscriptHints(fresh.bookDir).catch((err) => {
       console.warn(`[book-state] ${nextState!.manuscriptId}: could not remove manuscript-hints.json`, err);

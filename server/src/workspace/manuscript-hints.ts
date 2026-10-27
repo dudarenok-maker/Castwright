@@ -183,6 +183,30 @@ type HintsState = {
     default here (unlike the fresh-parse fallback): state.json is aligned and
     already records the user's choices, and re-applying the default would
     re-exclude a chapter the user re-included. */
+/** True when a persisted hints file records chapters but not one of their uuids
+    is in `state` (#3828). A reparse / replace-manuscript rebuilds the chapter
+    list from a fresh parse -- whose chapters carry no uuid until the next read
+    mints new ones -- and deletes this file best-effort; one it failed to delete
+    can therefore never share a uuid with the book. That is a leftover, not a
+    stale restructure: a restructure that went stale keeps its chapters' uuids.
+    A file that is not shaped like a hints file is never "leftover". */
+export function hintsShareNoUuidWith(
+  file: unknown,
+  state: { chapters: ReadonlyArray<{ uuid?: string }> },
+): boolean {
+  const entries = entriesOf(file);
+  if (!entries || entries.length === 0) return false;
+  const uuids = new Set(state.chapters.flatMap((c) => (c.uuid ? [c.uuid] : [])));
+  return entries.every((e) => {
+    const chapters = (e as { chapters?: unknown } | null)?.chapters;
+    if (!Array.isArray(chapters)) return true;
+    return chapters.every((c) => {
+      const uuid = (c as { uuid?: unknown } | null)?.uuid;
+      return typeof uuid !== 'string' || !uuids.has(uuid);
+    });
+  });
+}
+
 type HintsResult =
   | { ok: true; hints: HydratedHint[]; parseChapterCount?: number }
   | { ok: false; reason: string };

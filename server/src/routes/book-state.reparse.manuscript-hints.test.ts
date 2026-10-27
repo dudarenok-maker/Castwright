@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 
 const removeSpy = vi.hoisted(() => ({ fail: false }));
 const stateWriteSpy = vi.hoisted(() => ({ fail: false }));
@@ -211,7 +212,7 @@ describe('#3703 part 3 -- reparse / replace-manuscript drop manuscript-hints.jso
     expect(existsSync(hintsPath())).toBe(false);
   });
 
-  it('a failing hints remove does not fail the reparse; the leftover file cannot validate', async () => {
+  it('a failing hints remove does not fail the reparse; the leftover file shares no chapter uuid with the reparsed chapters', async () => {
     await mergeOneAndTwo();
 
     removeSpy.fail = true;
@@ -227,6 +228,59 @@ describe('#3703 part 3 -- reparse / replace-manuscript drop manuscript-hints.jso
     removeManuscript(MANUSCRIPT_ID); // restart
     const record = await getOrHydrateManuscript(MANUSCRIPT_ID);
     expect(record?.chapterHints).toHaveLength(3);
+  });
+});
+
+/* A reparse whose hints delete failed leaves the old file behind (#3828). The GET
+   title refresh must treat it as ABSENT -- it shares no chapter uuid with the
+   reparsed chapters, which are a fresh parse and so pair by position -- not as a
+   stale restructure that skips without a bump forever. A stale restructure keeps
+   its chapters' uuids and still skips. */
+describe('GET title refresh with a hints file a reparse failed to delete (#3828)', () => {
+  type S = { chapters: Array<{ title: string }>; chapterTitleParserVersion?: number };
+  const readS = (): S => JSON.parse(readFileSync(statePath(), 'utf8'));
+  function owingRefresh(titles: string[]): void {
+    const st = readS();
+    delete st.chapterTitleParserVersion;
+    st.chapters.forEach((c, i) => {
+      c.title = titles[i]!;
+    });
+    writeFileSync(statePath(), JSON.stringify(st));
+  }
+
+  it('refreshes by position and bumps the version', async () => {
+    await mergeOneAndTwo();
+    const oldHints = readFileSync(hintsPath());
+    const reparse = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(reparse.status).toBe(200);
+    writeFileSync(hintsPath(), oldHints); // what a swallowed EPERM / EBUSY on the rm leaves
+    const parsedTitles = readS().chapters.map((c) => c.title);
+    owingRefresh(['Old 1', 'Old 2', 'Old 3']);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(readS().chapters.map((c) => c.title)).toEqual(parsedTitles);
+    expect(readS().chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
+  });
+
+  it('control: a stale restructure (its uuids still in state.json) still skips without a bump', async () => {
+    await mergeOneAndTwo();
+    const file = JSON.parse(readFileSync(hintsPath(), 'utf8')) as {
+      entries: Array<{ sourceSha256: string }>;
+    };
+    for (const e of file.entries) e.sourceSha256 = 'deadbeef'; // the manuscript changed since
+    writeFileSync(hintsPath(), JSON.stringify(file));
+    owingRefresh(['Old 1', 'Old 2']);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const before = readFileSync(statePath());
+
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(readFileSync(statePath()).equals(before)).toBe(true);
+    expect(readS().chapterTitleParserVersion).toBeUndefined();
   });
 });
 
