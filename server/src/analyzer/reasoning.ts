@@ -1,7 +1,9 @@
 /* #3084 wave 5 (D8, spec §8) — reasoning levels per engine family and per
    endpoint control style. Pure: no settings, capabilities or workspace import
-   (those modules import THIS one; see the plan's cycle note). Its two value
-   imports are import-free leaves (catalog/gemini-catalog.ts, ollama-tag.ts).
+   (those modules import THIS one; see the plan's cycle note). Its value
+   imports are leaves: errors.ts (type-only import), catalog/gemini-catalog.ts
+   (node:crypto, @google/genai, the import-free redact.ts) and ollama-tag.ts
+   (its one import, the import-free model-id.ts).
    Every parameter type below is structural so AnalyzerEndpoint /
    ModelCapabilityRecord / UserSettings satisfy it.
 
