@@ -203,6 +203,7 @@ async function applyRestructure(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    hintsSource: 'persisted' | 'parse' | undefined,
   ) => RestructureResult,
   /* Rename and refresh-titles rewrite the very titles the pairing check reads, so on a
      book it already flags they would hide the mispairing from the next merge (#3791). */
@@ -269,6 +270,7 @@ async function applyRestructureClaimed(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    hintsSource: 'persisted' | 'parse' | undefined,
   ) => RestructureResult,
   refuseWhenMispaired: boolean,
 ): Promise<{
@@ -360,6 +362,7 @@ async function applyRestructureClaimed(
         sentences,
         advisoryValid,
         record.hintsSource === 'parse' ? record.parseTitles : undefined,
+        record.hintsSource,
       );
     } catch (e) {
       /* #3791 -- nothing is written: this is before the hints/state/edits writes. */
@@ -630,11 +633,13 @@ chaptersRestructureRouter.post(
       }
 
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (s, hints, sentences, advisoryValid) =>
+        applyRestructure(book, prep, (s, hints, sentences, advisoryValid, _parseTitles, hintsSource) =>
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles: advisoryValid ? parsedTitles : [],
             parsedTitleSynthesized: advisoryValid ? parsedTitleSynthesized : [],
-            parsedBodies: advisoryValid ? parsedBodies : [],
+            /* #3828 -- body pairing only where the bodies are the book's own restructure:
+               a never-restructured book keeps the positional pairing. */
+            ...(hintsSource === 'persisted' ? { parsedBodies: advisoryValid ? parsedBodies : [] } : {}),
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

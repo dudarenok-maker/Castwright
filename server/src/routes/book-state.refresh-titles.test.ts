@@ -428,6 +428,42 @@ describe('GET /:bookId/state — title refresh aligns by body on a restructured 
     expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2']);
   });
 
+  it('POST /chapters/refresh-titles on a never-restructured book keeps the positional pairing even when the record bodies differ from the route\'s parse', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), REORDER_MANUSCRIPT);
+    writeState({
+      chapters: [
+        { id: 1, title: 'Chapter 5', slug: '01-chapter-5', titleSynthesized: true },
+        { id: 2, title: 'Prologue', slug: '02-prologue' },
+      ],
+      parserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    });
+    /* A parse-fallback record whose bodies are not the route's parse bodies (the
+       two parses can differ, e.g. a PDF parsed with and without a source path). */
+    const { putManuscript } = await import('../store/manuscripts.js');
+    putManuscript({
+      manuscriptId: 'm_refresh_test',
+      format: 'markdown',
+      title: TITLE,
+      wordCount: 2,
+      byteSize: 1,
+      uploadedAt: '2026-01-01T00:00:00.000Z',
+      sourceText: 'x',
+      chapterHints: [
+        { id: 1, title: 'Chapter 5', body: 'a body the route parse does not produce' },
+        { id: 2, title: 'Prologue', body: 'neither does this one' },
+      ],
+      hintsSource: 'parse',
+      parseTitles: [null, 'Prologue'],
+    });
+
+    const res = await request(restructureApp)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Prologue']);
+  });
+
   it('a merged book keeps the merged chapter\'s title and still refreshes its neighbour', async () => {
     writeFileSync(join(bookDir, 'manuscript.md'), MERGE_MANUSCRIPT);
     writeState({
