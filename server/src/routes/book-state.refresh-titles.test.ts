@@ -671,4 +671,50 @@ describe('title refresh pairs by recorded parse origin (#3828 pass 1)', () => {
     await request(app2).get(`/api/books/${bookId}/state`);
     expect(readS().chapters.map((c) => c.title)).toEqual(['Gamma', 'Alpha', 'Beta']);
   });
+
+  it('GET: a corrupt hints file skips the refresh: nothing written, no bump', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'reorder', { order: [3, 1, 2] });
+    writeFileSync(hintsPath(), '{ not json');
+    backToOwing(['Chapter 1', 'Chapter 2', 'Chapter 3'], false);
+    await dropRecord();
+    const before = readFileSync(statePath);
+
+    const res = await request(app2).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(readS().chapterTitleParserVersion).toBeUndefined();
+  });
+
+  it('POST: an app-made "Chapter N" chapter at a moved position adopts the real heading its origin carries', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'reorder', { order: [3, 1, 2] });
+    const s = readS();
+    s.chapters[1]!.title = 'Chapter 2'; // Alpha, moved to position 2, as an older release named it
+    s.chapters[1]!.titleSynthesized = true;
+    writeFileSync(statePath, JSON.stringify(s));
+    await dropRecord();
+
+    const res = await request(app2)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+    expect(readS().chapters.map((c) => c.title)).toEqual(['Gamma', 'Alpha', 'Beta']);
+  });
+
+  it('POST: on a merged book the count check does not apply; the neighbour refreshes', async () => {
+    await seedAndRestructure(ABC, ['Alpha', 'Beta', 'Gamma'], 'merge', {
+      chapterIds: [1, 2],
+      mergedTitle: 'Alpha and Beta',
+    });
+    const s = readS();
+    s.chapters[1]!.title = 'Chapter 2';
+    s.chapters[1]!.titleSynthesized = true;
+    writeFileSync(statePath, JSON.stringify(s));
+    await dropRecord();
+
+    const res = await request(app2)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+    expect(readS().chapters.map((c) => c.title)).toEqual(['Alpha and Beta', 'Gamma']);
+  });
 });
