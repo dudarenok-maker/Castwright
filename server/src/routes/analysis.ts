@@ -4046,9 +4046,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   res.flushHeaders();
   /* Vite's dev proxy (http-proxy under the hood) closes the upstream
      connection if it sees no body data for a while after the headers
-     land — which is exactly what happens on a cold server where
-     getOrHydrateManuscript re-parses a 100k+ word EPUB before the
-     first SSE event lands. The proxy fires RST, the route's
+     land — which is what happens on a cold server while the analyzer
+     prepares its first chapter (a start's hydrate itself now runs BEFORE
+     the headers, for the #3829 refusal; a join still hydrates after them). The proxy fires RST, the route's
      req.on('close') runs, the analysis aborts before the first
      chapter is even prepared. Writing a single SSE comment (`:ok\n\n`)
      right after flushHeaders keeps the stream visibly "active" so the
@@ -7852,8 +7852,9 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
   /* Vite dev-proxy keep-alive shim — see the comment on the parent
-     analysis route. Same hazard (silence during getOrHydrateManuscript)
-     applies on a cold subset retry. */
+     analysis route. Same hazard (silence while the first chapter is
+     prepared) applies on a cold subset retry; a start hydrates before the
+     headers (#3829), a join after them. */
   res.write(':ok\n\n');
   const keepAlive = setInterval(() => {
     try {

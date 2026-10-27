@@ -8413,9 +8413,10 @@ export interface operations {
              *     parse that no longer pairs with its state.json (a merged, split or
              *     reordered book); body `{ error: <curated sentence>, code:
              *     hints_out_of_sync }`, where `error` says to re-parse the book from
-             *     its Library menu. Nothing was written and no job was registered. The same refusal
-             *     codes can also arrive as a terminal SSE `error` event when the
-             *     conflict appears after the stream opened.
+             *     its Library menu. Nothing was written and no job was registered.
+             *     This code is a 409 only; it never arrives as an SSE event. The other
+             *     refusal codes above can also arrive as a terminal SSE `error` event
+             *     when the conflict appears after the stream opened.
              */
             409: {
                 headers: {
