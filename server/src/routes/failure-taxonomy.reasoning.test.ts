@@ -8,7 +8,7 @@ beforeEach(() => _resetUserSettingsCache());
 
 describe('analyzer-reasoning-overflow names the reasoning control', () => {
   it('Ollama → the Ollama reasoning setting sent as think', () => {
-    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 812), 'Ollama (qwen3.5:4b)');
+    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 812, { reasoningLevel: 'on' }), 'Ollama (qwen3.5:4b)');
     expect(f.code).toBe('analyzer-reasoning-overflow');
     expect(f.userMessage).not.toContain('Lower reasoning');
     expect(f.remediation).toContain('Lower reasoning in the Ollama reasoning setting');
@@ -38,6 +38,37 @@ describe('analyzer-reasoning-overflow names the reasoning control', () => {
   it('a bare endpoint model falls back to generic endpoint wording', () => {
     const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('openai', 'qwen3-30b', undefined), 'qwen3-30b');
     expect(f.remediation).toContain("this endpoint's Reasoning setting");
+  });
+});
+
+describe('the remediation lead says "Lower reasoning" only above the floor (5.5-D2, review finding)', () => {
+  const endpointAt = (reasoningStyle: 'reasoning_effort' | 'enable_thinking', reasoning: string) =>
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768, reasoningStyle, reasoning })],
+    });
+  const openaiOverflow = (reasoningLevel: 'none' | 'off' | 'high' | 'on', endpointId = 'lab') =>
+    classifyAnalysisFailure(new AnalyzerReasoningOverflowError('openai', 'qwen3-30b', undefined, { endpointId, reasoningLevel }), 'Lab box · qwen3-30b');
+
+  it('Ollama at off (the default install) → no "Lower reasoning"', () => {
+    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 812, { reasoningLevel: 'off' }), 'Ollama (qwen3.5:4b)');
+    expect(f.remediation).not.toContain('Lower reasoning in');
+    expect(f.remediation).toContain('Reasoning: the Ollama reasoning setting');
+  });
+  it('reasoning_effort endpoint at none → no "Lower reasoning"', () => {
+    endpointAt('reasoning_effort', 'none');
+    expect(openaiOverflow('none').remediation).not.toContain('Lower reasoning in');
+  });
+  it('enable_thinking endpoint at off → no "Lower reasoning"', () => {
+    endpointAt('enable_thinking', 'off');
+    expect(openaiOverflow('off').remediation).not.toContain('Lower reasoning in');
+  });
+  it('a deleted endpoint → no "Lower reasoning"', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    expect(openaiOverflow('high', 'gone').remediation).not.toContain('Lower reasoning in');
+  });
+  it('an endpoint above its floor still says "Lower reasoning"', () => {
+    endpointAt('reasoning_effort', 'high');
+    expect(openaiOverflow('high').remediation).toContain('Lower reasoning in');
   });
 });
 

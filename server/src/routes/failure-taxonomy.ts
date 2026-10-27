@@ -591,17 +591,21 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string, remed
 /* #3084 wave 5 — the remediation lead naming the setting that controls reasoning for the model
    that overflowed. An endpoint is resolved from the id OpenAIAnalyzer stamped on the error, through
    the leaf gate (A9). "Lower reasoning in …" only where a control exists: a Gemini id with no table
-   row (2.5, unknown) and a not_controllable endpoint get the description alone. */
+   row (2.5, unknown), a not_controllable or deleted endpoint, and any model already at its lowest
+   level get the description alone. The above-the-floor rule is `reasoningOverflowFixes`'s (5.5-D2):
+   the lead says "Lower" only when that function offers a reasoning fix, so the two cannot disagree. */
 function reasoningRemediationLead(err: AnalyzerReasoningOverflowError): string {
   const endpoint = err.transport === 'openai' && err.endpointId
     ? listAnalyzerEndpoints().find((e) => e.id === err.endpointId)
     : undefined;
   const control = reasoningControlDescription(err.transport, { model: err.model, endpoint });
-  const controllable =
-    err.transport === 'ollama' ||
-    (err.transport === 'gemini' && geminiReasoningRow(err.model) !== undefined) ||
-    (err.transport === 'openai' && endpoint?.reasoningStyle !== 'not_controllable');
-  return controllable ? `Lower reasoning in ${control}.` : `Reasoning: ${control}.`;
+  const lowerable = reasoningOverflowFixes({
+    transport: err.transport,
+    model: err.model,
+    endpointId: err.endpointId,
+    reasoningLevel: err.reasoningLevel,
+  }).some((f) => f.reasoningSetting !== undefined || f.endpointField?.field === 'reasoning');
+  return lowerable ? `Lower reasoning in ${control}.` : `Reasoning: ${control}.`;
 }
 
 /* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
