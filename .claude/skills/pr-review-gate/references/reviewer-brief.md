@@ -625,6 +625,22 @@ recite:
     combining two handlers' edits in one send, forcing the give-up with the
     book open, and asserting both are reported and neither is dropped
     unannounced.
+52. **A resync read wipes client-only state it cannot restore, which makes a
+    protection upstream of it unobservable** — PR #3775 review pass 10
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6453919855),
+    PB (#3784, plan 289 C7): the full re-read a stale refusal asks for
+    hydrated the open book's details with `draft = null`, so the user's
+    uncommitted typing, and a draft a failed save had just restored, were
+    gone with no toast. Disk never held either, so the read could not put
+    them back. It also hid this round's precision: a mutant that pruned every
+    typed field on any stale refusal survived the whole suite, because the
+    restored draft that would show the difference was wiped. Checkable: for
+    every resync read, list the client state it resets and ask whether disk
+    can restore each piece; a reset of unsaved input or of a just-restored
+    value is a loss, and any guarantee about that state is untestable while
+    the reset stands. Test by leaving unsaved input (or a rolled-back draft)
+    in place, triggering the resync, and asserting the input survives while
+    the read still refreshes every field the user is not editing.
 
 ### Keeping the catalogue current
 
