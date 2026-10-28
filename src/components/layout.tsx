@@ -848,12 +848,16 @@ export function Layout() {
   useEffect(() => {
     revisionsReadFor.current = null;
   }, [bookId]);
-  /* #3784 PB — the last book whose details a full read hydrated. A full read
-     of that same book is a re-read of the book the user is editing, so it
-     keeps the details draft; the first read after opening another book does
-     not. Not reset on a trip to the library: the persistence middleware
-     clears the draft only on a switch to a different book (#3754, #3782), so
-     a draft that is still here when this matches belongs to this book. */
+  /* #3784 PB — the last book whose details a full read hydrated, keyed
+     `bookId|manuscriptId`. A full read of that same book is a re-read of the
+     book the user is editing, so it keeps the details draft; the first read
+     after opening another book does not. Not reset on a trip to the library:
+     the persistence middleware clears the draft only on a switch to a
+     different book (#3754, #3782), so a draft that is still here when this
+     matches belongs to this book. #3784 P11-1 — the manuscript id is in the
+     key because a book id is a slug: a book deleted and re-imported under the
+     same id is a new manuscript, and must not inherit the old book's draft.
+     A re-parse or a manuscript replace keeps the manuscript id. */
   const metaReadFor = useRef<string | null>(null);
 
   /* Plan 289 (D7) — a book marked `needsFullRead` (a save refused as stale, or
@@ -1082,10 +1086,10 @@ export function Layout() {
                 notes: res.state.notes ?? null,
                 prosodyEnabled: res.state.prosodyEnabled,
               },
-              keepDraft: metaReadFor.current === bookId,
+              keepDraft: metaReadFor.current === `${bookId}|${res.state.manuscriptId}`,
             }),
           );
-          metaReadFor.current = bookId;
+          metaReadFor.current = `${bookId}|${res.state.manuscriptId}`;
 
           /* Cold-boot rehydration for the top-bar AnalysisPill (plan 32, E2).
              If the server has an in-flight or paused/halted analysis for

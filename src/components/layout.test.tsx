@@ -37,7 +37,7 @@ import { tourSlice } from '../store/tour-slice';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
-import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence, dropRetainedSaves } from '../store/persistence-middleware';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -3474,6 +3474,81 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       openAt(store as never, 'B');
       await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
       expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-1 (review pass 11) — a book id is its author/series/title slug,
+     so deleting a book and importing one with the same slug reuses its id.
+     The new book is a different manuscript: the old book's unsaved typing
+     must not show on it, or be saved into it. */
+  it('P11-1: a draft typed on a deleted book does not carry into a book re-imported under its id', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      /* BooksRoute's onDeleteBook, after api.deleteBook resolved. */
+      disk.remove('A');
+      act(() => {
+        store.dispatch(revisionsActions.forgetBook('A'));
+        store.dispatch(dropRetainedSaves('A'));
+        store.dispatch(uiActions.clearPreviewForBook('A'));
+      });
+      /* An import whose slug is A's: a new manuscript, under the same id. */
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      /* Save writes nothing of the old book. */
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('fresh import notes');
+      expect(disk.log.filter((p) => p.bookId === 'A' && 'notes' in p.patch)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-1 (control) — a re-parse or a manuscript replace keeps the
+     book's manuscript id (the server pins that in book-state.reparse and
+     book-state.replace-manuscript), so it is still the same book: the typing
+     survives the re-read that follows it. */
+  it('P11-1 (control): typing survives the re-read of a re-parsed book', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      disk.reparse('A');
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Reparsed' });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Reparsed'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
     } finally {
       vi.useRealTimers();
     }
