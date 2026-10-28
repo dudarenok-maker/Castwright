@@ -32,6 +32,16 @@ export interface ChapterHint {
       from the user. Never persisted as `false`: write `true` or omit the key.
       Server-only; not in openapi.yaml or the frontend types. */
   titleSynthesized?: boolean;
+  /** The index of the parse chapter this hint's body came from, unmodified
+      (#3828). Set where hints are born from a parse; carried through reorder,
+      exclude, rename and refresh-titles; dropped by merge and split, whose
+      bodies have no single origin. Absent on a hint of unknown origin. */
+  parseIndex?: number;
+}
+
+/** Hints born from a parse, each stamped with the parse index it came from. */
+export function withParseOrigin<T extends ChapterHint>(hints: readonly T[]): Array<T & { parseIndex: number }> {
+  return hints.map((h, i) => ({ ...h, parseIndex: i }));
 }
 
 export interface ManuscriptRecord {
@@ -49,6 +59,10 @@ export interface ManuscriptRecord {
       THIS, never with whatever the file holds at restructure time. Absent when
       the record was not built from a book's on-disk file. */
   sourceSha256?: string;
+  /** The chapter count of the parse the hints' `parseIndex` values index into
+      (#3828). Set once a restructure has persisted origins, and restored from
+      the persisted file; absent while the hints are an unrestructured parse. */
+  parseChapterCount?: number;
   /** Where `chapterHints` came from, set only by `hydrateFromDisk` (#3791):
       `persisted` = a validated manuscript-hints.json (its id + uuid sequence
       pairs with state.json), `parse` = the fallback fresh parse, which carries
@@ -162,10 +176,13 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
   }
   const sourceSha256 = sha256Hex(buffer);
   let chapterHints: ChapterHint[] | null = null;
+  let parseChapterCount: number | undefined;
   if (persisted !== null) {
     const checked = hintsFromPersisted(persisted, book.state, sourceSha256);
-    if (checked.ok) chapterHints = checked.hints;
-    else {
+    if (checked.ok) {
+      chapterHints = checked.hints;
+      parseChapterCount = checked.parseChapterCount;
+    } else {
       console.warn(
         `[manuscripts] ${manuscriptId}: ignoring manuscript-hints.json (${checked.reason}); re-parsing`,
       );
@@ -184,6 +201,7 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
     sourceText: parsed.sourceText,
     chapterHints,
     sourceSha256,
+    ...(parseChapterCount !== undefined ? { parseChapterCount } : {}),
     hintsSource: fromParse ? 'parse' : 'persisted',
     ...(fromParse ? { parseTitles: parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)) } : {}),
     bookId: book.state.bookId,
@@ -210,7 +228,7 @@ function hintsFromParse(
      up with state's, and an id match would graft a title onto the wrong body. */
   const stateById = new Map(state.chapters.map((c) => [c.id, c]));
   const aligned = state.chapters.length === parsedChapters.length;
-  return parsedChapters.map((p) => {
+  return withParseOrigin(parsedChapters).map((p) => {
     /* User's prior exclusions win; otherwise fall back to the parser's
        front/back-matter default so re-parse doesn't silently re-admit
        Acknowledgments/Copyright/CONTENTS to the queue (plan 148). The default

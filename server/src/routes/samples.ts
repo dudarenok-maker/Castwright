@@ -25,7 +25,7 @@ import { peekBook, withBookPathClaim } from '../workspace/book-op-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import { putManuscript, withParseOrigin, type ManuscriptRecord } from '../store/manuscripts.js';
 import { sha256Hex } from '../workspace/manuscript-hints.js';
 import { parseManuscript } from '../parsers/index.js';
 
@@ -188,7 +188,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       byteSize: Buffer.byteLength(parsed.sourceText, 'utf8'),
       uploadedAt: now,
       sourceText: parsed.sourceText,
-      chapterHints: parsed.chapters.map((c) => ({ ...c })),
+      chapterHints: withParseOrigin(parsed.chapters),
       sourceSha256: sha256Hex(buffer),
       bookId,
       bookDir,

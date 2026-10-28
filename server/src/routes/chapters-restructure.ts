@@ -203,6 +203,8 @@ async function applyRestructure(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    hintsSource: 'persisted' | 'parse' | undefined,
+    parseChapterCount: number | undefined,
   ) => RestructureResult,
   /* Rename and refresh-titles rewrite the very titles the pairing check reads, so on a
      book it already flags they would hide the mispairing from the next merge (#3791). */
@@ -269,6 +271,8 @@ async function applyRestructureClaimed(
     sentences: Parameters<typeof applyMerge>[2],
     advisoryValid: boolean,
     parseTitles: ReadonlyArray<string | null> | undefined,
+    hintsSource: 'persisted' | 'parse' | undefined,
+    parseChapterCount: number | undefined,
   ) => RestructureResult,
   refuseWhenMispaired: boolean,
 ): Promise<{
@@ -342,6 +346,16 @@ async function applyRestructureClaimed(
        mutates `state` in place. */
     const oldChapters = state.chapters.map((c) => ({ ...c }));
 
+    /* #3828 -- the chapter count of the parse the hints' `parseIndex` values index
+       into: remembered by the record once a restructure has persisted it, else
+       (hints still an unrestructured parse, every one stamped) the hint count
+       now. Taken before the transform, which merges and splits. */
+    const parseChapterCount =
+      record.parseChapterCount ??
+      (record.chapterHints.length > 0 && record.chapterHints.every((h) => h.parseIndex !== undefined)
+        ? record.chapterHints.length
+        : undefined);
+
     /* Read before the transform, which may rewrite `state`. */
     const hintsMispaired =
       record.hintsSource === 'parse' &&
@@ -360,6 +374,8 @@ async function applyRestructureClaimed(
         sentences,
         advisoryValid,
         record.hintsSource === 'parse' ? record.parseTitles : undefined,
+        record.hintsSource,
+        parseChapterCount,
       );
     } catch (e) {
       /* #3791 -- nothing is written: this is before the hints/state/edits writes. */
@@ -433,6 +449,7 @@ async function applyRestructureClaimed(
             manuscriptFile: state.manuscriptFile,
             sourceSha256,
             hints: result.hints,
+            parseChapterCount,
             stateChapters: result.state.chapters,
           }),
           previousFile,
@@ -466,10 +483,10 @@ async function applyRestructureClaimed(
         ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
         : {}),
     });
-    return { early: null, result, editsPath, oldChapters, hintsWritten };
+    return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount };
   });
   if (outcome.early) return outcome.early;
-  const { result, editsPath, oldChapters, hintsWritten } = outcome;
+  const { result, editsPath, oldChapters, hintsWritten, parseChapterCount } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -479,10 +496,11 @@ async function applyRestructureClaimed(
   /* Once the file is written these hints are what a restart hydrates, so the
      record is `persisted` and no longer carries the parser's raw titles. */
   const { parseTitles: _parseTitles, ...recordRest } = record;
+  const originCount = parseChapterCount !== undefined ? { parseChapterCount } : {};
   putManuscript(
     hintsWritten
-      ? { ...recordRest, chapterHints: result.hints, hintsSource: 'persisted' }
-      : { ...record, chapterHints: result.hints },
+      ? { ...recordRest, chapterHints: result.hints, hintsSource: 'persisted', ...originCount }
+      : { ...record, chapterHints: result.hints, ...originCount },
   );
 
   // Apply audio ops (best-effort — errors are surfaced in the response).
@@ -608,6 +626,7 @@ chaptersRestructureRouter.post(
       // manuscript, and is dropped inside the lock if that has changed.
       let parsedTitles: string[] = [];
       let parsedTitleSynthesized: boolean[] = [];
+      let parsedBodies: string[] = [];
       const manuscriptPath = join(bookDir, state.manuscriptFile);
       if (existsSync(manuscriptPath)) {
         try {
@@ -619,6 +638,7 @@ chaptersRestructureRouter.post(
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
           parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);
+          parsedBodies = parsed.chapters.map((c) => c.body);
         } catch (parseErr) {
           console.warn(
             `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
@@ -628,10 +648,15 @@ chaptersRestructureRouter.post(
       }
 
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (s, hints, sentences, advisoryValid) =>
+        applyRestructure(book, prep, (s, hints, sentences, advisoryValid, _parseTitles, hintsSource, parseChapterCount) =>
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles: advisoryValid ? parsedTitles : [],
             parsedTitleSynthesized: advisoryValid ? parsedTitleSynthesized : [],
+            /* #3828 -- pairing through the hints (origin, or body for a file without origins) only where they are the book's own restructure:
+               a never-restructured book keeps the positional pairing. */
+            ...(hintsSource === 'persisted'
+              ? { parsedBodies: advisoryValid ? parsedBodies : [], parseChapterCount }
+              : {}),
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

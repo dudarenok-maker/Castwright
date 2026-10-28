@@ -79,7 +79,14 @@ import {
 } from '../workspace/manuscript-fingerprint.js';
 import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
-import { removeManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
+import {
+  hintsFromPersisted,
+  hintsShareNoUuidWith,
+  readManuscriptHints,
+  removeManuscriptHints,
+  sha256Hex,
+} from '../workspace/manuscript-hints.js';
+import { pairWithParse } from '../workspace/title-align.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -96,6 +103,7 @@ import {
   getManuscript,
   getOrHydrateManuscript,
   type ManuscriptRecord,
+  withParseOrigin,
 } from '../store/manuscripts.js';
 import {
   analysisCompleteFor,
@@ -243,13 +251,37 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
    revisions.json, analysis cache, manuscript-edits.json. Bumps
    `state.chapterTitleParserVersion` so the next read short-circuits.
 
+   How chapters pair with the fresh parse depends on what the book proves
+   about its structure (#3828):
+   - A valid manuscript-hints.json (a restructure after #3703): pair by the
+     parse index each hint recorded (`parseIndex`, with the parse's chapter
+     count), since a reorder moves bodies and a merge changes the count, and a
+     parser change moves text between a title and its body, so body text is no
+     key. A chapter with an origin and a real parse heading adopts that
+     heading; one without an origin (merge, split), or paired with a made-up
+     parse title ("Chapter N" renumbers with position), keeps its title. A
+     parse whose chapter count differs from the recorded one skips, version
+     not bumped. A file written before origins existed pairs by exact body
+     instead (no match keeps the title). No state-vs-parse count gate.
+   - A hints file that is corrupt, or is a stale restructure (it shares some
+     chapter uuid with this state.json but does not validate against it and the
+     manuscript): skip, version not bumped (as for a count mismatch).
+   - A hints file sharing NO chapter uuid with state.json is a reparse's
+     leftover (its best-effort delete failed) and counts as absent.
+   - No hints file: pair by position, behind the count gate. KNOWN GAP: a book
+     restructured BEFORE #3703 has no hints file and so lands here, where a
+     reorder is indistinguishable from a healthy book (a title-permutation
+     heuristic was tried in #3822 and reverted: it regressed healthy books).
+
    Skips refresh (returns state unchanged) when ANY of:
    - State is already at the current parser version.
    - Source manuscript file missing on disk.
    - parseManuscript throws (corrupt file, etc.).
-   - New chapter count differs from the existing count — splitting logic
-     itself changed; aligning titles by index would silently mislabel
-     chapters. Leave the version field as-is so a future fix can retry. */
+   - The hints file is present but not valid for this state/manuscript, or
+     records a parse chapter count the parse no longer has.
+   - No hints file and the new chapter count differs from the existing count —
+     splitting logic itself changed; aligning titles by index would silently
+     mislabel chapters. Leave the version field as-is so a future fix can retry. */
 async function refreshChapterTitles(state: BookStateJson, bookDir: string): Promise<BookStateJson> {
   const currentVersion = state.chapterTitleParserVersion ?? 1;
   if (currentVersion >= CHAPTER_TITLE_PARSER_VERSION) return state;
@@ -284,15 +316,56 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
           sourcePath: manuscriptPath,
         });
 
-    if (parsed.chapters.length !== state.chapters.length) {
+    /* #3828 — the hints read is write-free and, like the parse, outside the
+       state-json leaf lock; the merge below re-validates it against the fresh read. */
+    const sourceSha256 = sha256Hex(buffer);
+    let hintsFile: unknown = null;
+    let hintsCorrupt = false;
+    try {
+      hintsFile = await readManuscriptHints(bookDir);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+      hintsCorrupt = true;
+    }
+    /* A file sharing no chapter uuid with the book is a reparse's leftover (the
+       best-effort delete failed), not a stale restructure: the reparsed chapters
+       are a fresh parse, so it counts as absent and they pair by position. */
+    if (hintsFile !== null && hintsShareNoUuidWith(hintsFile, state)) {
+      console.warn(
+        `[book-state] ${state.bookId}: ignoring a manuscript-hints.json that shares no chapter uuid with the book (a reparse's leftover).`,
+      );
+      hintsFile = null;
+    }
+    const hasHints = hintsFile !== null;
+    const parsedBodies = parsed.chapters.map((p) => p.body);
+    /* The pairing is decided on the caller's snapshot here and again on the
+       fresh read inside the lock. */
+    const pairingFor = (s: BookStateJson) => {
+      const checked = hintsFromPersisted(hintsFile, s, sourceSha256);
+      return checked.ok ? pairWithParse(checked.hints, parsedBodies, checked.parseChapterCount) : null;
+    };
+    if (hintsCorrupt || (hasHints && !pairingFor(state))) {
+      console.warn(
+        `[book-state] title-refresh skipped for ${state.bookId}: manuscript-hints.json is corrupt or does not belong to this book's chapters and manuscript.`,
+      );
+      return state;
+    }
+    if (hasHints && pairingFor(state)!.mode === 'skip') {
+      console.warn(
+        `[book-state] title-refresh skipped for ${state.bookId}: the manuscript now parses to ${parsed.chapters.length} chapters, not the count its hints recorded. Chapter split logic changed — won't risk misalignment.`,
+      );
+      return state;
+    }
+
+    if (!hasHints && parsed.chapters.length !== state.chapters.length) {
       console.warn(
         `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
       );
       return state;
     }
 
-    /* Replace titles in order; everything else (slug, excluded, audio
-       state) stays put. Skip the write when nothing actually changed
+    /* Replace titles (in order, or via the hints' pairing); everything else
+       (slug, excluded, audio state) stays put. Skip the write when nothing actually changed
        to avoid touching mtime / triggering watchers.
 
        Chapters with `titleOverridden: true` are pass-through — the user
@@ -304,14 +377,27 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        sibling chapter render's stamp is never reverted by this write. */
     return (await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
       if ((fresh.chapterTitleParserVersion ?? 1) >= CHAPTER_TITLE_PARSER_VERSION) return null;
-      if (parsed.chapters.length !== fresh.chapters.length) return null;
+      let parseIndex: Array<number | null> | null = null;
+      if (hasHints) {
+        const pairing = pairingFor(fresh);
+        if (!pairing || pairing.mode === 'skip') return null;
+        parseIndex = pairing.index;
+      } else if (parsed.chapters.length !== fresh.chapters.length) {
+        return null;
+      }
       const newChapters = fresh.chapters.map((c, i) => {
         if (c.titleOverridden) return c;
+        const match = parseIndex ? parseIndex[i] : i;
+        const p = match == null ? undefined : parsed.chapters[match];
+        if (!p) return c;
+        /* Through the hints, a made-up parse title ("Chapter N") is position-dependent, so
+           it says nothing about this chapter: keep the one it has. */
+        if (parseIndex && p.titleSynthesized) return c;
         const { titleSynthesized: _stale, ...rest } = c;
         return {
           ...rest,
-          title: parsed.chapters[i].title,
-          titleSynthesized: parsed.chapters[i].titleSynthesized || undefined,
+          title: p.title,
+          titleSynthesized: p.titleSynthesized || undefined,
         };
       });
       const titlesChanged = newChapters.some((c, i) => c.title !== fresh.chapters[i].title);
@@ -1615,9 +1701,11 @@ async function applyReparse(
        write: deleting first would leave a failed state write holding the old
        (restructured) chapter list with no file to hydrate it from. The delete
        protects nothing the write does not already cover -- reparsed chapters
-       carry no uuid, so a leftover file can never validate against them -- so it
-       is housekeeping: best-effort, logged and swallowed, never failing a reparse
-       whose cast / audio / cache wipe already happened. Not in the destructive
+       carry no uuid, so a leftover file can never validate against them, and the
+       title refresh treats a file sharing no uuid with the book as absent
+       (`hintsShareNoUuidWith`, #3828) -- so it is housekeeping: best-effort,
+       logged and swallowed, never failing a reparse whose cast / audio / cache
+       wipe already happened. Not in the destructive
        arms above: they run before the moved-book check. */
     await removeManuscriptHints(fresh.bookDir).catch((err) => {
       console.warn(`[book-state] ${nextState!.manuscriptId}: could not remove manuscript-hints.json`, err);
@@ -1636,7 +1724,7 @@ async function applyReparse(
       byteSize: Buffer.byteLength(sourceText, 'utf8'),
       uploadedAt: nextState.createdAt,
       sourceText,
-      chapterHints: parsed.chapters.map((c) => ({
+      chapterHints: withParseOrigin(parsed.chapters).map((c) => ({
         ...c,
         excluded: newExcludedById.get(c.id) || undefined,
       })),
