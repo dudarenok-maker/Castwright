@@ -1109,3 +1109,18 @@ describe('applyRefreshTitles warning when the parse no longer has the recorded c
     expect(result.warnings.join(' ')).not.toContain('but state has 2');
   });
 });
+
+describe('applyRefreshTitles warning on the positional path (#3828)', () => {
+  it('says the parser may now split differently, since a never-restructured book can mismatch too', () => {
+    const state = makeState([{ id: 1, title: 'Chapter 1', titleSynthesized: true }]);
+    const hints = makeHints([{ id: 1, title: 'Chapter 1', body: 'a' }]);
+    const result = applyRefreshTitles(state, hints, [], {
+      parsedTitles: ['One', 'Two'],
+      useFirstLine: false,
+      looksLikeTitle: () => true,
+      maxLen: 80,
+    });
+    expect(result.warnings.join(' ')).toContain('but state has 1');
+    expect(result.warnings.join(' ')).toContain('or the parser now splits the manuscript differently');
+  });
+});

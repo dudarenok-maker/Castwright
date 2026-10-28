@@ -166,30 +166,15 @@ type HintsState = {
   }>;
 };
 
-/** Validate a persisted hints file against the current state.json and the
-    manuscript bytes' hash, and build the chapter hints from the first entry
-    that passes (newest first; see MAX_HINTS_ENTRIES). Every check
-    must pass (schema; manuscriptId + manuscriptFile; sourceSha256; and per
-    position the chapter id, a non-empty uuid equal to state's, and a string
-    body). The uuid check proves the file was written for a state.json with the
-    same chapter uuids in the same order -- NOT that the bodies are the same: a
-    split, reorder and merge that moves a passage between chapters returns to
-    the same uuid sequence with different bodies. File-level invalidation covers
-    the rest: reparse, replace-manuscript and an overwrite import all delete the
-    file (or replace it with the bundle's).
-
-    The file owns BODIES only. Titles, `excluded` and `titleSynthesized` come
-    from state.json. Deliberately NOT re-applying the parser's front-matter
-    default here (unlike the fresh-parse fallback): state.json is aligned and
-    already records the user's choices, and re-applying the default would
-    re-exclude a chapter the user re-included. */
 /** True when a persisted hints file records chapters but not one of their uuids
     is in `state` (#3828). A reparse / replace-manuscript rebuilds the chapter
     list from a fresh parse -- whose chapters carry no uuid until the next read
     mints new ones -- and deletes this file best-effort; one it failed to delete
     can therefore never share a uuid with the book. That is a leftover, not a
     stale restructure: a restructure that went stale keeps its chapters' uuids.
-    A file that is not shaped like a hints file is never "leftover". */
+    A file whose top-level shape is not a hints file is never "leftover" (an
+    entry of the wrong shape inside a well-formed file reads as one: only a
+    hand-edit makes that, and the outcome is the positional path). */
 export function hintsShareNoUuidWith(
   file: unknown,
   state: { chapters: ReadonlyArray<{ uuid?: string }> },
@@ -211,6 +196,23 @@ type HintsResult =
   | { ok: true; hints: HydratedHint[]; parseChapterCount?: number }
   | { ok: false; reason: string };
 
+/** Validate a persisted hints file against the current state.json and the
+    manuscript bytes' hash, and build the chapter hints from the first entry
+    that passes (newest first; see MAX_HINTS_ENTRIES). Every check
+    must pass (schema; manuscriptId + manuscriptFile; sourceSha256; and per
+    position the chapter id, a non-empty uuid equal to state's, and a string
+    body). The uuid check proves the file was written for a state.json with the
+    same chapter uuids in the same order -- NOT that the bodies are the same: a
+    split, reorder and merge that moves a passage between chapters returns to
+    the same uuid sequence with different bodies. File-level invalidation covers
+    the rest: reparse, replace-manuscript and an overwrite import all delete the
+    file (or replace it with the bundle's).
+
+    The file owns BODIES only. Titles, `excluded` and `titleSynthesized` come
+    from state.json. Deliberately NOT re-applying the parser's front-matter
+    default here (unlike the fresh-parse fallback): state.json is aligned and
+    already records the user's choices, and re-applying the default would
+    re-exclude a chapter the user re-included. */
 export function hintsFromPersisted(
   file: unknown,
   state: HintsState,

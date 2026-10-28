@@ -652,7 +652,7 @@ chaptersRestructureRouter.post(
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles: advisoryValid ? parsedTitles : [],
             parsedTitleSynthesized: advisoryValid ? parsedTitleSynthesized : [],
-            /* #3828 -- body pairing only where the bodies are the book's own restructure:
+            /* #3828 -- pairing through the hints (origin, or body for a file without origins) only where they are the book's own restructure:
                a never-restructured book keeps the positional pairing. */
             ...(hintsSource === 'persisted'
               ? { parsedBodies: advisoryValid ? parsedBodies : [], parseChapterCount }
