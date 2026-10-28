@@ -407,6 +407,7 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       process.env.STAGE2_COVERAGE_RETRIES = '0';
 
       let jobPromise: Promise<void> | undefined;
+      let lastState: unknown;
       try {
         jobPromise = runMainAnalyzerJob(
           seed.job,
@@ -424,8 +425,20 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         seed.job.controller.abort();
         seed.releasePhase0();
         await jobPromise.catch(() => {});
-        /* endJob's snapshot write is fire-and-forget (`void`). */
-        await new Promise((r) => setTimeout(r, 400));
+        /* endJob's snapshot write is fire-and-forget (`void`), so poll (bounded)
+           for the terminal state instead of sleeping a fixed time (#3838). A
+           deadline miss is not swallowed: lastState stays at whatever was
+           observed and the assertions below fail with it. */
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          try {
+            lastState = JSON.parse(readFileSync(analysisStateJsonPath(seed.newDir), 'utf8')).state;
+          } catch {
+            lastState = 'unreadable-or-absent';
+          }
+          if (lastState === 'paused') break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
       } finally {
         seed.releasePhase0();
         if (jobPromise) await jobPromise.catch(() => {});
@@ -448,7 +461,10 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
          what separates "the terminal snapshot followed the rename" from "some
          earlier file rode along with it". */
       const after = readFileSync(analysisStateJsonPath(seed.newDir), 'utf8');
-      expect(JSON.parse(after).state).toBe('paused');
+      expect(
+        JSON.parse(after).state,
+        `terminal snapshot never landed at newDir within 10s (last poll saw ${String(lastState)})`,
+      ).toBe('paused');
 
       /* Per-mechanism assertion — the write did NOT also go to the old path. */
       expect(existsSync(analysisStateJsonPath(seed.oldDir))).toBe(false);
