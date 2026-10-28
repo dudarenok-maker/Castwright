@@ -98,8 +98,11 @@ interface HydratePayload {
     notes?: string | null;
     prosodyEnabled?: boolean;
   };
-  /** #3784 PB — a re-read of the book the user is editing: refresh `saved`
-      and keep the draft. Unset for the first hydrate after opening a book. */
+  /** #3784 PB — a full read of the book the user is editing: refresh `saved`
+      and keep the draft. Layout sets it on every full read of the open book,
+      the first after opening it included, unless the read is of a different
+      manuscript than the book was last read from (#3784 P11-1: a book
+      re-imported under the same id). */
   keepDraft?: boolean;
 }
 
@@ -110,7 +113,7 @@ export const bookMetaSlice = createSlice({
     /* Seed `saved[bookId]` from the BookStateJson the server returned on book
        open. Wipes any stale draft from a previous book.
 
-       #3784 PB — a re-read of the open book (`keepDraft`) keeps the draft: it
+       #3784 PB — a full read of the open book (`keepDraft`) keeps the draft: it
        holds the user's typing, or the edit a failed save restored (#2230,
        #3754), and the read cannot restore either. `selectEffectiveMeta` still
        overlays it, so a field the user is editing shows their typing while

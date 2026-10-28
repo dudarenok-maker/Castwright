@@ -296,7 +296,7 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
     expect(rolledBack.saved.ns).toEqual(next.saved.ns);
   });
 
-  it('a hydrate without keepDraft (a book being opened) still wipes the draft', () => {
+  it('a hydrate without keepDraft (a re-import under the same id) still wipes the draft', () => {
     const start: BookMetaState = { draft: { notes: 'half-typed' }, saved: {}, prosodyEnabled: {} };
     const next = reducer(
       start,
