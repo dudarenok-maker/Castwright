@@ -5538,6 +5538,37 @@ components:
           format: date-time
           description: ISO timestamp the snapshot was written.
 
+    ReasoningLevel:
+      type: string
+      enum: ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high']
+      description: |
+        Reasoning level for one analyzer engine, Gemini model or endpoint.
+        Which values apply depends on the engine family (Gemini per model,
+        Ollama) or the endpoint's reasoningStyle; the server offers only those
+        and refuses others on save. `model-default` sends no reasoning field.
+        A server may accept a level and ignore it — that cannot be observed.
+    AnalyzerReasoningByEngine:
+      type: object
+      properties:
+        ollama:
+          type: object
+          additionalProperties:
+            type: string
+        gemini:
+          type: object
+          additionalProperties:
+            type: string
+      description: |
+        #3084 — per-engine reasoning, keyed by model id. Ollama: absent = 'off';
+        low / medium / high only for a model whose own Test accepted them; keys are
+        stored through normalizeModelTag (`qwen3` and `qwen3:latest` are one model).
+        Gemini: absent = 'model-default'. Values are strings: a save accepts only a
+        ReasoningLevel the model offers, and a stored value this version no longer
+        offers or does not know is returned as saved and refuses a run before it
+        starts. A PUT replaces this map, and each engine map inside it, as a whole:
+        send every engine's entries, because an engine left out of a sent map loses
+        them.
+
     UserSettings:
       type: object
       required:
@@ -5755,6 +5786,8 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerReasoningByEngine:
+          $ref: '#/components/schemas/AnalyzerReasoningByEngine'
         analyzerRateLimitsByModel:
           type: object
           additionalProperties:
@@ -5879,6 +5912,22 @@ components:
         digest:
           type: string
           description: '#3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded.'
+        verdictTestedAt:
+          type: object
+          properties:
+            reasoning:
+              type: object
+              additionalProperties:
+                type: string
+                format: date-time
+            structuredOutput:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: date-time
+          description: '#3084 — each verdict''s own Test date, keyed like the verdicts. A verdict with no entry was recorded by the Test the record''s testedAt names.'
         control:
           type: object
           required: [ok]
@@ -5898,8 +5947,8 @@ components:
       type: object
       description: |
         Master-contract fields id, label, contextTokens, outputTokens, capability
-        (offeredReasoningLevels arrives in wave 5); W3c adds engine, model,
-        structuredOutput and testPlan.
+        and offeredReasoningLevels; W3c adds engine, model, structuredOutput and
+        testPlan.
       required: [id, label, engine, model, structuredOutput, testPlan]
       properties:
         id: { type: string }
@@ -5907,6 +5956,11 @@ components:
         contextTokens: { type: integer, minimum: 1 }
         outputTokens: { type: integer, minimum: 1 }
         capability: { $ref: '#/components/schemas/ModelCapabilityRecord' }
+        offeredReasoningLevels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningLevel'
+          description: Levels the Settings UI may offer for this model (engine family, endpoint style, and the model's Test record).
         engine: { type: string, enum: [local, gemini, openai] }
         model: { type: string }
         structuredOutput:
@@ -5925,6 +5979,11 @@ components:
                 says "rejected" by design (P7) — a refused mode still shows its plain
                 structured-output label there — so a surface that must tell a rejection
                 apart from a pass (the Settings Test result line) reads this instead.
+            outcomeTestedAt:
+              type: string
+              description: >-
+                ISO date of the Test that recorded `outcome` (A2: a merged record holds
+                verdicts from more than one Test). Absent when `outcome` is absent.
         testPlan:
           type: object
           required: [configured, all, attempts]
@@ -6042,6 +6101,8 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerReasoningByEngine:
+          $ref: '#/components/schemas/AnalyzerReasoningByEngine'
         analyzerRateLimitsByModel:
           type: object
           additionalProperties:
@@ -6094,7 +6155,9 @@ components:
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
         reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
-        reasoning: { type: string }
+        reasoning:
+          type: string
+          description: 'A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint''s reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts.'
         maxOutputTokens: { type: integer, minimum: 0, description: '0 = Auto.' }
         contextTokens: { type: integer, minimum: 512 }
         maxInputTokensPerRequest: { type: integer, minimum: 256 }
@@ -6114,7 +6177,9 @@ components:
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
         reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
-        reasoning: { type: string }
+        reasoning:
+          type: string
+          description: 'A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint''s reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts.'
         maxOutputTokens: { type: integer, minimum: 0 }
         contextTokens: { type: integer, minimum: 512 }
         maxInputTokensPerRequest: { type: integer, minimum: 256 }
@@ -6858,9 +6923,9 @@ components:
         rendered as a deep link into that Advanced Settings row), a wiki link
         (`wikiPage`, always its OWN entry — it names a whole page, so it can
         never be a field tacked onto a setting-changing fix), or plain text
-        (neither, e.g. "switch model"). `endpointField` / `reasoningSetting`
-        are declared for the later waves that fill them (3b endpoints, 5a
-        reasoning level); nothing sends them yet.
+        (neither, e.g. "switch model"). `endpointField` (an OpenAI-compatible
+        endpoint's own field) and `reasoningSetting` (a Gemini or Ollama
+        model's reasoning level) are both emitted by `reasoningOverflowFixes`.
       required: [label]
       properties:
         label:
@@ -6871,7 +6936,7 @@ components:
           description: Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix.
         endpointField:
           type: object
-          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Not emitted yet.'
+          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields).'
           required: [endpointId, field]
           properties:
             endpointId: { type: string }
@@ -6885,7 +6950,7 @@ components:
             plain text instead of linking.
         reasoningSetting:
           type: object
-          description: 'Wave 5 (#3084) — the reasoning-level control this fix should focus. Not emitted yet.'
+          description: 'Wave 5 (#3084) — the reasoning-level control this fix should focus. Emitted for a Gemini or Ollama model when a lower level exists.'
           required: [engine, model]
           properties:
             engine: { type: string, enum: [gemini, ollama] }

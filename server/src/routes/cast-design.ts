@@ -61,6 +61,8 @@ import {
   AnalyzerUnreachableError,
   AnalyzerEndpointMissingError,
   AnalyzerTimeoutError,
+  AnalyzerReasoningUnavailableError,
+  AnalyzerCapabilityRejectedError,
 } from '../analyzer/errors.js';
 import { classifyAnalysisFailure } from './failure-taxonomy.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
@@ -296,8 +298,10 @@ const PERSONA_HEARTBEAT_MS = 6000;
     - `AnalyzerUnreachableError` (incl. Ollama's `LocalUnreachableError`),
       `AnalyzerEndpointMissingError`, `AnalyzerTimeoutError`, and any error the failure
       taxonomy codes `auth` (`AnalyzerKeyOriginError`, `AnalyzerHttpError` 401/403, a 400
-      whose body is Google's rejected-key text) → PROPAGATE (wholesale job abort — every
-      remaining character would fail identically).
+      whose body is Google's rejected-key text), `AnalyzerReasoningUnavailableError` (a stored
+      reasoning level the rules no longer offer) and `AnalyzerCapabilityRejectedError` (a level the
+      model's own Test rejected) → PROPAGATE (wholesale job abort — every remaining character
+      would fail identically).
     - A pause that aborted the call (the job signal reaches the transport) → return;
       nothing is recorded.
     - Any other per-character error → recorded to `job.failures` +
@@ -341,6 +345,10 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu:
           err instanceof AnalyzerUnreachableError ||
           err instanceof AnalyzerEndpointMissingError ||
           err instanceof AnalyzerTimeoutError ||
+          /* #3084 wave 5 (P17, 5.4-D1): a stored persona reasoning level the rules no longer offer, or one the
+             model's own Test rejected, refuses every character identically. */
+          err instanceof AnalyzerReasoningUnavailableError ||
+          err instanceof AnalyzerCapabilityRejectedError ||
           /* Owner decision B2: the taxonomy decides what is a refused key (key-origin, 401/403, and a 400 whose
              body is Google's rejected-key text), so this clause never drifts from the failure codes. */
           classifyAnalysisFailure(err, 'Persona generation').code === 'auth'

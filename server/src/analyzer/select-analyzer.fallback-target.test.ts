@@ -10,6 +10,7 @@ import { estimateInputTokens } from './runner/prompt.js';
 import {
   AnalyzerCapabilityRejectedError,
   AnalyzerKeyOriginError,
+  AnalyzerReasoningUnavailableError,
   AnalyzerTargetInputTooLargeError,
   AnalyzerTruncatedError,
   AnalyzerUnreachableError,
@@ -205,6 +206,15 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     const run = t.analyzer.runStage1Chapter('m', 1, 'p', {} as never);
     await expect(run).rejects.toBeInstanceOf(AnalyzerCapabilityRejectedError);
     await expect(run).rejects.toThrow('gemini-3.5-flash-lite');
+  });
+
+  it('a target whose stored reasoning level is no longer offered fails its first call, marked mid-run (P17)', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { gemini: { 'gemini-3.5-flash-lite': 'xhigh' } } });
+    const t = fallbackSelectionFor(sel('local', 'qwen3.5:4b'))!;
+    const run = t.analyzer.runStage1Chapter('m', 1, 'p', {} as never);
+    await expect(run).rejects.toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    await expect(run).rejects.toMatchObject({ modelId: 'gemini-3.5-flash-lite', level: 'xhigh', engine: 'gemini', when: 'mid-run' });
   });
 
   it('fallbackNames: the bare primary model (endpoint name · model for an endpoint) and an engine-named target', () => {

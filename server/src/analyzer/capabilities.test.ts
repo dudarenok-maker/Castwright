@@ -10,7 +10,6 @@ import {
   capabilityRecordFor,
   assertConfiguredCapabilitiesAllowed,
   plannedTestRequestCount,
-  defaultReasoningKey,
   ALL_STRUCTURED_OUTPUT_MODES,
   type ModelCapabilityRecord,
 } from './capabilities.js';
@@ -88,14 +87,6 @@ describe('classifyMarkerProbe — the runner extraction and repair chain before 
       ),
     ).toBe('enforced');
     expect(classifyMarkerProbe(`[THINK]plan the object[/THINK]{"${MARKER_KEY}":"mk-1"} Done.`, 'mk-1')).toBe('enforced');
-  });
-});
-
-describe('defaultReasoningKey (P7: records are keyed by the level actually sent)', () => {
-  it('Ollama sends think:false → off; Gemini and endpoints send no reasoning field → model-default', () => {
-    expect(defaultReasoningKey('ollama')).toBe('off');
-    expect(defaultReasoningKey('gemini')).toBe('model-default');
-    expect(defaultReasoningKey('openai')).toBe('model-default');
   });
 });
 
@@ -183,7 +174,12 @@ describe('assertConfiguredCapabilitiesAllowed', () => {
 });
 
 describe('plannedTestRequestCount', () => {
-  const deps = { configuredMode: 'schema' as const, offeredModes: ALL_STRUCTURED_OUTPUT_MODES };
+  const deps = {
+    configuredMode: 'schema' as const,
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    reasoningSelection: () => ({ engine: 'openai' as const, model: 'm', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' as const } }),
+    configuredReasoning: () => 'model-default' as const,
+  };
   it('configured = control + one mode step; all = control + the schema and json steps (the off step is the control)', () => {
     expect(plannedTestRequestCount({ modelId: 'm', scope: 'configured' }, deps)).toBe(2);
     expect(plannedTestRequestCount({ modelId: 'm', scope: 'all' }, deps)).toBe(3);

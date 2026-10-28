@@ -36,6 +36,13 @@ import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
 import { endpointKeyStatus, type EndpointKeyStatus } from '../workspace/analyzer-endpoints.js';
 import { fallbackTargetSaveError } from '../analyzer/fallback-target.js';
+import {
+  analyzerRequestControlsPatchSchemaFor,
+  changedRequestControls,
+  withNormalizedOllamaReasoningKeys,
+} from '../workspace/analyzer-request-controls.js';
+import { capabilityRecordFor } from '../analyzer/capabilities.js';
+import { normalizeModelTag } from '../analyzer/ollama-tag.js';
 
 export const userSettingsRouter = Router();
 
@@ -187,7 +194,23 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid user settings.', issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }] });
       }
     }
-    const updated = await writeUserSettings(req.body);
+    /* #3084 wave 5 — offered-level rules, judged on what this save changes (N6) against
+       the settings as stored (readUserSettings, not the cache: the boot warm at
+       server/src/index.ts is not awaited). A ZodError maps to 400 + issues in the
+       catch below, and nothing is written. N7: Ollama keys are written normalised. */
+    const stored = await readUserSettings();
+    /* #3625 — a locked/unreadable file no longer rejects the read: it returns cached or
+       default settings and refuses the write. Do not judge against those; let
+       writeUserSettings refuse (500) as it does for every other save. */
+    if (!isUserSettingsFileUnreadable()) {
+      analyzerRequestControlsPatchSchemaFor({
+        /* No digest (A3). N7: a record filed under either spelling of the tag counts. */
+        ollamaRecord: (model) =>
+          capabilityRecordFor(stored, model, getResolvedOllamaUrl()) ??
+          capabilityRecordFor(stored, normalizeModelTag(model), getResolvedOllamaUrl()),
+      }).parse(changedRequestControls(req.body ?? {}, stored));
+    }
+    const updated = await writeUserSettings(withNormalizedOllamaReasoningKeys(req.body));
     res.json(envDerived(updated));
   } catch (err) {
     if (err instanceof z.ZodError) {

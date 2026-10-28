@@ -18,7 +18,7 @@ import { adaptSchemaForGemini, adaptSchemaForOllama, adaptSchemaForOpenAI } from
 import { resolveCapacity, resolveGeminiMaxOutputTokens } from './capacity.js';
 import { resolveNumPredict } from './ollama-settings.js';
 import { ollamaModelDigest } from './ollama-digest.js';
-import { ALL_STRUCTURED_OUTPUT_MODES, type ModelTestDeps } from './capabilities.js';
+import { ALL_STRUCTURED_OUTPUT_MODES, configuredReasoningFor, reasoningSelectionFor, type ModelTestDeps } from './capabilities.js';
 import type { StructuredOutputMode } from './runner/transport.js';
 
 export class GeminiKeyMissingForTestError extends Error {
@@ -34,7 +34,12 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
      endpoint keys are added to the saved secrets. */
   const secrets = [...knownAnalyzerSecrets(), ...Object.values(settings.analyzerEndpointKeys).map((k) => k.key)];
   const redact = (text: string): string => redactKnownSecrets(text, secrets);
-  const offered = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, redact };
+  const offered = {
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    redact,
+    reasoningSelection: (id: string) => reasoningSelectionFor(settings, id),
+    configuredReasoning: (id: string) => configuredReasoningFor(settings, id),
+  };
   const engine = inferEngineFromModelId(modelId);
   if (engine === 'openai') {
     const parsed = parseEndpointModelId(modelId);

@@ -302,7 +302,7 @@ function checkedTarget(
   let built: Promise<Analyzer> | undefined;
   const get = (): Promise<Analyzer> =>
     (built ??= (async () => {
-      assertAnalyzerTargetUsable({ modelId: model, source: 'settings', engine }, getCachedUserSettings(), await digest());
+      assertAnalyzerTargetUsable({ modelId: model, source: 'settings', engine }, getCachedUserSettings(), await digest(), 'mid-run');
       return build();
     })());
   const analyzer: Analyzer = {

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { configSlice } from '../store/config-slice';
+import { configSlice, fetchConfig } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { accountSlice, fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
@@ -270,12 +270,17 @@ describe('AdvancedView — OverrideRow dispatch', () => {
 
 /* ── Device-knob picker ───────────────────────────────────────────────────── */
 
-/* The mobile "Jump to section" nav is also a <select role="combobox">, so the
-   device-knob select must be picked out by elimination. */
+/* The mobile "Jump to section" nav and the reasoning editor card's per-model
+   selects are also <select role="combobox">, so the device-knob select must be
+   picked out by elimination. */
 function getDeviceSelect(): HTMLSelectElement {
   const combobox = screen
     .getAllByRole('combobox')
-    .find((el) => el.getAttribute('aria-label') !== 'Jump to section');
+    .find(
+      (el) =>
+        el.getAttribute('aria-label') !== 'Jump to section' &&
+        !el.closest('[data-testid="analyzer-request-controls"]'),
+    );
   if (!combobox) throw new Error('device knob <select> not found');
   return combobox as HTMLSelectElement;
 }
@@ -1130,6 +1135,35 @@ describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () =>
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText(/Gemini max input tokens per request/i).closest('[data-highlighted="true"]')).toBeTruthy();
   });
+
+  it('removes the deep-link highlight after 2 s even when the config reloads inside that window', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    mockGetConfig.mockResolvedValueOnce(FOCUS_FIXTURE);
+    const store = configureStore({
+      reducer: {
+        config: configSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        ui: { stage: { kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' } } as never,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+    const row = await screen.findByLabelText(/Gemini max input tokens per request/i);
+    await waitFor(() => expect(row.closest('[data-highlighted="true"]')).toBeTruthy());
+    // A second fetchConfig.fulfilled replaces `descriptors` (new identity)
+    // while the 2 s highlight timer is still pending.
+    store.dispatch(
+      fetchConfig.fulfilled(JSON.parse(JSON.stringify(FOCUS_FIXTURE)) as ConfigResponse, 'reload-req', undefined),
+    );
+    await waitFor(() => expect(row.closest('[data-highlighted="true"]')).toBeNull(), { timeout: 3000 });
+  }, 10000);
 });
 
 /* ── Analyzer fallback picker (#3084 P30, D4/D5) ──────────────────────────── */

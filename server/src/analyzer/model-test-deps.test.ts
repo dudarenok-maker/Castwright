@@ -27,6 +27,8 @@ describe('modelTestDepsFor (#3084)', () => {
     expect(d.serverUrl).toBe('http://127.0.0.1:8080/v1');
     expect(d.configuredMode).toBe('json');
     expect(d.probeLimits()).toEqual({ contextTokens: 32768, maxOutputTokens: null });
+    expect(d.configuredReasoning('openai:lab::qwen3-30b')).toBe('model-default');
+    expect(d.reasoningSelection('openai:lab::qwen3-30b')).toMatchObject({ engine: 'openai', model: 'qwen3-30b', endpoint: { id: 'lab' } });
   });
 
   const PROBE_REQUEST = {

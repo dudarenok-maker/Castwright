@@ -34,8 +34,9 @@ import { endpointsSharingDevice } from '../gpu/endpoint-eviction.js';
 import { GeminiAnalyzer, stripCodeFences } from './gemini.js';
 import { OllamaAnalyzer, resolveOllamaTemperature, PERSONA_ABSOLUTE_MAX_MS } from './ollama.js';
 import { OpenAIAnalyzer } from './openai.js';
-import { inferEngineFromModelId, parseEndpointModelId } from './model-id.js';
+import { endpointModelId, inferEngineFromModelId, parseEndpointModelId } from './model-id.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
+import { assertPersonaReasoningAllowed } from './capabilities.js';
 import type { StageRunner } from './runner/stage-runner.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
@@ -251,6 +252,14 @@ export async function generateVoiceStylePersona(
 ): Promise<string> {
   const selection = resolvePersonaSelection();
   const runner = personaRunner(selection);
+  /* P17 + 5.4-D1 — refuse a stored reasoning level the rules no longer offer, or one this model's own
+     Test rejected, before the prompt is built or any request exists (after personaRunner, so a
+     missing endpoint or a foreign key reports first). */
+  assertPersonaReasoningAllowed(
+    getCachedUserSettings(),
+    selection.engine === 'openai' ? endpointModelId(selection.endpointId, selection.model) : selection.model,
+    selection.engine,
+  );
   const prompt = await buildVoiceStylePrompt(character);
   const raw = await runner.runFreeText(
     selection.engine === 'local'

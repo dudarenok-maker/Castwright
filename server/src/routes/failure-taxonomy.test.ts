@@ -14,6 +14,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
   AnalyzerCapabilityRejectedError,
+  AnalyzerReasoningUnavailableError,
   AnalyzerReasoningOverflowError,
   AnalyzerTimeoutError,
   AnalyzerTruncatedError,
@@ -1373,6 +1374,43 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.userMessage).toContain('high');
     expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
+  });
+});
+
+/* A Test only re-records what an Ollama model accepts; a Gemini model's or an endpoint's offered
+   levels never change with a Test, so "run Test again" is wrong advice there. */
+describe('AnalyzerReasoningUnavailableError copy (#3084 PR 5a)', () => {
+  it.each(['gemini', 'openai'] as const)('%s refusal does not advise running Test again', (engine) => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('m', 'xhigh', engine), 'Analyzer');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toContain('Choose an offered level in');
+    expect(r.userMessage).not.toMatch(/run Test again/i);
+  });
+
+  it('Ollama refusal still advises running Test again', () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local'), 'Analyzer');
+    expect(r.userMessage).toMatch(/or run Test again\.$/);
+  });
+
+  it('Ollama refusal of a level no Test probes does not advise running Test again', () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'xhigh', 'local'), 'Analyzer');
+    expect(r.userMessage).toContain('Choose an offered level in');
+    expect(r.userMessage).not.toMatch(/run Test again/i);
+  });
+
+  /* N10 — a refusal from the call itself must not claim the run never started. */
+  it("a 'mid-run' refusal says the run stopped, not that it was not started", () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local', 'mid-run'), 'Analyzer');
+    expect(r.userMessage).toContain('stopped');
+    expect(r.userMessage).not.toContain('was not started');
+    expect(r.detail).toContain('when=mid-run');
+  });
+
+  it("a 'before-start' refusal says the run was not started, not that it stopped", () => {
+    const r = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('qwen3.5:4b', 'high', 'local', 'before-start'), 'Analyzer');
+    expect(r.userMessage).toContain('was not started');
+    expect(r.userMessage).not.toContain('stopped');
+    expect(r.detail).toContain('when=before-start');
   });
 });
 

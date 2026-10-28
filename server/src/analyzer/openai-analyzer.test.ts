@@ -152,9 +152,20 @@ describe('OpenAIAnalyzer (#3084 PR 3b)', () => {
   it('resolves a numeric output cap for Auto and manual endpoints — never undefined (P24)', () => {
     /* The wire cannot tell `undefined` from Auto's number (the transport takes the same
        per-request bound either way), so the resolved setting is asserted directly. */
-    expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1'))).toEqual({ structuredOutput: 'schema', maxOutputTokens: 29_491 });
+    expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1'))).toEqual({ structuredOutput: 'schema', maxOutputTokens: 29_491, reasoning: 'model-default' });
     expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1'), 8_192).maxOutputTokens).toBe(8_192);
     expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1', { maxOutputTokens: 4_096 })).maxOutputTokens).toBe(4_096);
+  });
+
+  it("openAIRequestSettings resolves the endpoint's own reasoning level, and a stage sends it (#3084 wave 5)", async () => {
+    expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1')).reasoning).toBe('model-default');
+    expect(
+      openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1', { reasoningStyle: 'enable_thinking', reasoning: 'off' }), 8_192).reasoning,
+    ).toBe('off');
+    const url = await start((_n, res) => streamText(res, VALID));
+    await new OpenAIAnalyzer({ endpoint: endpoint(url, { reasoningStyle: 'reasoning_effort', reasoning: 'none' }), apiKey: null, model: 'qwen3:30b' })
+      .runStage1Chapter(ID, 1, '# p', {});
+    expect((bodies[bodies.length - 1] as unknown as Record<string, unknown>).reasoning_effort).toBe('none');
   });
 
   it('a 502 whose body says ECONNREFUSED fails as that HTTP error and never falls back to Gemini (P21)', async () => {

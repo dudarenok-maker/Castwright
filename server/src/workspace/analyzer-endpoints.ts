@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { parseEndpointModelId } from '../analyzer/model-id.js';
 import { AnalyzerKeyOriginError } from '../analyzer/errors.js';
+import { levelsForReasoningStyle } from '../analyzer/reasoning.js';
 
 export const REASONING_STYLES = ['reasoning_effort', 'enable_thinking', 'not_controllable'] as const;
 
@@ -92,6 +93,8 @@ export class AnalyzerEndpointRefusal extends Error {
     /* #3084 F5 — {path, message} pairs the route echoes verbatim as the response's
        `issues`. Never a field or key value: a route renders these inline next to
        the named field, so a value here would leak it into a save-time error body.
+       The one exception is the submitted `reasoning` level (the PR 5a offered-level
+       check echoes it): a reasoning level is not a secret, so echoing it leaks nothing.
        path is [] for a refusal that names no single field (duplicate-id,
        not-found, referenced). */
     readonly issues: { path: string[]; message: string }[] = [],
@@ -218,7 +221,7 @@ export function friendlyEndpointIssueMessage(path: string, issue: z.ZodIssue): s
   return issue.message; // fallback — still never a value, per the no-echo rule
 }
 
-export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
+export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): AnalyzerEndpoint {
   const withGpu =
     isRecord(input) && typeof input.baseUrl === 'string' && input.gpu === undefined
       ? { ...input, gpu: defaultGpuForBaseUrl(input.baseUrl) }
@@ -239,19 +242,25 @@ export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
     );
   }
   const ep = parsed.data;
-  /* #3084 P23 — until wave 5 exists, nothing validates a reasoning level or a
-     custom payload, and a value saved now would bypass wave 5's checks for good
-     (settings load leniently). PR 5a deletes the `reasoning` refusal; PR 5b
-     deletes the `extraParams` refusal. */
-  const notYet: { path: string[]; message: string }[] = [];
-  if (ep.reasoning !== 'model-default') {
-    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
+  /* #3084 PR 5a — a reasoning level must be one its control style offers. This
+     replaces P23's "model-default only" refusal. The `extraParams` refusal stays
+     until PR 5b replaces it with validateExtraParams. */
+  const problems: { path: string[]; message: string }[] = [];
+  /* A7 — judge the level only when this save changes it, or changes the style that decides which
+     levels are offered. P17 still refuses a run that would send an unchanged stale level. */
+  const levelChanged = !stored || stored.reasoning !== ep.reasoning || stored.reasoningStyle !== ep.reasoningStyle;
+  const offeredLevels = levelsForReasoningStyle(ep.reasoningStyle);
+  if (levelChanged && !(offeredLevels as readonly string[]).includes(ep.reasoning)) {
+    problems.push({
+      path: ['reasoning'],
+      message: `Reasoning "${ep.reasoning}" is not offered by the ${ep.reasoningStyle} control style (offered: ${offeredLevels.join(', ')}).`,
+    });
   }
   if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
-    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+    problems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
-  if (notYet.length > 0) {
-    throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
+  if (problems.length > 0) {
+    throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', problems);
   }
   if (ep.unloadUrl) {
     const unloadOrigin = new URL(ep.unloadUrl).origin;
@@ -292,7 +301,7 @@ export function applyUpdate(state: EndpointState, endpointId: string, input: unk
       'An endpoint id cannot be changed — delete the endpoint and add it again.',
     );
   }
-  const ep = parseEndpointInput(isRecord(input) ? { ...input, id: endpointId } : input);
+  const ep = parseEndpointInput(isRecord(input) ? { ...input, id: endpointId } : input, state.analyzerEndpoints[idx]);
   const next = [...state.analyzerEndpoints];
   next[idx] = ep;
   return { ...state, analyzerEndpoints: next };
