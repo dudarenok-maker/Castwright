@@ -902,7 +902,7 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
   - **Tests:** Layout PB-1 (uncommitted notes, and the outside title in `saved`), PB-2 (a rollback-restored draft), PB-3 (a field in the draft and changed outside) and PB-5 (typing kept across a library trip survives a Library Edit's read) are red without the fix; PB-4 (opening another book clears the draft) and a slice test without `keepDraft` are controls. Two slice tests pin `keepDraft`.
   - **Mutants:** 17 over a 347-test baseline, files restored byte-for-byte. M8 (prune every typed field on any stale refusal), which survived all 340 tests at aa2366ca because the restored draft was wiped, is now red (PB-2). Ignoring `keepDraft` in the slice: 5 red; Layout always `false`: 4; the ref never set: 4; the ref reset on a book change: 1 (PB-5). Layout always `true` survives: the middleware already clears the draft on a switch to another book, so the ref is defence in depth. M10 survives as before (equivalent). M1–M7, M9, M11 and M12 stay red.
 - **Text (pass-10 C1–C4):** the Layout P1 test's comment and title (it no longer waits for the read); the fuzz attribution in "Review pass 9 fixes"; the `manuscript-edits.json` writer list in "Review pass 6 fixes"; and the PR body.
-- **Catalogue:** entry 52 in the reviewer brief (a resync read wipes client-only state it cannot restore).
+- **Catalogue:** entry 54 in the reviewer brief (a resync read wipes client-only state it cannot restore).
 
 ### Not owed
 

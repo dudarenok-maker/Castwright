@@ -8,7 +8,7 @@ import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError } from '../parsers/index.js';
-import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import { putManuscript, withParseOrigin, type ManuscriptRecord } from '../store/manuscripts.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -43,7 +43,7 @@ manuscriptsRouter.post('/', upload.single('file'), async (req: Request, res: Res
       byteSize,
       uploadedAt: new Date().toISOString(),
       sourceText: parsed.sourceText,
-      chapterHints: parsed.chapters,
+      chapterHints: withParseOrigin(parsed.chapters),
     };
 
     putManuscript(record);

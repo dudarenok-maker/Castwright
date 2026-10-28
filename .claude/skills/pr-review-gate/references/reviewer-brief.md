@@ -500,7 +500,37 @@ recite:
     compared before the write, or the fill held under the writer's lock)?
     Then test by gating the fill between its read and its write, landing the
     invalidation, releasing, and asserting the cache holds the new value.
-43. **Client-side retention of a full-slice snapshot replayed after writes the
+43. **An equality key frozen at write time, compared against a producer whose
+    change is exactly what triggers the comparison** — PR #3836 pass 1 (#3828,
+    `refreshChapterTitles`): the title refresh paired a restructured book's
+    chapters with a fresh parse by exact body text. The hint bodies were frozen
+    when the restructure ran; the refresh only runs after a title-parser bump,
+    i.e. when the parser changed, and a title-parser change is precisely what
+    moves text between a title and its body (the v1 to v2 subtitle merge). The
+    chapters whose titles changed were the ones that stopped matching, kept
+    their old title, and the version bump was still recorded, so the refresh
+    never retried. Every test restructured and refreshed under the SAME parser,
+    which is not the condition the code runs under. Checkable: for every
+    comparison of a stored value against a freshly produced one, ask what
+    event triggers the comparison and whether that event changes the producer
+    (a parser version, a normaliser, a schema); if so, key on something the
+    producer's change cannot move (a recorded origin, an id), and test by
+    rewriting the stored value to what the OLD producer wrote before the
+    comparison runs.
+44. **A best-effort cleanup that becomes a correctness dependency once a new
+    reader treats the leftover as evidence** — PR #3836 pass 2 (#3828,
+    reparse's `removeManuscriptHints`): the delete was best-effort, logged and
+    swallowed, justified by "a leftover file can never validate against the
+    reparsed chapters, so it is housekeeping". True while nothing read the
+    leftover. The new title refresh read it and treated "present but invalid"
+    as "skip without bumping", so a leftover a failed delete left behind
+    blocked the refresh of a plain fresh parse on every GET. Checkable: when a
+    change adds a reader of a file, list every writer or cleaner of that file
+    that is documented as best-effort or harmless-if-skipped, and for each ask
+    what the new reader does with the leftover; then test by seeding the
+    leftover (a restored copy of the deleted file) and asserting the reader's
+    outcome, alongside the genuinely stale case that must still be refused.
+45. **Client-side retention of a full-slice snapshot replayed after writes the
     client never sees — each bookkeeping fix opens the next gap** — PR #3775
     pass 5 (#3421 / #3784, plan 289): a failed save was kept and re-sent as a
     whole-slice snapshot at an arbitrary later time, with a growing set of
@@ -517,7 +547,7 @@ recite:
     observed the write, the check belongs on the server. Test by landing that
     writer between the failure and the replay and asserting the replay is
     refused and the newer value stands.
-44. **Two outcomes gated on independent conditions that leave a third case with
+46. **Two outcomes gated on independent conditions that leave a third case with
     neither** — PR #3775 pass 6, P6-1 (#3784, `persistence-middleware.ts`):
     a failed book-details save was rolled back only if the book was still
     open, and kept only if the failure was retryable (not a 4xx). A 4xx that
@@ -528,7 +558,7 @@ recite:
     every cell lands in exactly one outcome, not zero; then test each cell,
     especially the one reached only by an unusual ordering (refused after
     leaving).
-45. **A restore or import path that carries back the salt or epoch the design
+47. **A restore or import path that carries back the salt or epoch the design
     relies on rotating** — PR #3775 pass 6, P6-2b (#3784,
     `auto-backup.ts` `restoreBackup`): a token scheme salted with a per-book
     `editEpoch` that every wiping writer rotates. A backup restore wrote the
@@ -540,7 +570,7 @@ recite:
     bundle overwrite, sync) and confirm each mints a fresh one rather than
     spreading the incoming copy; test by restoring a snapshot taken before a
     rotation and asserting the epoch differs from the snapshot's.
-46. **A per-field fact (a revision token) applied per request: an older
+48. **A per-field fact (a revision token) applied per request: an older
     request's success hands its whole revision to a newer partial send** — PR
     #3775 pass 7, R1 (#3784, plan 289 C3, `persistence-middleware.ts`): on any
     200, every newer retrying sequence of the key took `res.revision` as its
@@ -554,7 +584,7 @@ recite:
     target reads, and confirm only the intersection is copied. Test by
     landing an outside write to a field the source did not carry between the
     two requests and asserting the target is refused.
-47. **The user's own landed-but-unacknowledged save refuses their next edit** —
+49. **The user's own landed-but-unacknowledged save refuses their next edit** —
     PR #3775 pass 7, R3 (#3784, plan 289 C3): a fresh edit was made conditional
     on its first attempt, on a base learned before an earlier same-key send of
     the user's own had landed (its 200 still in transit). The server answered
@@ -567,7 +597,7 @@ recite:
     precondition names. A base is only valid if no such request is outstanding.
     Test by holding the earlier request's response, landing the next edit, and
     asserting it is neither refused nor sent against the stale base.
-48. **A hold-and-rebuild release that re-commits only part of what it held, or
+50. **A hold-and-rebuild release that re-commits only part of what it held, or
     keys its release on a snapshot every hydrate wipes** — PR #3775 pass 9,
     P9-1 and P9-2 (#3784, plan 289 C7, `persistence-middleware.ts`): sends of a
     book marked for a full re-read were held and released at the read's
@@ -586,7 +616,7 @@ recite:
     Test by holding two entries of different kinds, forcing a second mark
     during the read, and asserting every held value reaches disk or is
     reported, and that the screen shows what is on disk.
-49. **An unbounded hold on a client write, released after the user left and
+51. **An unbounded hold on a client write, released after the user left and
     came back, replays it unbased past writes the client never saw** — PR #3775
     pass 9, P9-3 (#3784, plan 289 C7): the hold had no bound, and the full read
     that releases it runs only for the open book, so a live edit made in the
@@ -594,26 +624,26 @@ recite:
     base. A Library Edit made in between was reverted, and a held
     `confirmCast` landed on a re-parsed book the edit epoch could not guard,
     since the replay carried no base. A tab closed first lost the edit
-    silently. This specialises 43. Checkable: for every hold, find its release
+    silently. This specialises 45. Checkable: for every hold, find its release
     condition and ask what happens if the user leaves before it fires; a held
     live edit that is released later must either carry the base it was made
     against or never be held. Test by holding an edit, leaving the book, making
     an outside write to the same field, reopening, and asserting the outside
     write survives.
-50. **A refused optimistic value stays in the client store and is re-sent
+52. **A refused optimistic value stays in the client store and is re-sent
     unbased by the next whole-snapshot build** — PR #3775 review pass 8
     (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
     P1 (#3784, plan 289): a save refused for an outside write left the user's
     optimistic value in the store, so the next send, which rebuilt the whole
     snapshot, carried it with no base and reverted the very outside write the
-    refusal protected. A hold until re-read was tried first and failed (see 48
-    and 49). The remedy that shipped sends only the fields the user typed
+    refusal protected. A hold until re-read was tried first and failed (see 50
+    and 51). The remedy that shipped sends only the fields the user typed
     (ae6bb325). Checkable: for every refusal path, ask what the client store
     holds afterwards and whether any later build re-sends it; a rebuild from
     the whole slice must not carry a value the server refused. Test by
     refusing a save, making an outside write to the same field, triggering
     the next send from another edit, and asserting the outside write survives.
-51. **A combined send gives up with the book open, and a later cleanup discards
+53. **A combined send gives up with the book open, and a later cleanup discards
     a unit that rode in the same send** — PR #3775 review pass 8
     (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
     P2 (#3784, plan 289): when a send combining several handlers' units gave
@@ -625,7 +655,7 @@ recite:
     combining two handlers' edits in one send, forcing the give-up with the
     book open, and asserting both are reported and neither is dropped
     unannounced.
-52. **A resync read wipes client-only state it cannot restore, which makes a
+54. **A resync read wipes client-only state it cannot restore, which makes a
     protection upstream of it unobservable** — PR #3775 review pass 10
     (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6453919855),
     PB (#3784, plan 289 C7): the full re-read a stale refusal asks for
