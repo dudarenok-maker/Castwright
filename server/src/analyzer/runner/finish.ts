@@ -3,6 +3,7 @@
    pre-extraction order exactly (ollama.ts chat() :830-844, gemini.ts
    generate() :783-818 on 80be2f1d). Wave 2 adds the reasoning-overflow rule. */
 import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError, type TransportKind } from '../errors.js';
+import type { ReasoningLevel } from '../reasoning-level.js';
 import { stripThink } from './parse.js';
 import type { TransportResult } from './transport.js';
 
@@ -14,7 +15,7 @@ export function hasReasoningEvidence(r: TransportResult): boolean {
   return (r.usage?.reasoningTokens ?? 0) > 0 || r.reasoningSeen;
 }
 
-export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string }): string {
+export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string; reasoningLevel?: ReasoningLevel }): string {
   if (r.finish === 'blocked') throw new GeminiContentBlockedError(ctx.model, r.blockReason);
   /* #3084 wave 2 — the 'length' rule runs FIRST for every transport (spec §7).
      Wave 1 kept Ollama's pre-extraction order (empty check first; ollama.ts:830
@@ -23,7 +24,7 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
   if (r.finish === 'length') {
     const answer = stripThink(r.text);
     if (answer.text.trim() === '' && (hasReasoningEvidence(r) || answer.unterminated)) {
-      throw new AnalyzerReasoningOverflowError(ctx.kind, ctx.model, r.usage?.reasoningTokens);
+      throw new AnalyzerReasoningOverflowError(ctx.kind, ctx.model, r.usage?.reasoningTokens, { reasoningLevel: ctx.reasoningLevel });
     }
     throw new AnalyzerTruncatedError(ctx.kind, r.finishReason ?? 'length', r.receivedBytes, r.usage?.outputTokens);
   }

@@ -11,6 +11,8 @@ import { adaptSchemaForOllama } from './runner/schema-adapters.js';
 import type { StructuredOutputMode } from './runner/transport.js';
 import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
 import { configValue } from '../config/resolver.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
+import { resolveReasoningSetting } from './reasoning.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
 export { ANALYZER_DISPATCHER, classifyConnectError, PERSONA_ABSOLUTE_MAX_MS } from './transports/ollama-transport.js';
 export {
@@ -47,6 +49,7 @@ export class OllamaAnalyzer extends TransportAnalyzer {
         settings: () => ({
           structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
           maxOutputTokens: resolveNumPredict(),
+          reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model: opts.model }),
         }),
         adaptSchema: adaptSchemaForOllama,
       }),

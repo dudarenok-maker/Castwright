@@ -24,6 +24,21 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     expect(catalog.groups.find((g) => g.kind === 'gemini')).toMatchObject({ status: 'fallback', models: [] });
   });
 
+  it('offers reasoning levels per engine, control style and Test record, as the server catalog does (#3084 PR 5a)', async () => {
+    (globalThis as Record<string, unknown>).__SEED_ENDPOINT_MODELS__ = { 'lab-server': ['qwen3-30b'] };
+    const source = { analyzerEndpoints: [{ ...endpoint, reasoningStyle: 'enable_thinking' as const }], analyzerCapabilitiesByModel: {}, apiKeyStatus: 'set' as const };
+    const catalog = await mockGetAnalyzerModels(false, source);
+    expect(catalog.groups.find((g) => g.kind === 'ollama')?.models[0].offeredReasoningLevels).toEqual(['model-default', 'off', 'on']);
+    expect(catalog.groups.find((g) => g.kind === 'gemini')?.models[0].offeredReasoningLevels).toEqual(['model-default', 'minimal', 'low', 'medium', 'high']);
+    expect(catalog.groups.find((g) => g.kind === 'endpoint')?.models[0].offeredReasoningLevels).toEqual(['model-default', 'off', 'on']);
+    /* The plan counts the level step: configured = control + the level when it differs; all = control + 5 other levels + 2 mode checks. */
+    expect(catalog.groups.find((g) => g.kind === 'ollama')?.models[0].testPlan).toMatchObject({ configured: 2, all: 8 });
+    /* A named Ollama level is offered exactly when that model's own Test record accepted it. */
+    const rec: ModelCapabilityRecord = { serverUrl: 'http://localhost:11434', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } };
+    const tested = await mockGetAnalyzerModels(false, { ...source, analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } });
+    expect(tested.groups.find((g) => g.kind === 'ollama')?.models[0].offeredReasoningLevels).toEqual(['model-default', 'off', 'on', 'low']);
+  });
+
   it('labels from a seeded Test record for the same server URL', async () => {
     const rec: ModelCapabilityRecord = { serverUrl: 'http://127.0.0.1:8080/v1', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: { schema: { 'model-default': 'ignored' } }, reasoning: {} };
     (globalThis as Record<string, unknown>).__SEED_ENDPOINT_MODELS__ = { 'lab-server': ['qwen3-30b'] };

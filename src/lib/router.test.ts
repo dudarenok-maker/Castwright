@@ -281,3 +281,23 @@ describe('helpHrefForFailureCode — fe-29', () => {
     expect(helpHrefForFailureCode('cloned-voice-broken')).toBe('#/help?code=cloned-voice-broken');
   });
 });
+
+describe('advanced stage — reasoningFocus deep link (#3084 wave 5a, F7)', () => {
+  it('round-trips engine and model through the hash', () => {
+    const hash = stageToHash({ kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } });
+    expect(hash).toBe('#/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
+  });
+  it('encodes an Ollama tag containing a colon', () => {
+    const hash = stageToHash({ kind: 'advanced', reasoningFocus: { engine: 'ollama', model: 'qwen3.5:4b' } });
+    expect(hash).toBe('#/advanced?reasoningEngine=ollama&reasoningModel=qwen3.5%3A4b');
+  });
+  it('plain #/advanced is unchanged with no reasoningFocus', () => {
+    expect(stageToHash({ kind: 'advanced' })).toBe('#/advanced');
+  });
+  it('stageEqual treats two different reasoningFocus values as different stages', () => {
+    const a = { kind: 'advanced' as const, reasoningFocus: { engine: 'gemini' as const, model: 'gemini-3.6-flash' } };
+    const b = { kind: 'advanced' as const, reasoningFocus: { engine: 'gemini' as const, model: 'gemini-3.5-flash' } };
+    expect(stageEqual(a, b)).toBe(false);
+    expect(stageEqual(a, a)).toBe(true);
+  });
+});

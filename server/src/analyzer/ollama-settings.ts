@@ -5,6 +5,8 @@ import { configValue } from '../config/resolver.js';
 import { getCachedUserSettings } from '../workspace/user-settings.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import type { Accelerator } from '../gpu/vram-state.js';
+import { normalizeModelTag } from './ollama-tag.js';
+export { normalizeModelTag } from './ollama-tag.js';
 
 /* Default sampling temperature for /api/chat. Low enough that the model
    sticks close to the schema and the system prompt's structural rules, but
@@ -45,12 +47,6 @@ const DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS = 30;
    whole window). Clamped to 0 on a CPU-only box regardless of the configured
    value. Orthogonal to the per-model map — a deliberate safety rail. */
 const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
-
-/** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
-    tags like 'qwen3.5:9b' untouched. */
-export function normalizeModelTag(tag: string): string {
-  return tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag;
-}
 
 /** Resolved keep-alive (seconds) for `model`: user override (raw or normalized
     key) → flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30). Reads the settings

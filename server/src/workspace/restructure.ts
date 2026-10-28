@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { slug } from './paths.js';
 import type { BookStateJson } from './scan.js';
 import type { ChapterHint } from '../store/manuscripts.js';
+import { pairWithParse } from './title-align.js';
 
 /** Shape of one row in manuscript-edits.json. Extra fields pass through
     untouched — sentences may carry confidence/startMs/endMs etc. that
@@ -958,9 +959,11 @@ export function applySplit(
   // Build new hints with re-issued ids 1..N
   const beforeHints = sortedHints.slice(0, targetIdx);
   const afterHints = sortedHints.slice(targetIdx + 1);
+  // The halves of a split have no single parse origin (#3828).
+  const { parseIndex: _origin, ...targetRest } = targetHint;
   const newHintsDraft: ChapterHint[] = [
     ...beforeHints,
-    { ...targetHint, body: firstBody },
+    { ...targetRest, body: firstBody },
     {
       id: 0,
       title: secondTitle,
@@ -1054,16 +1057,29 @@ function looksLikeDialogue(text: string): boolean {
 
 export interface RefreshTitlesOptions {
   /** Pre-parsed titles from the source manuscript, indexed by parser-
-      order. When the parsed chapter count matches the current state
-      chapter count, the route handler passes the parsed list; the
-      transform replaces titles by index. Empty array (or mismatched
-      length) → skip the parser-aligned rewrite and only run the
-      first-line promotion pass below. */
+      order. Without `parsedBodies`, and when the parsed chapter count
+      matches the current state chapter count, the transform replaces
+      titles by index; an empty array (or mismatched length) skips the
+      parser-aligned rewrite and only runs the first-line promotion pass
+      below. With `parsedBodies` the pairing is by origin or body instead. */
   parsedTitles: readonly string[];
   /** Parallel to `parsedTitles`: true where the parser made that title up
       (no heading in the manuscript). A replaced chapter carries
       `titleSynthesized: true` only when its parsed title is flagged. */
   parsedTitleSynthesized?: readonly boolean[];
+  /** Parallel to `parsedTitles`: each parse chapter's body (#3828). When given,
+      a chapter pairs with the parse chapter its hint came from -- not with the
+      one at its own position, which a reorder, merge or split has moved -- and
+      the state-vs-parse chapter-count gate does not apply. With
+      `parseChapterCount` the hints' recorded `parseIndex` decides (and a parse of
+      a different count skips the pass); without it, a hint pairs with the parse
+      chapter whose body equals its own. A chapter with no pairing is left alone,
+      and so is one paired with a made-up parse title ("Chapter N") at a
+      different position, since that title renumbers with position. Absent:
+      positional, behind the count gate. */
+  parsedBodies?: readonly string[];
+  /** The chapter count of the parse the hints' `parseIndex` values index into. */
+  parseChapterCount?: number;
   /** When true, opportunistically promote a chapter's first non-dialogue
       sentence to its title if the chapter's current title still matches
       the generic auto-generated pattern. Skipped per-chapter when the
@@ -1087,19 +1103,34 @@ export function applyRefreshTitles(
   opts: RefreshTitlesOptions,
 ): RestructureResult {
   const warnings: string[] = [];
-  const parsedAligned = opts.parsedTitles.length === state.chapters.length;
+  const hintById = new Map(hints.map((h) => [h.id, h]));
+  const pairing =
+    opts.parsedBodies !== undefined && opts.parsedBodies.length === opts.parsedTitles.length
+      ? pairWithParse(
+          state.chapters.map((c) => hintById.get(c.id)),
+          opts.parsedBodies,
+          opts.parseChapterCount,
+        )
+      : null;
+  const parsedAligned = pairing
+    ? pairing.mode !== 'skip'
+    : opts.parsedTitles.length === state.chapters.length;
   if (!parsedAligned && opts.parsedTitles.length > 0) {
     warnings.push(
-      `Manuscript parses to ${opts.parsedTitles.length} chapters but state has ${state.chapters.length} — parser-aligned title refresh skipped (chapters have been restructured since import).`,
+      pairing
+        ? `Manuscript now parses to ${opts.parsedTitles.length} chapters but this book's chapters were recorded against a parse of ${opts.parseChapterCount} — parser-aligned title refresh skipped (the parser now splits the manuscript differently).`
+        : `Manuscript parses to ${opts.parsedTitles.length} chapters but state has ${state.chapters.length} — parser-aligned title refresh skipped (chapters have been restructured since import, or the parser now splits the manuscript differently).`,
     );
   }
 
-  // First pass: parser-aligned rewrite (when chapter counts match).
+  // First pass: parser-aligned rewrite (by position when the chapter counts
+  // match; by origin or body when the route passes `parsedBodies`).
   // Only fires for chapters the app itself titled (titleSynthesized) whose
   // current title still matches the generic auto-generated pattern —
   // manuscript headings and user-customised titles ("The Verdict") are
   // never clobbered by re-parsing.
   let parserAligned = 0;
+  const parseIndex = pairing && pairing.mode !== 'skip' ? pairing.index : null;
   let stagedChapters = state.chapters.map((c, i) => {
     if (!parsedAligned) return c;
     // Hard gate: the user has manually renamed this chapter, so the
@@ -1109,16 +1140,19 @@ export function applyRefreshTitles(
     // Only an app-made title may be replaced; an unflagged chapter holds a
     // manuscript heading (or a legacy title) and is left alone.
     if (c.titleSynthesized !== true) return c;
-    const candidate = opts.parsedTitles[i];
+    const pi = parseIndex ? parseIndex[i] : i;
+    if (pi == null) return c;
+    const candidate = opts.parsedTitles[pi];
     if (!candidate || candidate === c.title) return c;
     if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
+    if (parseIndex && pi !== i && opts.parsedTitleSynthesized?.[pi] === true) return c;
     parserAligned++;
     const { titleSynthesized: _drop, ...rest } = c;
     return {
       ...rest,
       title: candidate,
       slug: chapterSlug(c.id, candidate),
-      ...(opts.parsedTitleSynthesized?.[i] === true ? { titleSynthesized: true } : {}),
+      ...(opts.parsedTitleSynthesized?.[pi] === true ? { titleSynthesized: true } : {}),
     };
   });
   if (parserAligned > 0) {

@@ -23,7 +23,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
 import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
-import { putManuscript, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
+import { putManuscript, withParseOrigin, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
   STANDALONES_SERIES,
@@ -481,12 +481,13 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       sourceText: entry.sourceText,
       /* Mirror the excluded flag onto chapterHints so the in-memory
          analysis route sees it without re-reading state.json. */
-      chapterHints: chaptersWithSlug.map((c) => ({
+      chapterHints: withParseOrigin(chaptersWithSlug).map((c) => ({
         id: c.id,
         title: c.title,
         body: c.body,
         excluded: c.excluded,
         titleSynthesized: c.titleSynthesized,
+        parseIndex: c.parseIndex,
       })) as ChapterHint[],
       sourceSha256: sha256Hex(entry.originalBuffer),
       bookId,

@@ -1,0 +1,8 @@
+[
+  { "tag": "qwen3:latest", "normalized": "qwen3" },
+  { "tag": "qwen3", "normalized": "qwen3" },
+  { "tag": "qwen3.5:9b", "normalized": "qwen3.5:9b" },
+  { "tag": "gemma4-e4b-8gb:latest", "normalized": "gemma4-e4b-8gb" },
+  { "tag": "hf.co/org/model:latest", "normalized": "hf.co/org/model" },
+  { "tag": "latest", "normalized": "latest" }
+]

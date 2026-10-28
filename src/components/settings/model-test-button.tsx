@@ -20,10 +20,11 @@ export function describeTestOutcome(entry: AnalyzerCatalogEntry): string | null 
      refuses on a verdict this line never showed. `outcome` is the record's verdict for the
      configured mode at the level a run sends: absent means that mode was never probed (a
      'configured'-scope Test, then the endpoint switched mode), so the line must not claim
-     it was — `tested` here is the record's date, not the mode's. */
+     it was. `tested` is the date of the Test that recorded that verdict (`outcomeTestedAt`,
+     5.4-D2), which a merged record can hold older than its newest `testedAt`. */
   const { mode, outcome, label } = entry.structuredOutput;
-  const testedAt = record.testedAt.slice(0, 10);
-  if (!outcome) return `${mode} · not tested in this mode · last test ${testedAt}`;
+  if (!outcome) return `${mode} · not tested in this mode · last test ${record.testedAt.slice(0, 10)}`;
+  const testedAt = (entry.structuredOutput.outcomeTestedAt ?? record.testedAt).slice(0, 10);
   return `${outcome === 'rejected' ? `${mode} · rejected` : label} · tested ${testedAt}`;
 }
 

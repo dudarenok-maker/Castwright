@@ -722,21 +722,28 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 40 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 14 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 15 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**68 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**71 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-24 (#3084 W4, #3777), 68 → 68.** Row **A109** rewritten
+> **Last change: 2026-10-27 (#3084 wave 5a, PR 5a), 68 → 71.** Rows **A118**
+> (endpoint reasoning styles take effect on llama-swap), **B107** (Ollama reasoning levels and
+> Test attribution) and **E114** (Gemini reasoning levels take effect) added from #3084 PR 5a's
+> run sheet (`3084-openai-analyzer-onbox-acceptance.md` §11–§13). Group A 39 → 40, B 7 → 8,
+> E 14 → 15. `next-id` bumped A118 → A119, B107 → B108 and E114 → E115 in the same change.
+> Rows are owed; not run here.
+>
+> **Prior change: 2026-10-24 (#3084 W4, #3777), 68 → 68.** Row **A109** rewritten
 > against the merged wave 4: the run must set Persona generation engine to the same-card
 > endpoint's model, and observes the persona requests reaching the endpoint before
 > VoiceDesign loads, W3d's eviction unloading it, and the "Pause audio generation to design
@@ -1853,7 +1860,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A118 -->
+<!-- next-id: A119 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6347,9 +6354,19 @@ plan 286 Task 30). *Criteria:* plan 286's "Manual acceptance walkthrough" and
 the nine steps above; issues #3400 and #3397; open decisions OD20, OD27,
 OD28, OD29, OD30, OD31.
 
+### A118 · Endpoint reasoning styles take effect on llama-swap ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5a) · **one GPU box: llama-swap serving a Qwen3.6 model**
+
+The automated tests prove the wire bodies carry `reasoning_effort` or `chat_template_kwargs.enable_thinking` as the endpoint's control style says. Only a real server shows whether the model then thinks less or more, and whether a schema probe's `enforced` / `ignored` verdict matches what the server does at that level.
+
+- **`reasoning_effort` endpoint.** At `none`, a Qwen3.6 model streams no `reasoning_content` deltas. At `high` it streams them (visible as `reasoningSeen`, or the route heartbeat continuing before any answer text).
+- **`enable_thinking` endpoint.** `off` and `on` show the same split.
+- **Schema probe.** At `on`, the Test records the structured-output probe `enforced` or `ignored`, and the run label shows "schema (not enforced)" only for a level recorded `ignored`.
+
+*Needs:* the GPU box with llama-swap and a Qwen3.6 model. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §11. Clears when each split and the probe verdict are recorded with the server log line that shows them.
+
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B107 -->
+<!-- next-id: B108 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6489,6 +6506,17 @@ Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-run
 - **Reload.** Reload (or close and reopen the app) mid-run, then open the book again. The run starts again, because the run marked the book `false` as it started.
 
 Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b), (c), the resume and the reload are recorded with the last prosody log line for each abort.
+
+### B107 · Ollama reasoning levels and Test attribution ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5a) · **local Ollama only; one thinking tag (e.g. `qwen3.5:4b`) and one non-thinking tag**
+
+Ollama accepts a reasoning level only on a model that thinks, so the Test must record each level per model and the editor must offer only what that model's own Test accepted. The automated tests use a fake Ollama. Only a real daemon shows which levels a real tag takes, and whether a re-pulled tag drops the verdicts of its old build.
+
+- **Non-thinking tag.** Test (`scope: all`) records `on`, `low`, `medium` and `high` as `rejected` and `off` and `model-default` as `accepted`.
+- **Thinking tag.** `low` is `accepted`, then appears in that model's own row of Advanced settings' Ollama reasoning list, and not in the non-thinking tag's row.
+- **Refusal.** A run with a `rejected` level fails before the first chapter, with copy naming the level and the date of the Test that recorded that verdict.
+- **A2 — a re-pulled tag.** After a Test (`scope: all`), re-pull the same tag so its build changes (`ollama pull <tag>`; `ollama list` shows a new digest), then Test `scope: configured`. The stored record keeps only the verdict this Test probed; the earlier levels are gone rather than carried onto a different build.
+
+*Needs:* local Ollama with a thinking and a non-thinking tag. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §12. Clears when all four are recorded.
 
 ---
 
@@ -6895,7 +6923,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E114 -->
+<!-- next-id: E115 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7550,6 +7578,18 @@ On the real Playing with Fire book, open the Generate view: the `the_torment` ca
 
 *Needs:* no GPU, just the real manuscript and a running server. *Cost:* ~5 minutes.
 *Criteria:* the line count and chapter list above; #3440's original bug report for what "wrong" looked like before the fix.
+
+### E114 · Gemini reasoning levels take effect ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5a) · **no GPU needed; a Gemini API key**
+
+Gemini levels are offered per model id and sent as `thinkingLevel`, with `includeThoughts` beside any level that thinks. The automated tests pin the request bodies. Only the live API shows whether it accepts each level, and what the thought-token counts do.
+
+- **Test.** Test (`scope: all`) on `gemini-3.6-flash`, `gemini-3.8-flash` and `gemma-4-31b-it` records every offered level `accepted`. A `length` stop on a level step still counts. The `gemini-3.8-flash` result lists `model-default`, `low`, `medium` and `high` and has no `minimal` step (the Test probes offered levels only, so `minimal` is never sent), and its Advanced settings reasoning row does not offer `minimal`.
+- **Stale `minimal`.** With `reasoning` for `gemini-3.8-flash` hand-set to `minimal` in `user-settings.json` and the app reloaded, starting an analysis is refused before it starts, with the message that the saved level "is not offered for this model". The Advanced settings row shows `minimal` selected, so it can be changed to an offered level.
+- **Thought tokens.** A stage-2 chapter on `gemini-3.6-flash` at `model-default` reports `thoughtsTokenCount` per its id-rule default, and at `high` a larger count. `gemma-4-31b-it` at `off` against `on` differs in thought tokens.
+- **A8 — the owed fact.** Record whether Gemma's `on` step is `accepted`, i.e. whether the API takes `thinkingLevel: HIGH` together with `includeThoughts`. If it is `rejected`, the `on` fragment must drop `includeThoughts` and keep `thinkingLevel: HIGH`; Gemma `on` then reports no thought tokens, so its truncations split like its default level (G1's overflow no longer applies there). That is a decision to reopen, not a silent change.
+- **G1.** On a chapter long enough to exhaust the cap, record what Gemma `on` does with an empty `MAX_TOKENS` answer (expected: `analyzer-reasoning-overflow`, the run stops) against the same chapter at Gemma's default level (expected: the chunk splits and recovers, #528).
+
+*Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §13. Clears when each bullet is recorded.
 
 ## Group G — GitHub Actions itself
 

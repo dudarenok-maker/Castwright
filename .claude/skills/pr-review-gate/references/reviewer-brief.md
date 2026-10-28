@@ -500,6 +500,36 @@ recite:
     compared before the write, or the fill held under the writer's lock)?
     Then test by gating the fill between its read and its write, landing the
     invalidation, releasing, and asserting the cache holds the new value.
+43. **An equality key frozen at write time, compared against a producer whose
+    change is exactly what triggers the comparison** — PR #3836 pass 1 (#3828,
+    `refreshChapterTitles`): the title refresh paired a restructured book's
+    chapters with a fresh parse by exact body text. The hint bodies were frozen
+    when the restructure ran; the refresh only runs after a title-parser bump,
+    i.e. when the parser changed, and a title-parser change is precisely what
+    moves text between a title and its body (the v1 to v2 subtitle merge). The
+    chapters whose titles changed were the ones that stopped matching, kept
+    their old title, and the version bump was still recorded, so the refresh
+    never retried. Every test restructured and refreshed under the SAME parser,
+    which is not the condition the code runs under. Checkable: for every
+    comparison of a stored value against a freshly produced one, ask what
+    event triggers the comparison and whether that event changes the producer
+    (a parser version, a normaliser, a schema); if so, key on something the
+    producer's change cannot move (a recorded origin, an id), and test by
+    rewriting the stored value to what the OLD producer wrote before the
+    comparison runs.
+44. **A best-effort cleanup that becomes a correctness dependency once a new
+    reader treats the leftover as evidence** — PR #3836 pass 2 (#3828,
+    reparse's `removeManuscriptHints`): the delete was best-effort, logged and
+    swallowed, justified by "a leftover file can never validate against the
+    reparsed chapters, so it is housekeeping". True while nothing read the
+    leftover. The new title refresh read it and treated "present but invalid"
+    as "skip without bumping", so a leftover a failed delete left behind
+    blocked the refresh of a plain fresh parse on every GET. Checkable: when a
+    change adds a reader of a file, list every writer or cleaner of that file
+    that is documented as best-effort or harmless-if-skipped, and for each ask
+    what the new reader does with the leftover; then test by seeding the
+    leftover (a restored copy of the deleted file) and asserting the reader's
+    outcome, alongside the genuinely stale case that must still be refused.
 
 43. **An exact comparison against a value re-derived from a producer that has
     changed since the stored copy was made** — PR #3835 pass 1 (#3829,

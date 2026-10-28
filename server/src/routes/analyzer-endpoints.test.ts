@@ -100,13 +100,7 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(res.body.code).toBe('unload-off-origin');
   });
 
-  it('until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, on create and update (P23)', async () => {
-    const reasoning = await request(app).post('/api/analyzer/endpoints').send({ ...lab, reasoning: 'high' });
-    expect(reasoning.status).toBe(400);
-    expect(reasoning.body).toMatchObject({
-      code: 'invalid',
-      issues: [{ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' }],
-    });
+  it('until PR 5b, refuses a non-empty payload on update (P23)', async () => {
     await request(app).post('/api/analyzer/endpoints').send(lab);
     const payload = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20 } });
     expect(payload.status).toBe(400);
@@ -114,6 +108,21 @@ describe('POST /api/analyzer/endpoints', () => {
       { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
     ]);
     expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).not.toHaveProperty('extraParams');
+  });
+
+  it('accepts a reasoning level its control style offers on create and update, validated by the 5a rules', async () => {
+    const created = await request(app).post('/api/analyzer/endpoints').send({ ...lab, reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    expect(created.status).toBe(201);
+    expect(created.body.analyzerEndpoints[0]).toMatchObject({ reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    const updated = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, reasoningStyle: 'enable_thinking', reasoning: 'off' });
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).toMatchObject({ reasoningStyle: 'enable_thinking', reasoning: 'off' });
+  });
+
+  it('create refuses a reasoning level its control style does not offer', async () => {
+    const res = await request(app).post('/api/analyzer/endpoints').send({ ...lab, reasoningStyle: 'reasoning_effort', reasoning: 'on' });
+    expect(res.status).toBe(400);
+    expect(res.body.issues[0].message).toContain('Reasoning "on" is not offered by the reasoning_effort control style');
   });
 
   it('keeps both endpoints when two creates race', async () => {

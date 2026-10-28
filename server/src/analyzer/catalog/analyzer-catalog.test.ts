@@ -77,6 +77,7 @@ describe('buildAnalyzerCatalog', () => {
     expect(entry).toMatchObject({ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', contextTokens: 32768 });
     /* N6: `attempts` is the most attempts one Test request can take on that transport. */
     expect(entry.testPlan).toEqual({ configured: 2, all: 3, attempts: 3 });
+    expect(entry.offeredReasoningLevels).toEqual(['model-default']);
     expect(catalog.groups[0].models[0].testPlan.attempts).toBe(1);
   });
 
@@ -214,6 +215,21 @@ describe('buildAnalyzerCatalog', () => {
     const bare = (await buildAnalyzerCatalog({ refresh: false }, unprobed)).groups[0].models[0];
     expect(bare.capability).toBeDefined();
     expect('outcome' in bare.structuredOutput).toBe(false);
+  });
+
+  it("carries the Test date of the verdict it shows, not the record's newest date (5.4-D2)", async () => {
+    const rec = {
+      serverUrl: 'http://127.0.0.1:8080/v1',
+      testedAt: '2026-09-12T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { schema: { 'model-default': 'enforced' as const } },
+      reasoning: {},
+      verdictTestedAt: { structuredOutput: { schema: { 'model-default': '2026-09-10T10:00:00.000Z' } } },
+    };
+    const d = deps({ settings: () => settings({ analyzerCapabilitiesByModel: { 'openai:lab::qwen3-30b': rec } }) });
+    const entry = (await buildAnalyzerCatalog({ refresh: true }, d)).groups.find((g) => g.kind === 'endpoint')!.models[0];
+    expect(entry.structuredOutput.outcome).toBe('enforced');
+    expect(entry.structuredOutput.outcomeTestedAt).toBe('2026-09-10T10:00:00.000Z');
   });
 
   it('reports off mode as accepted when the control passed and the record has no off entry; an explicit off entry wins (#3570)', async () => {

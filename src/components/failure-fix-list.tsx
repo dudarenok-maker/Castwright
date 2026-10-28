@@ -3,12 +3,13 @@
    Two surfaces show the same list and must not drift: the persistent
    <ReasoningOverflowToast> (survives navigation) and the run-level error panel
    in src/views/analysing.tsx. Both render <FailureFixList fixes={…} /> rather
-   than each resolving links itself, so the three-way rule below is defined
-   once:
+   than each resolving links itself, so the link rule below is defined once:
 
      - a `wikiPage` entry  → an outbound wiki link (isWikiPage + wikiUrl), or
        plain text when this build does not publish that page name;
-     - a `settingKey` entry → an in-app Advanced Settings deep link (fixHref);
+     - a `settingKey`, `endpointField` or `reasoningSetting` entry → an in-app
+       deep link (fixHref) to that Advanced Settings row, endpoint field or
+       model reasoning row;
      - a label-only entry  → plain text.
 
    No entry ever carries both `wikiPage` and `settingKey` (the server's

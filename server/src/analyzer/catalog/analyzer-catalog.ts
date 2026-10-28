@@ -20,12 +20,13 @@ import {
   ALL_STRUCTURED_OUTPUT_MODES,
   STAGE_GRAMMAR_SCHEMAS,
   capabilityRecordFor,
-  defaultReasoningKey,
   draft07,
   plannedTestRequestCount,
   type ModelCapabilityRecord,
+  verdictTestedAtFor,
   type ProbeOutcome,
 } from '../capabilities.js';
+import { offeredReasoningLevels, resolveReasoningSetting, type ReasoningLevel } from '../reasoning.js';
 import {
   adaptSchemaForGemini,
   adaptSchemaForOllama,
@@ -36,9 +37,8 @@ import type { AdaptedSchema, StructuredOutputMode } from '../runner/transport.js
 
 export type CatalogGroupKind = 'ollama' | 'gemini' | 'endpoint';
 
-/** Master-contract fields: id, label, contextTokens?, outputTokens?, capability?
-    (offeredReasoningLevels? arrives in wave 5). W3c additions: engine, model,
-    structuredOutput, testPlan. */
+/** Master-contract fields: id, label, contextTokens?, outputTokens?, capability?,
+    offeredReasoningLevels. W3c additions: engine, model, structuredOutput, testPlan. */
 export interface AnalyzerCatalogEntry {
   id: string;
   /** Gemini `displayName ?? id`; the Ollama tag; an endpoint's bare model name. */
@@ -48,7 +48,11 @@ export interface AnalyzerCatalogEntry {
   capability?: ModelCapabilityRecord;
   engine: 'local' | 'gemini' | 'openai';
   model: string;
-  structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string; outcome?: ProbeOutcome };
+  /** Levels the Settings editor may pick for this model (reasoning.ts, P17). */
+  offeredReasoningLevels: ReasoningLevel[];
+  /** `outcomeTestedAt` (5.4-D2): the date of the Test that recorded `outcome`, which after a merged
+      record can be older than `capability.testedAt`. */
+  structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string; outcome?: ProbeOutcome; outcomeTestedAt?: string };
   /** `attempts` (N6): the most attempts one Test request can take on this model's transport,
       retries included, so the confirm dialog can state the maximum. */
   testPlan: { configured: number; all: number; attempts: number };
@@ -260,17 +264,28 @@ function droppedForKind(kind: CatalogGroupKind): string[] {
   return out;
 }
 
-const OFFERED = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES };
-
 function toEntry(
   raw: RawModel,
-  ctx: { kind: CatalogGroupKind; engine: AnalyzerCatalogEntry['engine']; mode: StructuredOutputMode; serverUrl: string; settings: UserSettings },
+  ctx: {
+    kind: CatalogGroupKind;
+    engine: AnalyzerCatalogEntry['engine'];
+    mode: StructuredOutputMode;
+    serverUrl: string;
+    settings: UserSettings;
+    endpoint?: AnalyzerEndpoint;
+  },
 ): AnalyzerCatalogEntry {
   const capability = capabilityRecordFor(ctx.settings, raw.id, ctx.serverUrl, raw.digest); // A3: another build's record is dropped
   const dropped = ctx.mode === 'schema' ? droppedForKind(ctx.kind) : [];
-  const planDeps = { ...OFFERED, configuredMode: ctx.mode };
+  const sel = { engine: ctx.engine, model: raw.model, endpoint: ctx.endpoint, record: capability };
   /* P7: label from the record filed under the level a run of this model sends. */
-  const level = defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind);
+  const level = resolveReasoningSetting(ctx.settings, sel);
+  const planDeps = {
+    configuredMode: ctx.mode,
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    reasoningSelection: () => sel,
+    configuredReasoning: () => level,
+  };
   /* `label` never says "rejected" by design (the fixture table pins this) — a mode
      refused at the level a run sends still shows its plain structured-output label
      there, because refusal is enforced by the pre-run check, not the label. A
@@ -280,6 +295,14 @@ function toEntry(
      entry unless `off` was a tested mode: a passing control IS an accepted `off`. An
      explicit entry wins. */
   const outcome = capability?.structuredOutput[ctx.mode]?.[level] ?? (ctx.mode === 'off' && capability?.control.ok ? 'accepted' : undefined);
+  /* 5.4-D2 — the date of the Test that recorded THIS verdict (A2), not the record's newest date. The
+     implicit `off` accept is the control, which every Test re-runs, so it takes `testedAt`. */
+  const explicitOutcome = capability?.structuredOutput[ctx.mode]?.[level];
+  const outcomeTestedAt = !capability || !outcome
+    ? undefined
+    : explicitOutcome
+      ? verdictTestedAtFor(capability, { setting: 'structuredOutput', structuredOutput: ctx.mode, reasoning: level })
+      : capability.testedAt;
   return {
     id: raw.id,
     label: raw.displayName ?? raw.model,
@@ -288,11 +311,13 @@ function toEntry(
     ...(capability ? { capability } : {}),
     engine: ctx.engine,
     model: raw.model,
+    offeredReasoningLevels: offeredReasoningLevels(sel),
     structuredOutput: {
       mode: ctx.mode,
       dropped,
       label: structuredOutputLabel(ctx.mode, dropped, capability, level),
       ...(outcome ? { outcome } : {}),
+      ...(outcomeTestedAt ? { outcomeTestedAt } : {}),
     },
     testPlan: {
       configured: plannedTestRequestCount({ modelId: raw.id, scope: 'configured' }, planDeps),
@@ -356,7 +381,7 @@ async function endpointGroup(
   return {
     ...base,
     status: 'ok',
-    models: listing.models.map((m) => toEntry(m, { kind: 'endpoint', engine: 'openai', mode: endpoint.structuredOutput, serverUrl: endpoint.baseUrl, settings })),
+    models: listing.models.map((m) => toEntry(m, { kind: 'endpoint', engine: 'openai', mode: endpoint.structuredOutput, serverUrl: endpoint.baseUrl, settings, endpoint })),
   };
 }
 

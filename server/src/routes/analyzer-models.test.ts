@@ -122,7 +122,19 @@ describe('POST /api/analyzer/models/test', () => {
       { modelId: 'openai:lab::m', scope: 'all' },
       expect.objectContaining({ transport: deps.transport, signal: expect.any(AbortSignal) }),
     );
-    expect(h.writeAnalyzerCapabilityRecord).toHaveBeenCalledWith('openai:lab::m', RECORD);
+    expect(h.writeAnalyzerCapabilityRecord).toHaveBeenCalledWith('openai:lab::m', RECORD, expect.any(Function));
+  });
+
+  it('writes an Ollama Test under the canonical tag and merges into either tag form (N7)', async () => {
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    h.runModelTest.mockResolvedValue(RECORD);
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'qwen3:latest', scope: 'configured' });
+    expect(res.status).toBe(200);
+    expect(h.writeAnalyzerCapabilityRecord).toHaveBeenCalledWith('qwen3', RECORD, expect.any(Function));
+    const sameModel = h.writeAnalyzerCapabilityRecord.mock.calls[0][2] as (savedKey: string) => boolean;
+    expect(sameModel('qwen3:latest')).toBe(true);
+    expect(sameModel('qwen3')).toBe(true);
+    expect(sameModel('llama3')).toBe(false);
   });
 
   it('400 on a bad scope', async () => {

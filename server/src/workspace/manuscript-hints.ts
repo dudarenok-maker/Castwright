@@ -12,6 +12,11 @@
    keeping the previous entry means a reader still finds the entry that matches
    whichever state.json actually landed.
 
+   Each chapter may also record `parseIndex`, the index of the parse chapter its
+   body came from (absent for a merged or split body), and the entry the parse's
+   `parseChapterCount` (#3828): a later title refresh pairs through them, since
+   body text moves when the parser changes. Both are optional and additive.
+
    Staleness key (per entry): `manuscriptId` + `manuscriptFile` + `sourceSha256` (sha256 of
    the manuscript bytes at write time) + each chapter's `uuid`. A reader proves
    the file belongs to the current state.json and manuscript by matching all of
@@ -41,7 +46,10 @@ export interface ManuscriptHintsEntry {
   manuscriptFile: string;
   sourceSha256: string;
   writtenAt: string;
-  chapters: Array<{ id: number; uuid: string; body: string }>;
+  /** The chapter count of the parse the chapters' `parseIndex` values index
+      into (#3828). Absent in a file written before origins were recorded. */
+  parseChapterCount?: number;
+  chapters: Array<{ id: number; uuid: string; body: string; parseIndex?: number }>;
 }
 
 export function sha256Hex(buf: Buffer): string {
@@ -55,7 +63,9 @@ export function buildHintsEntry(args: {
   manuscriptId: string;
   manuscriptFile: string;
   sourceSha256: string;
-  hints: ReadonlyArray<{ id: number; body: string }>;
+  hints: ReadonlyArray<{ id: number; body: string; parseIndex?: number }>;
+  /** The parse's chapter count; with it the hints' `parseIndex` values are kept. */
+  parseChapterCount?: number;
   stateChapters: ReadonlyArray<{ id: number; uuid?: string }>;
 }): ManuscriptHintsEntry {
   const { hints, stateChapters } = args;
@@ -64,19 +74,26 @@ export function buildHintsEntry(args: {
       `manuscript-hints: ${hints.length} hints but ${stateChapters.length} state chapters`,
     );
   }
-  const bodyById = new Map<number, string>();
-  for (const h of hints) bodyById.set(h.id, h.body);
+  const hintById = new Map<number, { body: string; parseIndex?: number }>();
+  for (const h of hints) hintById.set(h.id, h);
+  const withOrigin = args.parseChapterCount !== undefined;
   const chapters = stateChapters.map((sc) => {
-    const body = bodyById.get(sc.id);
-    if (body === undefined) throw new Error(`manuscript-hints: no hint for chapter id ${sc.id}`);
+    const hint = hintById.get(sc.id);
+    if (hint === undefined) throw new Error(`manuscript-hints: no hint for chapter id ${sc.id}`);
     if (!sc.uuid) throw new Error(`manuscript-hints: chapter id ${sc.id} has no uuid`);
-    return { id: sc.id, uuid: sc.uuid, body };
+    return {
+      id: sc.id,
+      uuid: sc.uuid,
+      body: hint.body,
+      ...(withOrigin && hint.parseIndex !== undefined ? { parseIndex: hint.parseIndex } : {}),
+    };
   });
   return {
     manuscriptId: args.manuscriptId,
     manuscriptFile: args.manuscriptFile,
     sourceSha256: args.sourceSha256,
     writtenAt: new Date().toISOString(),
+    ...(withOrigin ? { parseChapterCount: args.parseChapterCount } : {}),
     chapters,
   };
 }
@@ -134,6 +151,7 @@ export type HydratedHint = {
   body: string;
   excluded?: boolean;
   titleSynthesized?: true;
+  parseIndex?: number;
 };
 
 type HintsState = {
@@ -147,6 +165,36 @@ type HintsState = {
     titleSynthesized?: boolean;
   }>;
 };
+
+/** True when a persisted hints file records chapters but not one of their uuids
+    is in `state` (#3828). A reparse / replace-manuscript rebuilds the chapter
+    list from a fresh parse -- whose chapters carry no uuid until the next read
+    mints new ones -- and deletes this file best-effort; one it failed to delete
+    can therefore never share a uuid with the book. That is a leftover, not a
+    stale restructure: a restructure that went stale keeps its chapters' uuids.
+    A file whose top-level shape is not a hints file is never "leftover" (an
+    entry of the wrong shape inside a well-formed file reads as one: only a
+    hand-edit makes that, and the outcome is the positional path). */
+export function hintsShareNoUuidWith(
+  file: unknown,
+  state: { chapters: ReadonlyArray<{ uuid?: string }> },
+): boolean {
+  const entries = entriesOf(file);
+  if (!entries || entries.length === 0) return false;
+  const uuids = new Set(state.chapters.flatMap((c) => (c.uuid ? [c.uuid] : [])));
+  return entries.every((e) => {
+    const chapters = (e as { chapters?: unknown } | null)?.chapters;
+    if (!Array.isArray(chapters)) return true;
+    return chapters.every((c) => {
+      const uuid = (c as { uuid?: unknown } | null)?.uuid;
+      return typeof uuid !== 'string' || !uuids.has(uuid);
+    });
+  });
+}
+
+type HintsResult =
+  | { ok: true; hints: HydratedHint[]; parseChapterCount?: number }
+  | { ok: false; reason: string };
 
 /** Validate a persisted hints file against the current state.json and the
     manuscript bytes' hash, and build the chapter hints from the first entry
@@ -169,7 +217,7 @@ export function hintsFromPersisted(
   file: unknown,
   state: HintsState,
   sourceSha256: string,
-): { ok: true; hints: HydratedHint[] } | { ok: false; reason: string } {
+): HintsResult {
   if (typeof file !== 'object' || file === null || Array.isArray(file)) {
     return { ok: false, reason: 'not an object' };
   }
@@ -191,7 +239,7 @@ function hintsFromEntry(
   entry: unknown,
   state: HintsState,
   sourceSha256: string,
-): { ok: true; hints: HydratedHint[] } | { ok: false; reason: string } {
+): HintsResult {
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
     return { ok: false, reason: 'entry shape' };
   }
@@ -213,13 +261,18 @@ function hintsFromEntry(
       return { ok: false, reason: `chapter ${i} uuid` };
     }
     if (typeof fc.body !== 'string') return { ok: false, reason: `chapter ${i} body` };
+    /* An origin that is not a non-negative integer is read as unknown, never a
+       reason to refuse the file. */
+    const origin = Number.isInteger(fc.parseIndex) && (fc.parseIndex as number) >= 0 ? (fc.parseIndex as number) : undefined;
     hints.push({
       id: sc.id,
       title: sc.title,
       body: fc.body,
+      ...(origin !== undefined ? { parseIndex: origin } : {}),
       ...(sc.titleSynthesized === true ? { titleSynthesized: true as const } : {}),
       excluded: sc.excluded ? true : undefined,
     });
   }
-  return { ok: true, hints };
+  const count = Number.isInteger(f.parseChapterCount) && (f.parseChapterCount as number) >= 0 ? (f.parseChapterCount as number) : undefined;
+  return { ok: true, hints, ...(count !== undefined ? { parseChapterCount: count } : {}) };
 }

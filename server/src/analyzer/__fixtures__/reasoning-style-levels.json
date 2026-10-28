@@ -1,0 +1,5 @@
+{
+  "reasoning_effort": ["model-default", "none", "minimal", "low", "medium", "high"],
+  "enable_thinking": ["model-default", "off", "on"],
+  "not_controllable": ["model-default"]
+}
