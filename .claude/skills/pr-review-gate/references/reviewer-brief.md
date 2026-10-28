@@ -668,9 +668,32 @@ recite:
     every resync read, list the client state it resets and ask whether disk
     can restore each piece; a reset of unsaved input or of a just-restored
     value is a loss, and any guarantee about that state is untestable while
-    the reset stands. Test by leaving unsaved input (or a rolled-back draft)
-    in place, triggering the resync, and asserting the input survives while
-    the read still refreshes every field the user is not editing.
+    the reset stands. The list includes state that is not on screen: review
+    pass 11
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461),
+    P11-2, found the fixed read still deleting the pending commit snapshot
+    (`lastCommitted`), the record a failed save's rollback restores the
+    typing from, so a save queued or in flight across the read lost its
+    typing when it then failed. Test by leaving unsaved input (or a
+    rolled-back draft, or a save still in flight) in place, triggering the
+    resync, and asserting the input survives, and is restored if that save
+    fails, while the read still refreshes every field the user is not
+    editing.
+55. **An identity check keyed on an id the system reuses after a delete and
+    re-create** — PR #3775 review pass 11
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461),
+    P11-1 (#3784, plan 289 C7): the re-read rule of 54's fix kept the details
+    draft when the read was of "the same book", decided by `bookId`. A book id
+    is its author/series/title slug, so deleting a book and importing one
+    with the same slug reuses the id, and the deleted book's unsaved typing
+    showed on, and was saved into, the new book. The delete handler's own
+    comment named the reuse. Checkable: for every "is this still the same X"
+    check, ask whether the key can be reissued to a different X (a slug, a
+    name, a path, a recycled counter) and, if so, key it on something only
+    the original holds (here the manuscript id each import mints). Test by
+    deleting X, re-creating one under the same key, and asserting nothing of
+    the old X carries over, with a control that an operation which keeps the
+    identity (a re-parse) still counts as the same X.
 
 ### Keeping the catalogue current
 

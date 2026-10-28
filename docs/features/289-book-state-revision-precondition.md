@@ -509,7 +509,13 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **Kept and re-sent after leaving (owner decision, 2026-10-25):** natural. A give-up with the book not open removes nothing, so the entries stay idle, and the book's next flush or next edit sends them with their bases.
 - **Full read (F1, amended by P2 of review pass 8):** `dropRetainedSaves(bookId, true)` removes the outbox of every key of the book that is idle, except one kind of `state` entry: (P2) a `state` entry that carries a base stays, and goes with the book's next send for the server to judge. Cast, manuscript and changeLog entries are still dropped, based or not: the read puts the screen back to disk, and a kept whole-slice save landing later would leave screen and disk disagreeing (fa0d78e2). Entries with a live timer or a flight are live edits and stay. **Delete success** dispatches `dropRetainedSaves(bookId)`, which drops everything (D8b hygiene). (Pass 8's second exception, a `state` key held for the read (P1), was removed in pass 9.)
 - **A book-details save sends only the fields typed since the last accepted save (P1, redone in pass 9).** A `bookMeta/commitDraft` sends the keys of `lastCommitted[bookId].draft`, which is exactly what a rollback reverts, not all eight `saved` fields. A value refused as stale and still on screen therefore cannot ride a later commit back to disk. `markNeedsFullRead`'s `refused` list prunes a stale-refused field from that set, so a rollback does not restore it and a later commit does not send it again. Nothing is held: pass 8's hold of a marked book's `state` sends until the read (bbb9f733, 8a316704, and the P1 half of ca09d9ad) was removed in ae6bb325 after review pass 9 found it unsafe (P9-1, P9-2, P9-3). A failed full read is retried by Layout only while the book stays open; if the user leaves first, nothing waits for it.
-- **A full re-read of the book being edited keeps the details draft (PB, review pass 10; owner decision on #3784, 2026-10-28).** Layout passes `keepDraft` to `bookMeta.hydrateFromBookState` when the read is of the last book whose details it hydrated (`metaReadFor`; not reset by a trip to the library, since the middleware clears the draft only on a switch to a different book). Such a read refreshes `saved`, so an outside write shows on every field the user is not editing, and keeps `draft`, so a field the user is typing in, or a draft a failed save restored (#2230, #3754), still shows the user's value. It still clears `lastCommitted`: that snapshot's `saved` baseline predates the read, so a rollback from it would revert the outside write; the next commit pins a fresh one from the read, and the typed-fields set it sends is the kept draft's keys. The first full read after opening another book, and the library-entry fallback hydrate, still wipe the draft.
+- **Every full read of the open book keeps the details draft (PB, review pass 10, owner decision on #3784, 2026-10-28; widened by the owner decisions on review pass 11, 2026-10-29).** Layout passes `keepDraft` to `bookMeta.hydrateFromBookState` on every full read, the first after opening the book included, unless the book was last read from a different manuscript.
+  - **Why it is safe:** the middleware clears the draft on a switch to a different book (#3754, #3782), so a draft still present at a read was typed on this book.
+  - **The one exception is a re-import under the same id (P11-1).** A book id is its author/series/title slug, so deleting a book and importing one with the same slug reuses the id. Every import mints a new `manuscriptId`, and the read of that new manuscript wipes the old book's draft. A re-parse or a manuscript replace keeps the manuscript id (pinned on the server), so it keeps the draft.
+  - **`metaReadFor`** is a per-book map of the manuscript each book's details were last read from. It is not reset by navigation. It is per book rather than "the last read", so a visit whose read never landed cannot hide a re-import made in another tab.
+  - **What the read does:** it refreshes `saved`, so an outside write shows on every field the user is not editing. It keeps `draft`, so a field the user is typing in, or a draft a failed save restored (#2230, #3754), still shows the user's value.
+  - **The pending commit snapshot is kept too (P11-2).** A `keepDraft` hydrate rebases `lastCommitted[bookId].saved` onto the read instead of deleting it. A commit queued or in flight across the read therefore still restores its typing if that save then fails, and its rollback reverts to the read, keeping the outside write the read brought. The send is unchanged: still exactly the snapshot's typed fields.
+  - **A hydrate without `keepDraft`** wipes the draft and deletes the snapshot. That is the re-import read, and the library-entry fallback, which runs only while `saved` holds nothing for the book.
 - **Does the outbox just persist per book?** Yes. It is keyed per (book, slice) and never cleared by navigation, only by an answer, a full read, or a delete.
 
 #### C8 — Book-meta rollback and drafts: what is now natural, what needs code
@@ -519,7 +525,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 | P6-1: a 4xx after leaving reverts `saved` without restoring the draft | **Needs code** (one argument): the 4xx rollback passes `restoreDraft = bookOpen`. Tests (g), (h) stay. |
 | #3782: a draft is never restored into another book | **Needs code**, unchanged: the give-up rollback runs only when the book is open, and a 4xx rollback restores the draft only when open. |
 | #3782: opening a different book clears the draft | **Unchanged code** (`lastOpenBookId` block). |
-| #2230 / #3754: a full re-read of the open book keeps the draft (PB, review pass 10) | **Needs code:** `keepDraft` on the hydrate, passed by Layout for a same-book re-read (C7). |
+| #2230 / #3754: a full read of the open book keeps the draft and the pending commit snapshot (PB, review pass 10; P11-2 and the first-read decision, review pass 11) | **Needs code:** `keepDraft` on the hydrate, passed by Layout unless the book was last read from a different manuscript (P11-1); the hydrate rebases the snapshot (C7). |
 | a304ae55: a rolled-back save keeps the carried earlier edit | **Natural:** a rollback removes only the entries its handler owns. |
 | 6c002345: combined queued edits | **Natural** (C1). |
 | f8871b1a: kept and re-sent after leaving | **Natural** (C7). |
@@ -619,7 +625,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **C-I7.** A give-up rolls back only while the book is open; everything else stays as kept.
 - **C-I8.** A kept save is a key's idle outbox. A timer-fired send or a flush of the book sends it first; a delete removes it, and a full read removes it except based `state` entries (P2). A `commitDraft` sends only the typed fields (the keys of `lastCommitted.draft`, less any `refused` by a stale 409). A flight's settle never starts a flight.
 - **C-I9.** The middleware holds none of `pending`, `toastPending`, `rollbackFields`, `generation`, `kept`, `carriedKept`, `sequences`, `mergeSaves`, `sendBase`, `resendRetained` or `leaveBehind`. The export names are unchanged, but `dropRetainedSaves` gained an `onFullRead` parameter (P2), which Layout's full hydrate passes.
-- **C-I10.** A full read of the open book whose details Layout already hydrated keeps `bookMeta.draft` and refreshes `saved`; the first full read after opening another book, and the library-entry fallback hydrate, wipe the draft. Every hydrate clears `lastCommitted[bookId]` (PB, review pass 10).
+- **C-I10.** Every full read of the open book, the first after opening it included, refreshes `saved`, keeps `bookMeta.draft`, and rebases `lastCommitted[bookId].saved` onto the read. The exception is a book last read from a different manuscript (a re-import under the same id): that read wipes the draft and deletes the snapshot, as does the library-entry fallback hydrate. A switch to a different book clears the draft in the middleware. (PB, review pass 10; P11-1, P11-2 and the first-read decision, review pass 11.)
 
 ### Test plan (C)
 
@@ -714,7 +720,7 @@ All of them use `src/test/book-state-disk.ts`, which must first be brought close
 | False refusal: overtaken blind spot | Fixed by `fields` (C9) | "a stale refusal of a field the newer send did not carry" |
 | False refusal: lost 200 | Same value: fixed (no-op). Newer value plus a second failure: residual (OD-C4) | Documented in C11 |
 | P6-6 doc caveat false | Fixed in this plan; release-notes-next :300 and the PR body in T4 | — |
-| Catalogue chores (R1, R3 shapes) | T4 adds entries 46 and 47 to `reviewer-brief.md` | — |
+| Catalogue chores (R1, R3 shapes) | T4 adds entries 48 and 49 to `reviewer-brief.md` | — |
 
 ### Test map (existing PR tests, `persistence-middleware.test.ts` unless named)
 
@@ -800,7 +806,7 @@ A Premium-tier `spec-checker` ran the `assumption-checker` skill on the first dr
    - `docs/release-notes-next.md`: rewrite the #3421 entry (:297) around the outbox, and fix :300's false lock caveat.
    - `RELEASE_NOTES.md`: check the user line still reads true.
    - This plan's Ship notes ("What was built → Client").
-   - `reviewer-brief.md` entries 46 (R1: a base refreshed from a response that covers more than the write it acknowledges) and 47 (R3: merging a replay into a live send changes whether the live fields are checked).
+   - `reviewer-brief.md` entries 48 (R1: a base refreshed from a response that covers more than the write it acknowledges) and 49 (R3: merging a replay into a live send changes whether the live fields are checked).
    - The PR #3775 body: the deleted-test map, and a "Superseded in pass 7" note.
 
 **Entry point:** T1, the 409 body in `server/src/routes/book-state.ts` (~:1500), and its server test.
@@ -889,7 +895,7 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
   - **Now:** a `bookMeta/commitDraft` sends only the fields typed since the last accepted save (the keys of `lastCommitted[bookId].draft`), not all eight `saved` fields. `markNeedsFullRead`'s `refused` pruning stays: it keeps a stale-refused field out of that set. This closes P9-1 (the release rebuilt held entries on the read's `saved`), P9-2 (a second mark while the read was in flight dropped held commits) and P9-3 (the unbounded hold replayed a live edit unbased after the user left and returned) by construction.
   - **Tests:** new P9-1, P9-2 and P9-3 pins, red at d80157b2; tests that asserted the eight-field send now assert the typed fields.
 - **Size, honestly:** `persistence-middleware.ts` is **803 lines, 33 of them over 100 characters**, down from 865. It is 3 lines over the plan's 800 ceiling, and was not compressed to meet it.
-- **Fuzz:** the fix agent's re-implementation of pass 9's model-based fuzz of the P1 window, oracles O1 to O4, gives 0 on each over 3,000 runs against this engine. Its O4 is not pass 9's: it fires 136 times on f2a41423 and 135 on d80157b2, where pass 9's fired 0 and 5. Review pass 10 ran its own fuzz as well and confirmed the zero at head. *Corrected 2026-10-28 (pass-10 C2): this bullet first called it the reviewer's fuzz.*
+- **Fuzz:** the fix agent's re-implementation of pass 9's model-based fuzz of the P1 window, oracles O1 to O4, gives 0 on each over 3,000 runs against this engine. Its O4 is not pass 9's: it fires 136 times on f2a41423 and 135 on d80157b2, where pass 9's fired 0 and 5. Review pass 10 ran its own harness as well. It reported O4b 1 and O5 2 at head, all three by D6's design (seeds 71, 271 and 1588), so what it confirmed was the fix agent's harness's zero, not a zero of its own. *Corrected 2026-10-28 (pass-10 C2): this bullet first called it the reviewer's fuzz. Corrected 2026-10-29 (pass-11 C3): it said pass 10 "confirmed the zero at head".*
 - **Routed to #3827:** a field the user typed that already landed can be sent again by a later commit while it is still in `lastCommitted.draft`. Whether to prune `lastCommitted` per field is the open question on #3827; it is not changed here.
 - **Corrections to earlier text (pass-9 C1):** C-I9 said the exports are unchanged, but `dropRetainedSaves` gained `onFullRead`; and "Layout retries the read until it lands" holds only while the book stays open. Both are fixed above. The two code comments that called P2's kept entry a "book-details field" (its case is `castConfirmed`) were already reworded in ae6bb325.
 
@@ -897,12 +903,46 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
 
 - **PB, 4698f107:** owner decision on #3784 (2026-10-28): a full re-read of the book the user is editing keeps the details draft and refreshes only `saved` (C7, C8, C-I10). Before, any mark on the open book triggered a full read whose hydrate set `draft = null`, so uncommitted typing was lost after a stale 409, and a draft a rollback had just restored was wiped by the re-read the 409 asked for (#2230, #3754).
   - **`lastCommitted`** is still cleared by every hydrate. Its `saved` baseline predates the read, so keeping it would let a rollback revert the outside write. The kept draft is either unsaved typing or a rollback's restore, which already excludes `refused` fields, so the next commit's typed-fields set is its keys and the prune still composes.
-  - **#3782 holds:** the draft is cleared on a switch to another book by the middleware, as before, and the first full read after opening another book still wipes it.
+  - **#3782 holds:** the draft is cleared on a switch to another book by the middleware, as before, and the first full read after opening another book still wipes it. *(Superseded by review pass 11: that first read now keeps the draft. See "Review pass 11 fixes".)*
   - **D7 holds:** the read still writes every field into `saved`, so the outside write shows on each field the user is not editing; a field in the draft shows the user's typing (`selectEffectiveMeta`), and the outside value is in `saved` underneath it.
   - **Tests:** Layout PB-1 (uncommitted notes, and the outside title in `saved`), PB-2 (a rollback-restored draft), PB-3 (a field in the draft and changed outside) and PB-5 (typing kept across a library trip survives a Library Edit's read) are red without the fix; PB-4 (opening another book clears the draft) and a slice test without `keepDraft` are controls. Two slice tests pin `keepDraft`.
-  - **Mutants:** 17 over a 347-test baseline, files restored byte-for-byte. M8 (prune every typed field on any stale refusal), which survived all 340 tests at aa2366ca because the restored draft was wiped, is now red (PB-2). Ignoring `keepDraft` in the slice: 5 red; Layout always `false`: 4; the ref never set: 4; the ref reset on a book change: 1 (PB-5). Layout always `true` survives: the middleware already clears the draft on a switch to another book, so the ref is defence in depth. M10 survives as before (equivalent). M1–M7, M9, M11 and M12 stay red.
+  - **Mutants:** 17 over a 347-test baseline, files restored byte-for-byte. M8 (prune every typed field on any stale refusal), which survived all 340 tests at aa2366ca because the restored draft was wiped, is now red (PB-2). Ignoring `keepDraft` in the slice: 5 red; Layout always `false`: 4; the ref never set: 4; the ref reset on a book change: 1 (PB-5). Layout always `true` survived. *Corrected 2026-10-29 (pass-11 C1): this bullet called the ref defence in depth because of that, which was false. Always `true` kept typing made before a reopened book's first full read, which head wiped, and no test covered that path. Under pass 11's rule, keeping it is the intended behaviour, and the always-`true` mutant is now caught by the re-import pins (P11-1).* M10 survives as before (equivalent). M1–M7, M9, M11 and M12 stay red.
 - **Text (pass-10 C1–C4):** the Layout P1 test's comment and title (it no longer waits for the read); the fuzz attribution in "Review pass 9 fixes"; the `manuscript-edits.json` writer list in "Review pass 6 fixes"; and the PR body.
 - **Catalogue:** entry 54 in the reviewer brief (a resync read wipes client-only state it cannot restore).
+
+### Review pass 11 fixes (PR #3775, all #3784)
+
+These are the owner decisions on #3784 (2026-10-29), from review pass 11 (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461).
+
+- **P11-1, e106d9ca:** a book deleted and re-imported under the same id no longer inherits the old book's details draft.
+  - The same-book check keys on the manuscript id as well as the book id: a book id is a slug, and every import mints a new `manuscriptId`.
+  - Re-parse and replace keep the manuscript id, so they still count as the same book.
+  - **Tests:** Layout P11-1 (pass 11's R2: delete, re-import under the same id, open; the draft is null and Save writes none of the old text), red at 95e96a62. Controls: a re-parse on the client, and server pins in `book-state.reparse` and `book-state.replace-manuscript` that both keep `manuscriptId`.
+- **P11-2, 96315e01:** a same-book read keeps a pending commit's `lastCommitted` snapshot and rebases its `saved` onto the read, instead of deleting it.
+  - A failed save after the read still restores the typing. Its rollback reverts to the read's values, keeping the outside write.
+  - The send is still exactly the snapshot's typed fields.
+  - **Tests:** Layout P11-2 (pass 11's R5, with an outside rename brought by the read: the PUT carries only `{ notes }`, the draft is restored, and `saved` keeps the read's title), red at 95e96a62. The slice test that pinned the deletion ("…and clears the stale snapshot") is rewritten to pin the rebase and its rollback.
+- **First read keeps the typing, 34a432cf:** any full read of the open book keeps a draft that belongs to it, the first read after opening included. This replaces "the first hydrate behaves as today".
+  - Layout's `metaReadFor` becomes a per-book map of the manuscript each book was last read from. A read keeps the draft unless that book was last read from a different manuscript.
+  - **The ref stays.** Nothing else records which manuscript `saved` was read from: the manuscript slice's id can already name an upload in progress.
+  - It is per book rather than "the last read", so a visit whose read never landed cannot hide a re-import made in another tab.
+  - **Tests:** two P11-3 pins, both red at 96315e01: pass 11's R1 (typing between reopening a book from another book and its first full read), and typing on the library-seeded `saved` before a book's first full read of the session. A further P11-1 pin covers the failed-read visit.
+- **Mutants:** 8, over a green 356-test baseline, each file restored byte-for-byte (sha checked). Every one is red:
+
+  | Mutant | Red |
+  |---|---|
+  | always `keepDraft: true` (pass 11's survivor) | 2 (both P11-1 re-import pins) |
+  | keyed on the book only | 3 (both P11-1 re-import pins, and the first-read-of-the-session P11-3) |
+  | the manuscript ignored | 2 |
+  | the map reduced to the last read | 1 (the failed-read P11-1) |
+  | a book's first read of the session wipes | 1 (P11-3) |
+  | the snapshot deleted, as before | 2 (P11-2 and the slice rebase test) |
+  | the snapshot kept but not rebased | 2 |
+  | the snapshot kept on a re-import | 1 (the slice's "clears the stale snapshot for the refreshed book") |
+
+- **Fuzz:** pass 11's harness, with Layout's new keep rule and its D3 oracle (a rollback that finds no snapshot) restored, over 3,000 runs. At head: D1, D2 and D3 are 0, and O4b 1 and O5 2 are D6's by-design hits on seeds 71, 271 and 1588. The positive controls fire: `keepDraft` off gives D1 2,094; no `refused` prune (M2) gives D2 13; the snapshot deleted as before gives D3 21, pass 11's head figure on the same seeds.
+- **Text (pass-11 C1–C3):** the "defence in depth" note in "Review pass 10 fixes" and the PR body; the catalogue cites in the finding map and the task breakdown (now 48 and 49, after the renumbering); and the pass-10 fuzz claim in "Review pass 9 fixes".
+- **Catalogue (C4):** entry 54 is widened to the pending commit snapshot. Entry 55 is added: an identity check keyed on an id the system reuses after a delete and re-create.
 
 ### Not owed
 
