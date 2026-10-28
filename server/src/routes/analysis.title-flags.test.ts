@@ -419,6 +419,43 @@ describe.each(['main', 'subset'] as const)(
     expect(merge.body.code).toBe('hints_out_of_sync');
   }, 60_000);
 
+  it('refuses a "Chapter 1" heading moved onto the parser-made position, on analysis, merge and refresh-titles', async () => {
+    // Parse [made up, Chapter 1, The Storm, The Calm]; a pre-#3703 reorder put the heading at position 0.
+    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# The Storm\n\n${LINE}\n\n# The Calm\n\n${LINE}\n`;
+    const { manuscriptId, bookId, bookDir } = await seedBook(`epigraph-swap-${kind}`, ms, [
+      { title: 'Chapter 1' },
+      { title: 'Chapter 2', titleSynthesized: true },
+      { title: 'The Storm' },
+      { title: 'The Calm' },
+    ]);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    const app = await restructureApp();
+    const merge = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [3, 4] });
+    expect(merge.status).toBe(409);
+    const refresh = await request(app).post(`/api/books/${bookId}/chapters/refresh-titles`).send({});
+    expect(refresh.status).toBe(409);
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+  }, 60_000);
+
+  it('does not refuse an unflagged (pre-#3628) fresh import with an untitled lead section before "Chapter 1"', async () => {
+    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;
+    const { manuscriptId } = await seedBook(`lead-legacy-${kind}`, ms, [
+      { title: 'Chapter 1' },
+      { title: 'Chapter 1' },
+      { title: 'Chapter 2' },
+    ]);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
   it('does not refuse a fresh import whose untitled lead section precedes a bare "Chapter 1"', async () => {
     // Parse and state are both ["Chapter 1" (made up), "Chapter 1", "Chapter 2"].
     const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;

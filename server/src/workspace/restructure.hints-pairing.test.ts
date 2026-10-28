@@ -129,11 +129,11 @@ describe('title drift is not a mispairing (#3829)', () => {
   });
 });
 
-describe('an app-made title at a null position is not identity evidence (#3829)', () => {
+describe('an app-made title at a null position (#3829)', () => {
   /* An untitled lead section followed by a bare "Chapter 1" heading: the parser's fallback
-     title for position 0 ("Chapter 1") repeats the real heading at position 1. */
+     title for position 0 ("Chapter 1") repeats the real heading at position 1. A fresh import
+     has every title at home, so it pairs; a heading that left home for position 0 does not. */
   const parse = [null, 'Chapter 1', 'Chapter 2'];
-  const madeUp = ['Chapter 1', null, null];
 
   it('pairs a synthesized state title that repeats a real heading elsewhere', () => {
     const s = stateOf([
@@ -141,24 +141,41 @@ describe('an app-made title at a null position is not identity evidence (#3829)'
       { id: 2, title: 'Chapter 1' },
       { id: 3, title: 'Chapter 2' },
     ]);
-    expect(parseTitlesPairWithState(s, parse, madeUp)).toBe(true);
+    expect(parseTitlesPairWithState(s, parse)).toBe(true);
   });
 
-  it('pairs the pre-#3628 unflagged variant when the title is the parser fallback for that position', () => {
+  it('pairs the pre-#3628 unflagged variant', () => {
     const s = stateOf([
       { id: 1, title: 'Chapter 1' },
       { id: 2, title: 'Chapter 1' },
       { id: 3, title: 'Chapter 2' },
     ]);
-    expect(parseTitlesPairWithState(s, parse, madeUp)).toBe(true);
+    expect(parseTitlesPairWithState(s, parse)).toBe(true);
   });
 
-  it('still mispairs an unflagged heading that moved onto the null position', () => {
+  it('mispairs a "Chapter 1" heading moved onto the null position, flagged or not', () => {
+    for (const flag of [{ titleSynthesized: true }, {}]) {
+      const s = stateOf([
+        { id: 1, title: 'Chapter 1' },
+        { id: 2, title: 'Chapter 2', ...flag },
+        { id: 3, title: 'The Storm' },
+      ]);
+      expect(parseTitlesPairWithState(s, [null, 'Chapter 1', 'The Storm'])).toBe(false);
+    }
+  });
+});
+
+describe('drift into a repeated heading (#3829)', () => {
+  /* Imported before the parser started merging a non-ASCII subtitle: state is
+     [Chapter 1, Chapter 2, Chapter 1], today's parse [Chapter 1, Chapter 2, Chapter 1 - Elan].
+     Position 2 matches position 0's heading, but that heading is still at home. */
+  it('pairs', () => {
     const s = stateOf([
-      { id: 1, title: 'Chapter Two' },
+      { id: 1, title: 'Chapter 1' },
       { id: 2, title: 'Chapter 2' },
+      { id: 3, title: 'Chapter 1' },
     ]);
-    expect(parseTitlesPairWithState(s, [null, 'Chapter Two'], ['Chapter 1', null])).toBe(false);
+    expect(parseTitlesPairWithState(s, ['Chapter 1', 'Chapter 2', 'Chapter 1 \u2014 \u00c9lan'])).toBe(true);
   });
 });
 
