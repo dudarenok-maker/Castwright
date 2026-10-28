@@ -6,6 +6,7 @@
    unreachable / HTTP / quota errors. */
 import type { StageCall } from '../types.js';
 import type { TransportKind } from '../errors.js';
+import type { ReasoningLevel } from '../reasoning-level.js';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -71,6 +72,12 @@ export interface TransportRequest {
   temperature: number | undefined; // W4: undefined only on a free-text request → the transport omits it
   /** undefined = the transport's pre-wave-2 default (Ollama resolveNumPredict, Gemini GEMINI_FALLBACK_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
+  /** #3084 wave 5 — the resolved reasoning level. undefined = the pre-W5 wire
+      (Ollama think:false; Gemini and OpenAI-compatible send no reasoning field). */
+  reasoning?: ReasoningLevel;
+  /** #3084 wave 5 — the engine/endpoint custom payload, merged last by the
+      transport (PR 5b). undefined = no payload. */
+  extraParams?: Record<string, unknown>;
   estimatedInputTokens: number;
   signal?: AbortSignal;
   /** W4: set only by StageRunner.runFreeText — a one-shot, unstructured, single-attempt call. */

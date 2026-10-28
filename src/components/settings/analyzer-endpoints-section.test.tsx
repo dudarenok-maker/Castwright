@@ -347,3 +347,61 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     );
   });
 });
+
+describe('endpoint form — reasoning fields', () => {
+  it('offers only the selected control style levels and resets an orphaned level', async () => {
+    renderSection();
+    fireEvent.click(screen.getByTestId('add-endpoint'));
+    const style = screen.getByTestId('endpoint-reasoning-style');
+    fireEvent.change(style, { target: { value: 'enable_thinking' } });
+    const reasoning = screen.getByTestId('endpoint-reasoning') as HTMLSelectElement;
+    expect([...reasoning.options].map((o) => o.value)).toEqual(['model-default', 'off', 'on']);
+    fireEvent.change(reasoning, { target: { value: 'on' } });
+    fireEvent.change(style, { target: { value: 'reasoning_effort' } });
+    expect((screen.getByTestId('endpoint-reasoning') as HTMLSelectElement).value).toBe('model-default');
+    expect([...(screen.getByTestId('endpoint-reasoning') as HTMLSelectElement).options].map((o) => o.value)).toEqual(['model-default', 'none', 'minimal', 'low', 'medium', 'high']);
+    expect(screen.getByText(/A server may accept a level and still ignore it/)).toBeInTheDocument();
+    /* Back to the first style: an orphaned `on` would resurface here (a select with no matching option only displays its first one). */
+    fireEvent.change(style, { target: { value: 'enable_thinking' } });
+    expect((screen.getByTestId('endpoint-reasoning') as HTMLSelectElement).value).toBe('model-default');
+  });
+
+  it('a stored level the control style does not offer is shown and can be changed to Model default', async () => {
+    renderSection({ endpoints: [{ ...LAB, reasoningStyle: 'enable_thinking', reasoning: 'high' }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    const reasoning = screen.getByTestId('endpoint-reasoning') as HTMLSelectElement;
+    expect(reasoning.value).toBe('high');
+    expect([...reasoning.options].map((o) => o.value)).toEqual(['model-default', 'off', 'on', 'high']);
+    fireEvent.change(reasoning, { target: { value: 'model-default' } });
+    expect(reasoning.value).toBe('model-default');
+  });
+
+  it('a reasoning-overflow fix deep link focuses the endpoint reasoning field (#3084 wave 5a)', async () => {
+    const store = renderSection({ endpoints: [LAB] });
+    store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'reasoning' }));
+    expect(await screen.findByTestId('endpoint-editor')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('endpoint-reasoning')).toHaveFocus());
+  });
+
+  it('a refusal at path reasoning shows under the Reasoning field, not the general error', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockRejectedValue(
+      new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', [{ path: ['reasoning'], message: 'Level "high" is not offered for this control style.' }]),
+    );
+    renderSection({ endpoints: [LAB] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    expect(await screen.findByText('Level "high" is not offered for this control style.')).toBeInTheDocument();
+    expect(screen.queryByTestId('endpoint-save-error')?.textContent ?? '').not.toContain('not offered');
+  });
+});
+
+describe('endpoint form — touch targets', () => {
+  it.each(['endpoint-name', 'endpoint-context-tokens', 'endpoint-reasoning-style', 'endpoint-reasoning'])(
+    '%s meets the 44px touch target on touch devices (CLAUDE.md mobile protocol)',
+    (testId) => {
+      renderSection();
+      fireEvent.click(screen.getByTestId('add-endpoint'));
+      expect(screen.getByTestId(testId)).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+    },
+  );
+});

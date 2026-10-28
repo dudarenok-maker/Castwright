@@ -41,6 +41,12 @@ describe('describeTestOutcome (#3084 W3c)', () => {
     expect(describeTestOutcome(entry({ mode: 'json', label: 'json', outcome: 'accepted' }))).toBe('json · tested 2026-10-09');
   });
 
+  it("prints the verdict's own Test date, not the record's newest one (5.4-D2) — reading `record.testedAt` again reddens this", () => {
+    const e = entry({ outcome: 'enforced', outcomeTestedAt: '2026-09-10T00:00:00.000Z' });
+    e.capability = { ...e.capability!, testedAt: '2026-09-12T00:00:00.000Z' };
+    expect(describeTestOutcome(e)).toBe('schema · tested 2026-09-10');
+  });
+
   it('does not claim a mode was tested when the record has no outcome for it — reverting to `${label} · tested` reddens this', () => {
     expect(describeTestOutcome(entry({ mode: 'json', label: 'json' }))).toBe('json · not tested in this mode · last test 2026-10-09');
   });

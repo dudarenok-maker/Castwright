@@ -11,15 +11,25 @@ import {
   AnalyzerCapabilityRejectedError,
   AnalyzerEndpointMissingError,
   AnalyzerHttpError,
-  type TransportKind,
+  AnalyzerReasoningUnavailableError,
 } from './errors.js';
 import { estimateInputTokens } from './runner/prompt.js';
 import { configValue } from '../config/resolver.js';
 /* #3192 moved the Ollama URL resolver into this leaf (not user-settings.ts). */
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
-import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
-import { parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { entryForModelTag } from './ollama-tag.js';
+import { sameServer } from './capability-record-merge.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
+import {
+  defaultReasoningLevel,
+  offeredReasoningLevels,
+  resolveReasoningSetting,
+  testableReasoningLevels,
+  type ReasoningLevel,
+  type ReasoningSelection,
+} from './reasoning.js';
 import {
   emotionAnnotationSchema,
   escalationSchema,
@@ -41,15 +51,19 @@ export interface ModelCapabilityRecord {
   control: { ok: true } | { ok: false; error: string };
   /** mode → reasoning level the requests actually sent → outcome (P7). */
   structuredOutput: Partial<Record<StructuredOutputMode, Record<string, ProbeOutcome>>>;
-  /** W5 narrows the key to ReasoningLevel; W3 records `{}`. Required-keyed, not
-      `Partial`: the persisted `modelCapabilityRecordSchema` (user-settings.ts) infers
-      `z.record`, so a record typed by that schema and this interface must agree
-      (Task 3c.3 Step 4 typecheck). A key is only ever present with a verdict. */
+  /** Keys are ReasoningLevel values but stay `string` (as stored values are, N10), so this stays
+      mutually assignable with the persisted schema. Required-keyed, not `Partial`: the persisted
+      `modelCapabilityRecordSchema` (user-settings.ts) infers `z.record`, so a record typed by that
+      schema and this interface must agree (Task 3c.3 Step 4 typecheck). A key is only ever present
+      with a verdict. */
   reasoning: Record<string, 'accepted' | 'rejected'>;
   /** 3c (A3): Ollama only — the installed model's `/api/tags` digest when the Test ran. A record
       whose digest differs from the model installed now is discarded, like a moved server URL,
       so `ollama pull` of a fixed build cannot leave a stale `rejected` refusing every run. */
   digest?: string;
+  /** #3084 wave 5 (A2) — each verdict's own Test date, keyed like the verdicts; a verdict with no
+      entry takes `testedAt`. Mirrors modelCapabilityRecordSchema exactly (both directions, strict). */
+  verdictTestedAt?: { reasoning?: Record<string, string>; structuredOutput?: Record<string, Record<string, string>> };
 }
 
 export interface ModelTestDeps {
@@ -64,6 +78,10 @@ export interface ModelTestDeps {
   /** P7: the model's context size and resolved Auto output cap (`null` = no cap, the context
       governs). Read once, after `transport.prepare()` has warmed served limits (P15). */
   probeLimits: () => { contextTokens: number; maxOutputTokens: number | null };
+  /** #3084 wave 5 — engine, bare model, endpoint and Test record for the id (reasoning.ts shape). */
+  reasoningSelection: (modelId: string) => ReasoningSelection;
+  /** #3084 wave 5 — the level the next run of this model would send (resolveReasoningSetting). */
+  configuredReasoning: (modelId: string) => ReasoningLevel;
   /** The client's abort signal: the route aborts it when the request closes. */
   signal?: AbortSignal;
   now?: () => Date;
@@ -72,14 +90,6 @@ export interface ModelTestDeps {
 }
 
 export const ALL_STRUCTURED_OUTPUT_MODES: readonly StructuredOutputMode[] = ['schema', 'json', 'off'];
-
-/** The reasoning level every W3 request is sent at, and so the key a Test record is filed
-    under (P7). Ollama sends `think: false` on every analyzer call (`ollama.ts:652`), so
-    `off`; Gemini and endpoints send no reasoning field, so `model-default`. W5 replaces this
-    with reasoning.ts `defaultReasoningLevel`, which returns the same values. */
-export function defaultReasoningKey(kind: TransportKind): string {
-  return kind === 'ollama' ? 'off' : 'model-default';
-}
 
 export const STAGE_GRAMMAR_SCHEMAS: ReadonlyArray<{ name: string; schema: z.ZodType<unknown> }> = [
   { name: 'stage1GrammarSchema', schema: stage1GrammarSchema },
@@ -163,8 +173,22 @@ export function classifyMarkerProbe(text: string, marker: string): 'enforced' | 
   return 'ignored';
 }
 
-function sameServer(a: string, b: string): boolean {
-  return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+export { capabilityRecordKey, sameCapabilityRecordModel } from './ollama-tag.js';
+
+/** A2 — the date of the Test that recorded one verdict: its own `verdictTestedAt` entry, else the
+    record's `testedAt` (a record written before per-verdict dates existed). The pre-run refusal cites
+    this, never a newer date a later Test of another verdict brought in. */
+export function verdictTestedAtFor(
+  record: ModelCapabilityRecord,
+  cell:
+    | { setting: 'reasoning'; reasoning: string }
+    | { setting: 'structuredOutput'; structuredOutput: StructuredOutputMode; reasoning: string },
+): string {
+  const own =
+    cell.setting === 'reasoning'
+      ? record.verdictTestedAt?.reasoning?.[cell.reasoning]
+      : record.verdictTestedAt?.structuredOutput?.[cell.structuredOutput]?.[cell.reasoning];
+  return own ?? record.testedAt;
 }
 
 export function capabilityRecordFor(
@@ -174,7 +198,11 @@ export function capabilityRecordFor(
   /** A3: the digest of the model installed now (Ollama only). Unknown → the record is kept. */
   currentDigest?: string,
 ): ModelCapabilityRecord | undefined {
-  const stored = settings.analyzerCapabilitiesByModel[modelId];
+  /* N7 — an Ollama record saved under either tag form answers for the other; an endpoint id is exact. */
+  const stored =
+    inferEngineFromModelId(modelId) === 'openai'
+      ? settings.analyzerCapabilitiesByModel[modelId]
+      : entryForModelTag(settings.analyzerCapabilitiesByModel, modelId);
   if (!stored || !sameServer(stored.serverUrl, currentServerUrl)) return undefined;
   /* A3: a record written for another build of the model says nothing about this one. Fail-open on
      an unknown current digest: the check never invents a discard it cannot see a reason for. */
@@ -189,11 +217,16 @@ export function assertConfiguredCapabilitiesAllowed(
 ): void {
   if (!record || !record.control.ok) return;
   if (record.reasoning[configured.reasoning] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', configured.reasoning, record.testedAt);
+    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', configured.reasoning, verdictTestedAtFor(record, { setting: 'reasoning', reasoning: configured.reasoning }));
   }
   /* P7: only a rejection recorded at the level this run sends refuses it. */
   if (record.structuredOutput[configured.structuredOutput]?.[configured.reasoning] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
+    throw new AnalyzerCapabilityRejectedError(
+      modelId,
+      'structuredOutput',
+      configured.structuredOutput,
+      verdictTestedAtFor(record, { setting: 'structuredOutput', structuredOutput: configured.structuredOutput, reasoning: configured.reasoning }),
+    );
   }
 }
 
@@ -204,6 +237,9 @@ export function assertAnalyzerTargetUsable(
   target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine },
   settings: UserSettings,
   digest?: string,
+  /** P17/N10 — 'mid-run' when a fallback target's first call runs this (index.ts checkedTarget):
+      the run has started, so Task 5.5's copy must not say it was not started. */
+  when: 'before-start' | 'mid-run' = 'before-start',
 ): void {
   if (target.engine === 'openai') {
     const parsed = parseEndpointModelId(target.modelId);
@@ -212,19 +248,19 @@ export function assertAnalyzerTargetUsable(
     resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
-      { structuredOutput: endpoint.structuredOutput, reasoning: defaultReasoningKey('openai') },
+      { structuredOutput: endpoint.structuredOutput, reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
       target.modelId,
     );
   } else if (target.engine === 'gemini') {
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, 'gemini'),
-      { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: defaultReasoningKey('gemini') },
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
       target.modelId,
     );
   } else {
     assertConfiguredCapabilitiesAllowed(
       capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digest),
-      { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: defaultReasoningKey('ollama') },
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, digest, when) },
       target.modelId,
     );
   }
@@ -232,12 +268,15 @@ export function assertAnalyzerTargetUsable(
 
 export function plannedTestRequestCount(
   input: { modelId: string; scope: 'configured' | 'all' },
-  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes'>,
+  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes' | 'reasoningSelection' | 'configuredReasoning'>,
 ): number {
-  /* P7 ladder: the control (`off` mode) always; wave 5 adds its level step here; then one
-     mode step per `schema` / `json` mode. An `off` mode step is the control itself. */
+  const sel = deps.reasoningSelection(input.modelId);
+  const levels = reasoningLevelsToProbe(input.scope, sel, deps.configuredReasoning(input.modelId));
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
-  return 1 + modes.filter((mode) => mode !== 'off').length;
+  /* P7 ladder: the control; the level step's requests (every level other than the control's); one
+     mode step per `schema` / `json` mode. A rejected configured level skips the mode steps, so this
+     is the upper bound the confirmation shows. */
+  return 1 + plannedReasoningProbeCount(levels, defaultReasoningLevel(sel.engine)) + modes.filter((mode) => mode !== 'off').length;
 }
 
 /** The control request failed, so nothing could be attributed. Nothing is saved; an
@@ -261,6 +300,19 @@ export class ModelTestInconclusiveError extends Error {
   ) {
     super(`The ${step} check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`);
     this.name = 'ModelTestInconclusiveError';
+  }
+}
+
+/** P7 — an inconclusive LEVEL step. It runs in `off` mode, but its copy names the level, never "The off check". */
+export class ReasoningLevelTestInconclusiveError extends ModelTestInconclusiveError {
+  constructor(
+    modelId: string,
+    readonly level: ReasoningLevel,
+    detail: string,
+  ) {
+    super(modelId, 'off', detail);
+    this.message = `The reasoning level "${level}" check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`;
+    this.name = 'ReasoningLevelTestInconclusiveError';
   }
 }
 
@@ -293,7 +345,9 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new AnalysisAbortedError('Model test cancelled: the client left.');
 }
 
-function isHttp400(err: unknown): boolean {
+/** A probe is `rejected` only on a 400 (AnalyzerHttpError from Ollama/OpenAI, or
+    the Gemini SDK's ApiError status 400). */
+export function isProbeRejected(err: unknown): boolean {
   if (err instanceof AnalyzerHttpError) return err.httpStatus === 400;
   return (err as { status?: unknown } | null)?.status === 400; // @google/genai ApiError
 }
@@ -304,7 +358,7 @@ function providerText(err: unknown): string {
   return err instanceof AnalyzerHttpError ? `${message} ${err.bodyExcerpt}` : message;
 }
 
-function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number): Promise<TransportResult> {
+function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number, reasoning: ReasoningLevel): Promise<TransportResult> {
   throwIfAborted(deps.signal);
   return deps.transport.send({
     system: PROBE_SYSTEM,
@@ -314,6 +368,7 @@ function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: num
     maxOutputTokens,
     estimatedInputTokens: estimateProbeInput(format),
     signal: deps.signal,
+    reasoning,
     call: {},
   });
 }
@@ -330,15 +385,16 @@ async function modeStep(
   format: ProbeFormat,
   marker: string,
   cap: number,
+  level: ReasoningLevel,
   deps: ModelTestDeps,
   redact: (text: string) => string,
 ): Promise<ProbeOutcome> {
   let result: TransportResult;
   try {
-    result = await sendStep(deps, format, cap);
+    result = await sendStep(deps, format, cap, level);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
-    if (isHttp400(err)) {
+    if (isProbeRejected(err)) {
       if (!namesContextOrTokenLimit(providerText(err))) return 'rejected';
       throw new ModelTestInconclusiveError(modelId, mode, 'the provider refused the request size, not the mode');
     }
@@ -349,14 +405,74 @@ async function modeStep(
   return mode === 'schema' ? classifyMarkerProbe(result.text, marker) : 'accepted';
 }
 
+export function reasoningLevelsToProbe(
+  scope: 'configured' | 'all',
+  sel: ReasoningSelection,
+  configured: ReasoningLevel,
+): ReasoningLevel[] {
+  return scope === 'all' ? testableReasoningLevels(sel) : [configured];
+}
+
+export function plannedReasoningProbeCount(levels: readonly ReasoningLevel[], controlLevel: ReasoningLevel): number {
+  return levels.filter((l) => l !== controlLevel).length;
+}
+
+/** The level step (spec §2, P7): `send(level)` sends the control request with only `reasoning`
+    changed (runModelTest passes `sendStep(deps, { mode: 'off' }, cap, level)`). It proves
+    acceptance only, and classifies failures exactly as W3c's modeStep does. */
+export async function probeReasoningLevels(
+  levels: readonly ReasoningLevel[],
+  deps: {
+    modelId: string;
+    controlLevel: ReasoningLevel;
+    send: (level: ReasoningLevel) => Promise<TransportResult>;
+    redact?: (text: string) => string;
+  },
+): Promise<ModelCapabilityRecord['reasoning']> {
+  const redact = deps.redact ?? ((t: string) => t);
+  const out: ModelCapabilityRecord['reasoning'] = {};
+  for (const level of levels) {
+    if (level === deps.controlLevel) {
+      out[level] = 'accepted'; // the control request already ran at this level
+      continue;
+    }
+    try {
+      await deps.send(level);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      /* P20 — a GeminiContentBlockedError and an AnalyzerReasoningOverflowError are handled alike here,
+         as W3c's modeStep handles them: inconclusive, below. A transport returns `blocked` / `length` as a
+         finish (only the runner's mapFinish raises either error), and a Test is not a run to stop. */
+      if (isProbeRejected(err)) {
+        if (!namesContextOrTokenLimit(providerText(err))) {
+          out[level] = 'rejected';
+          continue;
+        }
+        /* P7: a 400 naming a context, token or length limit is about the request size, not the level. */
+        throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, 'the provider refused the request size, not the level');
+      }
+      /* P7: a 5xx after the transport's retries, a timeout or an unreachable server proves nothing about
+         the level. Inconclusive: nothing is recorded and the route answers 502. */
+      throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, redact(err instanceof Error ? err.message : String(err)).slice(0, 300));
+    }
+    /* P7: the provider accepted the request. Any finish counts, `length` and `blocked` included:
+       a thinking model spends the cap reasoning, which is the shape a level step expects. */
+    out[level] = 'accepted';
+  }
+  return out;
+}
+
 export async function runModelTest(
   input: { modelId: string; scope: 'configured' | 'all' },
   deps: ModelTestDeps,
 ): Promise<ModelCapabilityRecord> {
   const redact = deps.redact ?? ((t: string) => t);
   const testedAt = (deps.now ?? (() => new Date()))().toISOString();
-  /* P7: a record is keyed by the level its requests actually sent. */
-  const level = defaultReasoningKey(deps.transport.kind);
+  /* P7: the control runs at the engine's default level; the level step and the mode steps at the
+     configured level. Every record is keyed by the level its requests actually sent. */
+  const sel = deps.reasoningSelection(input.modelId);
+  const controlLevel = defaultReasoningLevel(sel.engine);
+  const configuredLevel = deps.configuredReasoning(input.modelId);
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
   const marker = (deps.markerValue ?? newMarkerValue)();
   const control: ProbeFormat = { mode: 'off' };
@@ -371,28 +487,138 @@ export async function runModelTest(
 
   /* Step 1 — control: `off` mode at the engine's default level. Any finish passes. */
   try {
-    await sendStep(deps, control, cap);
+    await sendStep(deps, control, cap, controlLevel);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
     throw new ModelTestControlFailedError(input.modelId, redact(err instanceof Error ? err.message : String(err)).slice(0, 500));
   }
 
-  /* Step 2 — WAVE 5 (Task 5a) INSERTS THE LEVEL STEP HERE: `off` mode at the configured
-     reasoning level, differing from the control only in that level. It records
-     `reasoning[configuredLevel]`, skips step 3 when that level is rejected, and changes
-     `level` below to the configured level. W3 sends no reasoning field, so the control's
-     level is the only level there is. */
+  /* Step 2 — the level step (P7): `off` mode, differing from the control only in `reasoning`. */
+  const reasoning = await probeReasoningLevels(reasoningLevelsToProbe(input.scope, sel, configuredLevel), {
+    modelId: input.modelId,
+    controlLevel,
+    redact,
+    send: (level) => sendStep(deps, control, cap, level),
+  });
 
-  /* Step 3 — one mode step per tested mode. An `off` step is the control, already sent. */
+  /* Step 3 — one mode step per tested mode, at the configured level. An `off` step is the level
+     step (or the control), already sent. A rejected configured level leaves nothing to attribute. */
   const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
-  for (const mode of modes) {
-    const format = stepFormats.get(mode);
-    structuredOutput[mode] = {
-      [level]: format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, deps, redact) : 'accepted',
-    };
+  if (reasoning[configuredLevel] !== 'rejected') {
+    for (const mode of modes) {
+      const format = stepFormats.get(mode);
+      structuredOutput[mode] = {
+        [configuredLevel]:
+          format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, configuredLevel, deps, redact) : 'accepted',
+      };
+    }
   }
   /* A3: stamp the installed build, so a later `ollama pull` discards this record rather than
      letting a stale verdict refuse runs. Best-effort: no digest, no stamp. */
   const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;
-  return { serverUrl: deps.serverUrl, testedAt, control: { ok: true }, structuredOutput, reasoning: {}, ...(digest ? { digest } : {}) };
+  /* A2: each verdict's own date, so a later merge can keep a verdict without claiming this Test measured it. */
+  const verdictTestedAt = {
+    reasoning: Object.fromEntries(Object.keys(reasoning).map((level) => [level, testedAt])),
+    structuredOutput: Object.fromEntries(
+      Object.entries(structuredOutput).map(([mode, byLevel]) => [mode, Object.fromEntries(Object.keys(byLevel ?? {}).map((level) => [level, testedAt]))]),
+    ),
+  };
+  return {
+    serverUrl: deps.serverUrl,
+    testedAt,
+    control: { ok: true },
+    structuredOutput,
+    reasoning,
+    ...(digest ? { digest } : {}),
+    verdictTestedAt,
+  };
+}
+
+/** Engine, bare model, saved endpoint and Test record for a model id. `engine` defaults to the id
+    inference; persona generation passes it, because a bare local tag (`llama2`) infers as Gemini.
+    `currentDigest` (A3) is the local engine's installed-model digest, threaded to `capabilityRecordFor`
+    exactly as W3c's own structured-output check already threads it, so the two checks discard the same
+    stale record instead of disagreeing about which one applies. Only `runAnalyzerPreflight` has a digest
+    to pass — it already resolved one per target before either check runs. Every other caller
+    (`modelTestDepsFor`, the catalog's `toEntry`, persona generation) omits it, which is `capabilityRecordFor`'s
+    own fail-open rule (kept when either digest is unknown), unchanged from 3c. Gemini and endpoints carry
+    no digest, so `currentDigest` is passed to `capabilityRecordFor` only when `engine === 'local'`. */
+export function reasoningSelectionFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningSelection & { endpoint?: AnalyzerEndpoint } {
+  if (engine !== 'openai') {
+    return {
+      engine,
+      model: modelId,
+      record: capabilityRecordFor(
+        settings,
+        modelId,
+        engine === 'local' ? getResolvedOllamaUrl() : 'gemini',
+        engine === 'local' ? currentDigest : undefined,
+      ),
+    };
+  }
+  const parsed = parseEndpointModelId(modelId);
+  const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+  return { engine, model: parsed?.model ?? modelId, endpoint, record: endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined };
+}
+
+/** The reasoning level the next run of this model would send. `currentDigest` passes through to
+    `reasoningSelectionFor` (A3). */
+export function configuredReasoningFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+  return resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+}
+
+/** P17 — the level the next run would send, refused when the current rules no longer offer it (a Gemini
+    table change, an Ollama named level without its accepted Test record, an endpoint level saved under
+    another control style, or a stored value this version does not know, N10). Returns the level, so a
+    caller can hand it straight to `assertConfiguredCapabilitiesAllowed`. `when` is 'mid-run' for a
+    fallback target's first call. */
+export function assertConfiguredReasoningOffered(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+  when: 'before-start' | 'mid-run' = 'before-start',
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+  const level = resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+  /* N10: an unknown stored value (e.g. `xhigh`) is never offered, so it is refused here too. */
+  if (!offeredReasoningLevels(sel).includes(level)) throw new AnalyzerReasoningUnavailableError(modelId, level, sel.engine, when);
+  return level;
+}
+
+/** #3084 wave 5 (5.4-D1) — persona generation's pre-run reasoning check. A persona request sends a
+    reasoning level and no structured output, so only the reasoning half applies: the level must still be
+    offered (P17, AnalyzerReasoningUnavailableError) and must not be one this model's own Test recorded
+    `rejected` (AnalyzerCapabilityRejectedError, citing that verdict's own date, A2). No digest: persona
+    keeps capabilityRecordFor's fail-open rule. */
+export function assertPersonaReasoningAllowed(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+): ReasoningLevel {
+  const level = assertConfiguredReasoningOffered(settings, modelId, engine);
+  /* The full record, not reasoningSelectionFor's `record` (typed as reasoning.ts's narrow view). */
+  let record: ModelCapabilityRecord | undefined;
+  if (engine === 'openai') {
+    const parsed = parseEndpointModelId(modelId);
+    const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+    record = endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined;
+  } else {
+    record = capabilityRecordFor(settings, modelId, engine === 'local' ? getResolvedOllamaUrl() : 'gemini');
+  }
+  if (record?.control.ok && record.reasoning[level] === 'rejected') {
+    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', level, verdictTestedAtFor(record, { setting: 'reasoning', reasoning: level }));
+  }
+  return level;
 }

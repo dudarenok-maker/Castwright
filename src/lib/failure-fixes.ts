@@ -18,13 +18,16 @@ import { stageToHash } from './router';
    `isWikiPage` + `wikiUrl` (src/lib/wiki-links.ts), since a wiki page and an
    Advanced Settings knob are different destinations. No fix ever carries both.
 
-   Wave-stable by design: wave 3 (task 3d) adds an `endpointField` branch and
-   wave 5 (task 5a) a `reasoningSetting` branch to this same function, so both
-   renderers keep calling `fixHref(fix)` unchanged. */
+   Wave-stable by design: the `endpointField` branch (wave 3, task 3d) and the
+   `reasoningSetting` branch (wave 5, task 5a) live in this same function, so
+   both renderers keep calling `fixHref(fix)` unchanged. */
 export function fixHref(fix: AnalysisFailureFix): string | null {
   if (fix.settingKey) return stageToHash({ kind: 'advanced', focusKey: fix.settingKey });
   if (fix.endpointField) {
     return stageToHash({ kind: 'model-manager', endpointId: fix.endpointField.endpointId, endpointField: fix.endpointField.field });
+  }
+  if (fix.reasoningSetting) {
+    return stageToHash({ kind: 'advanced', reasoningFocus: fix.reasoningSetting });
   }
   return null;
 }

@@ -4,7 +4,7 @@
 
 ## Wave 5 — Reasoning controls (D8, §8) and custom payload (D9, §9)
 
-**Preconditions for the whole wave.** Waves 1–4 are merged. This plan is verified at `80be2f1d` (re-pinned from `46e62a34`); re-read any citation against current `main` before editing, since `main` moves. The wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `80be2f1d` either — waves 1-4 land as their own PRs, after this plan's pin commit. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
+**Preconditions for the whole wave.** Waves 1–4 are merged. PR 5a (this file through Task 5.7) is re-pinned and verified at `542d3501` (2026-10-25; see PR 5a's Re-pin notes, which win over any step below them). PR 5b is still verified at `80be2f1d` (re-pinned from `46e62a34`) until it is re-pinned after 5a merges. Re-read any citation against current `main` before editing, since `main` moves. The wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `80be2f1d` either — waves 1-4 land as their own PRs, after this plan's pin commit. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
 
 **Conventions used by every task below.**
 - Commands run from the worktree root. Server single file: `npm --prefix server run test -- <path relative to server/>`. Frontend single file: `npm test -- <path>`. None of this wave's test files are in `server/vitest.config.slow.ts` `SLOW_FILES`; do not add assertions to `server/src/analyzer/gemini.test.ts` (slow lane).
@@ -16,13 +16,155 @@
 
 ### PR 5a — Reasoning levels, control styles, and their Test coverage
 
-- **Branch:** `feat/server-3084-w5a-reasoning` — `node scripts/wt-new.mjs feat/server-3084-w5a-reasoning`.
+- **Branch:** `feat/server-3084-w5a-reasoning` — `node scripts/wt-new.mjs feat/server-3084-w5a-reasoning`. **Already cut (2026-10-25)** off `main` `542d3501` in worktree `C:\Claude\Projects\wt-3084-w5a-reasoning`; do not run `wt-new.mjs` again.
 - **Delivers:** `server/src/analyzer/reasoning.ts` (levels per engine family and endpoint control style, Gemini per-model table, wire fragments, control descriptions); `analyzerReasoningByEngine` user setting (Ollama and Gemini, each keyed by model id; P18) and endpoint `reasoning` validation; every transport sends the resolved level, with `includeThoughts` beside any Gemini level that thinks (P19); the Test action adds P7's level step (acceptance only) and keys schema probes by level; the pre-run check refuses a `rejected` level, or a stored level the rules no longer offer (P17), for analysis runs and persona generation; catalog entries carry `offeredReasoningLevels`; the reasoning-overflow message names the actual control; Advanced Settings and the endpoint form offer only offered levels.
 - **Must NOT change:** today's wire defaults — Ollama still sends `think: false` for an untouched install; Gemini and endpoints send no reasoning field for an untouched install. No new `FailureCode`. No custom-payload code (PR 5b). No structured-output default change.
 - **Entry:** waves 1–4 merged; `git grep -n -E "ReasoningLevel|extraParams" server/src/analyzer/runner` prints nothing (wave 1 declared neither; Task 5.1 adds them); W3c's `runModelTest`, `plannedTestRequestCount`, `assertConfiguredCapabilitiesAllowed` and the catalog route exist.
 - **Exit:** all tasks' tests green; `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch` green; `pr-review-gate` pass at **high** depth (multi-scope `feat`); on-box rows added.
 
+**Re-pinned 2026-10-25 against `main` `542d3501`** (PR 5a only: this block through Task 5.7. PR 5b below is still pinned at `80be2f1d` and is re-pinned after 5a merges). Waves 1–4 have merged (W3d #3710 `b015aae9`, W4 #3777 `daff0e8c`), so the wave 1–4 contract names the steps cite are now real files, and many line numbers, several snippets and a few decisions below were stale. Six drift audits checked every 5a task against `542d3501`. Each task now opens with a **Re-pin notes** block holding its corrected anchors, full replacement code and its child split; **where a Re-pin note and a step differ, the note wins**. The branch is already cut off `542d3501` in worktree `C:\Claude\Projects\wt-3084-w5a-reasoning`, so do not run `wt-new.mjs` again.
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **How a child uses this plan.**
+> - One child = one commit = one row of the Child decomposition table below. Do only that row's steps and mutations. `npm run typecheck` must be green when you commit.
+> - Earlier children move code. Every `path:line` in these notes is true at `542d3501` only. Re-locate each anchor with `git grep -n '<symbol or quoted text>'` before you edit, and edit by symbol or quoted text, never by line number.
+> - If a symbol a step edits has changed shape in a way no note covers, **STOP**. Do not improvise. Comment on the ticket naming the symbol, the shape the plan expects and the shape you found, and end the run.
+> - Every Playwright run in PR 5a belongs to the e2e child (row 25, Task 5.6e). The 5.6-i … 5.6d children run unit tests only.
+> - In a split task, Step 2's "Expected" list, Step 4's run list and Step 6's `git add` apply per child: expect only the failures of the tests your child writes, run your child's tests plus its Keeps-green list, and add only your child's files (each note names them). Likewise a step's single import list is split: each child adds exactly the imports its own code uses (server `noUnusedLocals` fails on an unused one).
+> - **Record your mutation proof.** Record each mutation's observed red output (the failing test's name plus its assertion line) in your commit body AND in your ticket completion comment. The ship child (Task 5.7) assembles the PR body from them.
+> - **Plan authoring bugs.** If a note's own code fails typecheck or its own test for an evident mechanical authoring reason — a wrong type annotation, a missing or unused import, a test placed in the wrong row, a test-harness timing slip — and the fix changes no behaviour, interface or owner decision, make the minimal fix and record it in your receipt under "Plan authoring fixes". Anything that touches behaviour, an interface or an owner decision still means STOP (the rule above).
+> - Commands run from the worktree root, never `cd X && …`: server file `npm --prefix server run test -- <path relative to server/>`; frontend file `npm test -- <path>`; `npm run typecheck`; `npm run check:cycles`; `npm run openapi:types`.
+>
+> **Owner decisions (2026-10-25) — binding. The task notes apply each one; no note offers options for them.**
+> 1. **5.2-D1.** Endpoint `reasoning` stays `type: string` in BOTH `AnalyzerEndpoint` and `AnalyzerEndpointInput` in `openapi.yaml`, each with a description pointing at `ReasoningLevel`. Stored levels stay strings (N10). Task 5.2's "replace it with `$ref ReasoningLevel`" step is void.
+> 2. **5.4-D1.** Persona generation and the design pre-pass ALSO refuse a level the model's own Test recorded `rejected` (a reasoning-only pre-check), not only a level the rules no longer offer. At `542d3501` wave 4's persona path runs **no capability check at all** (`voice-style.ts` never calls `assertConfiguredCapabilitiesAllowed`), so the Delivers line's "for analysis runs and persona generation" becomes true only when child 5.4e lands.
+> 3. **5.4-D2.** The server puts each verdict's own Test date on the catalog entry (`structuredOutput.outcomeTestedAt`), and the Settings Test result line shows the date of the verdict it displays (child 5.4c-2).
+> 4. **5.5-D1.** The reasoning-overflow failure names the actual reasoning control through a **per-instance remediation override** (`withCopy`'s 4th argument). `userMessage` stays W2's F7 headline, byte for byte. Nothing is appended to it.
+> 5. **5.5-D2 (clarified 2026-10-25).** The endpoint "lower reasoning" fix is offered only when the saved endpoint's `reasoningStyle` is not `not_controllable` AND the overflowing request's level is not that style's floor (its lowest real level: `off` for `enable_thinking`, `none` for `reasoning_effort`). A deleted endpoint gets none.
+> 6. **5.6-D1.** The reasoning editor is its own card above the settings groups in Advanced Settings, not inside the "Analyzer models & endpoints" group.
+> 7. **5.6-D2.** PR 5a gets its own Playwright spec for the reasoning editor and its deep link, `e2e/analyzer-request-controls.spec.ts`, as a dedicated child (row 25, Task 5.6e). Every Playwright run moves out of the 5.6 / 5.6b children into it. Task 5.12 (PR 5b) then modifies that spec instead of creating it.
+>
+> **Global drift found at `542d3501`.** Each task's notes carry the details.
+> - **Nothing of wave 5 exists yet.** There is no `reasoning.ts`, `reasoning-level.ts`, `ollama-tag.ts` or `workspace/analyzer-request-controls.ts`, and no `ReasoningLevel`, `analyzerReasoningByEngine` or `offeredReasoningLevels` anywhere except in comments.
+> - **W4 added `persona?: boolean`** to `AnalyzerReasoningOverflowError`'s `opts` (`analyzer/errors.ts:231`), and `runFreeText` throws with `{ persona: true }` (`runner/stage-runner.ts:221`). Every edit to that error keeps `persona`: its opts become `{ endpointId?; persona?; reasoningLevel? }` (5.1b), and 5.5 / 5.5b only read it.
+> - **3d (P30) moved the pre-run checks** out of `preflight.ts` into `assertAnalyzerTargetUsable` (`analyzer/capabilities.ts:203-231`). A fallback target's first call also runs it, mid-run (`analyzer/index.ts:305`), and so do the annotate-emotion, instruct-annotation and script-review routes. `preflight.ts` gets only a comment edit (5.4d).
+> - **#3625.** A locked or unreadable settings file no longer rejects the read: it returns cached settings or defaults, sets `isUserSettingsFileUnreadable()`, and refuses writes. Both new save paths guard on it (5.2a's server PUT, 5.6-ii's editor Save).
+> - **#3141.** The `ollamaUrl` user setting is retired. `getResolvedOllamaUrl()` (`config/ollama-resolved.ts:23`) reads the `OLLAMA_URL` env first, so tests that point at a fake Ollama set `OLLAMA_URL` (5.4c-1).
+> - **Endpoint refusals carry `issues: { path: string[]; message: string }[]`**, not string `details`: the server's `AnalyzerEndpointRefusal` (`workspace/analyzer-endpoints.ts:87`), the mock's `AnalyzerEndpointError` (`src/lib/api.ts:7276`), and the route body `{ error, code, issues }`. Every `details` in Task 5.2 becomes `issues` (5.2b).
+> - **`failure-taxonomy.ts` never imports `workspace/user-settings.ts`** (A9/P23). It reads saved endpoints through the leaf gate `listAnalyzerEndpoints()` (`analyzer/analyzer-endpoints-gate.ts`, imported at `failure-taxonomy.ts:52`). 5.5 and 5.5b use the gate and never import `getCachedUserSettings`.
+> - **Waves 2–3 already landed several things this plan says to add:** `AnalysisFailureFix.reasoningSetting` and `wikiPage` (`failure-taxonomy.ts:602-609`) and their openapi schema (`openapi.yaml:6744-6750`); and the `advanced` stage's `focusKey`, its `URLSearchParams` router case and `AdvancedRoute` (5.5c's preconditions). Do not re-add them.
+> - **The analyzer catalog lives in the store** (`s.account.analyzerCatalog`, `src/store/account-slice.ts:37`). It is loaded at boot and refreshed after a Test and after an endpoint save, and the editor reads it from there (5.6-ii).
+> - **`noUnusedLocals` is on** for the server, tests included. The plan's code had two unused imports (`TS6133`), which 5.1a's notes remove. Remove anything your own edit orphans (for example `type TransportKind` in `capabilities.ts`, 5.4d).
+> - **Cycles.** `catalog/gemini-catalog.ts` imports `node:crypto`, `@google/genai` AND `../redact.js` (itself import-free), so it is still a leaf; the plan's "imports only `node:crypto` and `@google/genai`" is incomplete but harmless. `server/madge-cycles-allowlist.json` has no analyzer rows and must stay unchanged. Run `npm run check:cycles` after every server child that adds an import edge.
+> - **#3721 console guard (global constraint).** Any `console.*` call this PR adds must not carry a printf placeholder (`%s %d %i %f %j %o %O %c %%`) in its first argument's static text. Use template literals (`server/src/console-format-placeholder.guard.test.ts`).
+> - **Owed chores folded into children** (CLAUDE.md "Incidental findings"): the `ollama-digest.ts` tag match the code says 5a widens (5.1a); the reasoning half of `REQUEST_SHAPING_SETTINGS` (5.5); the stale "arrives in wave 5" comments (5.2b openapi, 5.4c-2 server) and "not emitted yet" docs (5.5b-ii); mock catalog `testPlan` and Test-record parity (5.4c-2); and two frontend defects as their own `fix(frontend)` children (rows 23 and 24).
+
+#### Child decomposition (Open Engine) — PR 5a
+
+Twenty-seven children, in this order. All of them land sequentially on `feat/server-3084-w5a-reasoning` and ship as ONE PR, so a child may leave a seam the next one closes. One child is about one commit, and `npm run typecheck` is green after each. Each child depends on every row above it. Task 5.4 splits into seven children (5.4a-1/5.4a-2, 5.4b, 5.4c-1/5.4c-2, 5.4d, 5.4e) and Task 5.7 into two (5.7a documents, then ship).
+
+| # | Child | Owns (plan steps, files) | Mutations | Typecheck green after it because | Lane |
+|---|---|---|---|---|---|
+| 1 | **5.1a** pure modules | Task 5.1 Steps 1–6 for `reasoning-level.ts`, `ollama-tag.ts`, `reasoning.ts`, both fixtures and their three tests; `ollama-settings.ts` re-export; the `ollama-digest.ts` `normalizeModelTag` fix (5.1 Re-pin note 13) | 1–4, 7–11, 13–17, digest | nothing imports the new modules yet, and an unused export is not a `noUnusedLocals` error | auto-cloud |
+| 2 | **5.1b** runner | Task 5.1 Steps 1–6 for `runner/transport.ts`, `runner/stage-runner.ts`, `errors.ts` (keeps `persona`), `runner/finish.ts`, `stage-runner.request-controls.test.ts`, `stage-runner.reasoning-overflow-level.test.ts` | 5, 6, 12, the two Step 3 overflow mutations | every new field is optional | auto-cloud |
+| 3 | **5.2a** settings map | Task 5.2 for `workspace/analyzer-request-controls.ts` + test, `user-settings.ts` schema/default, the `PUT /` judgement (R6) + its tests (R7a/b, the #3625 test), openapi `ReasoningLevel` / `AnalyzerReasoningByEngine` / `UserSettings(Patch)` + regen, `MOCK_USER_SETTINGS`, the `mockPutUserSettings` whitelist + judgement mirror (R13) + tests (R7c, R13) | 1, 3–8, 9 (new), 10 (new) | the new openapi fields are optional and nothing else reads them yet | auto-cloud |
+| 4 | **5.2b** endpoint rule | Task 5.2 for `parseEndpointInput` (R3), the three P23 flips + the route append, `MOCK_STYLE_LEVELS`, `mockEndpointFromInput` with judge-on-change (R4), the mock catalog levels (R5) + tests, openapi `offeredReasoningLevels`, endpoint `reasoning` descriptions (5.2-D1) and the R9 reword + regen | 2, 2b, 2c, 2d (new) | endpoint `reasoning` stays `string` (5.2-D1); `offeredReasoningLevels` is optional in openapi | auto-cloud |
+| 5 | **5.3A** Ollama + OpenAI wire | Task 5.3 for `ollama-transport.ts` (both bodies), `buildOpenAIRequestBody`, `reasoning-wire.test.ts` without its Gemini describe | 1, 1b | `reasoning` is optional (5.1b); no caller sets it yet | auto-cloud |
+| 6 | **5.3B** Gemini wire | Task 5.3 for `gemini-transport.ts` (`mergeGeminiThinkingConfig`, `requestThinks` / `sentConfig` / evidence gate, resolver, watchdog calls), `gemini-request-thinks.test.ts`, the Gemini describe appended to `reasoning-wire.test.ts`, incl. the config-ordering regression test; the slow-lane `gemini.test.ts` run | 3, 3b (new), 5, 8, 9, 10, 10b | additive; the level is still unset by every caller | auto-cloud |
+| 7 | **5.3C** analyzer settings | Task 5.3 for the `ollama.ts` / `gemini.ts` closures, `openAIRequestSettings`, `gemini-reasoning-wiring.test.ts`, the `voice-style.test.ts` append, `openai-analyzer.test.ts` | 4, 6, 7, 11 | `analyzerReasoningByEngine` exists since 5.2a | auto-cloud |
+| 8 | **5.4a-1** record identity + merge leaf | Task 5.4 for `capability-record-merge.ts` + test, `capabilityRecordKey`, `sameCapabilityRecordModel`, `verdictTestedAtFor`, the N7 `capabilityRecordFor`, the `verdictTestedAt` interface field, the A2 refusal dates; the N7 and A2 describes | 17, 19, 21, 23 (`verdictDates` half), 24 | additive; the interface field is optional, so it and the persisted schema stay mutually assignable | auto-cloud |
+| 9 | **5.4a-2** persisted merge + key | Task 5.4 for the `user-settings.ts` schema field + its tests, the merging `writeAnalyzerCapabilityRecord`, the route's record key + `analyzer-models.test.ts`, openapi `verdictTestedAt` + regen | 18, 20, 22 | additive optional field; the route's third argument and its test change together | auto-cloud |
+| 10 | **5.4b** ladder pieces | Task 5.4 for `isProbeRejected`, `ReasoningLevelTestInconclusiveError`, `reasoningLevelsToProbe`, `plannedReasoningProbeCount`, `probeReasoningLevels`, `reasoningSelectionFor`, `configuredReasoningFor` — added, not called (its "levels to probe" test without the `plannedTestRequestCount` lines) | 1–4, 15 | pure additions | auto-cloud |
+| 11 | **5.4c-1** ladder wiring | Task 5.4 for the two `ModelTestDeps` fields, `sendStep` / `modeStep` level, `runModelTest`, `plannedTestRequestCount`, `model-test-deps.ts`, the catalog's `sel` / `level` / `planDeps` locals, the route test (Test-record cases), the W3c test updates, the `plannedTestRequestCount` test lines and the label describe, the `errors.ts:367-377` comment | 5–9, 23 (`runModelTest` half) | the `Pick` change, its deps and every caller land together | auto-cloud |
+| 12 | **5.4c-2** catalog levels + verdict date | Task 5.4 for `offeredReasoningLevels` on the entry, the `AnalyzerCatalogEntry` interface field, `outcomeTestedAt` (5.4-D2) + the Test line, openapi + regen, the frontend mock parity (R8) and its `api.ts:9222-9225` comment | 10, D2-a, D2-b | the interface and the return change together | auto-cloud |
+| 13 | **5.4d** coded refusal | Task 5.4 for `AnalyzerReasoningUnavailableError`, `unavailable()`, `assertConfiguredReasoningOffered`, `assertAnalyzerTargetUsable` (with `when`), `index.ts:305`, the `defaultReasoningKey` deletion | 11 (preflight half), 12, 16, 25, 26, 27 (new) | the last `defaultReasoningKey` user goes in the same commit | auto-cloud |
+| 14 | **5.4e** persona refusal | Task 5.4 for `assertPersonaReasoningAllowed` (5.4-D1), the `voice-style.ts` call, the `cast-design.ts` rethrow + comment | 11 (persona half), 13, 14, 28, 29 (new) | additive | auto-cloud |
+| 15 | **5.5** failure copy | Task 5.5: `reasoningRemediationLead` via the gate, the remediation override (5.5-D1), the `AnalyzerReasoningUnavailableError` branch, the `REQUEST_SHAPING_SETTINGS` reasoning entries + comment chore, the `failure-taxonomy.ts:1058-1066` comment | 1, 1b (new), 2–4 | server copy only | auto-cloud |
+| 16 | **5.5b-i** Gemini + Ollama fixes | Task 5.5b for the ctx `reasoningLevel`, the `:951` call, the Gemini and Ollama arms, `ROW_FIXTURE_IDS`, the exhaustive test, the `CONTEXTS` additions, the engine guard, Step 1's describe minus its endpoint case, the `failure-taxonomy.ts:594-601` / `:611-615` comments | 1–6, 8–11 | the ctx field is optional | auto-cloud |
+| 17 | **5.5b-ii** endpoint fix + docs | Task 5.5b for the endpoint fix gated at the style's floor (5.5-D2), the `failure-taxonomy-fixes.test.ts:107` retitle, the openapi description refresh + regen, and the stale "not emitted yet" docs (`openapi.yaml:6719-6721`, `:6732`, `:6746`, `api-types.ts`, the `api.ts:2896-2897` comment, `failure-fix-list.tsx:8-13`) | 7, 12 (new) | additive in one arm | auto-cloud |
+| 18 | **5.5c** deep link | Task 5.5c: `reasoningFocus` on the stage, router, `AdvancedRoute` (kept exported), `fixHref` | 1–4 | additive optional field | auto-cloud |
+| 19 | **5.6-i** library modules | Task 5.6 for `src/lib/reasoning-levels.ts` + test and `src/lib/settings-issues.ts` + test | 4, 6, 7 | nothing imports them yet | auto-cloud |
+| 20 | **5.6-ii** reasoning editor | Task 5.6 for `AnalyzerRequestControls` + test, its mount in `advanced.tsx` as its own card (5.6-D1), the store catalog, the #3625 unreadable-settings save guard; unit tests only | 1, 2, 5, 9 | the component and its mount land together | auto-cloud |
+| 21 | **5.6-iii** endpoint form | Task 5.6 for the endpoint-form reasoning fields, `ISSUE_FIELDS` / `ENDPOINT_FIELD_TEST_IDS`, inline errors, the appended tests; unit tests only | 3, 8, 10 | `Record<IssueField,string>` forces both entries together | auto-cloud |
+| 22 | **5.6b** deep-linked row | Task 5.6b: scroll and highlight (import `normalizeOllamaTag`); unit tests only | 1–5 | component-local | auto-cloud |
+| 23 | **5.6c** fix: settings-row highlight | Task 5.6c: `src/views/advanced.tsx:288-306` — the `focusKey` highlight can stick when config reloads within 2 s. Repro test FIRST; if it does not reproduce, or fails for another reason, report and change nothing. Commit `fix(frontend): …` | 1 (new) | component-local | auto-cloud |
+| 24 | **5.6d** fix: endpoint touch targets | Task 5.6d: `analyzer-endpoints-section.tsx`'s `INPUT` (`:66`) and the Context-size input (`:394`; `:393` is its wrapping `<div>`) get `min-h-[44px] fine-pointer:min-h-0`, with an `it.each` test. Commit `fix(frontend): …` | 1 (new) | class strings only | auto-cloud |
+| 25 | **5.6e** e2e | Task 5.6e: `e2e/analyzer-request-controls.spec.ts` (5.6-D2), plus every Playwright run moved out of 5.6 / 5.6b | 1 (new) | test only | claude |
+| 26 | **5.7a** ship documents | Task 5.7a: run-sheet sections, register rows + markers + glance counts + owed total, `register:build` + filled live-view shells + `--check` + `check:onbox-register`, the three wiki pages, both release-notes files, plan 284 invariants; commit + push. NO PR, NO live publish | — | docs | claude |
+| 27 | **ship** | Task 5.7: merge `origin/main` (never rebase), receipts audit, Step 1 checks, the battery, `--against-published` + live-view publish, the PR (with the post-merge `wiki:sync` line), `pr-review-gate` at high | — | docs | claude |
+
+- **Lanes.** Rows 25–27 need a lane without a short command cap: Playwright, `verify:fast:branch`, the Artifact tool and the live-view `--against-published` comparison all run long.
+- **Commit subjects.** Server children use `feat(server): …` (5.2a / 5.2b `feat(server,openapi,mocks): …`; 5.4a-2 `feat(server,openapi): …`; 5.4c-2 `feat(server,frontend,openapi,mocks): …`); frontend children `feat(frontend): …`; rows 23–24 `fix(frontend): …`; row 25 `test(e2e): …`; row 26 `docs(docs): …`. Each note gives its child's subject.
+
 ### Task 5.1: `reasoning.ts` — levels, Gemini table, wire fragments, control descriptions; request-control fields and runner forwarding
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Two children** (table rows 1–2), one commit each:
+> - **5.1a — pure modules.** Create `reasoning-level.ts`, `ollama-tag.ts`, `reasoning.ts`, `__fixtures__/reasoning-style-levels.json`, `__fixtures__/ollama-tag-cases.json`, `reasoning-level.test.ts`, `ollama-tag.test.ts` and `reasoning.test.ts`. Make `ollama-settings.ts`'s `normalizeModelTag` a re-export. Fix `ollama-digest.ts` (note 13). Mutations 1–4, 7–11, 13–17 and note 13's digest mutation. Nothing imports the new modules yet, and `noUnusedLocals` does not flag an unused export, so `npm run typecheck` and `npm run check:cycles` stay green. Step 2 / Step 4 runs: `npm --prefix server run test -- src/analyzer/reasoning.test.ts src/analyzer/reasoning-level.test.ts src/analyzer/ollama-tag.test.ts src/analyzer/ollama-digest.test.ts src/analyzer/ollama.test.ts`, then typecheck and `check:cycles`.
+>   `git add server/src/analyzer/reasoning.ts server/src/analyzer/reasoning-level.ts server/src/analyzer/reasoning-level.test.ts server/src/analyzer/reasoning.test.ts server/src/analyzer/__fixtures__/reasoning-style-levels.json server/src/analyzer/ollama-tag.ts server/src/analyzer/ollama-tag.test.ts server/src/analyzer/__fixtures__/ollama-tag-cases.json server/src/analyzer/ollama-settings.ts server/src/analyzer/ollama-digest.ts server/src/analyzer/ollama-digest.test.ts`
+>   Commit: `feat(server): reasoning levels per engine, the Gemini table and wire fragments`.
+> - **5.1b — runner plumbing.** Modify `runner/transport.ts`, `runner/stage-runner.ts`, `errors.ts` (note 4: keep `persona`) and `runner/finish.ts`. Create `runner/stage-runner.request-controls.test.ts` and `runner/stage-runner.reasoning-overflow-level.test.ts`. Mutations 5, 6, 12, and the two Step 3 "Mutation:" lines (drop `reasoningLevel` from `mapFinish`'s ctx, then from `runFreeText`'s opts). Every new field is optional, so typecheck stays green. Step 4 runs the rest of the plan's Step 4 list (the runner and transport dirs, `ollama.test.ts`).
+>   `git add server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/errors.ts server/src/analyzer/runner/finish.ts server/src/analyzer/runner/stage-runner.request-controls.test.ts server/src/analyzer/runner/stage-runner.reasoning-overflow-level.test.ts`
+>   Commit: `feat(server): request-control fields on the stage runner and the reasoning-overflow error`.
+>
+> 1. **Anchors at `542d3501`.**
+>    - `normalizeModelTag`: `server/src/analyzer/ollama-settings.ts:49-53` (doc comment `:49-50`, body `:51-53`, identical to the plan's; local callers `:60`, `:69`). `ollama.ts:19` re-exports it from `./ollama-settings.js`, and that chained re-export keeps working.
+>    - `TransportRequest.maxOutputTokens?`: `runner/transport.ts:73` (type imports `:7-8`; W4's `FreeTextOptions` / `FreeTextInput` and `freeText?` at `:77`).
+>    - `EngineRequestSettings`: `runner/stage-runner.ts:32-35`. It has the two fields and no comments, so there are no comments to keep.
+>    - Private `send`: `stage-runner.ts:249-283`. `prepare` is `:263`, `const settings = this.settings();` `:264`, `maxOutputTokens: settings.maxOutputTokens,` `:270`, and the `return mapFinish(withThinkEvidence(result), { kind: this.transport.kind, model: this.transport.model });` return `:282`. `mapFinish` has no other server caller.
+>    - `runFreeText`: doc comment `:178-184` (its "Wave 5 adds…" sentence is `:181`), W4's comment `:186-190`, `prepare` `:191`, `maxOutputTokens: undefined,` `:198`, the inline overflow throw `:221`.
+>    - `mapFinish`: `runner/finish.ts:17`, its overflow throw `:26`; `:5` already imports `type TransportKind` from `../errors.js`.
+>    - `AnalyzerReasoningOverflowError`: `errors.ts:214-243` — the mutable `endpointId?: string;` field `:225`, `opts` `:231`, the `persona` message branch `:232-238`, `this.endpointId = opts?.endpointId;` `:241`. `errors.ts` has no imports today (`TransportKind` is declared in it at `:7`).
+>    - `geminiModelThinks`: `catalog/gemini-catalog.ts:275`; `THINKING_ID_RULE`: `:65`. `REASONING_STYLES`: `workspace/analyzer-endpoints.ts:13`, the same three values; its schema already has `reasoningStyle` and `reasoning: z.string().default('model-default')` (`:38-39`).
+> 2. **`reasoning.ts` (5.1a): drop the unused value import.** As written it fails typecheck: `TS6133: 'REASONING_LEVELS' is declared but its value is never read`. In the Step 3 code block, the two lines
+>    ```ts
+>    export { REASONING_LEVELS, type ReasoningLevel } from './reasoning-level.js';
+>    import { REASONING_LEVELS, type ReasoningLevel } from './reasoning-level.js';
+>    ```
+>    become
+>    ```ts
+>    export { REASONING_LEVELS, type ReasoningLevel } from './reasoning-level.js';
+>    import type { ReasoningLevel } from './reasoning-level.js';
+>    ```
+>    Ignore the `errors.ts` paragraph's instruction that `reasoning.ts` "deletes its own `export const REASONING_LEVELS…` (lines 487-488 above)": the code block already has no local declaration, so there is nothing to delete. ("line 483 above" in that paragraph means the block's `import type { TransportKind } from './errors.js';`.)
+> 3. **`reasoning-level.test.ts` (5.1a):** its first import becomes `import { REASONING_LEVELS } from './reasoning-level.js';`. The `type ReasoningLevel` there is unused and fails typecheck the same way (`TS6133`).
+> 4. **`errors.ts` (5.1b): do NOT paste the plan's full class.** It would delete W4's `persona` opt and its message branch, which `stage-runner.free-text.test.ts:178-187` pins verbatim and `stage-runner.ts:221` passes. Make exactly three edits:
+>    - at the top of the file add `import type { ReasoningLevel } from './reasoning-level.js';` (its only import: a type-only edge into the import-free leaf);
+>    - directly after the `endpointId?: string;` field (`:225`) add
+>      ```ts
+>        /** #3084 wave 5 — the level the overflowing request was sent at, set at the throw site
+>            (mapFinish's ctx, runFreeText's inline check). Never re-derived from live settings. */
+>        readonly reasoningLevel?: ReasoningLevel;
+>      ```
+>    - widen the constructor's `opts` to `opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel },`, and directly after `this.endpointId = opts?.endpointId;` add `this.reasoningLevel = opts?.reasoningLevel;`.
+>
+>    Leave the message, `persona` and the F7 comment untouched.
+> 5. **`runFreeText` (5.1b): keep `persona: true`.** The inline throw (`:221`) becomes
+>    ```ts
+>          throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true, reasoningLevel: settings.reasoning });
+>    ```
+>    Insert `const settings = this.settings();` directly after the `prepare` line (`:191`). Replace W4's comment at `:186-190` with `/* The runner awaits prepare(signal) before it reads settings, as wave 2's private send does (P26). */`. In the doc comment, change "Wave 5 adds the engine's reasoning level and custom payload to this request." (`:181`) to "It carries the engine's reasoning level and custom payload (wave 5)." — the old future tense becomes false once this child lands.
+> 6. **Type import path (5.1b).** `runner/transport.ts`, `runner/stage-runner.ts` and `runner/finish.ts` import `type ReasoningLevel` from `'../reasoning-level.js'` (the leaf: a smaller edge than `'../reasoning.js'`). `finish.ts` needs it for its widened ctx.
+> 7. **`stage-runner.reasoning-overflow-level.test.ts` (5.1b): stop the inbox leak.** `runStage` writes `server/handoff/inbox/m1-stage1-ch1.md` (git-ignored, but never removed). Copy `stage-runner.request-controls.test.ts`'s `vi.hoisted` + `vi.mock('../../handoff/protocol.js', …)` block verbatim into this file; it covers the inbox, outbox and error files.
+> 8. **`stage-runner.request-controls.test.ts` (5.1b):** use `key: '1-ch1' as const, skillName: 'whole_book_stage1' as const` in its `stageSpec`, as W1's tests do. `script_review` reads the prompt registry and its user overrides through `readPrompt`; `whole_book_stage1` reads from disk only. The assertions do not change.
+> 9. **Step 2 run line** also names `src/analyzer/reasoning-level.test.ts` (5.1a; expected `Failed to resolve import "./reasoning-level.js"`) and `src/analyzer/runner/stage-runner.reasoning-overflow-level.test.ts` (5.1b; expected: `reasoningLevel` is `undefined`).
+> 10. **Step 4 "Keeps green" (5.1b)** adds `src/analyzer/runner/stage-runner.free-text.test.ts` (it pins the persona overflow message, which must not change) and `src/analyzer/runner/finish-reasoning-overflow.test.ts`. `routes/failure-taxonomy.test.ts` uses no `toStrictEqual` on this error, so the added `undefined` field is safe there.
+> 11. **Mutation 3 (5.1a)** targets the **3.5/3.6 Flash row**: change `/^gemini-3\.(?:5|6)-flash(?!-lite)(?:$|-)/` to `/^gemini-3\.(?:5|6)-flash(?:$|-)/`. Expected red (verified): only `gemini-3.6-flash-lite → undefined …`. The single regex the step quotes no longer exists: the table splits it into two rows.
+> 12. **Mutation 17 (5.1a)** edits **`reasoning.ts`**, not `reasoning-level.ts`: replace the `export { REASONING_LEVELS, type ReasoningLevel } from './reasoning-level.js';` line with `export { type ReasoningLevel } from './reasoning-level.js'; export const REASONING_LEVELS = ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high'] as const;`. Expected red: `reasoning.ts re-exports the same array, not a copy`.
+> 13. **Owed chore, in 5.1a: `ollama-digest.ts`.** Its comment (`server/src/analyzer/ollama-digest.ts:15`) says "5a widens this through normalizeModelTag", and no other wave 5 task does it. The exact match misses a model configured as bare `qwen3` (`/api/tags` lists `qwen3:latest`), so the digest comes back `undefined` and the Test-record digest check fails open. In `ollama-digest.ts`:
+>     - add `import { normalizeModelTag } from './ollama-tag.js';` (a leaf; no cycle);
+>     - replace lines 15–16 (the comment and the `const hit = …` line) with
+>       ```ts
+>           /* N7 — one Ollama model id: a bare tag and its :latest form are the same model. */
+>           const want = normalizeModelTag(model);
+>           const hit = (body.models ?? []).find((m) => (m.name !== undefined && normalizeModelTag(m.name) === want) || (m.model !== undefined && normalizeModelTag(m.model) === want));
+>       ```
+>     - in `ollama-digest.test.ts` add a case: `/api/tags` lists `qwen3:latest`, and asking for `qwen3` returns its digest; with a listed `qwen3.5:4b`, asking for `qwen3.5:9b` returns `undefined`;
+>     - mutation: revert to the exact match. Expected red: the new bare-tag case. Restore.
+>
+>     Task 5.4's sentence "this task does not touch that wiring" is about `modelTestDepsFor`'s `modelDigest` wiring and stays true.
 
 **Files:**
 - Create: `server/src/analyzer/reasoning.ts`
@@ -938,6 +1080,208 @@ git commit -m "feat(server): reasoning levels per engine and request-control fie
 
 ### Task 5.2: Settings storage and write validation (`analyzerReasoningByEngine`, endpoint `reasoning`), OpenAPI, mocks
 
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Two children** (table rows 3–4), one commit each, run in this order (both regenerate `api-types.ts`):
+> - **5.2a — settings reasoning map.** Create `workspace/analyzer-request-controls.ts` and its test. Add the `user-settings.ts` schema field and default. Add the `routes/user-settings.ts` PUT judgement (R6), its appended tests (R7a/b) and the new `routes/user-settings.reasoning-unreadable.test.ts` (R6). Add openapi `ReasoningLevel`, `AnalyzerReasoningByEngine` and the `UserSettings` / `UserSettingsPatch` properties, then run `npm run openapi:types`. Add `MOCK_USER_SETTINGS.analyzerReasoningByEngine`, the `mockPutUserSettings` whitelist entry and its judgement (R13) with their tests (R7c, R13). Mutations 1, 3, 4, 5, 6, 7, 8, 9 (new, R6) and 10 (new, R13). The new openapi fields are optional and nothing reads them yet, so typecheck stays green.
+>   `git add server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/workspace/user-settings.ts server/src/routes/user-settings.ts server/src/routes/user-settings.test.ts server/src/routes/user-settings.reasoning-unreadable.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/api-put-user-settings-mock.test.ts`
+>   Commit: `feat(server,openapi,mocks): store and validate per-model analyzer reasoning levels`.
+> - **5.2b — endpoint level rule and catalog levels.** Replace `parseEndpointInput`'s P23 block (R3) and flip the three P23 cases (workspace, route, mock); append the route create-refusal case. Add `MOCK_STYLE_LEVELS`, the `mockEndpointFromInput` rule with the server's judge-on-change (A7) rule (R4) and the `mockGetAnalyzerModels` levels (R5) with their mock tests. In openapi add `AnalyzerCatalogEntry.offeredReasoningLevels`, the endpoint `reasoning` descriptions (R10) and the R9 reword, then run `npm run openapi:types`. Mutations 2, 2b, 2c and 2d (new, R4). Under 5.2-D1 the endpoint schemas stay `string`, so `src/lib/api.ts:7808` and `analyzer-endpoints-section.tsx:134` compile unchanged.
+>   `git add server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/analyzer-endpoints.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/api-analyzer-endpoints-mock.test.ts src/lib/api-analyzer-catalog-mock.test.ts`
+>   Commit: `feat(server,openapi,mocks): validate endpoint reasoning levels by control style`.
+>
+> **R1 — anchors at `542d3501`.**
+> - Schema insert: directly after `analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),` (`server/src/workspace/user-settings.ts:397`), before `analyzerRateLimitsByModel` (`:403`). Defaults insert: after `analyzerKeepAliveByModel: {},` (`:500`).
+> - `readUserSettings`: `:1103`. Schema-failure fallback: `:1358-1361`. Unparseable / stranded recovery: `:1238-1318`. Boot warm: `void bootWarmUserSettings()` at `server/src/index.ts:201` (the function is at `:138`). `getCachedUserSettings`: `:1373`; `_setUserSettingsCacheForTest`: `:2111`.
+> - `openapi.yaml`: `UserSettings.analyzerKeepAliveByModel` `:5683-5687` (next is `analyzerRateLimitsByModel`, `:5688`); `UserSettingsPatch` after `:5970-5974` (schema starts `:5918`); `AnalyzerEndpoint.reasoning` `:6027`; `AnalyzerEndpointInput.reasoning` `:6047`; `AnalyzerCatalogEntry` `:5827` (description `:5829-5832`); `ModelCapabilityRecord.reasoning` `:5824-5826` (leave it).
+> - `src/lib/api.ts`: `MOCK_USER_SETTINGS` `:7186` (insert after `analyzerKeepAliveByModel: {},` at `:7196`); `mockPutUserSettings` `:7684` — it now starts with an `ENDPOINT_ID_REFUSED_KNOBS` mirror (`:7686-7704`) and the RETIRED mirror (`:7705-7714`); insert `analyzerReasoningByEngine,` after `analyzerRateLimitsByModel,` in both the destructure (`:7727`) and the literal (`:7742`). `mockOrigin` `:7766`. `mockEndpointFromInput`'s P23 block `:7785-7793`. `mockGetAnalyzerModels`'s `entry` helper `:9249` (call sites `:9268`, `:9270`, `:9278`).
+> - `server/src/workspace/analyzer-endpoints.ts`: `parseEndpointInput(input: unknown)` `:221`; its P23 block `:242-255`; `applyUpdate`'s call `parseEndpointInput(isRecord(input) ? { ...input, id: endpointId } : input)` `:295`, with `idx` in scope (`:287`). The route `server/src/routes/analyzer-endpoints.ts:41-42` needs no change.
+> - Test anchors: workspace P23 case `server/src/workspace/analyzer-endpoints.test.ts:155` (helpers `base` `:25` — no `reasoningStyle`, so `not_controllable` — `empty` `:26`, `refusal()` `:28`); route P23 case `server/src/routes/analyzer-endpoints.test.ts:103` (`lab` `:16`, `userSettingsPath` `:13`/`:26`, `readFileSync` `:5`); mock P23 case `src/lib/api-analyzer-endpoints-mock.test.ts:100` (`input()` `:9`, `refusal()` `:11`).
+> - `capabilityRecordFor(settings, modelId, currentServerUrl, currentDigest?)`: `server/src/analyzer/capabilities.ts:170-183` (exact-key lookup until Task 5.4a-1). `getResolvedOllamaUrl`: `config/ollama-resolved.ts:23`. `inferEngineFromModelId`: `analyzer/model-id.ts:24`.
+>
+> **R2 — refusal shape (replaces every `details` in this task).** `AnalyzerEndpointRefusal` (`workspace/analyzer-endpoints.ts:87`) and the mock's `AnalyzerEndpointError` (`src/lib/api.ts:7276`) both carry `issues: { path: string[]; message: string }[]`, and the route sends `{ error, code, issues }`. Wherever a test writes `x.details).toEqual(['<field>: <msg>'])`, write `x.issues).toEqual([{ path: ['<field>'], message: '<msg>' }])`; use `body.issues` in the route tests and `issues:` in `toMatchObject`. For example the workspace case's `wrongStyle.issues` is `[{ path: ['reasoning'], message: 'Reasoning "none" is not offered by the enable_thinking control style (offered: model-default, off, on).' }]`, and the payload case's is `[{ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' }]`. The create-refusal case's `JSON.stringify(res.body)` `toContain` works unchanged.
+>
+> **R3 — `parseEndpointInput` (5.2b), replacing `analyzer-endpoints.ts:242-255`** (from `/* #3084 P23 — until wave 5 exists…` through the `notYet` throw). The signature becomes `export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): AnalyzerEndpoint`, and `applyUpdate` passes `state.analyzerEndpoints[idx]` as the second argument. Add `import { levelsForReasoningStyle } from '../analyzer/reasoning.js';` after the `errors.js` import (`:11`).
+> ```ts
+>   /* #3084 PR 5a — a reasoning level must be one its control style offers. This
+>      replaces P23's "model-default only" refusal. The `extraParams` refusal stays
+>      until PR 5b replaces it with validateExtraParams. */
+>   const problems: { path: string[]; message: string }[] = [];
+>   /* A7 — judge the level only when this save changes it, or changes the style that decides which
+>      levels are offered. P17 still refuses a run that would send an unchanged stale level. */
+>   const levelChanged = !stored || stored.reasoning !== ep.reasoning || stored.reasoningStyle !== ep.reasoningStyle;
+>   const offeredLevels = levelsForReasoningStyle(ep.reasoningStyle);
+>   if (levelChanged && !(offeredLevels as readonly string[]).includes(ep.reasoning)) {
+>     problems.push({
+>       path: ['reasoning'],
+>       message: `Reasoning "${ep.reasoning}" is not offered by the ${ep.reasoningStyle} control style (offered: ${offeredLevels.join(', ')}).`,
+>     });
+>   }
+>   if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
+>     problems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+>   }
+>   if (problems.length > 0) {
+>     throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', problems);
+>   }
+> ```
+> The message names a level and a style, both short enum-like values. F5's no-echo rule (`:93-96`) covers URLs and keys; a reasoning level is not secret, so it does not apply.
+>
+> **R4 — mock rule (5.2b), replacing `api.ts:7785-7793`** (the `/* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */` comment through the `notYet` throw; the `unloadUrl` check after it is unchanged). Type the table so the catalog can use it, directly below `mockOrigin`:
+> ```ts
+> /* #3084 PR 5a — the server's endpoint control-style levels (reasoning.ts levelsForReasoningStyle;
+>    fixture server/src/analyzer/__fixtures__/reasoning-style-levels.json). */
+> const MOCK_STYLE_LEVELS: Record<'reasoning_effort' | 'enable_thinking' | 'not_controllable', readonly MockReasoningLevel[]> = {
+>   reasoning_effort: ['model-default', 'none', 'minimal', 'low', 'medium', 'high'],
+>   enable_thinking: ['model-default', 'off', 'on'],
+>   not_controllable: ['model-default'],
+> };
+> ```
+> (`MockReasoningLevel` is declared by 5.2a, R13.) `mockEndpointFromInput` gains the server's second parameter, `mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEndpoint)`, and `mockUpdateAnalyzerEndpoint` (`api.ts:7841`) passes the endpoint `mockEndpointOrThrow(id)` already returns (`const stored = mockEndpointOrThrow(id); … mockEndpointFromInput(input, stored)`); create passes none. The rule:
+> ```ts
+>   /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
+>      payload refusal until PR 5b. */
+>   const controlProblems: { path: string[]; message: string }[] = [];
+>   const style = input.reasoningStyle ?? 'not_controllable';
+>   const level = input.reasoning ?? 'model-default';
+>   /* A7, as the server — judge the level only when this save changes it or the style that decides it. */
+>   const levelChanged = !stored || stored.reasoning !== level || (stored.reasoningStyle ?? 'not_controllable') !== style;
+>   if (levelChanged && !(MOCK_STYLE_LEVELS[style] as readonly string[]).includes(level)) {
+>     controlProblems.push({
+>       path: ['reasoning'],
+>       message: `Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
+>     });
+>   }
+>   if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
+>     controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+>   }
+>   if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
+> ```
+> Mutation 2b's first edit becomes: replace `!(MOCK_STYLE_LEVELS[style] as readonly string[]).includes(level)` with `level !== 'model-default'`. The step's sentence that the mock "cannot exercise" the A7 rule is wrong: `_setMockUserSettingsForTest` can seed an endpoint holding a stale level. Add to `src/lib/api-analyzer-endpoints-mock.test.ts`: `'an update judges the level only when it or its style changes, as the server does (A7)'` — seed an `enable_thinking` endpoint whose `reasoning` is `'high'` through `_setMockUserSettingsForTest`; an update changing only `name` saves; an update changing `reasoningStyle` to `'reasoning_effort'` with `reasoning` still `'high'` saves (offered); one changing `reasoning` to `'none'` under `enable_thinking` is refused with `issues: [{ path: ['reasoning'], … }]`. **Mutation 2d:** drop `levelChanged &&` from the mock rule. Expected red: the name-only update is refused. Restore.
+>
+> **R5 — mock catalog levels (5.2b).** Give the `entry` helper (`api.ts:9249`) a sixth parameter `offered: readonly MockReasoningLevel[]` and spread `offeredReasoningLevels: [...offered]` into the object it returns. The calls become `entry('qwen3.5:4b', …, mockOllamaOffered('qwen3.5:4b', source.analyzerCapabilitiesByModel))`, `entry('gemini-3.5-flash-lite', …, MOCK_GEMINI_LEVELS['gemini-3.5-flash-lite'])` (both helpers are 5.2a's, R13 — so the mock catalog offers a named Ollama level exactly when the mock Test record accepted it, as the server's catalog does) and, for each endpoint `e`, `entry(endpointModelId(e.id, m), 'openai', m, …, MOCK_STYLE_LEVELS[e.reasoningStyle ?? 'not_controllable'])`. The mock catalog carries no other Gemini or Gemma id (the Gemini group exists only when `source.apiKeyStatus === 'set'`), so the plan's longer id list needs no other entries. Add one case to `src/lib/api-analyzer-catalog-mock.test.ts` asserting those three values (Ollama `['model-default', 'off', 'on']` with no record), with an `enable_thinking` endpoint seeded through `_setMockUserSettingsForTest`, plus one assertion that a seeded record accepting `low` for `qwen3.5:4b` adds `low` to its offered levels.
+>
+> **R6 — the `PUT /` judgement (5.2a).** The handler is at `routes/user-settings.ts:153` (`try` `:154`). Since #3141, #3084 P23 and P30 it runs the RETIRED reject (`:155-169`), `endpointModelIdRefusals` (`:170-177`) and the fallback-target check (`:178-189`) before `const updated = await writeUserSettings(req.body);` (`:190`); the ZodError → 400 catch is `:192-198`. Replace **that write line**, after all three checks, with:
+> ```ts
+>     /* #3084 wave 5 — offered-level rules, judged on what this save changes (N6) against
+>        the settings as stored (readUserSettings, not the cache: the boot warm at
+>        server/src/index.ts:201 is not awaited). A ZodError maps to 400 + issues in the
+>        catch below, and nothing is written. N7: Ollama keys are written normalised. */
+>     const stored = await readUserSettings();
+>     /* #3625 — a locked/unreadable file no longer rejects the read: it returns cached or
+>        default settings and refuses the write. Do not judge against those; let
+>        writeUserSettings refuse (500) as it does for every other save. */
+>     if (!isUserSettingsFileUnreadable()) {
+>       analyzerRequestControlsPatchSchemaFor({
+>         /* No digest (A3). N7: a record filed under either spelling of the tag counts. */
+>         ollamaRecord: (model) =>
+>           capabilityRecordFor(stored, model, getResolvedOllamaUrl()) ??
+>           capabilityRecordFor(stored, normalizeModelTag(model), getResolvedOllamaUrl()),
+>       }).parse(changedRequestControls(req.body ?? {}, stored));
+>     }
+>     const updated = await writeUserSettings(withNormalizedOllamaReasoningKeys(req.body));
+> ```
+> Imports: `analyzerRequestControlsPatchSchemaFor`, `changedRequestControls` and `withNormalizedOllamaReasoningKeys` from `../workspace/analyzer-request-controls.js`; `capabilityRecordFor` from `../analyzer/capabilities.js`; `normalizeModelTag` from `../analyzer/ollama-tag.js`. `readUserSettings` (`:20`), `isUserSettingsFileUnreadable` (`:27`) and `getResolvedOllamaUrl` (`:35`) are already imported. The plan's "the only rejection left is a locked or unreadable file" paragraph is superseded by #3625 as described in the comment above.
+>
+> The guard is kept, and proven. Create `server/src/routes/user-settings.reasoning-unreadable.test.ts`: `vi.mock('../workspace/user-settings.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../workspace/user-settings.js')>()), isUserSettingsFileUnreadable: () => unreadable }))` with a module-level `let unreadable = false;`, and an express app mounting `userSettingsRouter` the way `routes/user-settings.test.ts`'s `beforeAll` does (`:37-54`). Two cases, each PUTting `{ analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } }` (3.8 Flash does not offer `minimal`): with `unreadable = false` → 400 (the control); with `unreadable = true` → 200, because the judgement is skipped and only the flag the route reads is mocked (the real write still succeeds). **Mutation 9:** drop the `if (!isUserSettingsFileUnreadable())` guard (keep its body). Expected red: the `unreadable = true` case (`expected 400 to be 200`). Restore.
+>
+> **R7 — tests the plan missed (5.2a).**
+> - (a) `server/src/routes/user-settings.test.ts`'s "PUT round-trips every writable field…" (`:409-479`) walks `Object.keys(userSettingsSchema.shape)` and fails with `add a SAMPLE_VALUES entry for new field "analyzerReasoningByEngine"`. Add `analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } }` to its `SAMPLE_VALUES` (`:410-445`); both pass the write rules with no Test record.
+> - (b) That file loads every settings module dynamically in `beforeAll` (`:37-54`). Take `_setUserSettingsCacheForTest` from the dynamically imported `settings` module, and `getResolvedOllamaUrl` from a dynamic `import('../config/ollama-resolved.js')` in the same `Promise.all`, into `let` bindings — not static imports. `existsSync`, `mkdirSync`, `writeFileSync` (`:13-22`) and `dirname` (`:24`) are already imported. `beforeEach` deletes the file and resets the cache (`:66-75`), so the seeded-cache cases work (`readUserSettings` returns the seeded cache when the file is absent).
+> - (c) Add `describe('mockPutUserSettings — analyzerReasoningByEngine (#3084)')` to `src/lib/api-put-user-settings-mock.test.ts`, modelled on its rate-limits case (`:29-40`), asserting the whole map persists.
+>
+> **R8 — cycle wording.** The plan's "`reasoning.ts` imports only types (`model-id.ts`, `errors.ts`)" is stale. `reasoning.ts` value-imports `catalog/gemini-catalog.ts` (→ `node:crypto`, `@google/genai`, `../redact.js`, which imports nothing) and `ollama-tag.ts`. It has no workspace imports, so `analyzer-endpoints.ts → reasoning.ts` closes no cycle, even though `user-settings.ts:27` imports `analyzer-endpoints.ts` and so now pulls `reasoning.ts` in transitively. `routes/user-settings.ts → analyzer/capabilities.ts` is a new edge; nothing on the capabilities side imports `routes/user-settings.ts`. `npm run check:cycles` confirms both, and the allowlist stays unchanged.
+>
+> **R9 — stale comment (5.2b).** Reword `openapi.yaml:5829-5832` (the `AnalyzerCatalogEntry` description, "(offeredReasoningLevels arrives in wave 5)") so it lists `offeredReasoningLevels` as a contract field, then regenerate. The server twin comment at `analyzer-catalog.ts:39-41` is 5.4c-2's.
+>
+> **R10 — endpoint `reasoning` in openapi (5.2b, owner decision 5.2-D1).** Do NOT replace `AnalyzerEndpoint.reasoning` with `$ref ReasoningLevel` (Step 3's instruction is void). Keep both `AnalyzerEndpoint.reasoning` (`:6027`) and `AnalyzerEndpointInput.reasoning` (`:6047`) as strings, each becoming:
+> ```yaml
+>         reasoning:
+>           type: string
+>           description: 'A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint''s reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts.'
+> ```
+> `src/lib/api.ts:7808` and `analyzer-endpoints-section.tsx:134` then compile unchanged, and R4's `as readonly string[]` cast stays.
+>
+> **R11 — "Keeps green" additions.** 5.2a: `src/lib/api-put-user-settings-mock.test.ts`, `src/store/account-slice.test.ts`. 5.2b: `src/lib/api-analyzer-catalog-mock.test.ts`, `src/components/settings/analyzer-endpoints-section.test.tsx`, `server/src/routes/openapi-analyzer-endpoints-parity.test.ts`. Mutations 1–8 stand; where an expectation quotes `details`, read `issues` (R2).
+>
+> **R12 — no key narrowing.** Step 3's sentence "the key narrowing is TypeScript-only (Task 5.4)" is void: Task 5.4a-1 keeps `ModelCapabilityRecord.reasoning`'s key a `string` so the interface and the persisted schema stay mutually assignable.
+>
+> **R13 — mock PUT parity (5.2a).** A whitelist entry alone would let mock mode and e2e save a named Ollama level, or a Gemini level, that the server's PUT refuses. `mockPutUserSettings` (`src/lib/api.ts:7684`) therefore mirrors the server's judgement. Add, above it:
+> ```ts
+> /* #3084 PR 5a — mirrors the server's PUT judgement of analyzerReasoningByEngine (routes/user-settings.ts
+>    + workspace/analyzer-request-controls.ts analyzerRequestControlsPatchSchemaFor): only entries this save
+>    changes are judged (N6); Ollama keys are written normalised (N7); a named Ollama level needs that
+>    model's own accepted Test record (P18); a Gemini level must be one the model offers. Paths and messages
+>    are the server's. Deliberate subset, unobservable in mock mode: the mock ignores a record's server-URL
+>    binding (mockTestAnalyzerModel always writes for the mock server), and its Gemini table holds only the
+>    mock catalog's one Gemini id; any other Gemini id offers model-default only, as the server does for an
+>    id its table lacks. */
+> type MockReasoningLevel = ApiComponents['schemas']['ReasoningLevel'];
+> const MOCK_OLLAMA_BASE_LEVELS: readonly MockReasoningLevel[] = ['model-default', 'off', 'on'];
+> const MOCK_OLLAMA_NAMED_LEVELS = ['low', 'medium', 'high'] as const;
+> const MOCK_GEMINI_LEVELS: Record<string, readonly MockReasoningLevel[]> = {
+>   'gemini-3.5-flash-lite': ['model-default', 'minimal', 'low', 'medium', 'high'],
+> };
+> const mockNormalizeTag = (tag: string): string => (tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag);
+>
+> /** The levels the server's catalog would offer this Ollama model: the base levels, plus each named level
+>     the model's own Test record accepted (either tag form, N7). Also used by mockGetAnalyzerModels (5.2b). */
+> function mockOllamaOffered(model: string, records: UserSettings['analyzerCapabilitiesByModel'] | undefined): readonly MockReasoningLevel[] {
+>   const key = mockNormalizeTag(model);
+>   const record = records?.[key] ?? Object.entries(records ?? {}).find(([saved]) => mockNormalizeTag(saved) === key)?.[1];
+>   const named = MOCK_OLLAMA_NAMED_LEVELS.filter((level) => record?.control.ok === true && record.reasoning[level] === 'accepted');
+>   return [...MOCK_OLLAMA_BASE_LEVELS, ...named];
+> }
+>
+> function mockReasoningIssues(next: NonNullable<UserSettingsPatch['analyzerReasoningByEngine']>): { path: string[]; message: string }[] {
+>   const stored = MOCK_USER_SETTINGS.analyzerReasoningByEngine ?? {};
+>   const issues: { path: string[]; message: string }[] = [];
+>   const writable: readonly string[] = [...MOCK_OLLAMA_BASE_LEVELS, ...MOCK_OLLAMA_NAMED_LEVELS];
+>   for (const [model, level] of Object.entries(next.ollama ?? {})) {
+>     const path = ['analyzerReasoningByEngine', 'ollama', model];
+>     const before = Object.entries(stored.ollama ?? {}).find(([saved]) => mockNormalizeTag(saved) === mockNormalizeTag(model))?.[1];
+>     if (before === level) continue; // N6 — an unchanged entry is saved back as it was
+>     if (engineForModelId(model) === 'openai') {
+>       issues.push({ path, message: `Ollama reasoning map key "${model}" is an endpoint model id; endpoints carry their own Reasoning setting.` });
+>     } else if (!writable.includes(level)) {
+>       issues.push({ path, message: `Ollama reasoning "${level}" for ${model} is not an Ollama level (${writable.join(', ')}).` });
+>     } else {
+>       const offered = mockOllamaOffered(model, MOCK_USER_SETTINGS.analyzerCapabilitiesByModel);
+>       if (!(offered as readonly string[]).includes(level)) {
+>         issues.push({ path, message: `Ollama reasoning "${level}" for ${model} needs a Test of that model that accepted it (offered now: ${offered.join(', ')}).` });
+>       }
+>     }
+>   }
+>   for (const [model, level] of Object.entries(next.gemini ?? {})) {
+>     const path = ['analyzerReasoningByEngine', 'gemini', model];
+>     if (stored.gemini?.[model] === level) continue; // N6
+>     if (engineForModelId(model) !== 'gemini') {
+>       issues.push({ path, message: `Gemini reasoning map key "${model}" is not a Gemini model id.` });
+>       continue;
+>     }
+>     const offered = MOCK_GEMINI_LEVELS[model] ?? ['model-default'];
+>     if (!(offered as readonly string[]).includes(level)) {
+>       issues.push({ path, message: `Gemini reasoning "${level}" is not available for ${model} (offered: ${offered.join(', ')}).` });
+>     }
+>   }
+>   return issues;
+> }
+> ```
+> In `mockPutUserSettings`, after the RETIRED check and before the destructure, add
+> ```ts
+>   /* #3084 PR 5a — the server's 400 + issues body, as the endpoint-id refusal above formats it. */
+>   if (patch.analyzerReasoningByEngine) {
+>     const issues = mockReasoningIssues(patch.analyzerReasoningByEngine);
+>     if (issues.length > 0) {
+>       throw new Error(`User settings save failed (400): ${JSON.stringify({ error: 'Invalid user settings.', issues })}`);
+>     }
+>   }
+> ```
+> and store the map with normalised Ollama keys (N7): in the persisted literal, instead of the bare `analyzerReasoningByEngine` entry, pass
+> `analyzerReasoningByEngine: patch.analyzerReasoningByEngine && { ...patch.analyzerReasoningByEngine, ...(patch.analyzerReasoningByEngine.ollama ? { ollama: Object.fromEntries(Object.entries(patch.analyzerReasoningByEngine.ollama).map(([m, l]) => [mockNormalizeTag(m), l])) } : {}) },`
+> (the existing `.filter(([, v]) => v !== undefined)` drops it when unsent). The messages are copied from Step 3's `analyzerRequestControlsPatchSchemaFor`; if the server text you wrote differs, copy yours. Check the field names on the generated `UserSettingsPatch` / `UserSettings` types (`analyzerReasoningByEngine`, `analyzerCapabilitiesByModel`) and the frontend `ModelCapabilityRecord` shape before compiling; `engineForModelId` (`src/lib/model-id.ts:13`) is already imported in `api.ts`.
+> - Tests, in `src/lib/api-put-user-settings-mock.test.ts` (with R7c): a named Ollama level with no record is refused (`/400/` and the "needs a Test" message), and saves once `_setMockUserSettingsForTest` seeds a record that accepted it; a Gemini level the model does not offer is refused; an unchanged stale entry is saved back (N6: seed `{ ollama: { 'q:9b': 'high' } }` with no record, then PUT a map holding that same entry plus a changed Gemini level → saves); `{ ollama: { 'qwen3:latest': 'on' } }` is stored under `qwen3` (N7).
+> - **Mutation 10:** in `mockOllamaOffered`, drop the record filter (`named` = all three named levels). Expected red: the no-record refusal case. Restore.
+
 **Files:**
 - Modify: `server/src/workspace/user-settings.ts:317` at `80be2f1d`, re-pinned from `:253` (schema, after `analyzerKeepAliveByModel`) and `:390` at `80be2f1d`, re-pinned from `:334` (defaults, after `analyzerKeepAliveByModel: {}`)
 - Modify: `server/src/routes/user-settings.ts` — the `PUT /` handler (`:114`, its `try {` at `:115`, at `80be2f1d`, re-pinned from `:84-86`): write validation goes after #3192's `RETIRED_ANALYZER_FIELDS` early-reject block (`:117-129`), still before `writeUserSettings` (`:131`)
@@ -1627,6 +1971,120 @@ git commit -m "feat(server,openapi,mocks): store and validate analyzer reasoning
 ```
 
 ### Task 5.3: Every transport sends the resolved level; the runner and the three analyzers pass it
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Three children** (table rows 5–7), one commit each. `reasoning?` is optional since 5.1b and no settings closure sets it until 5.3C, so typecheck stays green after each:
+> - **5.3A — Ollama + OpenAI wire.** `transports/ollama-transport.ts` (both bodies) and `transports/openai-transport.ts` (`buildOpenAIRequestBody`). Create `transports/reasoning-wire.test.ts` with only its header, `Ollama wire`, `Ollama free-text (persona) wire` and `OpenAI-compatible wire` describes (everything in Step 1's `reasoning-wire.test.ts` block above `describe('Gemini wire'`): leave out the `GoogleGenAI` type import, the `GeminiTransport, mergeGeminiThinkingConfig` import, `geminiRateLimiter` and its `_reset()` call, and `vi` if nothing left uses it (`noUnusedLocals`). Optionally add the pure case to the existing `transports/openai-request-body.test.ts` (below). Mutations 1, 1b. No production behaviour changes: no caller sets `reasoning` yet.
+>   Commit: `feat(server): send the reasoning level on the Ollama and OpenAI-compatible transports`.
+> - **5.3B — Gemini wire.** `transports/gemini-transport.ts`: `mergeGeminiThinkingConfig`, the `requestThinks` / `sentConfig` / evidence-gate block (below), `resolveGeminiThinkingIdleTimeoutMs`, `geminiThinkingWindowApplies`, the watchdog calls and the import swap. Create `transports/gemini-request-thinks.test.ts`; append the plan's `describe('Gemini wire', …)` block (the last describe in Step 1's `reasoning-wire.test.ts` block) to `reasoning-wire.test.ts`, adding back the imports and the `beforeEach` `geminiRateLimiter._reset()` 5.3A left out, plus the config-ordering regression case below. Run the slow lane once: `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts` (add no assertion to that file). Mutations 3, 3b (new), 5, 8, 9, 10, 10b.
+>   Commit: `feat(server): send the reasoning level on the Gemini transport and key thinking to the request`.
+> - **5.3C — analyzer settings.** The `ollama.ts` / `gemini.ts` settings closures and `openAIRequestSettings`. Tests: `gemini-reasoning-wiring.test.ts`, the `voice-style.test.ts` append, and the `openai-analyzer.test.ts` assertion update plus new case. Mutations 4, 6, 7, 11. Needs 5.2a's `UserSettings.analyzerReasoningByEngine` (an excess-property error in the wiring test before it). This is the only part that changes runtime requests, and only for saved non-default levels; the defaults (`off` → `think:false`, `model-default` → nothing) reproduce today's wire.
+>   Commit: `feat(server): resolve each analyzer's saved reasoning level into its requests`.
+>
+> The plan's single Step 6 commit becomes these three; each child's `git add` names exactly the files above.
+>
+> **Interfaces.** "Consumes" also lists **Task 5.2** (`UserSettings.analyzerReasoningByEngine`, needed for 5.3C's typecheck). Re-pinned anchors: `getCachedUserSettings` → `user-settings.ts:1373`, `_setUserSettingsCacheForTest` → `:2111`.
+>
+> **Files block — replacement anchors.**
+> - `server/src/analyzer/transports/ollama-transport.ts`: the streaming `send` body literal (`const body = {` `:272`; `think: false,` `:292` with its 3-line comment `:289-291`; the pre-abort check `if (signal?.aborted)` `:320`) and W4's `sendFreeText` body literal (`const body = {` `:132`; `think: false,` `:141`; `const releaseSlot = await acquireAnalyzerSlot(this.model, onCpu);` `:164`). Both literals are untyped today.
+> - `server/src/analyzer/transports/gemini-transport.ts`: in `generate` (`:218`), the `includeThoughts` local (`:230`), the `config` literal (`:231-242`) plus its two later mutations — `Object.assign(config, geminiStructuredConfig(…))` (`:243`) and `config.abortSignal = combined;` (`:264`) — and the stream call (`:311-315`). Also `resolveGeminiThinkingIdleTimeoutMs` (`:91-95`), `geminiThinkingWindowApplies` (`:100-102`), the watchdog calls (`:267-268`), the usage gate `if (includeThoughts && thoughtsTokenCount !== undefined)` (`:435`) and the `geminiModelThinks` import (`:18`; its only uses are `:94`, `:101`, `:230`).
+> - `server/src/analyzer/transports/openai-transport.ts`: there is no `params` local. The body is the exported pure `buildOpenAIRequestBody(endpoint, model, req): Record<string, unknown>` (`:281-309`, doc comment `:280`), which `attempt()` passes straight to `create(… as unknown as ChatCompletionCreateParamsStreaming)` (`:439-442`). Free-text shaping already lives in that builder (`:301-307`).
+> - `server/src/analyzer/ollama.ts:47-50` and `server/src/analyzer/gemini.ts:43-46` (settings closures; neither imports `getCachedUserSettings` yet, and adding it closes no cycle). `server/src/analyzer/openai.ts:24-31` (`openAIRequestSettings`, its "No reasoning / extraParams…" comment `:28-29`, the closure `:48`).
+>
+> **Ollama (5.3A), replacing the step text.** In `send`, change `const body = {` (`:272`) to `const body: Record<string, unknown> = {`. Delete `think: false,` and its 3-line comment (`:289-292`). Directly after the literal, before the `if (signal?.aborted)` pre-abort check, add:
+> ```ts
+>     /* #3084 wave 5 — reasoning. `undefined` = a caller that predates reasoning
+>        settings (the Test action's direct transport.send): keep today's think:false
+>        (qwen3.5's <think> tokens break the parser; Ollama accepts false on
+>        non-thinking models). A defined level sends exactly its fragment;
+>        'model-default' sends no `think` at all. */
+>     if (req.reasoning === undefined) {
+>       body.think = false;
+>     } else {
+>       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
+>     }
+> ```
+> In `sendFreeText`, change `const body = {` (`:132`) to `const body: Record<string, unknown> = {`, delete `think: false,` (`:141`), and add the identical block directly after the literal, before the `const releaseSlot = …` line (`:164`). Add `import { reasoningWireFragment } from '../reasoning.js';`. **Mutation 1** reads: in `send`, delete `body.think = false;`. Expected red: `undefined reasoning keeps think:false (pre-W5 behaviour)`. Restore.
+>
+> **OpenAI (5.3A), replacing the step text.** In `buildOpenAIRequestBody` (`openai-transport.ts:281`), append one spread as the last entry of the returned literal, after `...openAIResponseFormat(req.structuredOutput),`:
+> ```ts
+>     /* #3084 wave 5 — `undefined` keeps the pre-W5 wire (no reasoning field); a level sends exactly
+>        its fragment ('model-default' sends nothing). Free-text (persona) requests use this same
+>        builder, so they carry the level too. */
+>     ...(req.reasoning !== undefined ? reasoningWireFragment('openai', { model, endpoint }, req.reasoning) : {}),
+> ```
+> Change the doc comment `/** Reasoning / extraParams: wave 5. */` (`:280`) to `/** #3084 — reasoning: wave 5a (Task 5.3); extraParams: wave 5b (Task 5.10). */`. Add `import { reasoningWireFragment } from '../reasoning.js';`. `attempt()` is unchanged. Optional pure case in `transports/openai-request-body.test.ts`: `buildOpenAIRequestBody(<enable_thinking endpoint>, 'm', { ...req('off'), freeText: {} }).chat_template_kwargs` equals `{ enable_thinking: false }` (pins the persona path without HTTP).
+>
+> **Gemini (5.3B) — replace the "hoist the `config` literal into `baseConfig`" paragraph and its steps 1 / 2 / 2b. The ordering is load-bearing.** `config` (`gemini-transport.ts:231`) is already a `Record<string, unknown>` and is mutated twice after the literal (`:243` structured output, `:264` `abortSignal`). `mergeGeminiThinkingConfig` returns a NEW object whenever the fragment carries a `thinkingConfig`. Binding the merge "directly after the literal", as the step says, would make any non-default level silently lose `responseMimeType` / `responseJsonSchema` AND `abortSignal` (no structured output, and pause / ceiling / idle could not cancel the stream), and no plan test would catch it. So the merge runs AFTER `:243`, and `abortSignal` is attached to the merged object. Replace `:224-243` (the two comment blocks above the `includeThoughts` local, through the `Object.assign(config, …)` line) with:
+> ```ts
+>     /* #3084 P27 — decided once per request from its settings, never the catalog: the id rule by default,
+>        or a level that turns thinking on or off (N1). */
+>     const requestThinks = geminiRequestThinks(this.model, req.reasoning);
+>     const config: Record<string, unknown> = {
+>       /* #3084 W4 — a free-text request omits what the pre-transport persona call never sent
+>          (it was a bare generateContent({ model, contents })). Stage requests are unchanged. */
+>       ...(req.freeText && req.system === '' ? {} : { systemInstruction: req.system }),
+>       ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
+>       /* Thought summaries (P19) on stage requests that think by id or level; a free-text (persona)
+>          request gets a thinkingConfig only from a non-default level's fragment, below. */
+>       ...(!req.freeText && requestThinks ? { thinkingConfig: { includeThoughts: true } } : {}),
+>       ...(req.freeText && req.maxOutputTokens === undefined
+>         ? {}
+>         : { maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS }),
+>     };
+>     Object.assign(config, geminiStructuredConfig(req.structuredOutput));
+>     /* #3084 wave 5 — the level's fragment, merged AFTER the structured-output keys and BEFORE
+>        abortSignal is attached below (the merge returns a new object). Task 5.10 merges the payload
+>        into this same `sentConfig`. */
+>     const sentConfig =
+>       req.reasoning === undefined
+>         ? config
+>         : mergeGeminiThinkingConfig(config, reasoningWireFragment('gemini', { model: this.model }, req.reasoning));
+>     /* #3084 P27, A3 — one flag, read from the thinkingConfig this request actually sends: a
+>        thoughtsTokenCount is reasoning evidence only when the wire asked for thoughts. */
+>     const includeThoughts =
+>       (sentConfig.thinkingConfig as { includeThoughts?: unknown } | undefined)?.includeThoughts === true;
+> ```
+> The literal's other entries are W2/W4's text unchanged (verified at `542d3501`); only the `thinkingConfig` line and its comment differ. Then change `:264` to `sentConfig.abortSignal = combined;` and the stream call's `config,` (`:314`) to `config: sentConfig,`. The usage gate (`:435`) needs no edit — it reads `includeThoughts`, which is still the name — but update its comment (`:432-434`, "Gemma asks for none") to: "only on a request whose wire asked for thoughts (Gemma at its default or `off` asks for none, so its empty MAX_TOKENS keeps the #528 split)." No `GenerateContentConfig` import or cast is needed (the step's `as GenerateContentConfig` is dropped). Add `geminiRequestThinks`, `reasoningWireFragment` to a `../reasoning.js` import; remove `geminiModelThinks` from the `:18` import once its three uses are gone. Steps 3–6 of the Gemini text (the resolver, the private helper, the watchdog calls, the import) fit the code exactly.
+>
+> **Config-ordering regression case (5.3B)** — append to the `Gemini wire` describe in `reasoning-wire.test.ts`:
+> ```ts
+>   it('a level keeps structured output and the abort signal on the config actually sent', async () => {
+>     const cap: Array<{ config: Record<string, unknown> }> = [];
+>     await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client: fakeClient(cap) }).send(req('low'));
+>     expect(cap[0].config.responseMimeType).toBe('application/json');
+>     expect(cap[0].config.abortSignal).toBeInstanceOf(AbortSignal);
+>     expect(cap[0].config.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 'LOW' });
+>   });
+> ```
+> **Mutation 3b:** move the `sentConfig` declaration above `Object.assign(config, geminiStructuredConfig(…))`. Expected red: this case (`responseMimeType` is `undefined`). Restore.
+>
+> **`gemini-request-thinks.test.ts` helpers (5.3B).** In Step 1, replace the parenthetical in the line that introduces `server/src/analyzer/transports/gemini-request-thinks.test.ts` ("(N1, P27; the helpers are copied verbatim from W2's `transports/gemini-transport.test.ts` …)") with: the helpers are copied verbatim from W2's `transports/gemini-transport-thinking.test.ts` — `chunk` / `clientWith` / `request` / `ANSWER` at `:23-53`, and `timedStream` / `answerAfter` / `transport` from inside its describe at `:136-153`. `transports/gemini-transport.test.ts` has none of them.
+>
+> **`gemini-reasoning-wiring.test.ts` (5.3C).** Give the fake client a `list`, so `prepare()` → `warmGeminiCatalog` (`catalog/gemini-catalog.ts:213`) fails fast and quietly instead of warning about a missing method:
+> ```ts
+>   class FakeGoogleGenAI {
+>     models = {
+>       list: async () => { throw new Error('offline'); },
+>       generateContentStream: async (params: { config: Record<string, unknown> }) => {
+>         captured.push(params);
+>         return (async function* () { yield { text: '{}', candidates: [{ finishReason: 'STOP' }] }; })();
+>       },
+>     };
+>   }
+> ```
+> Add `vi.spyOn(console, 'warn').mockImplementation(() => {})` in its `beforeEach` if the catalog warning is still printed. The `vi.mock('../handoff/protocol.js')` path is correct (`server/src/handoff/protocol.ts`).
+>
+> **Persona closures (5.3C).** Delete the sentence "If W4 built a separate settings closure for persona generation, apply the line matching its engine there too." W4 did not: `voice-style.ts:217-234` (`personaRunner`) builds the same analyzers and uses their `.runner`, so the closures cover persona generation. The `voice-style.test.ts` append goes after `CHAR` (`:397`); `mockSettingsPatch` (`:45-53`) and the env mapping (`:79-91`) exist.
+>
+> **`openai-analyzer.test.ts` (5.3C).** The P24 assertion is at `:155` (exactly `{ structuredOutput: 'schema', maxOutputTokens: 29_491 }`); its helpers are `:21-80`.
+>
+> **Step 4 "Keeps green" additions:** `src/analyzer/transports/gemini-transport-thinking.test.ts`, `src/analyzer/transports/gemini-transport.free-text.test.ts`, `src/analyzer/transports/openai-request-body.test.ts`, `src/analyzer/transports/ollama-transport.test.ts` (its `:63` `think false` case), `src/analyzer/transport-redaction.test.ts`. Re-pin `ollama.test.ts:386-410` → `:388-412`, and add `ollama.test.ts:1425` (W4's persona `body.think === false`; stays green because the local default resolves `off` → `{ think: false }`). The slow-lane Gemma case is `gemini.test.ts:914` (`gemini.test.ts` is in `vitest.config.slow.ts` `SLOW_FILES`, `:46`).
+>
+> **Stale comments this task makes false (chores, fixed in the child named):** `gemini-transport.ts:224-229` (replaced by the new comment) and `:236-237` ("wave 5 (Task 5.3) adds…") and `:432-434` — 5.3B; `openai-transport.ts:280` — 5.3A; `openai.ts:28-29` — 5.3C (already in the step).
+>
+> **Guards.** This task adds no `console.*` call. New value edges (`transports/* → reasoning.ts`, `ollama.ts` / `gemini.ts` / `openai.ts → reasoning.ts`) close no cycle; run `npm run check:cycles` in 5.3A and 5.3C.
 
 **Files:**
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` — the streaming request-body literal (W1 moved it from `server/src/analyzer/ollama.ts:632-675` at `80be2f1d`, re-pinned from `:631-674`; the line to change is the moved `think: false,` from `ollama.ts:649-652` at `80be2f1d`, re-pinned from `:648-651`) **and** W4's non-streaming `sendFreeText` body literal (the persona branch moved from `ollama.ts:951-1028` at `80be2f1d`, re-pinned from `:950-1027`, which also hard-codes `think: false,`)
@@ -2349,6 +2807,196 @@ git commit -m "feat(server): send the configured reasoning level on every analyz
 ```
 
 ### Task 5.4: Test action level step, level-keyed records, pre-run refusal of a stale level, catalog `offeredReasoningLevels`
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Seven children** (table rows 8–14), one commit each, strictly in this order: all of them edit `capabilities.ts`. Mutation numbers are the Step 5 list's; 27–29 and D2-a/b are new.
+>
+> - **5.4a-1 — record identity, merge leaf, per-verdict dates.** Create `capability-record-merge.ts` (`sameServer` moved, `mergeCapabilityRecords`, `verdictDates`) and `capability-record-merge.test.ts`. In `capabilities.ts`: `capabilityRecordKey`, `sameCapabilityRecordModel`, `verdictTestedAtFor`, the N7 `capabilityRecordFor` lookup, the `ModelCapabilityRecord.verdictTestedAt` interface field (R3) and the A2 dates in `assertConfiguredCapabilitiesAllowed`; add `inferEngineFromModelId` to the `./model-id.js` import (R0b) and `entryForModelTag` / `normalizeModelTag` from `./ollama-tag.js`. Tests: `capability-record-merge.test.ts`; the `one Ollama model id for Test records (N7)` and `a refusal cites the verdict's own Test date (A2)` describes of `capabilities.reasoning.test.ts` (create the file with only those). Mutations 17 (red: the N7 describe), 19, 21, 23's `verdictDates` half, and 24. Typecheck stays green: the interface field is optional, and the persisted schema (still without it, until 5.4a-2) and the interface stay mutually assignable — a type with an extra optional property is assignable both ways to one without it outside an object literal, and nothing writes `verdictTestedAt` before 5.4c-1.
+>   `git add server/src/analyzer/capability-record-merge.ts server/src/analyzer/capability-record-merge.test.ts server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.reasoning.test.ts`
+>   Commit: `feat(server): Test record identity, verdict merge and per-verdict dates`.
+> - **5.4a-2 — persisted record merge and key.** In `user-settings.ts`: the `modelCapabilityRecordSchema` `verdictTestedAt` field (and its `:266` comment to present tense, R3) and the merging `writeAnalyzerCapabilityRecord`. The route's record key (`routes/analyzer-models.ts:68`). Openapi `ModelCapabilityRecord.verdictTestedAt` + `npm run openapi:types`. Tests: `writeAnalyzerCapabilityRecord` unit cases in `server/src/workspace/user-settings.test.ts` for the N14 merge, the `:latest` rewrite and the digest replace (the route-level versions need the ladder and land in 5.4c-1); in `server/src/routes/analyzer-models.test.ts` the `:125` third-argument update plus one case asserting a POST for `qwen3:latest` writes under `'qwen3'` (mocked `runModelTest`). Mutations 18 and 22 (red: the new `user-settings.test.ts` cases) and 20 (red: the new `analyzer-models.test.ts` case).
+>   `git add server/src/workspace/user-settings.ts server/src/workspace/user-settings.test.ts server/src/routes/analyzer-models.ts server/src/routes/analyzer-models.test.ts openapi.yaml src/lib/api-types.ts`
+>   Commit: `feat(server,openapi): merge each Test into the stored record under one model key`.
+> - **5.4b — ladder pieces, added but not called.** `isHttp400` → exported `isProbeRejected` (rename, update its callers), `ReasoningLevelTestInconclusiveError`, `reasoningLevelsToProbe`, `plannedReasoningProbeCount`, `probeReasoningLevels` (R4), `reasoningSelectionFor`, `configuredReasoningFor`. Tests: the `isProbeRejected` and `probeReasoningLevels — the level step (P7)` describes of `capabilities.reasoning.test.ts`, and the `levels to probe and counts` describe WITHOUT its `planDeps` constant and its two `plannedTestRequestCount(…)` assertions (at this child `plannedTestRequestCount` is still W3c's, so those lines would be red; 5.4c-1 adds them, and drop the `ALL_STRUCTURED_OUTPUT_MODES` / `plannedTestRequestCount` test imports until then). Mutations 1–4 and 15.
+>   Commit: `feat(server): reasoning-level probe primitives for the Test action`.
+> - **5.4c-1 — ladder wiring.** `ModelTestDeps`' two required fields, the `sendStep` / `modeStep` level parameter, `runModelTest` (R5), `plannedTestRequestCount`, `model-test-deps.ts`, and in `catalog/analyzer-catalog.ts` the `toEntry` ctx `endpoint` + the `sel` / `level` / `planDeps` locals and the clean-up of `OFFERED` and the `defaultReasoningKey` import (the "ctx", "Locals" and "Clean-up" bullets of Step 3's catalog section — NOT the `offeredReasoningLevels` return entry; so this child imports only `resolveReasoningSetting` from `../reasoning.js`, and 5.4c-2 adds `offeredReasoningLevels` to that import). Tests: the `runModelTest` level-step describe of `capabilities.reasoning.test.ts`; `server/src/routes/analyzer-models.reasoning.test.ts` with every case except `the catalog offers named Ollama levels only after a Test accepted them`, using R7's setup; the R6 updates; the `capabilities.test.ts` `plannedTestRequestCount` deps; the `model-test-deps.test.ts` additions. Also: append the `planDeps` constant and the two `plannedTestRequestCount(…)` assertions (`2` / `8`) to the `levels to probe and counts` describe (mutation 9 expects them), and add the `label reflects the configured level` describe (it pins W3b's `structuredOutputLabel` keyed by the configured level that this child's catalog now passes; it already passes before the change). Stale-comment chore: `server/src/analyzer/errors.ts:367-377` — `AnalyzerCapabilityRejectedError`'s doc ("or — from wave 5 — its reasoning level") and its `setting` field comment ("W3 records only `structuredOutput`") become false once the Test records level verdicts; reword both to present tense. Mutations 5–9 and 23's `runModelTest` half. The `Pick` change forces the deps, the catalog's `planDeps` and the tests into this one commit. `defaultReasoningKey` survives here (`assertAnalyzerTargetUsable` still uses it).
+>   Commit: `feat(server): the Test action probes the configured reasoning level`.
+> - **5.4c-2 — catalog levels, per-verdict date, mock parity.** `toEntry`'s `offeredReasoningLevels: offeredReasoningLevels(sel),` return entry; the `AnalyzerCatalogEntry` interface field and comment (R3); the per-verdict date `structuredOutput.outcomeTestedAt` (5.4-D2, R10) on the server, in openapi, in the mock and in the Test line; the frontend mock parity (R8). Tests: the route case `the catalog offers named Ollama levels only after a Test accepted them` (append to `analyzer-models.reasoning.test.ts`); the `analyzer-catalog.test.ts` endpoint-group `offeredReasoningLevels` assertion and the D2 case; `model-test-button.test.ts`'s D2 case; one Ollama `testPlan` assertion in `src/lib/api-analyzer-catalog-mock.test.ts`. Stale-comment chore: the mock catalog comment `src/lib/api.ts:9222-9225` ("testPlan mirrors the server's plannedTestRequestCount for W3: configured = the off-mode control + 1…, all = control + the schema and json checks") describes the old formula — reword it to R8's. Mutations 10, D2-a, D2-b.
+>   Commit: `feat(server,frontend,openapi,mocks): catalog reasoning levels and per-verdict Test dates`.
+> - **5.4d — coded refusal for analysis runs.** `AnalyzerReasoningUnavailableError` in `errors.ts`; `reasoning.ts` `unavailable()` plus the five `reasoning.test.ts` assertions and the mid-run case; `assertConfiguredReasoningOffered` (with `when`, R1); `assertAnalyzerTargetUsable` (R1) and `index.ts:305`; delete `defaultReasoningKey` (definition, doc comment `capabilities.ts:76-79`, its `capabilities.test.ts` describe and import), and the now-unused `type TransportKind` import (`capabilities.ts:14`). Tests: `preflight.reasoning.test.ts` (with the A3 digest case), the `capabilities.reasoning.test.ts` mid-run case (R1), and a fallback mid-run case if the fallback suite's harness reaches `checkedTarget`. Mutations 11 (preflight half), 12, 16, 25, 26, 27. The last user of `defaultReasoningKey` goes in the same commit.
+>   Commit: `feat(server): refuse a stored reasoning level the rules no longer offer, before the run starts`.
+> - **5.4e — persona refusal (5.4-D1).** `assertPersonaReasoningAllowed` in `capabilities.ts` (R9), the `voice-style.ts` call, the `cast-design.ts` rethrow and its "Failure modes" comment. Tests: the `voice-style.test.ts` and `cast-design.test.ts` appends plus the two D1 cases (R9). Mutations 11 (persona half), 13, 14, 28, 29.
+>   Commit: `feat(server): persona generation refuses a rejected or stale reasoning level before any call`.
+>
+> **R0 — anchors at `542d3501`** (`server/src/analyzer/capabilities.ts` unless noted). `ModelCapabilityRecord` `:36-53` (its `reasoning` comment `:44-47`, field `:48`); `ModelTestDeps` `:55` (`modelDigest?` `:58-60`, after `serverUrl`; `probeLimits` `:66`); `defaultReasoningKey` `:80` (doc `:76-79`); `sameServer` `:166-168`; `capabilityRecordFor` `:170-183`; `assertConfiguredCapabilitiesAllowed` `:185-199` (its two throws pass `record.testedAt`, `:192`, `:196`); `assertAnalyzerTargetUsable` `:203-231` (its `defaultReasoningKey` calls `:215`, `:221`, `:227`); `plannedTestRequestCount` `:233-241`; `ModelTestControlFailedError` `:245`; `ModelTestInconclusiveError` `:256`; `isHttp400` `:296`; `providerText` `:302`; `sendStep` `:307-319`; `modeStep` `:327-350`; `const level = defaultReasoningKey(deps.transport.kind);` `:358-359`; the step-2 hook comment `:380-384`; the step-3 loop `:386-393`; the digest statement `:396-397`. Elsewhere: `modelCapabilityRecordSchema` `workspace/user-settings.ts:253-268` (`digest` `:267`, its comment "5a adds verdictTestedAt beside it" `:266`); `writeAnalyzerCapabilityRecord` `:1918-1930` (`mutateUserSettings` `:1891` merges shallowly, so the full-map replacement is right); the route write `routes/analyzer-models.ts:68`; `model-test-deps.ts:37` (`const offered = …`, `modelDigest` wired at `:83`); `catalog/analyzer-catalog.ts` — `interface AnalyzerCatalogEntry` `:42-55` (comment `:39-41`), import of `defaultReasoningKey` `:23`, `OFFERED` `:263`, `toEntry` `:265-303` (its three locals `:271-273`, return `:283-302`); `voice-style.ts:253` (`const runner = personaRunner(selection);`), its `./model-id.js` import `:37`, `getCachedUserSettings` imported `:30`; `routes/cast-design.ts` `runPersonaPrePass` rethrow `:340-348`, imports `:59-64`, "Failure modes" comment `:295-301`; `analyzer/index.ts:305` (`checkedTarget`'s `assertAnalyzerTargetUsable` call); `openapi.yaml` `ModelCapabilityRecord` `:5803-5826`, `AnalyzerCatalogEntry` `:5827` (`structuredOutput.outcome` `:5849`); `src/lib/api.ts` `mockGetAnalyzerModels` `:9218-9306` (hard-coded `testPlan` `:9263`), the `mockLevelKey` comment `:9228-9229`.
+>
+> **R0b — `capabilities.ts` imports at `542d3501`.** Already imported: `getResolvedOllamaUrl` (`:19`), `resolveEndpointApiKey` (a value import from `../workspace/analyzer-endpoints.js`, `:20`), `parseEndpointModelId` and `type AnalysisEngine` (`:21`), `namesContextOrTokenLimit` (`:22`), `AnalyzerCapabilityRejectedError` and `type TransportKind` (`:9-15`). Not imported yet: `inferEngineFromModelId` (add to the `:21` import in 5.4a-1: `capabilityRecordKey` and the N7 `capabilityRecordFor` use it), `type AnalyzerEndpoint` (add to the `:20` import in 5.4b, for `reasoningSelectionFor`), and every `./reasoning.js` / `./capability-record-merge.js` / `./ollama-tag.js` name — each child adds the ones its own code uses. 5.4d removes `type TransportKind`.
+>
+> **R1 — the analysis pre-run refusal (5.4d). Replaces the `preflight.ts` paragraph and mutations 12 / 16 / 26.** `preflight.ts` is **not** edited for this (only its header comment, below): since 3d (P30), `runAnalyzerPreflight` (`preflight.ts:76-89`) calls `assertAnalyzerTargetUsable(target, settings, digests?.get(target.modelId))` (`:87`) per target, and a fallback target's first call runs the same function mid-run (`index.ts:305`). Replace `assertAnalyzerTargetUsable` with:
+> ```ts
+> export function assertAnalyzerTargetUsable(
+>   target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine },
+>   settings: UserSettings,
+>   digest?: string,
+>   /** P17/N10 — 'mid-run' when a fallback target's first call runs this (index.ts checkedTarget):
+>       the run has started, so Task 5.5's copy must not say it was not started. */
+>   when: 'before-start' | 'mid-run' = 'before-start',
+> ): void {
+>   if (target.engine === 'openai') {
+>     const parsed = parseEndpointModelId(target.modelId);
+>     const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+>     if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source, parsed ? 'not-saved' : 'not-an-endpoint');
+>     resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
+>     assertConfiguredCapabilitiesAllowed(
+>       capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
+>       { structuredOutput: endpoint.structuredOutput, reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
+>       target.modelId,
+>     );
+>   } else if (target.engine === 'gemini') {
+>     assertConfiguredCapabilitiesAllowed(
+>       capabilityRecordFor(settings, target.modelId, 'gemini'),
+>       { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, undefined, when) },
+>       target.modelId,
+>     );
+>   } else {
+>     assertConfiguredCapabilitiesAllowed(
+>       capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digest),
+>       { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, digest, when) },
+>       target.modelId,
+>     );
+>   }
+> }
+> ```
+> `assertConfiguredReasoningOffered` (Step 3's code) gains a trailing parameter and passes it to the error:
+> ```ts
+> export function assertConfiguredReasoningOffered(
+>   settings: UserSettings,
+>   modelId: string,
+>   engine: AnalysisEngine = inferEngineFromModelId(modelId),
+>   currentDigest?: string,
+>   when: 'before-start' | 'mid-run' = 'before-start',
+> ): ReasoningLevel {
+>   const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+>   const level = resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+>   /* N10: an unknown stored value (e.g. `xhigh`) is never offered, so it is refused here too. */
+>   if (!offeredReasoningLevels(sel).includes(level)) throw new AnalyzerReasoningUnavailableError(modelId, level, sel.engine, when);
+>   return level;
+> }
+> ```
+> In `index.ts:305` pass `'mid-run'` as the fourth argument: `assertAnalyzerTargetUsable({ modelId: model, source: 'settings', engine }, getCachedUserSettings(), await digest(), 'mid-run');`.
+> - New test in `capabilities.reasoning.test.ts`: `assertAnalyzerTargetUsable({ modelId: 'gemini-3.8-flash', source: 'settings', engine: 'gemini' }, s, undefined, 'mid-run')`, with `s` storing a stale `minimal` for that model, throws `toMatchObject({ when: 'mid-run' })`; the same call with no fourth argument throws `toMatchObject({ when: 'before-start' })`. Add one case through `selectAnalyzer`'s fallback in the existing fallback suite only if its harness reaches `checkedTarget`.
+> - Mutations 12 / 16 / 26 name `assertAnalyzerTargetUsable`'s branches: 12 replaces the Gemini branch's `assertConfiguredReasoningOffered(…)` with `defaultReasoningLevel('gemini')`; 16 replaces the Ollama branch's `target.engine` with `undefined`; 26 passes `undefined` instead of `digest` in the Ollama branch's `assertConfiguredReasoningOffered(…)` (not `digests?.get(…)`). **New mutation 27:** in `assertConfiguredReasoningOffered`, pass no `when` to the `AnalyzerReasoningUnavailableError` constructor. Expected red: the new `mid-run` case (`when` is `before-start`). Restore. (`index.ts:305`'s `'mid-run'` argument is covered only if the fallback-suite case above can be written; say in the PR body which it is.)
+> - Also reword `preflight.ts`'s header comment (`:1-7`), which lists only the structured-output rejection, to name the reasoning refusal too (P17).
+> - Keeps green: `preflight.test.ts`, and the route tests of `annotate-emotion`, `instruct-annotation` and `script-review` (they run the same check; their settings carry no reasoning level).
+>
+> **R2 — entry check (plan "Entry check").** Drop `export function namesContextOrTokenLimit` from the `capabilities.ts` pattern: it and `LIMIT_400_PATTERNS` live in `server/src/analyzer/limit-400-patterns.ts:62` / `:7` (`capabilities.ts:22` imports it). Every other symbol is found. The second grep's expected list is: the definition (`capabilities.ts:80`), `runModelTest` (`:359`), `assertAnalyzerTargetUsable` ×3 (`:215`, `:221`, `:227` — not `preflight.ts`), `catalog/analyzer-catalog.ts:23` and `:273`, the `capabilities.test.ts` describe (`:13`, `:94-99`), and the frontend comment `src/lib/api.ts:9228-9229` (reworded by 5.4c-2). Step 4's final grep then finds nothing.
+>
+> **R3 — interface edits the steps miss.**
+> - **5.4a-1** (the interface; the schema field and its `:266` comment are 5.4a-2's). In `capabilities.ts`'s `interface ModelCapabilityRecord`, after `digest?: string;`, add
+>   ```ts
+>     /** #3084 wave 5 (A2) — each verdict's own Test date, keyed like the verdicts; a verdict with no
+>         entry takes `testedAt`. Mirrors modelCapabilityRecordSchema exactly (both directions, strict). */
+>     verdictTestedAt?: { reasoning?: Record<string, string>; structuredOutput?: Record<string, Record<string, string>> };
+>   ```
+>   Without it the plan's own `rec({ verdictTestedAt: … })` fails typecheck, and `user-settings.ts:262-265` requires the two shapes to stay mutually assignable. Reword the `reasoning` comment (`:44-47`): replace "W5 narrows the key to ReasoningLevel; W3 records `{}`." with "Keys are ReasoningLevel values but stay `string` (as stored values are, N10), so this stays mutually assignable with the persisted schema." Do **not** narrow the key. Reword `user-settings.ts:266`'s "5a adds verdictTestedAt beside it" to present tense.
+> - **5.4c-2.** In `catalog/analyzer-catalog.ts`'s `interface AnalyzerCatalogEntry`, add `offeredReasoningLevels: ReasoningLevel[];` (import `type ReasoningLevel` from `../reasoning.js`) and `outcomeTestedAt?: string` inside `structuredOutput` (R10). Without the first, the return entry is an excess-property error. Reword `:39-41` to drop "(offeredReasoningLevels? arrives in wave 5)". (`openapi.yaml`'s matching description was reworded by 5.2b.)
+>
+> **R4 — `probeReasoningLevels`' return type (5.4b).** Type the return and its `out` as `ModelCapabilityRecord['reasoning']` (`Record<string, 'accepted' | 'rejected'>`), not `Partial<Record<ReasoningLevel, …>>`: under `strict`, a `Partial` with optional properties is not assignable to the record's string index signature. The plan's `toEqual` assertions are unchanged.
+>
+> **R5 — keep 3c's digest statement (5.4c-1).** In the `runModelTest` replacement, keep `const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;` and `...(digest ? { digest } : {})` verbatim (`:396-397`). Add only `verdictTestedAt` and the level-keyed `reasoning`.
+>
+> **R6 — `capabilities.run-model-test.test.ts` (5.4c-1), replacing the step's bullet.** The step's "every request count and record in the file stays as written" is false:
+> - its `deps()` helper gains `reasoningSelection: () => ({ engine: 'openai', model: 'm', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' } })` and `configuredReasoning: () => 'model-default'`;
+> - the full-record `toEqual` (`:78-84`) becomes `reasoning: { 'model-default': 'accepted' }` plus `verdictTestedAt: { reasoning: { 'model-default': '2026-09-11T10:00:00.000Z' }, structuredOutput: { schema: { 'model-default': '2026-09-11T10:00:00.000Z' } } }` — the configured level equals the control level, so it is recorded `accepted` with no extra request, and the request count is unchanged;
+> - in the `[['ollama','off'], ['gemini', …], ['openai', …]]` loop (`:120-125`), pass per row `deps(transport, kind === 'ollama' ? { reasoningSelection: () => ({ engine: 'local', model: 'm' }), configuredReasoning: () => 'off' } : kind === 'gemini' ? { reasoningSelection: () => ({ engine: 'gemini', model: 'm' }) } : {})`, so the `off` key stays;
+> - the digest case (`:88-93`, `kind: 'ollama'`) asserts only `digest` and needs no override.
+>
+> **R7 — route test setup (5.4c-1), replacing the `beforeAll` / `beforeEach` of Step 1's `server/src/routes/analyzer-models.reasoning.test.ts` block.** The `ollamaUrl` setting is retired (#3141; `config/ollama-resolved.ts:20-23`), so `writeUserSettings({ ollamaUrl, … })` leaves the Test talking to `127.0.0.1:11434`. In `beforeAll`, after `ollamaUrl` is set: `savedOllamaUrl = process.env.OLLAMA_URL; process.env.OLLAMA_URL = ollamaUrl;`, restored in `afterAll` (pattern: `server/src/routes/ollama-health-load.endpoint-id.test.ts:14,25,38`). `beforeEach` becomes `await settings.writeUserSettings({ defaultAnalysisModel: 'q:4b' });`. The suite must reach only its fake server: after the run, if a real Ollama daemon runs on the box, confirm with `GET /api/ps` that the run loaded no model.
+>
+> **R8 — frontend mock parity (5.4c-2).** In `src/lib/api.ts`:
+> - `mockGetAnalyzerModels`' `entry()` computes `testPlan` the way the server does: `configured = 1 + (level !== control ? 1 : 0) + (mode !== 'off' ? 1 : 0)` and `all = 1 + (testable levels other than the control's) + 2`. Ollama `all` = 8; Gemini uses the mock's offered list minus `model-default`; endpoints use `MOCK_STYLE_LEVELS[style].length - 1`.
+> - `mockTestAnalyzerModel` records `reasoning: { [level]: 'accepted' }` and sets `outcomeTestedAt` on the entries it feeds (R10).
+> - Reword the `mockLevelKey` comment (`:9228-9229`) to cite "server capabilities.ts → reasoning.ts `defaultReasoningLevel`" instead of `defaultReasoningKey`; this is the comment R2's grep finds.
+> - Extend `src/lib/api-analyzer-catalog-mock.test.ts` with one Ollama `testPlan` assertion (`{ configured: 2, all: 8, … }`); its endpoint assertion (`:22`, `{2,3,3}`) stays correct for `not_controllable`.
+>
+> **R9 — persona refusal (5.4e, owner decision 5.4-D1).** Persona sends a reasoning level and no structured output, so its check is reasoning-only, and it now also refuses a Test-`rejected` level. Add to `capabilities.ts`, after `assertConfiguredReasoningOffered`:
+> ```ts
+> /** #3084 wave 5 (5.4-D1) — persona generation's pre-run reasoning check. A persona request sends a
+>     reasoning level and no structured output, so only the reasoning half applies: the level must still be
+>     offered (P17, AnalyzerReasoningUnavailableError) and must not be one this model's own Test recorded
+>     `rejected` (AnalyzerCapabilityRejectedError, citing that verdict's own date, A2). No digest: persona
+>     keeps capabilityRecordFor's fail-open rule. */
+> export function assertPersonaReasoningAllowed(
+>   settings: UserSettings,
+>   modelId: string,
+>   engine: AnalysisEngine = inferEngineFromModelId(modelId),
+> ): ReasoningLevel {
+>   const level = assertConfiguredReasoningOffered(settings, modelId, engine);
+>   /* The full record, not reasoningSelectionFor's `record` (typed as reasoning.ts's narrow view). */
+>   let record: ModelCapabilityRecord | undefined;
+>   if (engine === 'openai') {
+>     const parsed = parseEndpointModelId(modelId);
+>     const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+>     record = endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined;
+>   } else {
+>     record = capabilityRecordFor(settings, modelId, engine === 'local' ? getResolvedOllamaUrl() : 'gemini');
+>   }
+>   if (record?.control.ok && record.reasoning[level] === 'rejected') {
+>     throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', level, verdictTestedAtFor(record, { setting: 'reasoning', reasoning: level }));
+>   }
+>   return level;
+> }
+> ```
+>   (Verified in a scratch typecheck under the server's flags: this body compiles; the first draft, which read `reasoningSelectionFor(…).record`, failed with TS2339 / TS2532 / TS2345 because that `record` is `ReasoningSelection`'s `ReasoningRecordView`.)
+> - `voice-style.ts`: import `assertPersonaReasoningAllowed` (not `assertConfiguredReasoningOffered`) from `./capabilities.js`, add `endpointModelId` to the `./model-id.js` import (`:37`), and directly after `const runner = personaRunner(selection);` (`:253`) add
+>   ```ts
+>     /* P17 + 5.4-D1 — refuse a stored reasoning level the rules no longer offer, or one this model's own
+>        Test rejected, before the prompt is built or any request exists (after personaRunner, so a
+>        missing endpoint or a foreign key reports first). */
+>     assertPersonaReasoningAllowed(
+>       getCachedUserSettings(),
+>       selection.engine === 'openai' ? endpointModelId(selection.endpointId, selection.model) : selection.model,
+>       selection.engine,
+>     );
+>   ```
+> - `cast-design.ts`: `runPersonaPrePass`'s rethrow condition (`:340-348`) gains `err instanceof AnalyzerReasoningUnavailableError || err instanceof AnalyzerCapabilityRejectedError ||`, both imported from `../analyzer/errors.js` (`:59-64`). Every character would be refused identically, so the job ends once. Add both classes to the "PROPAGATE (wholesale job abort)" list in the "Failure modes" comment (`:295-301`). A lazy-path refusal stays a per-character failure, as the step says.
+> - New test, `voice-style.test.ts` (with the plan's two persona cases): `'a level the endpoint model's own Test recorded rejected refuses before any call (5.4-D1)'` — `PERSONA_GEN_ENGINE = 'openai:lab::qwen3'`, `mockSettingsPatch = { analyzerEndpoints: [ENDPOINT({ reasoningStyle: 'enable_thinking', reasoning: 'on' })], analyzerCapabilitiesByModel: { 'openai:lab::qwen3': { serverUrl: ENDPOINT().baseUrl, testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { on: 'rejected' } } } }`; expect `AnalyzerCapabilityRejectedError` `toMatchObject({ setting: 'reasoning', value: 'on' })` and `OpenAITransport.prototype.send` not called. (Check `ENDPOINT`'s signature at `voice-style.test.ts:86-101` and adapt the call, without inventing a new helper.)
+> - New test, `cast-design.test.ts`: copy the plan's `a stored persona reasoning level no longer offered ends the design job once` case (it has no settings seed: `cast-design.test.ts:60` mocks `voice-style.js` wholesale, and the case makes `generateVoiceStylePersona` reject) and change only its `mockRejectedValue(…)` to `new AnalyzerCapabilityRejectedError('qwen3.5:9b', 'reasoning', 'on', '2026-09-11T10:00:00.000Z')`, imported the same way (`const { AnalyzerCapabilityRejectedError } = await import('../analyzer/errors.js');`; the constructor is `(modelId, setting, value, testedAt)`, `errors.ts:374-390`); title `'a Test-rejected persona reasoning level ends the design job once (5.4-D1)'`.
+> - Mutation 13 now reads: delete the `assertPersonaReasoningAllowed(…)` statement. Expected red: both of the plan's persona refusal cases and the D1 case. **New mutation 28:** in `assertPersonaReasoningAllowed` delete the `rejected` throw. Expected red: the voice-style D1 case only. **New mutation 29:** drop `err instanceof AnalyzerCapabilityRejectedError ||` from the rethrow. Expected red: the cast-design D1 case (`character_failed` present). Restore each.
+> - `voice-style.ts → capabilities.ts` is a new edge; nothing in the capabilities graph imports `voice-style.ts` (its importers are `app.ts`, `routes/cast-design.ts`, `routes/voice-style.ts`, `tts/persona-gpu-plan.ts`). Run `npm run check:cycles`.
+>
+> **R10 — per-verdict date on the catalog (5.4c-2, owner decision 5.4-D2).** `model-test-button.tsx:22-27` prints `tested <record.testedAt>` beside the configured mode's verdict, which after an N14 merge can be newer than the Test that recorded it, while the pre-run refusal cites `verdictTestedAt`. In `toEntry`, next to the existing `outcome` line:
+> ```ts
+>   /* 5.4-D2 — the date of the Test that recorded THIS verdict (A2), not the record's newest date. The
+>      implicit `off` accept is the control, which every Test re-runs, so it takes `testedAt`. */
+>   const explicitOutcome = capability?.structuredOutput[ctx.mode]?.[level];
+>   const outcomeTestedAt = !capability || !outcome
+>     ? undefined
+>     : explicitOutcome
+>       ? verdictTestedAtFor(capability, { setting: 'structuredOutput', structuredOutput: ctx.mode, reasoning: level })
+>       : capability.testedAt;
+> ```
+> and in the returned `structuredOutput` add `...(outcomeTestedAt ? { outcomeTestedAt } : {})` after the `outcome` spread. Add `verdictTestedAtFor` to the file's existing `../capabilities.js` import. In `openapi.yaml`, under `AnalyzerCatalogEntry.structuredOutput.properties`, after the `outcome` property (`:5849`), add
+> ```yaml
+>             outcomeTestedAt:
+>               type: string
+>               description: >-
+>                 ISO date of the Test that recorded `outcome` (A2: a merged record holds
+>                 verdicts from more than one Test). Absent when `outcome` is absent.
+> ```
+> then run `npm run openapi:types`. In `src/components/settings/model-test-button.tsx`'s `describeTestOutcome`, the outcome line uses `(entry.structuredOutput.outcomeTestedAt ?? record.testedAt).slice(0, 10)`; the "not tested in this mode · last test" line keeps `record.testedAt`. Update its comment (`tested` is now the verdict's date). The mock `entry()` sets `outcomeTestedAt: record.testedAt` whenever it sets `outcome`.
+> - Tests: `analyzer-catalog.test.ts` — a record whose `testedAt` is `2026-09-12…` and whose `verdictTestedAt.structuredOutput.schema[<level>]` is `2026-09-10…` gives `entry.structuredOutput.outcomeTestedAt === '2026-09-10…'`; `model-test-button.test.ts` — an entry with `outcomeTestedAt: '2026-09-10…'` and `capability.testedAt: '2026-09-12…'` reads `… · tested 2026-09-10`.
+> - **Mutation D2-a:** in `toEntry` set `outcomeTestedAt` to `capability.testedAt` unconditionally. Expected red: the catalog case. **Mutation D2-b:** in `describeTestOutcome` read `record.testedAt` again. Expected red: the button case. Restore each.
+>
+> **R11 — errors.ts wording (5.4d).** The new class's comment says "so errors.ts imports nothing"; since 5.1b it has one type-only import, so write "so errors.ts needs nothing beyond its type-only `./reasoning-level.js` import". The same applies to the `reasoning.ts` paragraph's "`errors.ts` imports nothing". The edge is still type-only into a leaf.
+>
+> **R12 — other step corrections.**
+> - Step 3's prose that `toEntry` "omits" the digest is wrong but harmless: `toEntry` already passes `raw.digest` to `capabilityRecordFor` (`analyzer-catalog.ts:269`).
+> - `analyzer-models.test.ts` mocks `capabilities.js` with an `importOriginal` spread (`:25-28`), so the new `capabilityRecordKey` / `sameCapabilityRecordModel` imports resolve.
+> - The existing wholesale-error table in `cast-design.test.ts` (`:1563-1625`) asserts a `code`; the new classes have none until Task 5.5, so the standalone cases above are the right shape.
+> - Records already on disk (3c/3d) need no migration: their `reasoning: {}` and level keys (`off` for Ollama, `model-default` otherwise) equal the default configured level; a missing `verdictTestedAt` falls back to `testedAt`; an old `qwen3:latest` key is found through `entryForModelTag` and rewritten under `qwen3` on the next Test.
+> - No lock rules apply beyond `mutateUserSettings`' `writeChain`; no `console.*` call is added.
 
 **Files:**
 - Modify: `server/src/analyzer/capabilities.ts` (W3c Tasks 3c.3–3c.4):
@@ -3709,6 +4357,50 @@ git commit -m "feat(server): Test action level step, and pre-run refusal of a re
 
 ### Task 5.5: Failure copy names the actual reasoning control
 
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **One child** (table row 15), server only. Needs Task 5.1's `reasoningControlDescription` and 5.4d's `AnalyzerReasoningUnavailableError` (with `when`). Commit: `fix(server): name the actual reasoning control in reasoning-overflow and pre-run refusal copy` (as the step says).
+>
+> 1. **Anchors at `542d3501`** (`server/src/routes/failure-taxonomy.ts`). W2's `AnalyzerReasoningOverflowError` branch is `:934-953` (its F7 comment `:937-941`; the `withCopy(…)` call `:942-946`; `fixes: reasoningOverflowFixes(…)` `:951`); `AnalyzerTargetInputTooLargeError` (`:916-932`) now sits between it and Truncated (`:907-915`). W3's `AnalyzerCapabilityRejectedError` branch `:1069-1079`. `REQUEST_SHAPING_SETTINGS` `:742-757` (its comment `:739-741`). `withCopy(code, userMessage, detail?, remediation?)` `:585-587` — its 4th argument overrides the static per-code remediation. The import block is `:27-42` and already imports both W2/W3 errors. Static remediation: `server/src/routes/failure-remediations.ts:102-117` (its comment `:106-110`).
+> 2. **No `workspace/user-settings.ts` import** (A9/P23, `failure-taxonomy.ts:48-52`). Read saved endpoints through the leaf gate `listAnalyzerEndpoints()` (`../analyzer/analyzer-endpoints-gate.js`, already imported at `:52`; `user-settings.ts` registers its provider at module load). Add only `AnalyzerReasoningUnavailableError` to the existing `../analyzer/errors.js` import, and `import { geminiReasoningRow, reasoningControlDescription } from '../analyzer/reasoning.js';`. Do NOT add the step's `parseEndpointModelId` or `getCachedUserSettings` imports. Drop Step 4's `setFailureTaxonomySettingsReader` contingency: the gate already exists.
+> 3. **The endpoint comes from `err.endpointId`, not from parsing `err.model`.** For an endpoint, `err.model` is the bare served model (`runner/finish.ts:26` passes the transport's model), and `OpenAIAnalyzer` stamps `err.endpointId` (`analyzer/openai.ts:64`, `:78`). Replace the step's helper with:
+>    ```ts
+>    /* #3084 wave 5 — the remediation lead naming the setting that controls reasoning for the model
+>       that overflowed. An endpoint is resolved from the id OpenAIAnalyzer stamped on the error, through
+>       the leaf gate (A9). "Lower reasoning in …" only where a control exists: a Gemini id with no table
+>       row (2.5, unknown) and a not_controllable endpoint get the description alone. */
+>    function reasoningRemediationLead(err: AnalyzerReasoningOverflowError): string {
+>      const endpoint = err.transport === 'openai' && err.endpointId
+>        ? listAnalyzerEndpoints().find((e) => e.id === err.endpointId)
+>        : undefined;
+>      const control = reasoningControlDescription(err.transport, { model: err.model, endpoint });
+>      const controllable =
+>        err.transport === 'ollama' ||
+>        (err.transport === 'gemini' && geminiReasoningRow(err.model) !== undefined) ||
+>        (err.transport === 'openai' && endpoint?.reasoningStyle !== 'not_controllable');
+>      return controllable ? `Lower reasoning in ${control}.` : `Reasoning: ${control}.`;
+>    }
+>    ```
+> 4. **Where the control is named — owner decision 5.5-D1: a per-instance remediation override.** W2's `userMessage` is a headline only and contains no reasoning phrase to replace (its comment `:937-941`: userMessage "carries no 'raise X' advice"). Keep `userMessage` and `detail` byte-identical and pass a 4th argument to the branch's `withCopy(…)`:
+>    ```ts
+>          /* #3084 wave 5a (5.5-D1) — per-instance remediation: name the reasoning control that governs
+>             THIS model, then the static per-code steps. userMessage stays the F7 headline. */
+>          `${reasoningRemediationLead(err)} ${FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation}`,
+>    ```
+>    Replace the step's "replace the substring of the `userMessage` template…" paragraph with this. The static remediation text is unchanged (so `help-failures` stays 28 / 54); reword only its comment at `failure-remediations.ts:106-110`, whose "until 5a" premise is now false, to: "The reasoning control is named per instance: classifyAnalysisFailure prepends 'Lower reasoning in <control>.' to this text (#3084 wave 5a, 5.5-D1), and Task 5.5b adds the matching structured fix."
+> 5. **Test file (`failure-taxonomy.reasoning.test.ts`) corrections.**
+>    - In the six `analyzer-reasoning-overflow names the reasoning control` cases, assert on `f.remediation`, not `f.userMessage` (same `toContain` strings). In the Ollama case add `expect(f.userMessage).not.toContain('Lower reasoning');` (the headline is unchanged) and `expect(f.remediation).toContain('Lower reasoning in the Ollama reasoning setting')`. In the Gemini 2.5 case add `expect(f.remediation).not.toContain('Lower reasoning in')` and `expect(f.remediation).toContain('Reasoning: the Gemini reasoning setting for gemini-2.5-flash')` (no control exists there, A11).
+>    - The endpoint case throws `new AnalyzerReasoningOverflowError('openai', 'qwen3-30b', undefined, { endpointId: 'lab' })` (not `'openai:lab::qwen3-30b'`), keeping its `_setUserSettingsCacheForTest({ analyzerEndpoints: [ … reasoningStyle: 'enable_thinking', reasoning: 'on' ] })` seed; importing `user-settings.js` in the test registers the gate's provider. The bare-endpoint case passes no `endpointId`.
+>    - The `a pre-run refusal names the reasoning setting` case: `expect(f.userMessage).toContain('reasoning=on')` instead of `toContain('"on"')` (W3's message is `err.message`, `Model qwen3.5:4b rejected reasoning=on when it was last tested (…)`, `errors.ts:374-391`).
+>    - Add `it('a reasoning refusal remediation names the reasoning setting (REQUEST_SHAPING_SETTINGS)', …)`: `classifyAnalysisFailure(new AnalyzerCapabilityRejectedError('qwen3.5:4b', 'reasoning', 'on', '2026-09-11T10:00:00.000Z'), 'Ollama (qwen3.5:4b)').remediation` contains `'the Ollama reasoning setting (Advanced settings → Analyzer request controls)'`.
+> 6. **W3's `AnalyzerCapabilityRejectedError` branch: do not touch it.** It already handles `setting: 'reasoning'`, and `failure-taxonomy.test.ts:1368-1377` pins `userMessage === err.message` plus its `requestShapingSettings` remediation and `redactKnownSecrets` detail. Delete the step's "Only if the pre-run refusal test is red, replace W3's branch…" paragraph and its code block, and the Files line's "and, only if Step 2 shows it red, W3's … branch".
+> 6b. **Stale-comment chore:** the comment above W3's `AnalyzerCapabilityRejectedError` branch (`failure-taxonomy.ts:1058-1066`) says "(or, from wave 5, the reasoning level)"; reword it to present tense ("or the reasoning level").
+> 7. **Owed chore: `REQUEST_SHAPING_SETTINGS`.** Its comment (`:739-741`) says "Wave 5 adds the reasoning and custom-payload settings when they exist", and no other wave 5 task does the reasoning half. Append `'the Ollama reasoning setting (Advanced settings → Analyzer request controls)'` to `ollama`, `'the Gemini reasoning setting (Advanced settings → Analyzer request controls)'` to `gemini`, and `"the endpoint's Reasoning setting"` to `openai`, and reword the comment's last sentence to "Wave 5b adds the custom-payload settings." The existing `failure-taxonomy.test.ts` assertions (`:1334-1347`, `:1375`) use `toContain`, so they stay green.
+> 8. **The `AnalyzerReasoningUnavailableError` branch** is the step's code, unchanged; put it directly after W3's `AnalyzerCapabilityRejectedError` branch (after `:1079`), above the ApiError / bare-status checks.
+> 9. **Keeps green:** `failure-taxonomy.test.ts`, `failure-taxonomy-fixes.test.ts`, `analysis.phase-model.test.ts` (`:971`, `:1014` assert `toContain('spent its whole output budget reasoning on')` — unaffected, the headline is unchanged), `analysis.reasoning-overflow.test.ts`, `npm test -- src/views/analysing.test.tsx`, and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts` at 28 / 54.
+> 10. **Mutation proof (replaces Step 5):** (1) drop the remediation override (back to the static string) → all six control cases red; (1b) make `reasoningRemediationLead` always return the `Lower reasoning in …` form → the Gemini 2.5 case red; (2) delete the `AnalyzerReasoningUnavailableError` branch → `maps a stored level no longer offered…` and `names the setting and says the run stopped…` red; (3) `const outcome = 'was not started';` → the mid-run case only; (4) remove the reasoning entry from `REQUEST_SHAPING_SETTINGS.ollama` → the new remediation case. Restore each.
+> 11. **Files to `git add`:** `server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.reasoning.test.ts`. No new cycle (`failure-taxonomy → reasoning.ts` reaches only leaves); run `npm run check:cycles`.
+
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts` — W2's `AnalyzerReasoningOverflowError` branch in `classifyAnalysisFailure` (`:492` onward at `80be2f1d` — `failure-taxonomy.ts` is unchanged across `2b63b451..80be2f1d` (re-pinned from `46e62a34`, verified with no further diff to `80be2f1d`); W2 inserted it next to the `AnalyzerTruncatedError` branch at `:526-534`), and, only if Step 2 shows it red, W3's `AnalyzerCapabilityRejectedError` branch
 - Modify: `server/src/routes/failure-taxonomy.ts` — a branch for Task 5.4's `AnalyzerReasoningUnavailableError` (P17)
@@ -3866,6 +4558,67 @@ git commit -m "fix(server): name the actual reasoning control in reasoning-overf
 ```
 
 ### Task 5.5b: `reasoningOverflowFixes` — reasoning-level fixes (F7, owner-approved 2026-09-13; extension accepted 2026-09-13)
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Two children** (table rows 16–17), in this order (both edit `failure-taxonomy-fixes.test.ts`):
+> - **5.5b-i — Gemini + Ollama fixes.** Widen `reasoningOverflowFixes`' ctx with `reasoningLevel`, extend its call site, add the Gemini and Ollama pushes inside the existing arms, `ROW_FIXTURE_IDS`, the exhaustive rule test, the `CONTEXTS` additions and the `reasoningSetting.engine` guard. Append Step 1's describe (with its `overflow` helper) **without** its `an endpoint gets a fix pointing at its own reasoning field` case: that case is red until 5.5b-ii and wrong under 5.5-D2; 5.5b-ii adds note 7's cases inside this same describe. Stale-comment chores (this child makes them false): the `AnalysisFailureFix` comment (`failure-taxonomy.ts:594-601`, "`endpointField` (wave 3) and `reasoningSetting` (wave 5) are declared now…; nothing in 2b sets them") and the `reasoningOverflowFixes` doc (`:611-615`, "`endpointId` is declared now and unused in 2b…; `reasoningLevel` is 5a's addition…, not this task's") — reword both to describe today's fields. Mutations 1–6 and 8–11. The ctx field is optional and `err.reasoningLevel` exists since 5.1b, so typecheck stays green.
+>   `git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts`
+>   Commit: `feat(server): reasoning-level fixes for Gemini and Ollama, gated on the level actually run having a lower rung`.
+> - **5.5b-ii — endpoint fix and stale docs.** The gated endpoint fix (owner decision 5.5-D2), the `failure-taxonomy-fixes.test.ts:107/129` update, the openapi description refresh + regen, and the stale "not emitted yet" docs. Mutations 7 and 12 (new). Additive inside one arm.
+>   `git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/components/failure-fix-list.tsx`
+>   Commit: `feat(server,openapi,frontend): an endpoint reasoning-level fix, and the fix-entry docs brought current`.
+>
+> 1. **Already landed — do not widen anything (both children).** `AnalysisFailureFix` already carries `reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string }` and `wikiPage` (`failure-taxonomy.ts:602-609`), and `openapi.yaml:6744-6750` / `src/lib/api-types.ts:4760-4764` already declare it. No `wikiHref` exists anywhere. The "Resolution" block's widening, the Files line "Modify `openapi.yaml` … adding `reasoningSetting`", and the Files line "Modify `src/lib/api.ts` — wherever the mock SSE/analysis-failure builder constructs `fixes`" are void: there is no mock fixes builder (`api.ts` only re-exports the type, `:2890-2898`; `e2e/reasoning-overflow-fixes.spec.ts` hand-authors its frame).
+> 2. **Anchors at `542d3501`** (`server/src/routes/failure-taxonomy.ts`). `reasoningOverflowFixes(ctx)` `:621-704` is one `if (gemini) / else if (ollama) / else if (openai && endpointId)` chain with separate `fixes` and `reads` arrays, returning `[...fixes, ...reads]`: the Gemini arm `:631` (its `fixes.push({ label: 'Switch to a different analyzer model' })` `:652`), the Ollama arm `:657`, the openai arm `:681` (its comment `:682-685`, `const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;` `:686`, its `fixes.push(…)` `:687-692`). The call site `:951` is `reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId })`. Guard test: `server/src/routes/failure-taxonomy-fixes.test.ts` — `CONTEXTS` `:32-36`, the wikiPage / `Read:`-last guards `:203-215`, `:238-256`, the endpoint case `:107-130`.
+> 3. **Ctx (5.5b-i).** Add `reasoningLevel?: ReasoningLevel` to the ctx parameter (`:621-627`); add `type ReasoningLevel` to the `../analyzer/reasoning.js` import that Task 5.5 created (it already imports `geminiReasoningRow`). Extend the call at `:951` to `reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel })`. A second consumer picks the field up with no edit: `reasoningOverflowAdvice`, which `routes/analysis.ts` calls with the error object itself as ctx (`:7007`, `:9197`); its tests (`analysis.reasoning-overflow.test.ts:891-922`) are regex-based and stay green — add that file to Keeps green. (Task 5.1b made the opts `{ endpointId?; persona?; reasoningLevel? }`; this task only reads `err.reasoningLevel`.)
+> 4. **Pushes go inside the existing arms, into `fixes`, never `reads` (5.5b-i).**
+>    - Gemini arm: put the step's `row` / `gemmaOnOff` / `thinkingLevel` block before the `fixes.push({ label: 'Switch to a different analyzer model' })` line (`:652`). **Delete `wikiPage: 'Analysis-and-the-Analyzer',` from the `thinkingLevel` push** (in Step 3's Gemini-branch code): no actionable fix may carry `wikiPage` (the interface comment `:596-599`, the guards `:203-215` / `:238-256`, and the step's own item 10b and test all say so).
+>    - Ollama arm (`:657`): put the step's Ollama push first in that arm.
+> 5. **Guard extension (5.5b-i).** There is no `ALL_FIXTURE_FIXES_LISTS`: the guard iterates `CONTEXTS` (ctx objects). Append `{ transport: 'ollama' as const, model: 'qwen3.5:9b', reasoningLevel: 'on' as const }` and `{ transport: 'gemini' as const, model: 'gemma-4-31b-it', reasoningLevel: 'on' as const }`, so the existing settingKey / endpointField / wikiPage guards also cover the new branches. Write the `reasoningSetting.engine` check as `for (const ctx of CONTEXTS) for (const fix of reasoningOverflowFixes(ctx))`. `ROW_FIXTURE_IDS` and the exhaustive rule test go in as written. Mutation 11's fixture is a push into a `CONTEXTS`-driven result.
+> 6. **The endpoint fix (5.5b-ii, owner decision 5.5-D2 as clarified 2026-10-25: no fix at the style's floor).** The openai arm binds no `endpoint` today, only `name`. Replace its `const name = …` line (`:686`) with
+>    ```ts
+>        const endpoint = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId);
+>        const name = endpoint?.name ?? ctx.endpointId;
+>    ```
+>    and directly after the arm's existing `fixes.push(…)` (`:687-692`) add
+>    ```ts
+>        /* #3084 wave 5a (5.5-D2) — a lower reasoning rung exists only on a controllable style, above that
+>           style's floor (its lowest real level: `off` for enable_thinking, `none` for reasoning_effort).
+>           A deleted endpoint (the lookup fails) gets no reasoning fix: its field is gone. */
+>        if (
+>          endpoint &&
+>          endpoint.reasoningStyle !== 'not_controllable' &&
+>          ctx.reasoningLevel !== levelsForReasoningStyle(endpoint.reasoningStyle)[1]
+>        ) {
+>          fixes.push({ label: `Lower ${name}'s reasoning level`, endpointField: { endpointId: ctx.endpointId, field: 'reasoning' } });
+>        }
+>    ```
+>    (no quotes around `name`, matching the arm's other labels). `levelsForReasoningStyle(style)` (Task 5.1) returns `['model-default', <floor>, …]`, so index 1 is the floor; add `levelsForReasoningStyle` to the `../analyzer/reasoning.js` import. Reword the arm's comment (`:682-685`) "No reasoning or payload rows: those are 5a and 5b." to "A reasoning row only for a controllable endpoint above its style's floor (5a, 5.5-D2); no payload rows (5b)." The step's "reuse `endpoint` / `name`, `getCachedUserSettings` is already imported" text is void: no `getCachedUserSettings` is involved.
+> 7. **Tests for the endpoint fix (5.5b-ii).** Replace the step's `an endpoint gets a fix pointing at its own reasoning field` case with:
+>    ```ts
+>      it('an endpoint gets a fix pointing at its own reasoning field only on a controllable style above its floor (5.5-D2)', () => {
+>        const lab = (reasoningStyle: 'not_controllable' | 'enable_thinking' | 'reasoning_effort') =>
+>          analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768, reasoningStyle });
+>        const reasoningFix = (fixes: ReturnType<typeof overflow>) => fixes.find((f) => f.endpointField?.field === 'reasoning');
+>        _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('enable_thinking')] });
+>        expect(reasoningFix(overflow('openai', 'm', 'on', 'lab'))).toEqual({ label: "Lower Lab box's reasoning level", endpointField: { endpointId: 'lab', field: 'reasoning' } });
+>        expect(reasoningFix(overflow('openai', 'm', 'model-default', 'lab'))).toBeDefined();
+>        expect(reasoningFix(overflow('openai', 'm', 'off', 'lab'))).toBeUndefined();
+>        _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('reasoning_effort')] });
+>        expect(reasoningFix(overflow('openai', 'm', 'low', 'lab'))).toBeDefined();
+>        expect(reasoningFix(overflow('openai', 'm', 'none', 'lab'))).toBeUndefined();
+>        _setUserSettingsCacheForTest({ analyzerEndpoints: [lab('not_controllable')] });
+>        expect(reasoningFix(overflow('openai', 'm', 'model-default', 'lab'))).toBeUndefined();
+>        _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+>        expect(reasoningFix(overflow('openai', 'm', 'on', 'gone'))).toBeUndefined();
+>      });
+>    ```
+>    **The existing case at `:107` stays valid under 5.5-D2**: its `LAB_ENDPOINT` is `not_controllable` and passes no level, so it gets no reasoning row and its `:129` assertion (no `endpointField.field === 'reasoning'`) still holds. Retitle it only: "…naming the endpoint, never payload, and no reasoning row for a not_controllable endpoint (5.5-D2), and only the trailing Read: entry links a page". Its `actionable` `toEqual` (`:120-125`) is unchanged. The `falls back to the endpoint id when the endpoint has been deleted` case stays green (the first label still names `gone`).
+>    **Mutation 7** (rewritten): delete the new `if (endpoint && …) { fixes.push(…) }` block. Expected red: the D2 case's `on` assertion. **New mutation 12:** drop `endpoint.reasoningStyle !== 'not_controllable' &&` → red at the `not_controllable` assertion; then restore it and replace the floor comparison with `ctx.reasoningLevel !== 'off'` → red at the `reasoning_effort` / `none` assertion; then drop the floor comparison entirely → red at the `enable_thinking` / `off` assertion. Restore.
+> 8. **Stale docs (5.5b-ii).** `openapi.yaml`: the `AnalysisFailureFix` description (`:6719-6721`, "…`endpointField` / `reasoningSetting` are declared for the later waves… nothing sends them yet"), the `endpointField` description (`:6732`, "Not emitted yet" — 3b emits it today, `failure-taxonomy.ts:687-692`), and the `reasoningSetting` description (`:6746`, "Not emitted yet"). Reword all three to present tense (both are emitted by `reasoningOverflowFixes`), then `npm run openapi:types` and commit the `api-types.ts` diff (its mirrored text `:4738-4740`, `:4747`). Reword the `src/lib/api.ts:2896-2897` comment the same way. In `src/components/failure-fix-list.tsx:8-13`, the "three-way rule" comment (wiki / settingKey / label) omits the `endpointField` and `reasoningSetting` link kinds that render through `fixHref`; reword it to name all link kinds (comment only; Task 5.5c adds `fixHref`'s reasoning branch).
+> 9. **Keeps green (both children):** `failure-taxonomy.test.ts`, `failure-taxonomy-fixes.test.ts` (the `gemini-3.6-flash` contexts with no level now gain a fix via `defaultLevel: 'medium'`, harmless to `:182-201`, which uses `.map(settingKey)` / `toContain`), `analysis.reasoning-overflow.test.ts`. Step 4's run adds `npm run openapi:types && git diff --exit-code src/lib/api-types.ts` only in 5.5b-ii.
+> 10. Mutations 1–6 and 8–11 stand as written.
 
 **Precondition:** wave 2 has landed `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)` and its guard test (`server/src/routes/failure-taxonomy.ts`, per the master plan's P20/F7 contract) before this task starts. Re-read that file's actual shape before implementing; this task's Step 3 assumes the contract below.
 
@@ -4159,6 +4912,33 @@ git commit -m "feat(server,frontend): reasoning-level fixes for Gemini and Ollam
 
 ### Task 5.5c: `reasoningFocus` router deep link (F7, mirrors wave 2's `?code=`/`focus` grammar)
 
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **One child** (table row 18), frontend only. Commit as the step says. The `reasoningSetting` type is already in `api-types.ts`, so this child does not depend on 5.5b's code.
+>
+> 1. **Wave 2 landed the precondition.** `src/lib/types.ts:1125` is `| { kind: 'advanced'; focusKey?: string }` (its comment `:1117-1124` already names 5.5c); `src/lib/router.ts:56-66` is the `URLSearchParams` advanced case (its local is named `s`, not `qs`; extend it in place); `stageEqual`'s single advanced branch is `:118-120` (`:112-120` with its comment); `AdvancedRoute` is `src/routes/index.tsx:513-518`, exported; `fixHref` is `src/lib/failure-fixes.ts:25-31` (it already imports `stageToHash`, `:13`, and routes `endpointField` to `#/models?endpoint=&field=`). Each carries a comment inviting exactly this extension. The step's "`router.ts` has no query parameter on the advanced stage" and `types.ts:1073` are stale; the code it gives applies verbatim.
+> 2. **Comments this child makes true or false.** Add a line to the router grammar comment (`router.ts:16`): `#/advanced?focus=&reasoningEngine=&reasoningModel= → { kind: 'advanced', focusKey?, reasoningFocus? }`. Drop "Wave 5's Task 5.5c extends…" from the `types.ts:1117-1124` comment. Update `failure-fixes.ts`'s header comment (`:21-23`, "wave 5 (task 5a) a `reasoningSetting` branch") to present tense. (`failure-fix-list.tsx`'s comment is 5.5b-ii's.)
+> 3. **The `index.test.tsx` cases must be async.** `AdvancedView` is `React.lazy`, and the existing cases (`src/routes/index.test.tsx:625-656`) document that a synchronous read is order-dependent. Use the existing `renderAtAdvanced(store, path)` helper (`:611`), inside the existing `describe('AdvancedRoute — focus query param hydrates the stage …')` (`:625`); add no second helper:
+>    ```tsx
+>    it('AdvancedRoute reads reasoningEngine/reasoningModel into ui.stage.reasoningFocus', async () => {
+>      const store = makeStore();
+>      renderAtAdvanced(store, '/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
+>      await screen.findByTestId('advanced-view');
+>      await waitFor(() => expect(store.getState().ui.stage).toEqual({ kind: 'advanced', focusKey: undefined, reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } }));
+>    });
+>    it('an unrecognised engine value hydrates no reasoningFocus', async () => {
+>      const store = makeStore();
+>      renderAtAdvanced(store, '/advanced?reasoningEngine=openai&reasoningModel=m');
+>      await screen.findByTestId('advanced-view');
+>      await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'advanced' }));
+>      expect((store.getState().ui.stage as { reasoningFocus?: unknown }).reasoningFocus).toBeUndefined();
+>    });
+>    ```
+>    The step's focus-plus-reasoning case takes the same shape (`await findByTestId`, then `waitFor(toEqual(…))`). Use the file's own store factory if it is not named `makeStore`.
+> 4. **`failure-fixes.test.ts` imports.** The file imports only `fixHref` (`:12`); add `import { stageToHash } from './router';` and `import type { AnalysisFailureFix } from './api';` for the new cases. Put the new `fixHref` branch after the `endpointField` branch.
+> 5. **Keep `AdvancedRoute` exported.** Step 3's code declares `function AdvancedRoute()`; the real one is `export function AdvancedRoute()` (`src/routes/index.tsx:513`), imported by `index.test.tsx`. Extend it in place and keep the `export`.
+> 6. Mutations 1–4 stand.
+
 **Resolved by the coordinator (2026-09-13):** Task 5.5b's `reasoningSetting` fix (below, rewritten) needs a frontend deep link into the per-model reasoning row Task 5.6 renders. `src/lib/router.ts` has no query parameter on the `'advanced'` stage today (`case 'advanced': return '#/advanced';`, confirmed at `80be2f1d` — unchanged from `46e62a34`) — wave 2's F7-staged `focusKey` stage field and its `?focus=<settingKey>` deep link for a registry knob are expected to add one first (per the master plan/w2's Task 2.9a). This task adds a **second, independent** query parameter on the same stage, `reasoningFocus`, following the identical pattern the codebase already uses for the Help view's `?code=` (`src/lib/types.ts`'s `{ kind: 'help'; focusCode? }`, `src/lib/router.ts`'s `'help'` case, `src/routes/index.tsx`'s `HelpRoute`) — the closest existing precedent for a stage-scoped, URL-borne focus value, and the one CLAUDE.md's "pure `parseHash`/`stageToHash`" language describes.
 
 **Why two query params, not one packed string.** A Gemini model id never contains `:`, but an Ollama tag routinely does (`qwen3.5:4b`), and `engine` is one of exactly two literals. Packing `<engine>:<model>` into one value would need an unambiguous split rule for a value the URL itself does not need escaped. Two params (`reasoningEngine`, `reasoningModel`) avoid that: each is `encodeURIComponent`-safe on its own, matching the `q.set(...)`/`URLSearchParams` style `stageToHash`'s `'ready'` case already uses (`80be2f1d:src/lib/router.ts`, unchanged from `46e62a34`, the `q.set('chapter', …)` / `q.set('profile', …)` calls).
@@ -4311,6 +5091,78 @@ git commit -m "feat(frontend): deep-link Advanced Settings to a model's reasonin
 ```
 
 ### Task 5.6: Settings UI — per-engine reasoning editor and endpoint-form reasoning fields
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Three children** (table rows 19–21), one commit each, **unit tests only**: every Playwright run in Step 4 (`npx playwright test … e2e/advanced-settings.spec.ts e2e/advanced-settings-save-error.spec.ts e2e/analyzer-endpoints.spec.ts`) moves to the e2e child (Task 5.6e, row 25, owner decision 5.6-D2).
+> - **5.6-i — library modules.** `src/lib/reasoning-levels.ts` + test and `src/lib/settings-issues.ts` + test. Mutations 4, 6, 7. Needs 5.2a's generated `ReasoningLevel` and 5.1a's two fixtures. Nothing imports these modules yet, so typecheck stays green.
+>   `git add src/lib/reasoning-levels.ts src/lib/reasoning-levels.test.ts src/lib/settings-issues.ts src/lib/settings-issues.test.ts`
+>   Commit: `feat(frontend): reasoning-level helpers for the Settings editors`.
+> - **5.6-ii — the reasoning editor.** `src/components/settings/analyzer-request-controls.tsx` + its test, and its mount in `src/views/advanced.tsx` as its own card (owner decision 5.6-D1), reading the store catalog, with the #3625 unreadable-settings save guard. Mutations 1, 2, 5, 9 (new). Runs: `npm test -- src/components/settings/analyzer-request-controls.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx`.
+>   `git add src/components/settings/analyzer-request-controls.tsx src/components/settings/analyzer-request-controls.test.tsx src/views/advanced.tsx` (plus `advanced.test.tsx` / `a11y.test.tsx` only if a run shows a real failure; see below)
+>   Commit: `feat(frontend): per-model analyzer reasoning editor in Advanced settings`.
+> - **5.6-iii — endpoint form fields.** The `analyzer-endpoints-section.tsx` edits and the appended tests. Mutations 3, 8, 10 (new). Runs: `npm test -- src/components/settings/analyzer-endpoints-section.test.tsx`.
+>   `git add src/components/settings/analyzer-endpoints-section.tsx src/components/settings/analyzer-endpoints-section.test.tsx`
+>   Commit: `feat(frontend): reasoning control and level fields in the endpoint form`.
+>
+> Delete Step 6's `git add $(git grep -ln "createAnalyzerEndpoint" src/components)` line: every file it matches is already listed.
+>
+> 1. **Placement (5.6-ii, owner decision 5.6-D1).** In `src/views/advanced.tsx`, insert `<AnalyzerRequestControls />` between the Reset-all header's closing `</div>` (`:547`) and `<SettingsAccordion` (`:549`), inside the `{hydrated && (<div className="space-y-6">` block. The plan's rationale ("`analyzer-models` … in mock mode, is not guaranteed to exist") is false now — the mock groups are `[...REGISTRY_GROUPS]` (`src/lib/api.ts:9171`), which includes `analyzer-models` — so delete that clause. The card sits above the accordion because it is then always visible: the 5.6b deep link never has to open a collapsed section.
+> 2. **The catalog comes from the store, not a per-component fetch (5.6-ii).** `AnalyzerRequestControls` reads `s.account.analyzerCatalog` (`src/store/account-slice.ts:37`), as `AnalyzerModelLimits` does (`src/components/settings/analyzer-model-limits.tsx:19`). That is what makes a level a Test just accepted appear without a reload (the Test button refreshes the store catalog, `model-test-button.tsx:48`), which Group B's on-box row expects. It fetches only when the store has none, so it never overwrites a catalog Layout already loaded or a test seeded. `api.getAnalyzerModels` takes a `refresh` boolean and is reached through the thunk `fetchAnalyzerCatalog(opts)` (`account-slice.ts:170-173`). Replace the component's `models` `useState` and its `api.getAnalyzerModels()` effect with:
+>    ```tsx
+>    import { fetchAnalyzerCatalog, saveAccountSettings } from '../../store/account-slice';
+>    // (drop `import { api } from '../../lib/api';` if nothing else in the file uses it)
+>    const catalog = useAppSelector((s) => s.account.analyzerCatalog);
+>    /* #3625 — while the settings file is unreadable the slice holds boot defaults; a save sends the whole
+>       analyzerReasoningByEngine key, which would replace the user's real maps. */
+>    const blocked = useAppSelector((s) => !!s.account.settingsFileUnreadable);
+>    const models = useMemo(() => collectCatalogModels(catalog), [catalog]);
+>    useEffect(() => {
+>      if (catalog === null) void dispatch(fetchAnalyzerCatalog(undefined));
+>      // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: Layout, Test and endpoint saves refresh it
+>    }, []);
+>    ```
+>    Make sure `collectCatalogModels` accepts `AnalyzerCatalog | null` (return `[]` for `null`), and that `useMemo` / `useEffect` are in the `react` import. Remove `type CatalogModelReasoning` from the import list if it becomes unused. `saveAccountSettings` is `account-slice.ts:59`. `npm run lint` runs `--max-warnings 0` with `react-hooks/exhaustive-deps` at `warn`, so keep the disable comment exactly on the deps line.
+> 3. **The #3625 save guard (5.6-ii).** In `onSave`, start with `if (blocked) return;`. Give the Save button `disabled={blocked}`, and beside it render `{blocked && <span data-testid="analyzer-request-controls-unreadable" className="text-xs text-rose-700">Your settings can't be read right now, so saving is off until they load.</span>}` (the same copy as `analyzer-model-limits.tsx:104-108`). Add to `analyzer-request-controls.test.tsx` (let `renderControls`' account argument set `settingsFileUnreadable`):
+>    ```tsx
+>    it('blocks the save while the settings file is unreadable (#3625)', async () => {
+>      renderControls({ settingsFileUnreadable: true });
+>      await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-ollama-q:4b')).toBeInTheDocument());
+>      expect(screen.getByTestId('analyzer-request-controls-save')).toBeDisabled();
+>      fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
+>      expect(mockPut).not.toHaveBeenCalled();
+>      expect(screen.getByTestId('analyzer-request-controls-unreadable')).toBeInTheDocument();
+>    });
+>    ```
+>    **Mutation 9:** delete `if (blocked) return;` AND the `disabled` prop. Expected red: `blocks the save while the settings file is unreadable (#3625)`. Restore.
+> 4. **Component tests (5.6-ii).** Keep `vi.mock('../../lib/api', …)` with `getAnalyzerModels` and `putUserSettings`: the null-gated `fetchAnalyzerCatalog` thunk calls the mocked `api.getAnalyzerModels`, so the plan's cases pass unchanged.
+> 5. **Harness edits (5.6-ii; replaces the step's `advanced.test.tsx` / `a11y.test.tsx` bullets).** `src/views/advanced.test.tsx` already has `account: accountSlice.reducer` in `makeStore` (`:153`/`:159`) and seeds the catalog with `fetchAnalyzerCatalog.fulfilled` (`:174`); its api mock (`:18-32`) has neither `getAnalyzerModels` nor `putUserSettings`. **Do not** add a `getAnalyzerModels: … {groups:[]}` mock there: it would overwrite the seeded catalog the analyzer-engine picker suite (`:1137+`) relies on. Because the fetch is null-gated, a test that seeds no catalog only dispatches a thunk that rejects, which is harmless. `src/test/a11y.test.tsx` already mocks `getAnalyzerModels` (`:140`). Edit neither file unless a run shows a real failure, and then only what that failure needs.
+> 6. **Endpoint form (5.6-iii).** The `EndpointDraft` (after `structuredOutput: Mode;`, `:38`), `draftFrom` (`:92`) and `validateEndpointDraft` (`:133-134`) edits are unchanged; the "Structured output" `FieldRow` is `:440-447` inside the 2-column grid (`:430`); `FieldRow` wraps its children in a `<label>` (`src/components/account-forms.tsx:44-60`), so the new selects are labelled for axe; `INPUT` is `:66`; `setDraft` / `set` exist (`:185`, `:239`). Changes to the step:
+>    - **Drop the `save()` catch edit and the `settingsIssueMessages` import.** The catch already routes structured refusals through `splitEndpointIssues(err)` → `setErrors(fieldErrors)` + `setSaveError(rest)` (`:268-277`, helper `:158-174`). `settingsIssueMessages` is used only by `AnalyzerRequestControls`.
+>    - `ISSUE_FIELDS` (`:48`): append `'reasoningStyle', 'reasoning'`. `ENDPOINT_FIELD_TEST_IDS` (`:53-64`): add `reasoningStyle: 'endpoint-reasoning-style', reasoning: 'endpoint-reasoning',`. Its `Record<IssueField, string>` type makes typecheck enforce the pairing. (The step's comment "opens the editor without focusing" exists nowhere, and its `server/src/components/…` path is wrong; the edit still applies.)
+>    - In the inserted block, after each `</select>`, add `{errors.reasoningStyle && <p className="mt-1 text-xs text-rose-700">{errors.reasoningStyle}</p>}` and `{errors.reasoning && <p className="mt-1 text-xs text-rose-700">{errors.reasoning}</p>}` respectively, matching every sibling field.
+>    - Both new selects use `className={INPUT}` unchanged. The 44px touch target is added to `INPUT` itself by the later fix child (Task 5.6d, row 24), which then covers these selects too.
+> 7. **Endpoint deep-link and inline-error tests (5.6-iii), replacing the step's `renderSectionAtHash('#/models?…')` + `endpoint-edit-lab` click case.** The real mechanism opens the editor by itself, with no click (`analyzer-endpoints-section.test.tsx:315-320`; the component `:220-237`; `ui-slice.ts:259`):
+>    ```tsx
+>    it('a reasoning-overflow fix deep link focuses the endpoint reasoning field (#3084 wave 5a)', async () => {
+>      const store = renderSection({ endpoints: [LAB] });
+>      store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'reasoning' }));
+>      expect(await screen.findByTestId('endpoint-editor')).toBeInTheDocument();
+>      await waitFor(() => expect(screen.getByTestId('endpoint-reasoning')).toHaveFocus());
+>    });
+>    it('a refusal at path reasoning shows under the Reasoning field, not the general error', async () => {
+>      vi.mocked(api.updateAnalyzerEndpoint).mockRejectedValue(
+>        new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', [{ path: ['reasoning'], message: 'Level "high" is not offered for this control style.' }]),
+>      );
+>      renderSection({ endpoints: [LAB] });
+>      fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>      fireEvent.click(screen.getByTestId('endpoint-save'));
+>      expect(await screen.findByText('Level "high" is not offered for this control style.')).toBeInTheDocument();
+>      expect(screen.queryByTestId('endpoint-save-error')?.textContent ?? '').not.toContain('not offered');
+>    });
+>    ```
+>    Before writing the second case, check the file's actual names — the `renderSection` / `LAB` helpers, the `endpoint-edit-<id>` / `endpoint-save` / `endpoint-save-error` test ids, how it mocks `api.updateAnalyzerEndpoint`, and the `AnalyzerEndpointError` constructor (`src/lib/api.ts:7276`) — and use them; invent none. Mutation 8 still applies. **Mutation 10:** remove `'reasoning'` from `ISSUE_FIELDS` AND its `ENDPOINT_FIELD_TEST_IDS` entry. Expected red: both cases above. Restore.
+> 8. Mutations 1–8 otherwise stand. `e2e/responsive/coverage.spec.ts:247` already covers `#/advanced`; no new view, so no coverage append is owed.
 
 **Files:**
 - Create: `src/lib/reasoning-levels.ts`, `src/lib/settings-issues.ts`, `src/components/settings/analyzer-request-controls.tsx`
@@ -4950,6 +5802,21 @@ git commit -m "feat(frontend): offer only takeable reasoning levels in Advanced 
 
 ### Task 5.6b: `AnalyzerRequestControls` scrolls to and highlights a deep-linked model row (F7, Task 5.5c consumer)
 
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **One child** (table row 22), unit tests only (no Playwright; the deep link's browser test is Task 5.6e). Needs 5.5c (`reasoningFocus` on the stage) and 5.6-ii. Commit as the step says.
+>
+> 1. **The frontend tag normaliser is `normalizeOllamaTag`** (`src/lib/reasoning-levels.ts`, Task 5.6-i). Every `normalizeModelTag` in this task — the bullets, Interfaces, Step 3's code and its import line, mutation 3 — becomes `normalizeOllamaTag`; `normalizeModelTag` does not exist on the frontend, so the import would not resolve. Step 3's import is `import { normalizeOllamaTag } from '../../lib/reasoning-levels';`, merged into the component's existing import from that module; add `useRef` to its `react` import.
+> 2. **The rows come from the store catalog** (5.6-ii's re-pin), not from an internal `useState` + `api.getAnalyzerModels()` fetch, so ignore the "Corrected against the real component" paragraph's description of an internal fetch. The effect's deps `[reasoningFocus, ollamaRows, geminiModels]`, the `scrolledForRef` guard and the `highlightTimerRef` design are unchanged and still correct: the rows still arrive after the first render whenever the catalog is not loaded yet.
+> 3. **Precondition:** Task 5.5c widened the `advanced` stage to `{ kind: 'advanced'; focusKey?: string; reasoningFocus?: { engine: 'gemini' | 'ollama'; model: string } }` (`src/lib/types.ts:1125` carries only `focusKey` at `542d3501`). `help.tsx`'s guarded `scrollIntoView?.()` calls are confirmed at `:167` and `:230`.
+> 4. **Test hygiene.** Do not overwrite `Element.prototype.scrollIntoView` without restoring it: it leaks across files in the same worker. At the top of the 5.6b `describe`, add
+>    ```tsx
+>    const originalScrollIntoView = Element.prototype.scrollIntoView;
+>    afterEach(() => { Element.prototype.scrollIntoView = originalScrollIntoView; });
+>    ```
+>    (the pattern at `src/views/advanced.test.tsx:1102-1106`), and add `afterEach` to the vitest import.
+> 5. Mutations 1–5 stand, with mutation 3 reading `normalizeOllamaTag(...)`.
+
 **What this closes:** Task 5.5b's `reasoningSetting` fix and Task 5.5c's `#/advanced?reasoningEngine=&reasoningModel=` deep link both exist; this task is where the "How to fix" click actually lands.
 
 **Corrected against the real component (review pass 1, 2026-09-13).** Task 5.6 declares `export function AnalyzerRequestControls()` with **no props** — it reads everything itself, via `useAppSelector`/`useAppDispatch` and an internal `useState<CatalogModelReasoning[]>` populated by an async `api.getAnalyzerModels()` effect (empty until that resolves). Its own tests render `<Provider store={store}><AnalyzerRequestControls /></Provider>`, with no props passed. This task therefore does **not** add a `focusReasoningSetting` prop:
@@ -5098,7 +5965,92 @@ git add src/components/settings/analyzer-request-controls.tsx src/components/set
 git commit -m "feat(frontend): scroll to and highlight a reasoning-overflow fix's model row in Advanced settings"
 ```
 
+### Task 5.6c: fix(frontend) — the Advanced settings-row deep-link highlight can stick (re-pin child, row 23)
+
+> **Re-pin notes (2026-10-25, against 542d3501).** This task was added by the re-pin: an incidental defect found by the 5.6 drift audit, fixed in this PR (CLAUDE.md "Incidental findings"). It is the same bug class as Task 5.6b's review-pass-3 item 7, in the existing `focusKey` deep link. **Unproven:** the audit read the code but did not reproduce it.
+
+**The suspected defect.** `src/views/advanced.tsx:289-307`: the `focusKey` effect's deps are `[focusKey, descriptors]`; it returns `() => clearTimeout(timer)` and guards on `scrolledForRef.current === focusKey`. `fetchConfig()` runs at boot (`src/components/layout.tsx:596`) and again on Advanced mount (`advanced.tsx:309`). If the second `fetchConfig.fulfilled` replaces `descriptors` (`src/store/config-slice.ts:125`) within 2 s of the scroll, the cleanup cancels the timer, the guard then returns before a new one is set, and `focusHighlight` stays `true` — the row keeps `data-highlighted="true"` (`advanced.tsx:611`).
+
+**Files:** Modify `src/views/advanced.tsx`; Test: `src/views/advanced.test.tsx` (append to the deep-link describe that holds `scrolls the focused row into view and sets data-highlighted once`, `:1109`).
+
+- [ ] **Step 1: Write the repro test FIRST.** In that describe (it already saves and restores `Element.prototype.scrollIntoView`, `:1102-1107`), add `it('removes the deep-link highlight after 2 s even when the config reloads inside that window')`, on **real timers** (a fake clock switched on after the marker appears would never fire the component's already-scheduled real timer, so the test could not pass even after the fix): build the store and render exactly as the existing case does (`FOCUS_FIXTURE`, stage `{ kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' }`); await the row and its `[data-highlighted="true"]` marker; immediately dispatch `fetchConfig.fulfilled` with a fresh deep copy of the fixture so `descriptors` changes identity (match the action creator's real `(payload, requestId, arg)` shape in `config-slice.ts`); then `await waitFor(() => expect(<the row>.closest('[data-highlighted="true"]')).toBeNull(), { timeout: 3000 })`. Give the `it` a 10 s timeout.
+- [ ] **Step 2: Run it.** `npm test -- src/views/advanced.test.tsx`. Expected: FAIL, at the final `waitFor`, because the highlight is still on after 3 s. **STOP** — change nothing, delete the new test, and report in the ticket what you saw — if it passes (the defect does not reproduce) or if it fails for any other reason (setup, the marker never appearing, the dispatch shape). Only a red caused by the stuck highlight proceeds to Step 3.
+- [ ] **Step 3: Fix.** Hold the timer in a ref that survives re-runs; clear it only from a separate mount/unmount-only effect (`[]` deps); clear a still-pending timer before starting a new one; the timer's own callback calls `setFocusHighlight(false)`. Remove the `return () => clearTimeout(timer);` from the main effect. Keep the `scrolledForRef` guard and the `descriptors` dependency (its comment explains why).
+- [ ] **Step 4: Run.** `npm test -- src/views/advanced.test.tsx`, then `npm run typecheck` and `npm run lint` (`--max-warnings 0`). Keeps green: every existing `advanced.test.tsx` case.
+- [ ] **Step 5: Mutation proof.** Put `return () => clearTimeout(timer);` back in the main effect (and stop clearing from the unmount effect). Expected red: the new case. Restore.
+- [ ] **Step 6: Commit.** `git add src/views/advanced.tsx src/views/advanced.test.tsx` — `git commit -m "fix(frontend): the Advanced settings deep-link highlight clears even if config reloads (refs #3084)"`. Ship (Task 5.7) declares it under "Also fixed, found in passing".
+
+### Task 5.6d: fix(frontend) — 44px touch targets on the endpoint editor inputs (re-pin child, row 24)
+
+> **Re-pin notes (2026-10-25, against 542d3501).** Added by the re-pin: an incidental defect found by the 5.6 drift audit. CLAUDE.md's mobile protocol requires every interactive control to be ≥44×44 px on any touch device via `min-h-[44px] fine-pointer:min-h-0`.
+
+**The defect.** `src/components/settings/analyzer-endpoints-section.tsx:66` — `const INPUT = 'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm …'` carries no touch target, so every text input and select that uses it (Name, Base URL, API key, GPU, Unload URL, Concurrency, Ceiling, Structured output, Max output, Max input, and 5.6-iii's two reasoning selects) is about 38 px tall on a touch device. The Context-size input (`data-testid="endpoint-context-tokens"`, `:394`; `:393` is its wrapping `<div>`) has its own class string with no target either. Its neighbours on `:395-396` already carry `min-h-[44px] fine-pointer:min-h-0`.
+
+**Files:** Modify `src/components/settings/analyzer-endpoints-section.tsx`; Test: `src/components/settings/analyzer-endpoints-section.test.tsx` (append).
+
+- [ ] **Step 1: Failing test.** Append `it.each(['endpoint-name', 'endpoint-context-tokens', 'endpoint-reasoning-style', 'endpoint-reasoning'])('%s meets the 44px touch target on touch devices (CLAUDE.md mobile protocol)', async (testId) => { … })`: open the editor for a fixture endpoint the way the file's other cases do, then assert `screen.getByTestId(testId)` `toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0')`. One case per id, so the mutation below can show which ids it reaches. (Use the file's real test ids; check them before writing.)
+- [ ] **Step 2: Run** `npm test -- src/components/settings/analyzer-endpoints-section.test.tsx`. Expected: FAIL on the missing classes.
+- [ ] **Step 3: Fix.** Append ` min-h-[44px] fine-pointer:min-h-0` to `INPUT` and to the Context-size input's `className`.
+- [ ] **Step 4: Run** the same file, then `npm test -- src/test/a11y.test.tsx` and `npm run typecheck`. Expected: PASS.
+- [ ] **Step 5: Mutation proof.** Remove the two classes from `INPUT` only. Expected red: the `endpoint-name`, `endpoint-reasoning-style` and `endpoint-reasoning` cases; the `endpoint-context-tokens` case stays green (its own class string). Then restore `INPUT` and remove them from the Context-size input only. Expected red: the `endpoint-context-tokens` case alone. Restore.
+- [ ] **Step 6: Commit.** `git add src/components/settings/analyzer-endpoints-section.tsx src/components/settings/analyzer-endpoints-section.test.tsx` — `git commit -m "fix(frontend): 44px touch targets on the analyzer endpoint editor inputs (refs #3084)"`. Ship declares it under "Also fixed, found in passing".
+
+### Task 5.6e: Playwright spec for the reasoning editor and its deep link (owner decision 5.6-D2; re-pin child, row 25)
+
+> **Re-pin notes (2026-10-25, against 542d3501).** Added by the re-pin (owner decision 5.6-D2): the router → redux → layout deep link (Tasks 5.5c + 5.6b) crosses exactly the seams CLAUDE.md says should get an e2e test, and every Playwright run of Tasks 5.6 / 5.6b moves here. Lane `claude` (no short command cap). Task 5.12 (PR 5b) later **modifies** this spec instead of creating it; record that in Task 5.12 when PR 5b is re-pinned.
+
+**Files:** Create `e2e/analyzer-request-controls.spec.ts`.
+
+**Harness facts.** The suite runs Vite in mock mode on port 5174 (`playwright.config.ts` `webServer`). The mock catalog always has the Ollama model `qwen3.5:4b` (offered `model-default`, `off`, `on` since 5.2b); its Gemini group has models only when `apiKeyStatus === 'set'`, so use the Ollama row. Mock module state (`MOCK_USER_SETTINGS`) does not survive a full page reload, so assert persistence across an in-app hash navigation, not `page.reload()`. `e2e/reasoning-overflow-fixes.spec.ts` shows how to deliver a terminal failure frame through `window.__store__` and its helpers (`bootFreshBookIntoAnalysing`, `waitForRouteReady` in `e2e/helpers`).
+
+- [ ] **Step 1: Write the spec** — three cases. Read the real test ids and the highlight class from `analyzer-request-controls.tsx` (5.6-ii / 5.6b) before writing; invent none.
+  1. **Deep link lands and highlights.** `page.goto('/#/advanced?reasoningEngine=ollama&reasoningModel=' + encodeURIComponent('qwen3.5:4b'))`; the editor card is visible above the first settings group; the `qwen3.5:4b` row is `toBeInViewport()` and carries the highlight class, which is gone after its timeout (`expect.poll` or `toHaveClass` negated with a timeout above 2.4 s).
+  2. **Save round-trips.** On `#/advanced`, pick `on` for `qwen3.5:4b`, click Save, see the saved state; navigate in-app away (`page.evaluate(() => { location.hash = '#/books'; })`) and back to `#/advanced`; the select still shows `on`.
+  3. **A failure's fix link lands on the row.** Deliver a terminal `analyzer-reasoning-overflow` frame whose `fixes` contains `{ label: 'Turn reasoning off for qwen3.5:4b', reasoningSetting: { engine: 'ollama', model: 'qwen3.5:4b' } }` (5.5b's Ollama label — copy the exact text from `failure-taxonomy.ts`), click that fix link in the run-level "How to fix" list, and assert the URL hash is `#/advanced?reasoningEngine=ollama&reasoningModel=…` and the row is highlighted.
+- [ ] **Step 2: Run** `npx playwright test --project=chromium e2e/analyzer-request-controls.spec.ts`. Expected: PASS (the behaviour already exists; if a case fails, that is a defect in 5.5c / 5.6-ii / 5.6b — report it, do not weaken the spec).
+- [ ] **Step 3: Run the moved specs.** `npx playwright test --project=chromium e2e/advanced-settings.spec.ts e2e/advanced-settings-save-error.spec.ts e2e/analyzer-endpoints.spec.ts e2e/reasoning-overflow-fixes.spec.ts`. Expected: PASS (a new endpoint still saves `not_controllable` / `model-default` by default; no spec selects the first `section`, so the new card breaks none of them).
+- [ ] **Step 4: Mutation proof.** In 5.6b's highlight effect, return early before `scrollIntoView` (or in `AdvancedRoute`, drop the `reasoningFocus` hydration). Expected red: cases 1 and 3. Restore.
+- [ ] **Step 5: Commit.** `git add e2e/analyzer-request-controls.spec.ts` — `git commit -m "test(e2e): the analyzer reasoning editor and its deep link (refs #3084)"`.
+
+### Task 5.7a: Ship documents — run sheet, register, wiki, release notes, plan 284 (re-pin child, row 26)
+
+> **Re-pin notes (2026-10-25, against 542d3501).** Added by the re-pin (owner re-cut, 2026-10-25): Task 5.7's document half as its own child. Lane `claude`. It edits documents only, commits once and pushes once. It opens **no** PR and does **not** publish the live view — both belong to the ship child (Task 5.7, row 27). It executes Task 5.7's own steps under Task 5.7's Re-pin notes below, which win where they differ.
+>
+> 1. **Release notes (Task 5.7 Step 2, with its note 2).** Also add, to both files, an entry for each in-passing fix: Task 5.6c (an Advanced Settings deep-link highlight that could stay lit if settings reloaded within two seconds) and Task 5.6d (the analyzer endpoint editor's fields now have full-size touch targets on tablets and phones). Leave `(#PR)` as it is; the ship child fills it.
+> 2. **Wiki (Task 5.7 Step 2b, with its note 3):** the three pages and their two stale sections.
+> 3. **Register and run sheet (Task 5.7 Step 3, with its note 4, items 1–4 only):** mint the three IDs from the markers and bump them; glance counts and the `**N owed.**` line; the `>` change note; the run-sheet sections; `npm run register:build`; fill the three live-view shells; `npm run register:build -- --check`; `npm run check:onbox-register`. Not item 5 (publish).
+> 4. **Plan 284 (Task 5.7 Step 4, with its note 5).**
+> 5. **Commit and push**, each a single foreground call: `git add` exactly the list in Task 5.7 note 7; commit `docs(docs): release notes, on-box rows, run sheet, wiki and plan invariants for analyzer reasoning controls (refs #3084)`; `git push`. Record in your receipt the three minted register IDs.
+
 ### Task 5.7: Ship PR 5a
+
+> **Re-pin notes (2026-10-25, against 542d3501) — read first; these override the steps below where they differ.**
+>
+> **Two children** (owner re-cut, 2026-10-25), both lane `claude`:
+> - **5.7a — ship documents (row 26, Task 5.7a above):** Steps 2, 2b, 3 (items 1–4 of note 4) and 4, with notes 1–5 and 7's `git add` list. Commit and push; no PR, no publish.
+> - **ship (row 27, this task):** note 0, note A, Step 1, Step 5 / note 6, note 4 item 5 (live-view publish) and Step 6's PR and review gate. Notes 1–5 below are reference for 5.7a.
+>
+> 0. **(ship) Bring the branch current first — merge, never rebase.** `git -C <worktree> fetch origin` then `git -C <worktree> merge origin/main` (a merge commit; never rebase the shared branch). Resolve conflicts and re-run the affected children's tests. If `main` advanced the register (new rows, or a group's `next-id` marker moved past an ID 5.7a minted), re-mint those IDs from the merged markers and renumber them everywhere (register, run sheet, live view, plan 284), then `npm run register:build`, fill any new shells, `npm run register:build -- --check`, `npm run check:onbox-register`, and commit.
+> A. **(ship) Receipts audit.** For every child commit on the branch (`git -C <worktree> log --format='%h %s%n%b' origin/main..HEAD`) and its ticket completion comment, confirm each mutation the child owns (Child decomposition table) has a recorded red output (test name plus assertion line), and collect every "Plan authoring fixes" entry. A missing proof is re-run by this child (apply the mutation, run, record the red, restore, confirm a clean tree) — never assumed. Assemble the PR body's mutation-proof section and a "Plan authoring fixes" section from them.
+> 1. **Files — add:** `docs/testing/3084-openai-analyzer-onbox-acceptance.md` (the per-feature run sheet; CLAUDE.md Before-shipping step 3 requires it to move in the same PR). The release-notes section `## 🗣️ Analyzer, script review & manuscript` is at `docs/release-notes-next.md:316` (not `:284`); append after the existing #3084 entries there. `RELEASE_NOTES.md`'s top in-progress section is `# Castwright 1.15.0`.
+> 2. **Release-notes text corrections (Step 2).** The technical entry's "Ollama always offers \"turn reasoning off\"" is wrong: Ollama offers it at `on`, a named level or `model-default`, never at `off` or unset (Task 5.5b). Add to that entry: the endpoint "lower reasoning" fix appears only for a controllable endpoint whose level is above its style's floor — not at `off` (`enable_thinking`) or `none` (`reasoning_effort`) (5.5-D2); persona generation refuses a Test-`rejected` level too (5.4-D1); the Settings Test line shows the date of the verdict it displays (5.4-D2); the reasoning-overflow remediation names the actual control where one exists (5.5-D1). Add the two in-passing-fix entries (Task 5.6c, Task 5.6d) — see Task 5.7a item 1. The ship child replaces `(#PR)` with the PR number once the PR exists.
+> 3. **Step 2b, wiki — add to the list:**
+>    - `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` "The fields" table (`:18-33`): after the *Structured output* row, add a **Reasoning control** row (`reasoning_effort` / `chat_template_kwargs.enable_thinking` / Not controllable; the per-server subsection says which to pick) and a **Reasoning** row (only the selected control's levels; Model default sends nothing; a server may accept a level and ignore it).
+>    - The "When a model thinks past its output limit" fix lists on that page (`:195-209`) **and** on `docs/wiki/Analysis-and-the-Analyzer.md` (`:47+`) list only token / context / fraction fixes. Add the reasoning fixes Task 5.5b introduces, using the exact labels from its code: the endpoint's `Lower <name>'s reasoning level` (controllable endpoints above their style's floor only), Ollama's `Turn reasoning off for <model>`, and Gemini's lower-level / lowest-level suggestions (Advanced Settings → Analyzer request controls).
+>    - `docs/wiki/Advanced-Settings.md`: the editor is a card above the numbered group sections (owner decision 5.6-D1), so document it in a short unnumbered subsection directly before `## 1.`. Keep `:14` "115 knobs across 12 groups" unchanged: no knob is added.
+> 4. **Step 3, register — corrected procedure.**
+>    1. Mint the three IDs from the markers at ship time and bump each marker by one in the same commit. At `542d3501` they would be A118 (`<!-- next-id: A118 -->`, `docs/testing/onbox-acceptance-register.md:1856`), B107 (`:6352`) and E114 (`:6898`); re-read the markers and never hard-code those numbers.
+>    2. Update the At-a-glance counts (A, B, E each +1, `:721-731`) **and** the hand-edited owed-total line `**68 owed.** …` (`:735`; +3, re-read first). Add a `>` change note in the register's own style naming the three IDs, the group deltas and the marker bumps.
+>    3. In the run sheet `docs/testing/3084-openai-analyzer-onbox-acceptance.md`, add one section per new row after its last section, titled `## N. <title> — register row <ID>`, with Preconditions / Procedure / Pass / `Result:` in the existing sections' shape. The plan's Observe text for Groups E, B and A becomes the Procedure / Pass content, and each register row's "criteria live in" points at its section (not "this plan Task 5.1 table + spec §8").
+>    4. Run `npm run register:build`. It writes a placeholder shell for each new row into `docs/testing/onbox-acceptance-register-live-view.html`. Fill each shell's body, then run `npm run register:build -- --check` (it fails while any `body-placeholder` remains) and `npm run check:onbox-register`.
+>    5. **(ship) Live-view publish:** the register's four-step procedure, unchanged — save the page live at the URL recorded in the register's header, run `npm run check:onbox-register -- --against-published <saved file>`, and publish **the html file** with that recorded `url` (never without it, never the `.md`).
+> 5. **Step 4, plan doc.** "Status stays `active`" → **leave the frontmatter `status:` unchanged** (it is `draft`, `docs/features/284-openai-compatible-analyzer.md:2`; `docs/features/INDEX.md:71` matches). The invariants go under `## Invariants to preserve` (`:53`). Correct two invariant bullets: Ollama's "turn off" fix is offered at `on`, a named level or `model-default`, not unconditionally; and the endpoint fix is offered only for a controllable endpoint above its style's floor (`off` / `none`, 5.5-D2), not "unchanged". Add: persona generation refuses a Test-`rejected` level as well as a stale one (5.4-D1); the catalog carries each verdict's own Test date (`outcomeTestedAt`, 5.4-D2); the reasoning-overflow remediation names the control per instance where one exists while `userMessage` stays the F7 headline (5.5-D1).
+> 6. **(ship) Step 5, verify.** `npm run typecheck`, `npm run check:cycles`, `npm run lint`, `npm run verify:fast:branch`.
+> 7. **Step 6 — 5.7a's `git add` line:**
+>    ```bash
+>    git add docs/release-notes-next.md RELEASE_NOTES.md docs/testing/onbox-acceptance-register.md docs/testing/onbox-acceptance-register-live-view.html docs/testing/3084-openai-analyzer-onbox-acceptance.md docs/features/284-openai-compatible-analyzer.md docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md docs/wiki/Advanced-Settings.md docs/wiki/Analysis-and-the-Analyzer.md
+>    ```
+>    The step's own `git commit`/`git push` lines are 5.7a's (with its commit subject). **(ship)** opens the PR (title as the step says). Its body adds: a `## Post-merge` line, "Run `npm run wiki:sync` to publish the three wiki pages (P33)."; "Also fixed, found in passing:" naming Task 5.6c and Task 5.6d and the folded chores (the `ollama-digest.ts` tag match, `REQUEST_SHAPING_SETTINGS`, the stale openapi / comment docs, the mock catalog and PUT parity); the e2e spec (Task 5.6e) under `## Test plan`; note A's mutation-proof and "Plan authoring fixes" sections. `Refs #3084` (wave 5b still follows). Then fill `(#PR)` in `docs/release-notes-next.md` (commit + push), and run the `pr-review-gate` skill at **high** depth once the PR exists, everything is pushed and cloud `verify.yml` is green; fold findings, and leave the merge to the operator.
 
 **Files:**
 - Modify: `docs/release-notes-next.md` (section `## 🗣️ Analyzer, script review & manuscript`, `:284`), `RELEASE_NOTES.md` (top `# Castwright <in-progress version>` section)
@@ -5107,7 +6059,7 @@ git commit -m "feat(frontend): scroll to and highlight a reasoning-overflow fix'
 - Modify: `docs/features/284-openai-compatible-analyzer.md` (the #3084 regression plan created in an earlier wave) — add the reasoning invariants
 
 - [ ] **Step 1: Regenerate and check derived artifacts**
-Run: `npm run openapi:types` then `git diff --exit-code src/lib/api-types.ts` — Expected: exit 0 (committed in Task 5.2). No registry knob is added in this PR, so `npm run config:check` must pass unchanged — run it. No `FailureCode` is added either: `git diff --exit-code main -- src/data/help-failures.ts` exits 0, and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts` passes at 28 / 54.
+Run: `npm run openapi:types` then `git diff --exit-code src/lib/api-types.ts` — Expected: exit 0 (committed in Task 5.2). No registry knob is added in this PR, so `npm run config:check` must pass unchanged — run it. No `FailureCode` is added either: `git diff --exit-code origin/main -- src/data/help-failures.ts` exits 0 (`origin/main`, not a local `main` that may be stale in a worktree), and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts` passes at 28 / 54.
 
 - [ ] **Step 2: Release notes (both files)**
 Append to `docs/release-notes-next.md` under `## 🗣️ Analyzer, script review & manuscript`:
@@ -5159,6 +6111,8 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 ---
 
 ### PR 5b — Custom request payload
+
+> **Not re-pinned yet.** PR 5b below is still pinned at `80be2f1d`; it will be re-pinned against `main` after PR 5a merges. Do not execute it from this text.
 
 - **Branch:** `feat/server-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server-3084-w5b-payload`, cut after PR 5a merges.
 - **Delivers:** `server/src/analyzer/runner/extra-params.ts` (validation, merge, temperature precedence, output-cap detection, redaction); `analyzerExtraParamsByEngine` (Ollama, Gemini) and endpoint `extraParams` validated on save, an update judging its payload only when the payload or the reasoning style changes (A7); a persona (free-text) request carrying the payload without its output-cap keys (A4); every transport merges the payload last; a payload temperature sets attempt 1 only; a payload output cap (llama.cpp `n_predict` included) disables Auto, the label says so and overflow copy names the key; Gemini `safetySettings` shape and prototype keys (`__proto__`, `constructor`, `prototype`) validated at save and filtered at merge; payload string values ≥ 8 chars redacted from the errors of the request that carried them, in all three transports (P29), never through the global known secrets; payload never logged or persisted; editors in Advanced settings and the endpoint form; run label "+ custom params" with the e2e assertion; `Closes #3084`.

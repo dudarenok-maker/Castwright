@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../../handoff/protocol.js';
 import type { StageCall } from '../types.js';
 import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../errors.js';
+import type { ReasoningLevel } from '../reasoning-level.js';
 import { hasReasoningEvidence, mapFinish, withThinkEvidence } from './finish.js';
 import { parseAndValidate, persistResponse, stripThink, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
@@ -32,6 +33,10 @@ export interface StageSpec<T> {
 export interface EngineRequestSettings {
   structuredOutput: StructuredOutputMode;
   maxOutputTokens: number | undefined;
+  /** #3084 wave 5 — omitted/undefined = the pre-W5 wire. */
+  reasoning?: ReasoningLevel;
+  /** #3084 wave 5 — omitted/undefined = no custom payload. */
+  extraParams?: Record<string, unknown>;
 }
 
 export type SchemaAdapter = (draft07: Record<string, unknown>) => { schema: Record<string, unknown>; dropped: string[] };
@@ -178,17 +183,14 @@ export class StageRunner {
   /** #3084 W4 — one unstructured, single-attempt call (persona generation, spec §10).
       No schema, no validation retry, no chunking, and NO engine output cap: free text gets the
       model's default length, as the persona calls had before they ran through a transport.
-      Wave 5 adds the engine's reasoning level and custom payload to this request.
+      It carries the engine's reasoning level and custom payload (wave 5).
       Returns the answer text with a leading <think> block removed. An empty string is returned
       as-is for the caller to judge; a blocked response and a length stop that produced only
       reasoning throw, so neither failure is collapsed into an empty answer. */
   async runFreeText(input: FreeTextInput): Promise<string> {
-    /* Master contract: the runner awaits prepare(signal) before it reads settings (the Gemini transport
-       warms its model catalog there; P26 bounds it, and the caller's abort releases it). This is the
-       same inline call wave 2 put in the private `send`: `await this.transport.prepare?.(call.signal);`
-       followed by `const settings = this.settings();`. Free text reads no settings in wave 4; wave 5
-       (Task 5.1) adds `const settings = this.settings();` directly after this line. */
+    /* The runner awaits prepare(signal) before it reads settings, as wave 2's private send does (P26). */
     await this.transport.prepare?.(input.signal);
+    const settings = this.settings();
     const system = input.system ?? '';
     const sent = await this.transport.send({
       system,
@@ -196,6 +198,8 @@ export class StageRunner {
       structuredOutput: { mode: 'off' },
       temperature: input.temperature,
       maxOutputTokens: undefined,
+      reasoning: settings.reasoning,
+      extraParams: settings.extraParams,
       /* The persona limiter estimate from voice-style.ts:219 at 6c3a0a49 (its Gemini branch's `const estTokens`): ~chars/4 plus a flat margin. */
       estimatedInputTokens: Math.ceil((system.length + input.prompt.length) / 4) + 200,
       signal: input.signal,
@@ -218,7 +222,7 @@ export class StageRunner {
       throw new GeminiContentBlockedError(this.transport.model, answer.blockReason, { transport: this.transport.kind });
     }
     if (answer.finish === 'length' && answer.text.trim() === '' && hasReasoningEvidence(answer)) {
-      throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true });
+      throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true, reasoningLevel: settings.reasoning });
     }
     return answer.text;
   }
@@ -268,6 +272,8 @@ export class StageRunner {
       structuredOutput,
       temperature,
       maxOutputTokens: settings.maxOutputTokens,
+      reasoning: settings.reasoning,
+      extraParams: settings.extraParams,
       estimatedInputTokens: estimateInputTokens(
         system,
         messages.map((m) => ({ role: m.role === 'assistant' ? ('model' as const) : ('user' as const), parts: [{ text: m.content }] })),
@@ -279,7 +285,7 @@ export class StageRunner {
         onEvalTiming: withEvalTiming ? call.onEvalTiming : undefined,
       },
     });
-    return mapFinish(withThinkEvidence(result), { kind: this.transport.kind, model: this.transport.model });
+    return mapFinish(withThinkEvidence(result), { kind: this.transport.kind, model: this.transport.model, reasoningLevel: settings.reasoning });
   }
 }
 

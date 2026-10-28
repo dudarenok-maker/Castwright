@@ -3,6 +3,8 @@
 
    Lives in its own module (not on an engine) so both engines + the route layer
    can import these without a circular dependency. */
+import type { ReasoningLevel } from './reasoning-level.js';
+
 /** Every transport the stage runner can drive. Wave 1 uses 'ollama' and 'gemini'. */
 export type TransportKind = 'ollama' | 'gemini' | 'openai';
 
@@ -224,11 +226,14 @@ export class AnalyzerReasoningOverflowError extends Error {
      existing 3-arg call site (Ollama/Gemini paths, mapFinish) compiles and behaves
      unchanged, and `endpointId` stays `undefined` for them. */
   endpointId?: string;
+  /** #3084 wave 5 — the level the overflowing request was sent at, set at the throw site
+      (mapFinish's ctx, runFreeText's inline check). Never re-derived from live settings. */
+  readonly reasoningLevel?: ReasoningLevel;
   constructor(
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
-    opts?: { endpointId?: string; persona?: boolean },
+    opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
@@ -239,6 +244,7 @@ export class AnalyzerReasoningOverflowError extends Error {
     );
     this.name = 'AnalyzerReasoningOverflowError';
     this.endpointId = opts?.endpointId;
+    this.reasoningLevel = opts?.reasoningLevel;
   }
 }
 
@@ -365,7 +371,7 @@ export class AnalyzerKeyOriginError extends Error {
 }
 
 /** The Test action recorded that this model refuses a setting the run is configured
-    to send (its structured-output mode, or — from wave 5 — its reasoning level), so
+    to send (its structured-output mode or its reasoning level), so
     the run stops before its first request. Nothing was sent, so it deliberately has
     NO `status` property: the taxonomy's bare-status branch reads `.status`, and this
     refusal must never be taken for an HTTP answer. `classifyAnalysisFailure` gives it
@@ -375,7 +381,7 @@ export class AnalyzerCapabilityRejectedError extends Error {
   readonly code = 'ANALYZER_CAPABILITY_REJECTED';
   constructor(
     readonly modelId: string,
-    /** Which setting the record refused. W3 records only `structuredOutput`. */
+    /** Which setting the record refused: the structured-output mode or the reasoning level. */
     readonly setting: 'structuredOutput' | 'reasoning',
     /** The value the run would have sent (`schema` / `json` / `off`, or a level key). */
     readonly value: string,
@@ -408,5 +414,26 @@ export class AnalyzerInvalidOutputError extends Error {
         : `${TRANSPORT_LABEL[transport]} ${model} ${key} failed validation after retry: ${detail}`,
     );
     this.name = 'AnalyzerInvalidOutputError';
+  }
+}
+
+/** #3084 wave 5 (P17) — a stored reasoning level the current rules no longer offer for this model
+    (a Gemini table change, an Ollama named level without its accepted Test record, an endpoint level
+    saved under another control style), or a stored value this version does not know (N10). Normally
+    thrown before the run's first call; a fallback target's first call throws it with `when: 'mid-run'`
+    (the run has started, so its copy must not say it was not started), and `reasoningWireFragment`
+    throws it the same way for a value that reached a call anyway (a hand-edited file), so those throws
+    are coded too. Task 5.5 maps it to `analyzer-request-rejected`, and `engine` names where the setting
+    lives. `level` and `when` are plain strings and `engine` spells out AnalysisEngine, so errors.ts needs
+    nothing beyond its type-only `./reasoning-level.js` import. */
+export class AnalyzerReasoningUnavailableError extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly level: string,
+    readonly engine: 'local' | 'gemini' | 'openai',
+    readonly when: 'before-start' | 'mid-run' = 'before-start',
+  ) {
+    super(`Reasoning level "${level}" is not offered for ${modelId}.`);
+    this.name = 'AnalyzerReasoningUnavailableError';
   }
 }

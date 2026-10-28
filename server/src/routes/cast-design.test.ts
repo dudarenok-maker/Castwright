@@ -1626,6 +1626,66 @@ describe('cast-design persona pre-pass', () => {
     writeBookOnDisk(characters);
   });
 
+  it('a stored persona reasoning level no longer offered ends the design job once (#3084 wave 5, P17)', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerReasoningUnavailableError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerReasoningUnavailableError('qwen3.5:9b', 'low', 'local'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a Test-rejected persona reasoning level ends the design job once (5.4-D1)', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerCapabilityRejectedError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerCapabilityRejectedError('qwen3.5:9b', 'reasoning', 'on', '2026-09-11T10:00:00.000Z'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+
+    writeBookOnDisk(characters);
+  });
+
   it('a non-auth HTTP error (500) in the pre-pass stays a per-character failure', async () => {
     personaSharesGpuMock.mockReturnValue(true);
 

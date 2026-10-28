@@ -10,6 +10,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { fixHref } from './failure-fixes';
+import { stageToHash } from './router';
+import type { AnalysisFailureFix } from './api';
 
 describe('fixHref (#3084 wave 2b, F7)', () => {
   it('a settingKey fix links to the focused Advanced Settings row', () => {
@@ -28,5 +30,16 @@ describe('fixHref (#3084 wave 2b, F7)', () => {
   it('an endpoint fix links to that endpoint editor field (#3084 P34)', () => {
     expect(fixHref({ label: 'Raise the endpoint context size', endpointField: { endpointId: 'lab', field: 'contextTokens' } })).toBe('#/models?endpoint=lab&field=contextTokens');
     expect(fixHref({ label: 'Both', settingKey: 'analyzer.stage1.localInputFraction', endpointField: { endpointId: 'lab', field: 'contextTokens' } })).toBe('#/advanced?focus=analyzer.stage1.localInputFraction');
+  });
+});
+
+describe('fixHref — reasoningSetting (#3084 wave 5a, F7)', () => {
+  it('builds the same href stageToHash would for the matching reasoningFocus', () => {
+    const fix: AnalysisFailureFix = { label: 'Lower the reasoning level for gemini-3.6-flash', reasoningSetting: { engine: 'gemini', model: 'gemini-3.6-flash' } };
+    expect(fixHref(fix)).toBe(stageToHash({ kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } }));
+    expect(fixHref(fix)).toBe('#/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
+  });
+  it('a fix with none of settingKey/endpointField/reasoningSetting returns null', () => {
+    expect(fixHref({ label: 'No link' })).toBeNull();
   });
 });
