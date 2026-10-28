@@ -532,35 +532,33 @@ recite:
     outcome, alongside the genuinely stale case that must still be refused.
 
 45. **An exact comparison against a value re-derived from a producer that has
-    changed since the stored copy was made** — PR #3835 pass 1 (#3829,
+    changed since the stored copy was made** — PR #3835 passes 1-4 (#3829,
     `workspace/restructure.ts` `parseTitlesPairWithState`): state.json holds
     chapter titles as the parser wrote them at import; the check compared each
     to what TODAY's parser produces, position by position. Every unversioned
     parser change (entity decoding, heading normalisation) then read as a
     mismatch, and the refusal's advice (re-parse) destroys analysis, cast and
-    audio, so a never-restructured book was locked out of work that was harmless
-    before. Checkable: for every guard that recomputes a value and compares it
-    to a stored one, has the producer changed since the oldest stored copy
-    (git log on the producer, and whether its version constant moved)? If so,
-    the comparison must test the property that matters (here: does this title
-    belong to ANOTHER position) rather than equality. Then test with a stored
-    value in an older producer's form and assert the guard passes.
+    audio, so a never-restructured book would have been locked out of work that
+    was harmless before. Checkable: for every guard that recomputes a value and
+    compares it to a stored one, has the producer changed since the oldest
+    stored copy (git log on the producer, and whether its version constant
+    moved)? If so, equality is not a safe test; and extending a shared check to
+    a new caller widens who is exposed to that drift, so measure it on a book
+    in an older producer's form before reusing it. Four rounds of rule changes
+    did not settle which weaker test is safe; that design is tracked in #3837.
 46. **An app-made placeholder compared as identity evidence** — PR #3835 passes
-    2 and 3 (#3829, same function): the parser's fallback title for an untitled
+    2-3 (#3829, same function): the parser's fallback title for an untitled
     section is `Chapter N` (a position number), and a real heading elsewhere can
-    carry the same text, so an untouched import was read as a reorder. Pass 2's
-    fix exempted the placeholder at its own position, which also exempted a real
-    heading that had been moved onto that position and happened to read
+    carry the same text, so an untouched import was read as a reorder. A
+    special case for the placeholder (exempt it at its own position) also
+    exempted a real heading moved onto that position that happened to read
     `Chapter 1`. Any placeholder the app invents (a position-numbered title, a
     default name, a synthesized id) collides with real data of the same text.
     Checkable: for each value used as evidence of which item something is, can
-    the app itself have produced it? If so, do not special-case the placeholder
-    (that exempts the real value that equals it); test the property the
-    evidence is for instead (here: has the matching title left its original
-    home?), which a fresh import satisfies by construction. Then test both
-    sides: a placeholder equal to a real value elsewhere must pair, and a real
-    value of that same text moved onto the placeholder's position must still be
-    refused.
+    the app itself have produced it? If so, test a fresh, untouched import with
+    the placeholder equal to a real value elsewhere (must pass), and the case
+    where a real value of that same text sits on the placeholder's position
+    (must still be caught), before trusting any exemption.
 
 ### Keeping the catalogue current
 

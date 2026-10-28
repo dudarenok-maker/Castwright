@@ -8457,8 +8457,8 @@ export interface operations {
              *     (merge, split, reorder, exclude, rename or refresh-titles) is in
              *     flight on this book; try again when it finishes.
              *     `hints_out_of_sync` (#3829): the book's chapter hints came from a fresh
-             *     parse that no longer pairs with its state.json (a merged, split or
-             *     reordered book); body `{ error: <curated sentence>, code:
+             *     parse whose chapter count or ids no longer match its state.json (a
+             *     book merged before its hints were saved); body `{ error: <curated sentence>, code:
              *     hints_out_of_sync }`, where `error` says to re-parse the book from
              *     its Library menu. Nothing was written and no job was registered.
              *     This code is a 409 only; it never arrives as an SSE event. The other
@@ -8539,8 +8539,8 @@ export interface operations {
              *     stream opened. A chapter restructure in flight on the book
              *     refuses the same way with `error: chapters_restructuring` and a
              *     `message` (no `draining`). `hints_out_of_sync` (#3829): the
-             *     book's chapter hints came from a fresh parse that no longer pairs
-             *     with its state.json; body `{ error: <curated sentence>, code }`
+             *     book's chapter hints came from a fresh parse whose chapter count
+             *     or ids no longer match its state.json; body `{ error: <curated sentence>, code }`
              *     and nothing was written.
              */
             409: {
