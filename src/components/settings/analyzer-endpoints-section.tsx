@@ -20,6 +20,7 @@ import { modelLabel } from '../../lib/model-label';
 import type { AnalyzerEndpoint, AnalyzerEndpointInput, AnalyzerEndpointModelsPreview, GpuDevice } from '../../lib/types';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { FieldRow } from '../account-forms';
+import { REASONING_HELP, REASONING_LEVEL_LABELS, REASONING_STYLE_LABELS, levelsForEndpointStyle, type ReasoningLevel, type ReasoningStyle } from '../../lib/reasoning-levels';
 import { WikiLink } from '../wiki-link';
 import { ADMIN_WIKI } from '../../lib/wiki-links';
 import { DroppedEndpointEntriesBanner } from './dropped-endpoint-entries-banner';
@@ -37,6 +38,8 @@ export interface EndpointDraft {
   concurrency: string;
   ceilingMinutes: string;
   structuredOutput: Mode;
+  reasoningStyle: ReasoningStyle;
+  reasoning: ReasoningLevel;
   maxOutputTokens: string;
   contextTokens: string;
   maxInputTokensPerRequest: string;
@@ -45,7 +48,7 @@ export interface EndpointDraft {
 }
 
 /** Form fields a save refusal's `issues[].path[0]` can name (the endpoint schema's editable fields). */
-const ISSUE_FIELDS = ['name', 'baseUrl', 'gpu', 'unloadUrl', 'concurrency', 'requestCeilingMs', 'structuredOutput', 'maxOutputTokens', 'contextTokens', 'maxInputTokensPerRequest'] as const;
+const ISSUE_FIELDS = ['name', 'baseUrl', 'gpu', 'unloadUrl', 'concurrency', 'requestCeilingMs', 'structuredOutput', 'reasoningStyle', 'reasoning', 'maxOutputTokens', 'contextTokens', 'maxInputTokensPerRequest'] as const;
 type IssueField = (typeof ISSUE_FIELDS)[number];
 type DraftErrors = Partial<Record<IssueField | 'key', string>>;
 
@@ -58,12 +61,14 @@ export const ENDPOINT_FIELD_TEST_IDS: Record<IssueField, string> = {
   concurrency: 'endpoint-concurrency',
   requestCeilingMs: 'endpoint-ceiling-minutes',
   structuredOutput: 'endpoint-structured-output',
+  reasoningStyle: 'endpoint-reasoning-style',
+  reasoning: 'endpoint-reasoning',
   maxOutputTokens: 'endpoint-max-output-tokens',
   contextTokens: 'endpoint-context-tokens',
   maxInputTokensPerRequest: 'endpoint-max-input-tokens',
 };
 
-const INPUT = 'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30';
+const INPUT = 'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0';
 
 export function slugifyEndpointId(name: string, taken: readonly string[]): string {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 36) || 'endpoint';
@@ -91,6 +96,8 @@ function draftFrom(e: AnalyzerEndpoint | null): EndpointDraft {
     concurrency: String(e?.concurrency ?? 1),
     ceilingMinutes: String(Math.round((e?.requestCeilingMs ?? 1_800_000) / 60_000)),
     structuredOutput: e?.structuredOutput ?? 'schema',
+    reasoningStyle: e?.reasoningStyle ?? 'not_controllable',
+    reasoning: (e?.reasoning as ReasoningLevel | undefined) ?? 'model-default',
     maxOutputTokens: String(e?.maxOutputTokens ?? 0),
     contextTokens: e ? String(e.contextTokens) : '',
     maxInputTokensPerRequest: e?.maxInputTokensPerRequest ? String(e.maxInputTokensPerRequest) : '',
@@ -130,8 +137,8 @@ export function validateEndpointDraft(
     concurrency: Math.min(16, Math.max(1, Number.parseInt(d.concurrency, 10) || 1)),
     requestCeilingMs: Math.min(240, Math.max(1, Number.parseInt(d.ceilingMinutes, 10) || 30)) * 60_000,
     structuredOutput: d.structuredOutput,
-    reasoningStyle: original?.reasoningStyle ?? 'not_controllable',
-    reasoning: original?.reasoning ?? 'model-default',
+    reasoningStyle: d.reasoningStyle,
+    reasoning: d.reasoning,
     maxOutputTokens: Math.max(0, Number.parseInt(d.maxOutputTokens, 10) || 0),
     contextTokens: context,
     ...(Number.isInteger(maxInput) && maxInput >= 256 ? { maxInputTokensPerRequest: maxInput } : {}),
@@ -391,7 +398,7 @@ export function AnalyzerEndpointsSection() {
           </FieldRow>
           <FieldRow label="Context size (tokens)" sublabel="Required: what the server actually serves per request, not the model's training context. List models fills it from served values; Detect reads llama.cpp / llama-swap. It sets the chunk size: each stage's chunks are at most its input fraction (Advanced Settings → Analyzer chunking) × this × 2 characters per token, capped by the pass ceiling.">
             <div className="flex flex-wrap items-center gap-2">
-              <input data-testid="endpoint-context-tokens" type="number" min={512} value={draft.contextTokens} onChange={(e) => set('contextTokens', e.target.value)} className="w-40 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm" />
+              <input data-testid="endpoint-context-tokens" type="number" min={512} value={draft.contextTokens} onChange={(e) => set('contextTokens', e.target.value)} className="w-40 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm min-h-[44px] fine-pointer:min-h-0" />
               <button type="button" data-testid="endpoint-list-models" onClick={() => void listModels()} className="px-3 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">List models</button>
               <select data-testid="endpoint-detect-flavor" value={detectFlavor} onChange={(e) => setDetectFlavor(e.target.value as 'llama.cpp' | 'llama-swap')} className="px-2 py-1.5 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">
                 <option value="llama.cpp">llama.cpp</option>
@@ -444,6 +451,43 @@ export function AnalyzerEndpointsSection() {
                 <option value="off">off</option>
               </select>
               {errors.structuredOutput && <p className="mt-1 text-xs text-rose-700">{errors.structuredOutput}</p>}
+            </FieldRow>
+            <FieldRow label="Reasoning control" sublabel="How this server is told to reason. Pick the field your server reads; if it reads neither, choose Not controllable.">
+              <select
+                data-testid="endpoint-reasoning-style"
+                value={draft.reasoningStyle}
+                onChange={(e) => {
+                  const reasoningStyle = e.target.value as ReasoningStyle;
+                  setDraft((d) => ({
+                    ...d,
+                    reasoningStyle,
+                    reasoning: levelsForEndpointStyle(reasoningStyle).includes(d.reasoning) ? d.reasoning : 'model-default',
+                  }));
+                }}
+                className={INPUT}
+              >
+                {(Object.keys(REASONING_STYLE_LABELS) as ReasoningStyle[]).map((s) => (
+                  <option key={s} value={s}>{REASONING_STYLE_LABELS[s]}</option>
+                ))}
+              </select>
+              {errors.reasoningStyle && <p className="mt-1 text-xs text-rose-700">{errors.reasoningStyle}</p>}
+            </FieldRow>
+            <FieldRow label="Reasoning" sublabel={REASONING_HELP}>
+              <select
+                data-testid="endpoint-reasoning"
+                value={draft.reasoning}
+                onChange={(e) => set('reasoning', e.target.value as ReasoningLevel)}
+                className={INPUT}
+              >
+                {/* A stored level this style doesn't offer stays visible, so it can be changed (mirrors the Ollama rows). */}
+                {[
+                  ...levelsForEndpointStyle(draft.reasoningStyle),
+                  ...(levelsForEndpointStyle(draft.reasoningStyle).includes(draft.reasoning) ? [] : [draft.reasoning]),
+                ].map((l) => (
+                  <option key={l} value={l}>{REASONING_LEVEL_LABELS[l] ?? l}</option>
+                ))}
+              </select>
+              {errors.reasoning && <p className="mt-1 text-xs text-rose-700">{errors.reasoning}</p>}
             </FieldRow>
             <FieldRow label="Max output tokens" sublabel="0 = Auto (the model's limit, or context minus input).">
               <input data-testid="endpoint-max-output-tokens" type="number" min={0} value={draft.maxOutputTokens} onChange={(e) => set('maxOutputTokens', e.target.value)} className={INPUT} />

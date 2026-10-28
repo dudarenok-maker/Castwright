@@ -3007,8 +3007,9 @@ async function realUploadManuscript({
    (the frontend deep-links it as `#/advanced?focus=<key>`); `wikiPage` is a
    docs wiki page NAME (never an anchor) that the renderer narrows with
    `isWikiPage` before building a URL; a fix with neither (e.g. "switch
-   model") is label-only. `endpointField` (wave 3) / `reasoningSetting`
-   (wave 5) are declared by the contract but not emitted yet. */
+   model") is label-only. `endpointField` (an endpoint's own field) and
+   `reasoningSetting` (a Gemini or Ollama model's reasoning level) are both
+   emitted by the server's `reasoningOverflowFixes`. */
 export type AnalysisFailureFix = ApiComponents['schemas']['AnalysisFailureFix'];
 
 interface AnalysisStreamEvent {
@@ -7316,6 +7317,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   workspaceSource: 'default',
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
+  analyzerReasoningByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   analyzerEndpoints: [],
@@ -7803,6 +7805,65 @@ const RETIRED_ANALYZER_FIELDS = [
   'analyzerPhase1MinLagChapters',
 ] as const;
 
+/* #3084 PR 5a — mirrors the server's PUT judgement of analyzerReasoningByEngine (routes/user-settings.ts
+   + workspace/analyzer-request-controls.ts analyzerRequestControlsPatchSchemaFor): only entries this save
+   changes are judged (N6); Ollama keys are written normalised (N7); a named Ollama level needs that
+   model's own accepted Test record (P18); a Gemini level must be one the model offers. Paths and messages
+   are the server's. Deliberate subset, unobservable in mock mode: the mock ignores a record's server-URL
+   binding (mockTestAnalyzerModel always writes for the mock server), and its Gemini table holds only the
+   mock catalog's one Gemini id; any other Gemini id offers model-default only, as the server does for an
+   id its table lacks. */
+type MockReasoningLevel = ApiComponents['schemas']['ReasoningLevel'];
+const MOCK_OLLAMA_BASE_LEVELS: readonly MockReasoningLevel[] = ['model-default', 'off', 'on'];
+const MOCK_OLLAMA_NAMED_LEVELS = ['low', 'medium', 'high'] as const;
+const MOCK_GEMINI_LEVELS: Record<string, readonly MockReasoningLevel[]> = {
+  'gemini-3.5-flash-lite': ['model-default', 'minimal', 'low', 'medium', 'high'],
+};
+const mockNormalizeTag = (tag: string): string => (tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag);
+
+/** The levels the server's catalog would offer this Ollama model: the base levels, plus each named level
+    the model's own Test record accepted (either tag form, N7). Also used by mockGetAnalyzerModels (5.2b). */
+function mockOllamaOffered(model: string, records: UserSettings['analyzerCapabilitiesByModel'] | undefined): readonly MockReasoningLevel[] {
+  const key = mockNormalizeTag(model);
+  const record = records?.[key] ?? Object.entries(records ?? {}).find(([saved]) => mockNormalizeTag(saved) === key)?.[1];
+  const named = MOCK_OLLAMA_NAMED_LEVELS.filter((level) => record?.control.ok === true && record.reasoning[level] === 'accepted');
+  return [...MOCK_OLLAMA_BASE_LEVELS, ...named];
+}
+
+function mockReasoningIssues(next: NonNullable<UserSettingsPatch['analyzerReasoningByEngine']>): { path: string[]; message: string }[] {
+  const stored = MOCK_USER_SETTINGS.analyzerReasoningByEngine ?? {};
+  const issues: { path: string[]; message: string }[] = [];
+  const writable: readonly string[] = [...MOCK_OLLAMA_BASE_LEVELS, ...MOCK_OLLAMA_NAMED_LEVELS];
+  for (const [model, level] of Object.entries(next.ollama ?? {})) {
+    const path = ['analyzerReasoningByEngine', 'ollama', model];
+    const before = Object.entries(stored.ollama ?? {}).find(([saved]) => mockNormalizeTag(saved) === mockNormalizeTag(model))?.[1];
+    if (before === level) continue; // N6 — an unchanged entry is saved back as it was
+    if (engineForModelId(model) === 'openai') {
+      issues.push({ path, message: `Ollama reasoning map key "${model}" is an endpoint model id; endpoints carry their own Reasoning setting.` });
+    } else if (!writable.includes(level)) {
+      issues.push({ path, message: `Ollama reasoning "${level}" for ${model} is not an Ollama level (${writable.join(', ')}).` });
+    } else {
+      const offered = mockOllamaOffered(model, MOCK_USER_SETTINGS.analyzerCapabilitiesByModel);
+      if (!(offered as readonly string[]).includes(level)) {
+        issues.push({ path, message: `Ollama reasoning "${level}" for ${model} needs a Test of that model that accepted it (offered now: ${offered.join(', ')}).` });
+      }
+    }
+  }
+  for (const [model, level] of Object.entries(next.gemini ?? {})) {
+    const path = ['analyzerReasoningByEngine', 'gemini', model];
+    if (stored.gemini?.[model] === level) continue; // N6
+    if (engineForModelId(model) !== 'gemini') {
+      issues.push({ path, message: `Gemini reasoning map key "${model}" is not a Gemini model id.` });
+      continue;
+    }
+    const offered = MOCK_GEMINI_LEVELS[model] ?? ['model-default'];
+    if (!(offered as readonly string[]).includes(level)) {
+      issues.push({ path, message: `Gemini reasoning "${level}" is not available for ${model} (offered: ${offered.join(', ')}).` });
+    }
+  }
+  return issues;
+}
+
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
   /* #3084 P23 — mirrors the server's refusal of an endpoint id in the one
@@ -7823,6 +7884,29 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         );
       }
     }
+    /* #3084 P30 — mirrors the server's fallbackTargetSaveError (analyzer/fallback-target.ts) for a CHANGED
+       analyzer.fallback.target: gemini needs a saved key, an endpoint target needs a saved endpoint. An
+       unchanged value always saves. Messages are the server's, verbatim. */
+    const fallbackTarget = incomingOverrides['analyzer.fallback.target'];
+    const storedOverrides = (MOCK_USER_SETTINGS as { configOverrides?: Record<string, unknown> }).configOverrides ?? {};
+    if (typeof fallbackTarget === 'string' && fallbackTarget.trim() !== storedOverrides['analyzer.fallback.target']) {
+      const target = fallbackTarget.trim();
+      const parsed = parseEndpointModelId(target);
+      let message: string | null = null;
+      if (target === 'gemini' && MOCK_USER_SETTINGS.apiKeyStatus !== 'set') {
+        message = 'analyzer.fallback.target: gemini needs a Gemini API key. Add one in Model Manager → Server configuration, or pick another target.';
+      } else if (parsed && !(MOCK_USER_SETTINGS.analyzerEndpoints ?? []).some((e) => e.id === parsed.endpointId)) {
+        message = `analyzer.fallback.target: no analyzer endpoint "${parsed.endpointId}" is saved. Add it in Model Manager → Analyzer endpoints, or pick another target.`;
+      }
+      if (message) {
+        throw new Error(
+          `User settings save failed (400): ${JSON.stringify({
+            error: 'Invalid user settings.',
+            issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }],
+          })}`,
+        );
+      }
+    }
   }
   const offending = RETIRED_ANALYZER_FIELDS.filter(
     (field) => field in (patch as Record<string, unknown>),
@@ -7833,6 +7917,13 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         offending.length > 1 ? 'are' : 'is'
       } managed in Advanced Settings and cannot be set here.`,
     );
+  }
+  /* #3084 PR 5a — the server's 400 + issues body, as the endpoint-id refusal above formats it. */
+  if (patch.analyzerReasoningByEngine) {
+    const issues = mockReasoningIssues(patch.analyzerReasoningByEngine);
+    if (issues.length > 0) {
+      throw new Error(`User settings save failed (400): ${JSON.stringify({ error: 'Invalid user settings.', issues })}`);
+    }
   }
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
@@ -7847,6 +7938,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     dualModelEnabled,
     analyzerKeepAliveByModel,
     analyzerRateLimitsByModel,
+    analyzerReasoningByEngine,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7862,6 +7954,13 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         dualModelEnabled,
         analyzerKeepAliveByModel,
         analyzerRateLimitsByModel,
+        /* N7 — Ollama keys are stored normalised. */
+        analyzerReasoningByEngine: analyzerReasoningByEngine && {
+          ...analyzerReasoningByEngine,
+          ...(analyzerReasoningByEngine.ollama
+            ? { ollama: Object.fromEntries(Object.entries(analyzerReasoningByEngine.ollama).map(([m, l]) => [mockNormalizeTag(m), l])) }
+            : {}),
+        },
       }).filter(([, v]) => v !== undefined),
     ),
   );
@@ -7893,7 +7992,15 @@ function mockOrigin(url: string): string | null {
   }
 }
 
-function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
+/* #3084 PR 5a — the server's endpoint control-style levels (reasoning.ts levelsForReasoningStyle;
+   fixture server/src/analyzer/__fixtures__/reasoning-style-levels.json). */
+const MOCK_STYLE_LEVELS: Record<'reasoning_effort' | 'enable_thinking' | 'not_controllable', readonly MockReasoningLevel[]> = {
+  reasoning_effort: ['model-default', 'none', 'minimal', 'low', 'medium', 'high'],
+  enable_thinking: ['model-default', 'off', 'on'],
+  not_controllable: ['model-default'],
+};
+
+function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEndpoint): AnalyzerEndpoint {
   /* #3084 F5 — {path, message}, never the rejected value (mirrors the server). */
   const problems: { path: string[]; message: string }[] = [];
   if (!MOCK_ENDPOINT_ID.test(input.id ?? '')) problems.push({ path: ['id'], message: 'must match ^[a-z0-9-]{1,40}$' });
@@ -7904,15 +8011,23 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
     problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
   }
   if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
-  /* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */
-  const notYet: { path: string[]; message: string }[] = [];
-  if (input.reasoning !== undefined && input.reasoning !== 'model-default') {
-    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
+  /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
+     payload refusal until PR 5b. */
+  const controlProblems: { path: string[]; message: string }[] = [];
+  const style = input.reasoningStyle ?? 'not_controllable';
+  const level = input.reasoning ?? 'model-default';
+  /* A7, as the server — judge the level only when this save changes it or the style that decides it. */
+  const levelChanged = !stored || stored.reasoning !== level || (stored.reasoningStyle ?? 'not_controllable') !== style;
+  if (levelChanged && !(MOCK_STYLE_LEVELS[style] as readonly string[]).includes(level)) {
+    controlProblems.push({
+      path: ['reasoning'],
+      message: `Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
+    });
   }
   if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
-    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+    controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
-  if (notYet.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
+  if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
   if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
     /* F5 no-echo — names the field, never either URL. */
     throw new AnalyzerEndpointError(400, 'unload-off-origin', 'The unload URL must be on the same scheme, host and port as the base URL.', [
@@ -7962,9 +8077,9 @@ async function mockCreateAnalyzerEndpoint(input: AnalyzerEndpointInput): Promise
 
 async function mockUpdateAnalyzerEndpoint(id: string, input: AnalyzerEndpointInput): Promise<UserSettings> {
   await wait(50);
-  mockEndpointOrThrow(id);
+  const stored = mockEndpointOrThrow(id);
   if (input.id !== id) throw new AnalyzerEndpointError(400, 'invalid', 'An endpoint id cannot be changed.');
-  const ep = mockEndpointFromInput(input);
+  const ep = mockEndpointFromInput(input, stored);
   return mockSettingsWithEndpoints(mockEndpoints().map((e) => (e.id === id ? ep : e)));
 }
 
@@ -9342,13 +9457,14 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
    __SEED_ANALYZER_CATALOG__ (whole response), __SEED_ENDPOINT_MODELS__ (endpointId →
    model names), __SEED_ANALYZER_CAPABILITIES__ (modelId → Test record),
    __SEED_TEST_OUTCOME__ (schema outcome mockTestAnalyzerModel records). testPlan mirrors
-   the server's plannedTestRequestCount for W3: configured = the off-mode control + 1 (just the
-   control for an `off` model), all = control + the schema and json checks. Group statuses
-   follow the contract: Gemini without a key is `fallback`. */
+   the server's plannedTestRequestCount: configured = the control + 1 when the configured level
+   differs from the control's + 1 when the mode is not `off`; all = the control + one request per
+   other testable level + the schema and json checks. The mock's configured level is the control's.
+   Group statuses follow the contract: Gemini without a key is `fallback`. */
 type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
 
-/* The level a W3 request is sent at, and so the record key (server capabilities.ts
-   defaultReasoningKey, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
+/* The level a W3 request is sent at, and so the record key (server capabilities.ts →
+   reasoning.ts defaultReasoningLevel, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
 function mockLevelKey(modelId: string): string {
   return engineForModelId(modelId) === 'local' ? 'off' : 'model-default';
 }
@@ -9368,12 +9484,15 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
   };
   if (g.__SEED_ANALYZER_CATALOG__) return g.__SEED_ANALYZER_CATALOG__;
   const capabilities = { ...(source.analyzerCapabilitiesByModel ?? {}), ...(g.__SEED_ANALYZER_CAPABILITIES__ ?? {}) };
-  const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model: string, mode: StructuredOutputMode, droppedIfSchema: string[]): AnalyzerCatalogEntry => {
+  const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model: string, mode: StructuredOutputMode, droppedIfSchema: string[], offered: readonly MockReasoningLevel[]): AnalyzerCatalogEntry => {
     const serverUrl = mockServerUrlFor(id, source).replace(/\/+$/, '');
     const stored = capabilities[id];
     const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
     const dropped = mode === 'schema' ? droppedIfSchema : [];
     const level = mockLevelKey(id);
+    /* The levels the Test probes besides the control's: Ollama tests all six (named ones included);
+       Gemini and endpoints test what they offer, less `model-default`. */
+    const otherTestableLevels = engine === 'local' ? 5 : offered.filter((l) => l !== 'model-default').length;
     const outcome = record?.structuredOutput[mode]?.[level] ?? (mode === 'off' && record?.control.ok ? 'accepted' : undefined);
     return {
       id,
@@ -9381,15 +9500,22 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       ...(record ? { capability: record } : {}),
       engine,
       model,
-      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, level), ...(outcome ? { outcome } : {}) },
-      testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
+      structuredOutput: {
+        mode,
+        dropped,
+        label: structuredOutputLabel(mode, dropped, record, level),
+        ...(outcome ? { outcome } : {}),
+        ...(outcome && record ? { outcomeTestedAt: record.testedAt } : {}),
+      },
+      testPlan: { configured: mode === 'off' ? 1 : 2, all: 1 + otherTestableLevels + 2, attempts: engine === 'local' ? 1 : 3 },
+      offeredReasoningLevels: [...offered],
     };
   };
   return {
     groups: [
-      { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'local', 'qwen3.5:4b', 'schema', [])] },
+      { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'local', 'qwen3.5:4b', 'schema', [], mockOllamaOffered('qwen3.5:4b', capabilities))] },
       source.apiKeyStatus === 'set'
-        ? { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [entry('gemini-3.5-flash-lite', 'gemini', 'gemini-3.5-flash-lite', 'json', [])] }
+        ? { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [entry('gemini-3.5-flash-lite', 'gemini', 'gemini-3.5-flash-lite', 'json', [], MOCK_GEMINI_LEVELS['gemini-3.5-flash-lite'])] }
         : { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'fallback', models: [] },
       ...(source.analyzerEndpoints ?? []).map((e) => ({
         kind: 'endpoint' as const,
@@ -9397,7 +9523,7 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
         label: e.name,
         status: 'ok' as const,
         models: (g.__SEED_ENDPOINT_MODELS__?.[e.id] ?? ['mock-model']).map((m) =>
-          entry(endpointModelId(e.id, m), 'openai', m, e.structuredOutput ?? 'schema', []),
+          entry(endpointModelId(e.id, m), 'openai', m, e.structuredOutput ?? 'schema', [], MOCK_STYLE_LEVELS[e.reasoningStyle ?? 'not_controllable']),
         ),
       })),
     ],
@@ -9418,7 +9544,7 @@ export async function mockTestAnalyzerModel(body: AnalyzerModelTestRequest): Pro
       body.scope === 'all'
         ? { schema: { [level]: seeded }, json: { [level]: 'accepted' }, off: { [level]: 'accepted' } }
         : { [mode]: { [level]: mode === 'schema' ? seeded : 'accepted' } },
-    reasoning: {},
+    reasoning: { [level]: 'accepted' },
   };
   Object.assign(MOCK_USER_SETTINGS, {
     analyzerCapabilitiesByModel: { ...(MOCK_USER_SETTINGS.analyzerCapabilitiesByModel ?? {}), [body.modelId]: record },

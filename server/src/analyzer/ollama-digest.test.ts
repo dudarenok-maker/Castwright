@@ -26,6 +26,17 @@ describe('ollamaModelDigest (#3084 A3)', () => {
     });
   });
 
+  it('a bare tag matches its :latest listing (N7 — 5.1a), but a different size does not', async () => {
+    await withServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'qwen3:latest', digest: 'sha256:def' }, { name: 'qwen3.5:4b', digest: 'sha256:ghi' }] }));
+    }, async (url) => {
+      expect(await ollamaModelDigest(url, 'qwen3')).toBe('sha256:def');
+      expect(await ollamaModelDigest(url, 'qwen3:latest')).toBe('sha256:def');
+      expect(await ollamaModelDigest(url, 'qwen3.5:9b')).toBeUndefined();
+    });
+  });
+
   it('never throws: a 500, a non-JSON body and a dropped connection all answer undefined', async () => {
     await withServer((_req, res) => { res.writeHead(500); res.end('boom'); }, async (url) => {
       expect(await ollamaModelDigest(url, 'qwen3.5:4b')).toBeUndefined();

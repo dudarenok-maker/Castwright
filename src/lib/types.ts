@@ -1087,9 +1087,10 @@ export type Stage =
      from the Admin view and Account view. #3084 F7: `focusKey` is an
      untrusted knob key round-tripped from `#/advanced?focus=<key>`; the
      view validates it against the descriptors it actually renders and
-     scrolls/highlights the matching row. Wave 5's Task 5.5c extends THIS
-     member with `reasoningFocus` rather than adding a second one. */
-  | { kind: 'advanced'; focusKey?: string }
+     scrolls/highlights the matching row. `reasoningFocus` is the second,
+     independent deep link (`#/advanced?reasoningEngine=&reasoningModel=`)
+     to one model's reasoning-level row. */
+  | { kind: 'advanced'; focusKey?: string; reasoningFocus?: { engine: 'gemini' | 'ollama'; model: string } }
   /* fe-37 — in-app multi-version release-notes history, reached from /about and
      Account → Application updates. */
   | { kind: 'release-notes' }

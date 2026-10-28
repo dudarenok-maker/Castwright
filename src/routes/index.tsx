@@ -524,7 +524,15 @@ function AboutRoute() {
 export function AdvancedRoute() {
   const [searchParams] = useSearchParams();
   const focusKey = searchParams.get('focus') ?? undefined;
-  useHydrateStage({ kind: 'advanced', focusKey }, [focusKey]);
+  const reasoningEngine = searchParams.get('reasoningEngine');
+  const reasoningModel = searchParams.get('reasoningModel');
+  /* An unrecognised engine or a partial pair yields no reasoningFocus, never a
+     malformed object. */
+  const reasoningFocus: { engine: 'gemini' | 'ollama'; model: string } | undefined =
+    (reasoningEngine === 'gemini' || reasoningEngine === 'ollama') && reasoningModel
+      ? { engine: reasoningEngine, model: reasoningModel }
+      : undefined;
+  useHydrateStage({ kind: 'advanced', focusKey, reasoningFocus }, [focusKey, reasoningEngine, reasoningModel]);
   return <AdvancedView />;
 }
 

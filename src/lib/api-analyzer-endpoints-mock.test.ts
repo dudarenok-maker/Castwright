@@ -2,6 +2,7 @@
    PR 3d e2e (mock mode) exercises the same rules. Module state persists across
    tests in this file, so every test uses its own endpoint id. */
 import { describe, it, expect, vi } from 'vitest';
+import styleLevels from '../../server/src/analyzer/__fixtures__/reasoning-style-levels.json';
 
 vi.stubEnv('VITE_USE_MOCKS', 'true');
 const { api, AnalyzerEndpointError, _setMockUserSettingsForTest } = await import('./api');
@@ -97,15 +98,51 @@ describe('mock analyzer endpoint API', () => {
     _setMockUserSettingsForTest({ analyzerPhase0Model: null, analyzerPhase1Model: null } as Parameters<typeof _setMockUserSettingsForTest>[0]);
   });
 
-  it('until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, as the server does', async () => {
-    const r = await refusal(api.createAnalyzerEndpoint({ ...input('m-reasoning'), reasoning: 'high' }));
-    expect(r).toMatchObject({
-      code: 'invalid',
-      issues: [{ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' }],
-    });
+  it('until PR 5b, refuses a non-empty payload, as the server does', async () => {
     const p = await refusal(api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } }));
     expect(p.issues).toEqual([
       { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
+    ]);
+  });
+
+  it('accepts a reasoning level its control style offers and refuses one it does not, as the server does', async () => {
+    const r = await refusal(api.createAnalyzerEndpoint({ ...input('m-reasoning'), reasoning: 'high' }));
+    expect(r).toMatchObject({
+      code: 'invalid',
+      issues: [{ path: ['reasoning'], message: 'Reasoning "high" is not offered by the not_controllable control style (offered: model-default).' }],
+    });
+    /* The same table as the server (reasoning.ts, pinned to this fixture by reasoning.test.ts). */
+    for (const [style, levels] of Object.entries(styleLevels)) {
+      for (const level of ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high']) {
+        const id = `m-lvl-${style.replace(/_/g, '-')}-${level}`;
+        const outcome = await api
+          .createAnalyzerEndpoint({ ...input(id), reasoningStyle: style, reasoning: level } as never)
+          .then(() => 'accepted', () => 'refused');
+        expect([style, level, outcome]).toEqual([style, level, levels.includes(level) ? 'accepted' : 'refused']);
+      }
+    }
+  });
+
+  it('an update judges the level only when it or its style changes, as the server does (A7)', async () => {
+    _setMockUserSettingsForTest({
+      analyzerEndpoints: [
+        {
+          id: 'm-a7', name: 'Box m-a7', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', concurrency: 1, requestCeilingMs: 1_800_000,
+          structuredOutput: 'schema', reasoningStyle: 'enable_thinking', reasoning: 'high', maxOutputTokens: 0, contextTokens: 32768,
+        },
+      ],
+    });
+    const base = { ...input('m-a7'), reasoningStyle: 'enable_thinking' as const, reasoning: 'high' };
+    const renamed = await api.updateAnalyzerEndpoint('m-a7', { ...base, name: 'Renamed' });
+    expect(renamed.analyzerEndpoints?.find((e) => e.id === 'm-a7')).toMatchObject({ name: 'Renamed', reasoning: 'high' });
+    const restyled = await api.updateAnalyzerEndpoint('m-a7', { ...base, reasoningStyle: 'reasoning_effort' });
+    expect(restyled.analyzerEndpoints?.find((e) => e.id === 'm-a7')).toMatchObject({ reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    _setMockUserSettingsForTest({
+      analyzerEndpoints: [{ ...restyled.analyzerEndpoints![0], reasoningStyle: 'enable_thinking' }],
+    });
+    const refused = await refusal(api.updateAnalyzerEndpoint('m-a7', { ...base, reasoning: 'none' }));
+    expect(refused.issues).toEqual([
+      { path: ['reasoning'], message: 'Reasoning "none" is not offered by the enable_thinking control style (offered: model-default, off, on).' },
     ]);
   });
 

@@ -15,7 +15,8 @@ import { redactKnownSecrets } from '../redact.js';
 /* #3084 A9 — through the leaf gate. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { geminiRateLimiter } from '../rate-limit.js';
-import { geminiModelThinks, warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
+import { warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
+import { geminiRequestThinks, reasoningWireFragment, type ReasoningLevel } from '../reasoning.js';
 import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
 import {
   BACKOFFS_MS,
@@ -86,19 +87,42 @@ export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 120_000;
 /** P5 — the silence allowed before a Gemini request's answer text starts: the
     wait for the first chunk and each gap between thought parts.
     analyzer.gemini.thinkingIdleTimeoutMs = 0 (the default) is automatic per
-    model: 120 s for a model that thinks (static id rule, P27), otherwise the
-    stream idle window. A positive value applies to every model. */
-export function resolveGeminiThinkingIdleTimeoutMs(model: string): number {
+    request: 120 s (F6, approved by the owner 2026-09-13; was 240 s) for a
+    request that thinks (P27: the static id rule by default, or a level that
+    turns thinking on; geminiRequestThinks), otherwise the stream idle window.
+    A positive value applies to every request. */
+export function resolveGeminiThinkingIdleTimeoutMs(model: string, level?: ReasoningLevel): number {
   const configured = configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs');
   if (configured > 0) return configured;
-  return geminiModelThinks(model) ? GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs();
+  return geminiRequestThinks(model, level) ? GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs();
 }
 
 /** P5 — whether a timeout before answer text is a thinking-window timeout
     (AnalyzerTimeoutError, not retried) rather than today's idle timeout
-    (GeminiStreamIdleError, retried): a model that thinks, or a positive knob. */
-function geminiThinkingWindowApplies(model: string): boolean {
-  return configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs') > 0 || geminiModelThinks(model);
+    (GeminiStreamIdleError, retried): a request that thinks (P27), or a positive knob. */
+function geminiThinkingWindowApplies(model: string, level?: ReasoningLevel): boolean {
+  return configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs') > 0 || geminiRequestThinks(model, level);
+}
+
+/** Merge a reasoning fragment's thinkingConfig into the request config built by
+    W2 (which may already carry includeThoughts). The fragment decides
+    includeThoughts (P19): reasoningWireFragment adds it to every level that
+    thinks and leaves it off `off` (Gemma's MINIMAL — the only row with an
+    `off` level), so it accompanies any request that thinks and never one
+    that does not. The fragment never carries thinkingBudget at all — that
+    control is retired (F2); reasoning.test.ts pins it. */
+export function mergeGeminiThinkingConfig(
+  config: Record<string, unknown>,
+  fragment: Record<string, unknown>,
+): Record<string, unknown> {
+  const add = fragment.thinkingConfig as Record<string, unknown> | undefined;
+  if (!add) return config;
+  const merged: Record<string, unknown> = {
+    ...((config.thinkingConfig as Record<string, unknown> | undefined) ?? {}),
+    ...add,
+  };
+  if (add.includeThoughts !== true) delete merged.includeThoughts;
+  return { ...config, thinkingConfig: merged };
 }
 
 /** Live-read the cloud analyzer sampling temperature (registry wins). */
@@ -221,26 +245,33 @@ export class GeminiTransport implements ChatTransport {
       parts: [{ text: m.content }],
     }));
 
-    /* #3084 P27 — decided once per request from the static id rule, never the
-       live catalog, so a model's request shape and its reasoning evidence never
-       change between requests. */
-    /* #3084 W4 (P27, A3) — one flag for the wire and the evidence gate. A free-text (persona) request asks
-       for no thought summaries, so its thoughtsTokenCount is not reasoning evidence either. Stage requests
-       keep wave 2's id rule. */
-    const includeThoughts = !req.freeText && geminiModelThinks(this.model);
+    /* #3084 P27 — decided once per request from its settings, never the catalog: the id rule by default,
+       or a level that turns thinking on or off (N1). */
+    const requestThinks = geminiRequestThinks(this.model, req.reasoning);
     const config: Record<string, unknown> = {
       /* #3084 W4 — a free-text request omits what the pre-transport persona call never sent
          (it was a bare generateContent({ model, contents })). Stage requests are unchanged. */
       ...(req.freeText && req.system === '' ? {} : { systemInstruction: req.system }),
       ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
-      /* Wave 2's thought summaries (P19) go on stage requests only. A persona request keeps today's
-         shape; wave 5 (Task 5.3) adds a thinkingConfig to it only for a non-default reasoning level. */
-      ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
+      /* Thought summaries (P19) on stage requests that think by id or level; a free-text (persona)
+         request gets a thinkingConfig only from a non-default level's fragment, below. */
+      ...(!req.freeText && requestThinks ? { thinkingConfig: { includeThoughts: true } } : {}),
       ...(req.freeText && req.maxOutputTokens === undefined
         ? {}
         : { maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS }),
     };
     Object.assign(config, geminiStructuredConfig(req.structuredOutput));
+    /* #3084 wave 5 — the level's fragment, merged AFTER the structured-output keys and BEFORE
+       abortSignal is attached below (the merge returns a new object). Task 5.10 merges the payload
+       into this same `sentConfig`. */
+    const sentConfig =
+      req.reasoning === undefined
+        ? config
+        : mergeGeminiThinkingConfig(config, reasoningWireFragment('gemini', { model: this.model }, req.reasoning));
+    /* #3084 P27, A3 — one flag, read from the thinkingConfig this request actually sends: a
+       thoughtsTokenCount is reasoning evidence only when the wire asked for thoughts. */
+    const includeThoughts =
+      (sentConfig.thinkingConfig as { includeThoughts?: unknown } | undefined)?.includeThoughts === true;
 
     const watchdog = new AbortController();
     let idleFired = false;
@@ -261,11 +292,11 @@ export class GeminiTransport implements ChatTransport {
     const signals: AbortSignal[] = [watchdog.signal, ceiling];
     if (req.signal) signals.push(req.signal);
     const combined = AbortSignal.any(signals);
-    config.abortSignal = combined;
+    sentConfig.abortSignal = combined;
 
     const idleTimeoutMs = resolveStreamIdleTimeoutMs();
-    const thinkingIdleTimeoutMs = resolveGeminiThinkingIdleTimeoutMs(this.model);
-    const thinkingWindowApplies = geminiThinkingWindowApplies(this.model);
+    const thinkingIdleTimeoutMs = resolveGeminiThinkingIdleTimeoutMs(this.model, req.reasoning);
+    const thinkingWindowApplies = geminiThinkingWindowApplies(this.model, req.reasoning);
     /* #3084 P5 — true while the pending timer bounds silence before the answer
        text with the thinking window, so its expiry is a thinking-window timeout
        (not retried) rather than an idle timeout (retried). */
@@ -311,7 +342,7 @@ export class GeminiTransport implements ChatTransport {
       const stream = await this.client.models.generateContentStream({
         model: this.model,
         contents,
-        config,
+        config: sentConfig,
       });
       const start = Date.now();
       let lastChunkAt = start;
@@ -430,8 +461,8 @@ export class GeminiTransport implements ChatTransport {
       if (promptTokenCount !== undefined) resultUsage.inputTokens = promptTokenCount;
       if (candidatesTokenCount !== undefined) resultUsage.outputTokens = candidatesTokenCount;
       /* #3084 P27 — a thoughtsTokenCount is reasoning evidence only on a request
-         that asked for thoughts. Gemma asks for none, so its empty MAX_TOKENS
-         keeps the #528 split recovery even if the response reports a count. */
+         whose wire asked for thoughts (Gemma at its default or `off` asks for none,
+         so its empty MAX_TOKENS keeps the #528 split recovery). */
       if (includeThoughts && thoughtsTokenCount !== undefined) {
         resultUsage.reasoningTokens = thoughtsTokenCount;
       }

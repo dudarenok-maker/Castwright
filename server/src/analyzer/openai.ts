@@ -15,6 +15,7 @@ import { OpenAITransport, resolveEndpointMaxOutputTokens } from './transports/op
 import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { AnalyzerReasoningOverflowError } from './errors.js';
+import { resolveReasoningSetting } from './reasoning.js';
 import type { StageCall } from './types.js';
 
 /** #3084 P24 — the request settings an endpoint's runner reads. `maxOutputTokens` is
@@ -25,8 +26,9 @@ export function openAIRequestSettings(endpoint: AnalyzerEndpoint, servedOutputLi
   return {
     structuredOutput: endpoint.structuredOutput,
     maxOutputTokens: resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit),
-    /* No reasoning / extraParams: EngineRequestSettings has neither field until
-       wave 5 (Task 5.1). Task 5.3 adds `reasoning:` and Task 5.10 adds `extraParams:` here. */
+    /* #3084 wave 5 — an endpoint carries its own level. resolveReasoningSetting reads neither the
+       settings file nor the model for engine 'openai', so neither is passed. Task 5.10 adds extraParams. */
+    reasoning: resolveReasoningSetting({}, { engine: 'openai', model: '', endpoint }),
   };
 }
 

@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register row: A109 (§10 below, rewritten by #3777; the id is unchanged).
+> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), B107 (§12, Ollama reasoning levels and Test attribution) and E114 (§13, Gemini reasoning levels).
 
 ---
 
@@ -352,5 +352,120 @@ touches the endpoint and proves nothing. Follow the endpoint's server log.
    engine. Result:
 5. After both complete (the design and the reverse-order analysis in step 4), a chapter render
    on that card succeeds. Result:
+
+Run by / date / SHA:
+
+## 11. Endpoint reasoning styles on llama-swap — register row A118
+
+**Hardware:** the GPU box with llama-swap serving a Qwen3.6 model. Follow the endpoint's server log.
+
+### Preconditions
+
+- An OpenAI-compatible endpoint on that llama-swap, saved twice (or edited between runs): once with
+  reasoning control `reasoning_effort`, once with `chat_template_kwargs.enable_thinking`.
+- A chapter to analyse, and a Test available on the endpoint.
+
+### Procedure
+
+1. `reasoning_effort` endpoint: set Reasoning to `none` and analyse the chapter. Watch for
+   `reasoning_content` deltas (`reasoningSeen`, or the route heartbeat continuing before any answer text).
+   Repeat at `high`.
+2. `enable_thinking` endpoint: repeat step 1 at `off` and at `on`.
+3. At `on`, run the Test. Record the structured-output probe verdict (`enforced` or `ignored`) and
+   whether the run label shows "schema (not enforced)".
+
+### Pass
+
+- At `none` (and `off`) no reasoning deltas stream; at `high` (and `on`) they do.
+- The run label shows "schema (not enforced)" only for a level whose probe was recorded `ignored`.
+
+`reasoning_effort` `none` / `high`: deltas ___ / ___ Result:
+
+`enable_thinking` `off` / `on`: deltas ___ / ___ Result:
+
+Probe at `on`: ___ label: ___ Result:
+
+Run by / date / SHA:
+
+## 12. Ollama reasoning levels and Test attribution — register row B107
+
+**Hardware:** local Ollama only; one thinking tag (for example `qwen3.5:4b`) and one non-thinking tag.
+
+### Preconditions
+
+- Both tags pulled. A chapter to analyse.
+
+### Procedure
+
+1. Non-thinking tag: Test with scope `all`. Record each level's verdict.
+2. Thinking tag: Test with scope `all`. Open Advanced settings → Analyzer request controls and check
+   both models' rows.
+3. Set a level the Test recorded `rejected` and start an analysis. Record when it fails and the copy.
+4. A2: after step 2, re-pull the same tag so its build changes (`ollama pull <tag>`; `ollama list` shows
+   a new digest). Test with scope `configured` and read the stored record.
+
+### Pass
+
+- Non-thinking tag: `on`, `low`, `medium` and `high` `rejected`; `off` and `model-default` `accepted`.
+- Thinking tag: `low` `accepted`, and `low` is offered in that model's row and not in the other's.
+- The `rejected` level fails the run before the first chapter, naming the level and the date of the
+  Test that recorded it.
+- After the re-pull, the record keeps only the verdict this Test probed.
+
+Non-thinking verdicts: ___ Result:
+
+Thinking-tag verdicts and rows: ___ Result:
+
+Refusal copy: ___ Result:
+
+A2 record after re-pull: ___ Result:
+
+Run by / date / SHA:
+
+## 13. Gemini reasoning levels — register row E114
+
+**Hardware:** any machine with a Gemini API key; no GPU. **Quota:** `gemini-3.6-flash` allows 20 requests
+a day, and §1 and §2 also use it; run this on a different day.
+
+### Preconditions
+
+- A Gemini API key. A chapter long enough to exhaust the output cap (for G1) and an ordinary stage-2 chapter.
+
+### Procedure
+
+1. Test with scope `all` on `gemini-3.6-flash`, `gemini-3.8-flash` and `gemma-4-31b-it`.
+2. Analyse a stage-2 chapter on `gemini-3.6-flash` at `model-default`, then at `high`. Record
+   `thoughtsTokenCount` for each.
+3. Analyse on `gemma-4-31b-it` at `off`, then at `on`. Record thought tokens, and whether the `on` step
+   of the Test was `accepted` (A8: whether `thinkingLevel: HIGH` takes `includeThoughts`).
+4. G1: on the long chapter, run Gemma at `on` and at its default level; record each outcome.
+5. Stale `minimal`: with no analysis running, hand-set `minimal` for `gemini-3.8-flash` in `user-settings.json`,
+   then reload the app. Do not Save from the reasoning card before reloading: the settings slice is fetched only
+   once at boot, so it would send the stale whole map and overwrite the hand edit. Start an analysis and record
+   the refusal copy and the Advanced settings row. Restore the saved level, then reload again.
+
+### Pass
+
+- Every offered level `accepted` (a `length` stop on a level step still counts). The `gemini-3.8-flash`
+  result lists `model-default`, `low`, `medium` and `high` with no `minimal` step, and its Advanced
+  settings reasoning row does not offer `minimal`.
+- With `minimal` hand-set for `gemini-3.8-flash` in `user-settings.json` and the app reloaded, starting an
+  analysis is refused before it starts ("is not offered for this model"), and the row shows `minimal` selected
+  so it can be changed.
+- `high` reports a larger `thoughtsTokenCount` than `model-default`; Gemma `on` differs from `off`.
+- Gemma `on` with an empty `MAX_TOKENS` answer fails as `analyzer-reasoning-overflow`; at its default
+  level the chunk splits and recovers (#528).
+- If the Gemma `on` step is `rejected`, record it: the `on` fragment must drop `includeThoughts`, a
+  decision to reopen.
+
+Test verdicts: ___ Result:
+
+Thought tokens (`model-default` / `high`; Gemma `off` / `on`): ___ Result:
+
+A8, Gemma `on` step: ___ Result:
+
+G1, `on` vs default: ___ Result:
+
+Stale `minimal` refusal and row: ___ Result:
 
 Run by / date / SHA:

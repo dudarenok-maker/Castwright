@@ -673,6 +673,43 @@ describe('AdvancedRoute — focus query param hydrates the stage (#3084 wave 2b,
     await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'advanced' }));
     expect((store.getState().ui.stage as { focusKey?: string }).focusKey).toBeUndefined();
   });
+
+  it('AdvancedRoute reads reasoningEngine/reasoningModel into ui.stage.reasoningFocus', async () => {
+    const store = makeStore();
+    renderAtAdvanced(store, '/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
+    await screen.findByTestId('advanced-view');
+    await waitFor(() =>
+      expect(store.getState().ui.stage).toEqual({
+        kind: 'advanced',
+        focusKey: undefined,
+        reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' },
+      }),
+    );
+  });
+
+  it('an unrecognised engine value hydrates no reasoningFocus', async () => {
+    const store = makeStore();
+    renderAtAdvanced(store, '/advanced?reasoningEngine=openai&reasoningModel=m');
+    await screen.findByTestId('advanced-view');
+    await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'advanced' }));
+    expect((store.getState().ui.stage as { reasoningFocus?: unknown }).reasoningFocus).toBeUndefined();
+  });
+
+  it('focus and reasoningEngine/reasoningModel both hydrate together', async () => {
+    const store = makeStore();
+    renderAtAdvanced(
+      store,
+      '/advanced?focus=analyzer.gemini.maxInputTokensPerRequest&reasoningEngine=ollama&reasoningModel=qwen3.5:4b',
+    );
+    await screen.findByTestId('advanced-view');
+    await waitFor(() =>
+      expect(store.getState().ui.stage).toEqual({
+        kind: 'advanced',
+        focusKey: 'analyzer.gemini.maxInputTokensPerRequest',
+        reasoningFocus: { engine: 'ollama', model: 'qwen3.5:4b' },
+      }),
+    );
+  });
 });
 
 describe('BooksRoute — re-parse wipes stale redux state', () => {

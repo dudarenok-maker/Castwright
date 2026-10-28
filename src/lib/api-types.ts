@@ -3771,6 +3771,34 @@ export interface components {
              */
             createdAt: string;
         };
+        /**
+         * @description Reasoning level for one analyzer engine, Gemini model or endpoint.
+         *     Which values apply depends on the engine family (Gemini per model,
+         *     Ollama) or the endpoint's reasoningStyle; the server offers only those
+         *     and refuses others on save. `model-default` sends no reasoning field.
+         *     A server may accept a level and ignore it — that cannot be observed.
+         * @enum {string}
+         */
+        ReasoningLevel: "model-default" | "off" | "on" | "none" | "minimal" | "low" | "medium" | "high";
+        /**
+         * @description #3084 — per-engine reasoning, keyed by model id. Ollama: absent = 'off';
+         *     low / medium / high only for a model whose own Test accepted them; keys are
+         *     stored through normalizeModelTag (`qwen3` and `qwen3:latest` are one model).
+         *     Gemini: absent = 'model-default'. Values are strings: a save accepts only a
+         *     ReasoningLevel the model offers, and a stored value this version no longer
+         *     offers or does not know is returned as saved and refuses a run before it
+         *     starts. A PUT replaces this map, and each engine map inside it, as a whole:
+         *     send every engine's entries, because an engine left out of a sent map loses
+         *     them.
+         */
+        AnalyzerReasoningByEngine: {
+            ollama?: {
+                [key: string]: string;
+            };
+            gemini?: {
+                [key: string]: string;
+            };
+        };
         UserSettings: {
             /**
              * @description Free-text name shown in the top-bar avatar and used as the
@@ -3959,6 +3987,7 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
@@ -4062,6 +4091,17 @@ export interface components {
             testedAt: string;
             /** @description #3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded. */
             digest?: string;
+            /** @description #3084 — each verdict's own Test date, keyed like the verdicts. A verdict with no entry was recorded by the Test the record's testedAt names. */
+            verdictTestedAt?: {
+                reasoning?: {
+                    [key: string]: string;
+                };
+                structuredOutput?: {
+                    [key: string]: {
+                        [key: string]: string;
+                    };
+                };
+            };
             control: {
                 ok: boolean;
                 error?: string;
@@ -4077,8 +4117,8 @@ export interface components {
         };
         /**
          * @description Master-contract fields id, label, contextTokens, outputTokens, capability
-         *     (offeredReasoningLevels arrives in wave 5); W3c adds engine, model,
-         *     structuredOutput and testPlan.
+         *     and offeredReasoningLevels; W3c adds engine, model, structuredOutput and
+         *     testPlan.
          */
         AnalyzerCatalogEntry: {
             id: string;
@@ -4087,6 +4127,8 @@ export interface components {
             contextTokens?: number;
             outputTokens?: number;
             capability?: components["schemas"]["ModelCapabilityRecord"];
+            /** @description Levels the Settings UI may offer for this model (engine family, endpoint style, and the model's Test record). */
+            offeredReasoningLevels?: components["schemas"]["ReasoningLevel"][];
             /** @enum {string} */
             engine: "local" | "gemini" | "openai";
             model: string;
@@ -4100,6 +4142,8 @@ export interface components {
                  * @enum {string}
                  */
                 outcome?: "enforced" | "ignored" | "rejected" | "accepted";
+                /** @description ISO date of the Test that recorded `outcome` (A2: a merged record holds verdicts from more than one Test). Absent when `outcome` is absent. */
+                outcomeTestedAt?: string;
             };
             testPlan: {
                 configured: number;
@@ -4191,6 +4235,7 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
@@ -4236,6 +4281,7 @@ export interface components {
             structuredOutput: "schema" | "json" | "off";
             /** @enum {string} */
             reasoningStyle: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            /** @description A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint's reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts. */
             reasoning: string;
             /** @description 0 = Auto. */
             maxOutputTokens: number;
@@ -4260,6 +4306,7 @@ export interface components {
             structuredOutput?: "schema" | "json" | "off";
             /** @enum {string} */
             reasoningStyle?: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            /** @description A ReasoningLevel (see #/components/schemas/ReasoningLevel) that this endpoint's reasoningStyle offers; a save refuses any other. A stored value this version no longer offers or does not know is returned as saved (N10) and refuses a run before it starts. */
             reasoning?: string;
             maxOutputTokens?: number;
             contextTokens: number;
@@ -4861,16 +4908,16 @@ export interface components {
          *     rendered as a deep link into that Advanced Settings row), a wiki link
          *     (`wikiPage`, always its OWN entry — it names a whole page, so it can
          *     never be a field tacked onto a setting-changing fix), or plain text
-         *     (neither, e.g. "switch model"). `endpointField` / `reasoningSetting`
-         *     are declared for the later waves that fill them (3b endpoints, 5a
-         *     reasoning level); nothing sends them yet.
+         *     (neither, e.g. "switch model"). `endpointField` (an OpenAI-compatible
+         *     endpoint's own field) and `reasoningSetting` (a Gemini or Ollama
+         *     model's reasoning level) are both emitted by `reasoningOverflowFixes`.
          */
         AnalysisFailureFix: {
             /** @description Human-readable action text, rendered verbatim (and as the link's text when the fix is a link). */
             label: string;
             /** @description Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix. */
             settingKey?: string;
-            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Not emitted yet. */
+            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields). */
             endpointField?: {
                 endpointId: string;
                 field: string;
@@ -4882,7 +4929,7 @@ export interface components {
              *     plain text instead of linking.
              */
             wikiPage?: string;
-            /** @description Wave 5 (#3084) — the reasoning-level control this fix should focus. Not emitted yet. */
+            /** @description Wave 5 (#3084) — the reasoning-level control this fix should focus. Emitted for a Gemini or Ollama model when a lower level exists. */
             reasoningSetting?: {
                 /** @enum {string} */
                 engine: "gemini" | "ollama";
