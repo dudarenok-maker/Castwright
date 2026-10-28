@@ -232,7 +232,7 @@ import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { RevisionOpFailure } from '../lib/revision-op-failure';
-import { bookMetaActions } from '../store/book-meta-slice';
+import { bookMetaActions, selectEffectiveMeta } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
@@ -3216,9 +3216,10 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
 
   /* #3784 P1 (review pass 8) — a title refused as stale stays in `saved` until
      the re-read hydrates it, so a notes commit made before then must not send
-     it back without a base. The commit waits for the read, and goes out with
-     the read's title and the user's notes. */
-  it('P1: a commit made before the stale re-read lands keeps the outside title, and its notes land after the read', async () => {
+     it back without a base. The commit does not wait for the read: it sends
+     only the field the user typed, so the notes land while the read is still
+     out and the outside title stays (review pass 9). */
+  it('P1: a commit made before the stale re-read lands sends only its notes, and keeps the outside title', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
     const disk = wireDisk();
@@ -3355,6 +3356,124 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(disk.books.get('A')!.state).toMatchObject({ title: 'Theirs', notes: 'A note' });
       expect(store.getState().bookMeta.saved.A?.notes).toBe('A note');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 PB (review pass 10) — the re-read a stale refusal asks for is a
+     re-read of the book the user is editing: it refreshes `saved` and keeps
+     the draft (#2230, #3754). */
+  it('PB-1: uncommitted typing survives the re-read a stale refusal triggers, and the outside write shows in saved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+
+      /* The user is typing notes; nothing is committed yet. */
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      expect(titlePuts(disk)).toEqual(['503 Mine', '409 Mine']);
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+      expect(selectEffectiveMeta(store.getState() as never, 'A')).toMatchObject({ title: 'Theirs', notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-2: a draft restored by a refused follow-up survives the stale re-read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      act(() => {
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Mine' }));
+        store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      disk.refuseNext(
+        'book_busy',
+        (id, req) =>
+          id === 'A' && req.slice === 'state' && 'author' in (req.patch as object) && !('title' in (req.patch as object)),
+      );
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      const keys = store.getState().notifications.toasts.map((t) => t.dedupeKey);
+      expect(keys).toContain('book-meta-persist-failed');
+      /* The refused title is not restored; the author the user still wants is. */
+      expect(store.getState().bookMeta.draft).toEqual({ author: 'New Author' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-3: a field both in the draft and changed outside shows the typing, over the outside value in saved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typing' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      expect(store.getState().bookMeta.draft).toEqual({ title: 'Typing' });
+      expect(selectEffectiveMeta(store.getState() as never, 'A')?.title).toBe('Typing');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-5: typing kept across a trip to the library survives the full read a Library Edit asks for (#3754)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await libraryEditTitle(disk, 'T2');
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-4 (control): opening a different book still clears the draft', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'for A' })); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+      expect(store.getState().bookMeta.draft).toBeNull();
     } finally {
       vi.useRealTimers();
     }

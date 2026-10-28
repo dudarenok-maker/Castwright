@@ -267,6 +267,39 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
     expect(next.saved.ns.title).toBe('Authoritative');
     expect(next.lastCommitted?.['ns']).toBeUndefined();
   });
+
+  /* #3784 PB (review pass 10) — a re-read of the book being edited. */
+  it('a same-book re-read (keepDraft) refreshes saved, keeps the draft, and clears the stale snapshot', () => {
+    const start: BookMetaState = {
+      draft: { notes: 'half-typed' },
+      saved: { ns: fullMeta({ title: 'Mine' }) },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'Mine' } } },
+      prosodyEnabled: {},
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Theirs', author: 'A', series: 'S' },
+        keepDraft: true,
+      }),
+    );
+    expect(next.saved.ns.title).toBe('Theirs');
+    expect(next.draft).toEqual({ notes: 'half-typed' });
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
+
+  it('a hydrate without keepDraft (a book being opened) still wipes the draft', () => {
+    const start: BookMetaState = { draft: { notes: 'half-typed' }, saved: {}, prosodyEnabled: {} };
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Theirs', author: 'A', series: 'S' },
+      }),
+    );
+    expect(next.draft).toBeNull();
+  });
 });
 
 describe('selectors', () => {

@@ -98,6 +98,9 @@ interface HydratePayload {
     notes?: string | null;
     prosodyEnabled?: boolean;
   };
+  /** #3784 PB — a re-read of the book the user is editing: refresh `saved`
+      and keep the draft. Unset for the first hydrate after opening a book. */
+  keepDraft?: boolean;
 }
 
 export const bookMetaSlice = createSlice({
@@ -105,9 +108,15 @@ export const bookMetaSlice = createSlice({
   initialState,
   reducers: {
     /* Seed `saved[bookId]` from the BookStateJson the server returned on book
-       open. Wipes any stale draft from a previous book. */
+       open. Wipes any stale draft from a previous book.
+
+       #3784 PB — a re-read of the open book (`keepDraft`) keeps the draft: it
+       holds the user's typing, or the edit a failed save restored (#2230,
+       #3754), and the read cannot restore either. `selectEffectiveMeta` still
+       overlays it, so a field the user is editing shows their typing while
+       every other field shows the read. */
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
-      const { bookId, state } = a.payload;
+      const { bookId, state, keepDraft = false } = a.payload;
       s.saved[bookId] = {
         title: state.title,
         author: state.author,
@@ -119,7 +128,7 @@ export const bookMetaSlice = createSlice({
         notes: state.notes ?? null,
       };
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
-      s.draft = null;
+      if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
          commit snapshot (the server is now the truth, rollback is moot). */
       if (s.lastCommitted) delete s.lastCommitted[bookId];
