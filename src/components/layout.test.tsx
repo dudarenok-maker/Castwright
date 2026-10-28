@@ -3479,6 +3479,54 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
+  /* #3784 P11-2 (review pass 11) — a details commit whose PUT is still out
+     when a re-read of the same book lands. The read rebases the commit's
+     snapshot instead of dropping it, so a failed save still restores the
+     typing (#2230), and the rollback reverts to the read, keeping the outside
+     write it brought. */
+  it('P11-2: a commit in flight across a same-book re-read keeps its typing when the save then fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      /* `hold` needs the disk's async `serve`. */
+      putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
+      const releasePut = disk.hold((id, req) => id === 'A' && req.slice === 'state');
+      disk.refuseNext('book_busy', (id, req) => id === 'A' && req.slice === 'state');
+      commit(store, 'notes', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+
+      /* Another tab renames the book; the re-read brings it. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      releaseRead();
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      releasePut();
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      const keys = store.getState().notifications.toasts.map((t) => t.dedupeKey);
+      expect(keys).toContain('book-meta-persist-failed');
+      expect(disk.log.filter((p) => p.bookId === 'A' && p.slice === 'state').map((p) => p.patch)).toEqual([
+        { notes: 'Mine' },
+      ]);
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'Mine' });
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', notes: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /* #3784 P11-1 (review pass 11) — a book id is its author/series/title slug,
      so deleting a book and importing one with the same slug reuses its id.
      The new book is a different manuscript: the old book's unsaved typing

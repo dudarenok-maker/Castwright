@@ -130,8 +130,15 @@ export const bookMetaSlice = createSlice({
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
       if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
-         commit snapshot (the server is now the truth, rollback is moot). */
-      if (s.lastCommitted) delete s.lastCommitted[bookId];
+         commit snapshot (the server is now the truth, rollback is moot).
+
+         #3784 P11-2 — except on a re-read of the open book: a commit whose PUT
+         is still queued or in flight keeps its snapshot, rebased onto the read,
+         so a failed save still restores the typing and reverts to the read
+         (keeping the outside write it brought), not to the pre-read baseline. */
+      const pending = s.lastCommitted?.[bookId];
+      if (pending && keepDraft) pending.saved = { ...s.saved[bookId] };
+      else if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
     /* Stage a single-field edit into the draft buffer. Triggered on every
