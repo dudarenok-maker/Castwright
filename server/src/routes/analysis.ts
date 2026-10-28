@@ -3941,21 +3941,24 @@ function releaseBusyAndPin(job: AnalysisJob): void {
   }
 }
 
-/** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs with
-    state.json (a merged/split/reordered book before #3703 persisted its hints) would rebuild
-    `state.chapters` from the parse: chapters reappear, a uuid lands on another chapter and rendered
-    audio is orphaned. Answered before the SSE headers open, with the 409 the restructure routes
-    use. Fail-open on an unreadable or foreign state.json, like the `loadState` read in the runners.
-    Persisted hints are not checked here: they carry their own staleness check. */
+/** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs one-to-one
+    with state.json (a merged book before #3703 persisted its hints: a different chapter count or an id
+    state lacks) would rebuild `state.chapters` from the parse: chapters reappear, a uuid lands on
+    another chapter and rendered audio is orphaned. Answered before the SSE headers open, with the 409
+    the restructure routes use. Fail-open on an unreadable or foreign state.json, like the `loadState`
+    read in the runners. Persisted hints are not checked here: they carry their own staleness check.
+    The count/id check ONLY: `parseTitles` is deliberately not passed. Its title arm cannot tell a
+    same-count reorder from title drift without refusing never-restructured books, so a same-count
+    reorder from before #3703 is still analysed, as on main (design owed in #3837). */
 async function hintsOutOfSyncRefusal(
   manuscriptId: string,
-  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1]; parseTitles?: Parameters<typeof assertHintsPairWithState>[2] },
+  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1] },
 ): Promise<{ error: string; code: string } | null> {
   if (record.hintsSource !== 'parse' || !record.bookDir) return null;
   const state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
   if (!state || state.manuscriptId !== manuscriptId) return null;
   try {
-    assertHintsPairWithState(state, record.chapterHints, record.parseTitles);
+    assertHintsPairWithState(state, record.chapterHints);
   } catch (e) {
     if (e instanceof HintsOutOfSyncError) return { error: e.message, code: e.code };
     throw e;

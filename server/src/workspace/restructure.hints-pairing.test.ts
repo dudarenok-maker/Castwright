@@ -51,7 +51,7 @@ describe('assertHintsPairWithState', () => {
     expect(() => assertHintsPairWithState(state, hintsOf([1, 2]), ['Beta', 'Alpha'])).not.toThrow();
   });
 
-  it('a null parse title is not a mismatch by itself, but the state title there must not be a heading from another position', () => {
+  it('skips a position the parser made up (null), which says nothing about identity', () => {
     expect(parseTitlesPairWithState(state, [null, 'Alpha'])).toBe(true);
     expect(parseTitlesPairWithState(state, [null, 'Beta'])).toBe(false);
   });
@@ -65,11 +65,10 @@ describe('assertHintsPairWithState', () => {
   });
 });
 
-describe('a heading moved onto a parser-made (null) position is caught', () => {
+describe('a synthesized state title is compared, not skipped', () => {
   /* Reorder renumbers an app-made title, so a swap between an app-titled chapter and a
-     heading chapter leaves a null parse title at one position (now holding the heading's
-     state title) and an app-made, synthesized title where the heading was. The heading at
-     the null position is the evidence; the synthesized `Chapter 2` is drift and pairs. */
+     heading chapter leaves a null parse title at one position and a synthesized state
+     title at the other; skipping both compared neither. */
   const swapped = stateOf([
     { id: 1, title: 'Chapter Two' },
     { id: 2, title: 'Chapter 2', titleSynthesized: true },
@@ -86,111 +85,6 @@ describe('a heading moved onto a parser-made (null) position is caught', () => {
       { id: 2, title: 'Chapter Two' },
     ]);
     expect(parseTitlesPairWithState(healthy, [null, 'Chapter Two'])).toBe(true);
-  });
-});
-
-describe('title drift is not a mispairing (#3829)', () => {
-  /* Parser changes (entity decoding, heading normalisation) alter a title after state.json
-     was written. A drifted title matches no OTHER position's parse title; a pre-#3703 reorder
-     puts a heading at another position. */
-  it('pairs a position whose state title is an older parser form of its own heading', () => {
-    const s = stateOf([
-      { id: 1, title: 'Alpha' },
-      { id: 2, title: 'The Wizard&rsquo;s Tower' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Alpha', 'The Wizard’s Tower'])).toBe(true);
-  });
-
-  it('mispairs headings reordered among themselves', () => {
-    const s = stateOf([
-      { id: 1, title: 'Gamma' },
-      { id: 2, title: 'Alpha' },
-      { id: 3, title: 'Beta' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Gamma'])).toBe(false);
-  });
-
-  it('pairs drift next to a titleOverridden chapter', () => {
-    const s = stateOf([
-      { id: 1, title: 'Alpha' },
-      { id: 2, title: 'Mine', titleOverridden: true },
-      { id: 3, title: 'Caf&eacute;' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Café'])).toBe(true);
-  });
-
-  it('still mispairs a reorder when another position has also drifted', () => {
-    const s = stateOf([
-      { id: 1, title: 'Beta' },
-      { id: 2, title: 'Alpha' },
-      { id: 3, title: 'Caf&eacute;' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Café'])).toBe(false);
-  });
-});
-
-describe('an app-made title at a null position (#3829)', () => {
-  /* An untitled lead section followed by a bare "Chapter 1" heading: the parser's fallback
-     title for position 0 ("Chapter 1") repeats the real heading at position 1. A fresh import
-     has every title at home, so it pairs; a heading that left home for position 0 does not. */
-  const parse = [null, 'Chapter 1', 'Chapter 2'];
-
-  it('pairs a synthesized state title that repeats a real heading elsewhere', () => {
-    const s = stateOf([
-      { id: 1, title: 'Chapter 1', titleSynthesized: true },
-      { id: 2, title: 'Chapter 1' },
-      { id: 3, title: 'Chapter 2' },
-    ]);
-    expect(parseTitlesPairWithState(s, parse)).toBe(true);
-  });
-
-  it('pairs the pre-#3628 unflagged variant', () => {
-    const s = stateOf([
-      { id: 1, title: 'Chapter 1' },
-      { id: 2, title: 'Chapter 1' },
-      { id: 3, title: 'Chapter 2' },
-    ]);
-    expect(parseTitlesPairWithState(s, parse)).toBe(true);
-  });
-
-  it('mispairs a "Chapter 1" heading moved onto the null position, flagged or not', () => {
-    for (const flag of [{ titleSynthesized: true }, {}]) {
-      const s = stateOf([
-        { id: 1, title: 'Chapter 1' },
-        { id: 2, title: 'Chapter 2', ...flag },
-        { id: 3, title: 'The Storm' },
-      ]);
-      expect(parseTitlesPairWithState(s, [null, 'Chapter 1', 'The Storm'])).toBe(false);
-    }
-  });
-});
-
-describe('drift into a repeated heading (#3829)', () => {
-  /* Imported before the parser started merging a non-ASCII subtitle: state is
-     [Chapter 1, Chapter 2, Chapter 1], today's parse [Chapter 1, Chapter 2, Chapter 1 - Elan].
-     Position 2 matches position 0's heading, but that heading is still at home. */
-  it('pairs', () => {
-    const s = stateOf([
-      { id: 1, title: 'Chapter 1' },
-      { id: 2, title: 'Chapter 2' },
-      { id: 3, title: 'Chapter 1' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Chapter 1', 'Chapter 2', 'Chapter 1 \u2014 \u00c9lan'])).toBe(true);
-  });
-});
-
-describe('documented blind spot: a same-count merge then split (#3829)', () => {
-  /* The UI's split titles the second half "<title> (cont.)", a title no parse contains, so a
-     pre-#3703 merge + split moves a break without moving a heading. A title-only rule cannot tell
-     it from drift. Pinned as PAIRS so a future fix (body evidence) flips this deliberately. */
-  it('pairs', () => {
-    const s = stateOf([
-      { id: 1, title: 'Alpha' },
-      { id: 2, title: 'Beta' },
-      { id: 3, title: 'Gamma' },
-      { id: 4, title: 'Gamma (cont.)' },
-    ]);
-    expect(parseTitlesPairWithState(s, ['Alpha', 'Beta', 'Gamma', 'Delta'])).toBe(true);
   });
 });
 

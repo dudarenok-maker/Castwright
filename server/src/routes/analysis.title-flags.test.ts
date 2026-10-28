@@ -377,70 +377,21 @@ describe.each(['main', 'subset'] as const)(
     expect(res.status).toBe(200);
   }, 60_000);
 
-  it('refuses a same-count book whose headings were reordered before hints were persisted', async () => {
-    // Same ids and count; "# Alpha" is swallowed as the book title, so the parse is [made up, Prologue, Epilogue]
-    // and state is [Prologue, Alpha, Epilogue]: a heading sits on the parser-made position.
-    const { manuscriptId, bookDir } = await seedBook(`reordered-${kind}`, FLAGGED_MANUSCRIPT, [
-      { title: 'Prologue' },
-      { title: 'Alpha' },
-      { title: 'Epilogue' },
-    ]);
-    const { removeManuscript } = await import('../store/manuscripts.js');
-    removeManuscript(manuscriptId);
-    const statePath = join(bookDir, '.audiobook', 'state.json');
-    const before = readFileSync(statePath);
-    const res = await start(await analysisApp(), manuscriptId);
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('hints_out_of_sync');
-    expect(readFileSync(statePath).equals(before)).toBe(true);
-  }, 60_000);
-
-  it('refuses a same-count reorder among real headings at non-null positions', async () => {
-    // "# Book" is the title, so the parse is [made up, Alpha, Beta, Gamma]; state has Gamma, Alpha, Beta.
+  it('KNOWN GAP (#3837): a same-count reorder from before #3703 is still analysed', async () => {
+    // Same ids and count as the parse, headings in a different order. Analysis refuses on the
+    // count/id check only; the title arm is deliberately not used (design owed in #3837), so this starts, as on main.
     const ms = `# Book\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
-    const { manuscriptId, bookId, bookDir } = await seedBook(`headings-${kind}`, ms, [
+    const { manuscriptId } = await seedBook(`gap-${kind}`, ms, [
       { title: 'Chapter 1', titleSynthesized: true },
       { title: 'Gamma' },
       { title: 'Alpha' },
       { title: 'Beta' },
     ]);
-    const { removeManuscript } = await import('../store/manuscripts.js');
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
     removeManuscript(manuscriptId);
-    const statePath = join(bookDir, '.audiobook', 'state.json');
-    const before = readFileSync(statePath);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
     const res = await start(await analysisApp(), manuscriptId);
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('hints_out_of_sync');
-    expect(readFileSync(statePath).equals(before)).toBe(true);
-    const merge = await request(await restructureApp())
-      .post(`/api/books/${bookId}/chapters/merge`)
-      .send({ chapterIds: [3, 4] });
-    expect(merge.status).toBe(409);
-    expect(merge.body.code).toBe('hints_out_of_sync');
-  }, 60_000);
-
-  it('refuses a "Chapter 1" heading moved onto the parser-made position, on analysis, merge and refresh-titles', async () => {
-    // Parse [made up, Chapter 1, The Storm, The Calm]; a pre-#3703 reorder put the heading at position 0.
-    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# The Storm\n\n${LINE}\n\n# The Calm\n\n${LINE}\n`;
-    const { manuscriptId, bookId, bookDir } = await seedBook(`epigraph-swap-${kind}`, ms, [
-      { title: 'Chapter 1' },
-      { title: 'Chapter 2', titleSynthesized: true },
-      { title: 'The Storm' },
-      { title: 'The Calm' },
-    ]);
-    const { removeManuscript } = await import('../store/manuscripts.js');
-    removeManuscript(manuscriptId);
-    const statePath = join(bookDir, '.audiobook', 'state.json');
-    const before = readFileSync(statePath);
-    const res = await start(await analysisApp(), manuscriptId);
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('hints_out_of_sync');
-    const app = await restructureApp();
-    const merge = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [3, 4] });
-    expect(merge.status).toBe(409);
-    const refresh = await request(app).post(`/api/books/${bookId}/chapters/refresh-titles`).send({});
-    expect(refresh.status).toBe(409);
-    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(res.status).toBe(200);
   }, 60_000);
 
   it('does not refuse an unflagged (pre-#3628) fresh import with an untitled lead section before "Chapter 1"', async () => {
@@ -471,32 +422,6 @@ describe.each(['main', 'subset'] as const)(
     expect(rec.parseTitles).toEqual([null, 'Chapter 1', 'Chapter 2']);
     const res = await start(await analysisApp(), manuscriptId);
     expect(res.status).toBe(200);
-  }, 60_000);
-
-  it('merges a fresh import whose untitled lead section precedes a bare "Chapter 1"', async () => {
-    const ms = `# Book
-
-${LINE}
-
-# Chapter 1
-
-${LINE}
-
-# Chapter 2
-
-${LINE}
-`;
-    const { manuscriptId, bookId } = await seedBook(`lead-merge-${kind}`, ms, [
-      { title: 'Chapter 1', titleSynthesized: true },
-      { title: 'Chapter 1' },
-      { title: 'Chapter 2' },
-    ]);
-    const { removeManuscript } = await import('../store/manuscripts.js');
-    removeManuscript(manuscriptId);
-    const merge = await request(await restructureApp())
-      .post(`/api/books/${bookId}/chapters/merge`)
-      .send({ chapterIds: [2, 3] });
-    expect(merge.status).toBe(200);
   }, 60_000);
 
   it('does not refuse a healthy fresh import', async () => {

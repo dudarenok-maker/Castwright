@@ -698,41 +698,30 @@ export class HintsOutOfSyncError extends Error {
 }
 
 /** Whether a fresh parse's titles agree with state.json's, position by position.
-    Position i mispairs only when its state title equals the parse's title at some
-    OTHER position j AND the state title at j no longer equals that parse title:
-    the title has left its original home, which is what a pre-#3703 reorder does
-    (the heading moves, and whatever replaced it is not the heading). Anything
-    else is parser drift (entity decoding, heading normalisation changed after
-    state.json was written; the title parser's version stays put, so nothing
-    re-syncs it) and pairs (#3829). A `titleOverridden` position is skipped (the
-    user's own wording).
-    A fresh import can never trip it: state equals the parse, every title sits at
-    its home, so no title has left. That holds for a `null` parse title (the
-    parser made it up: "Chapter N") and for a repeated heading alike, so no
-    producer-specific exemption for app-made titles is needed.
-    Blind spots, all accepted (a title cannot tell them from drift): a reorder in
-    which every moved title has also drifted; a reorder that only permutes
-    app-titled chapters among themselves; a same-count merge then split (the UI
-    titles the second half "<title> (cont.)", which no parse contains, so a break
-    moved and no heading did); and a reorder whose displaced titles were
-    overwritten by a rename or a drift, because then no title is left at its
-    destination to match. */
+    Exact comparison, like `backfillTitleSynthesized`: state titles come from the
+    parse verbatim (import, re-parse, title refresh). Two kinds of position are
+    skipped because their title is not evidence of which chapter it is: a
+    `titleOverridden` chapter (the user's own wording) and one the parser made up
+    (`null` in the parse: "Chapter N" renumbers with position). A state title that
+    is app-made is NOT skipped: reorder renumbers it, so skipping it let a swap
+    between an app-titled and a heading chapter through, and on a book never
+    restructured the parse is `null` at that position anyway. The blind spot is a
+    reorder that only permutes app-titled chapters among themselves. */
 export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
 ): boolean {
   return state.chapters.every((c, i) => {
-    if (c.titleOverridden === true || c.title === parseTitles[i]) return true;
-    return parseTitles.every((t, j) => j === i || t !== c.title || state.chapters[j]?.title === t);
+    const parsed = parseTitles[i];
+    return c.titleOverridden === true || parsed == null || c.title === parsed;
   });
 }
 
 /** Hints pair with state when both hold the same chapter ids (so the same
     count). Hints carry no uuid, so for hints from a persisted file that is all
     there is to check. Hints from a parse fallback (`parseTitles` given) carry no
-    identity at all, so `parseTitlesPairWithState` also runs: a same-count
-    mispairing (a reorder from before #3703) fails there, while a title an older
-    parser wrote differently does not. */
+    identity at all, so each position's parsed title must also match state's: a
+    same-count mispairing (a reorder from before #3703) fails here. */
 export function assertHintsPairWithState(
   state: BookStateJson,
   hints: readonly ChapterHint[],
