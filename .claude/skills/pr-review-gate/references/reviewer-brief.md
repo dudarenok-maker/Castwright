@@ -515,18 +515,22 @@ recite:
     the comparison must test the property that matters (here: does this title
     belong to ANOTHER position) rather than equality. Then test with a stored
     value in an older producer's form and assert the guard passes.
-44. **An app-made placeholder compared as identity evidence** — PR #3835 pass 2
-    (#3829, same function): the parser's fallback title for an untitled
+44. **An app-made placeholder compared as identity evidence** — PR #3835 passes
+    2 and 3 (#3829, same function): the parser's fallback title for an untitled
     section is `Chapter N` (a position number), and a real heading elsewhere can
-    carry the same text, so an untouched import was read as a reorder. Any
-    placeholder the app invents (a position-numbered title, a default name, a
-    synthesized id) collides with real data of the same text. Checkable: for
-    each value used as evidence of which item something is, can the app itself
-    have produced it? If so, exclude it (the `titleSynthesized` flag, or, for
-    data from before the flag, the producer's own output for that position)
-    and test the collision: a placeholder that equals a real value elsewhere
-    must pair, and a real value that moved onto the placeholder's position must
-    still be refused.
+    carry the same text, so an untouched import was read as a reorder. Pass 2's
+    fix exempted the placeholder at its own position, which also exempted a real
+    heading that had been moved onto that position and happened to read
+    `Chapter 1`. Any placeholder the app invents (a position-numbered title, a
+    default name, a synthesized id) collides with real data of the same text.
+    Checkable: for each value used as evidence of which item something is, can
+    the app itself have produced it? If so, do not special-case the placeholder
+    (that exempts the real value that equals it); test the property the
+    evidence is for instead (here: has the matching title left its original
+    home?), which a fresh import satisfies by construction. Then test both
+    sides: a placeholder equal to a real value elsewhere must pair, and a real
+    value of that same text moved onto the placeholder's position must still be
+    refused.
 
 ### Keeping the catalogue current
 
