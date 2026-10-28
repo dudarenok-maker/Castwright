@@ -266,13 +266,20 @@ describe('GET title refresh with a hints file a reparse failed to delete (#3828)
   });
 
   it('control: a stale restructure (its uuids still in state.json) still skips without a bump', async () => {
-    await mergeOneAndTwo();
+    /* A reorder keeps the chapter count, so only the stale-file rule -- not the
+       positional count gate -- can be what skips: were the file read as absent,
+       the positional path would write and bump. */
+    const reorder = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(reorder.status).toBe(200);
+    expect(existsSync(hintsPath())).toBe(true);
     const file = JSON.parse(readFileSync(hintsPath(), 'utf8')) as {
       entries: Array<{ sourceSha256: string }>;
     };
     for (const e of file.entries) e.sourceSha256 = 'deadbeef'; // the manuscript changed since
     writeFileSync(hintsPath(), JSON.stringify(file));
-    owingRefresh(['Old 1', 'Old 2']);
+    owingRefresh(['Old 1', 'Old 2', 'Old 3']);
     const { removeManuscript } = await import('../store/manuscripts.js');
     removeManuscript(MANUSCRIPT_ID);
     const before = readFileSync(statePath());
