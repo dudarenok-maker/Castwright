@@ -7893,8 +7893,8 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEn
     problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
   }
   if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
-  /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
-     payload refusal until PR 5b. */
+  /* #3084 — mirrors the server's parseEndpointInput level rule (PR 5a). A payload is accepted as sent:
+     protected keys are refused by the server only (5b-D9). */
   const controlProblems: { path: string[]; message: string }[] = [];
   const style = input.reasoningStyle ?? 'not_controllable';
   const level = input.reasoning ?? 'model-default';
@@ -7905,9 +7905,6 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEn
       path: ['reasoning'],
       message: `Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
     });
-  }
-  if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
-    controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
   if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
   if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
