@@ -1,0 +1,11 @@
+[
+  { "kind": "openai", "params": { "top_k": 40, "min_p": 0.05 }, "controlsOutputCap": false, "labelParts": ["+ custom params"] },
+  { "kind": "openai", "params": { "max_completion_tokens": 4096 }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
+  { "kind": "openai", "params": { "max_tokens": null }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
+  { "kind": "ollama", "params": { "options": { "num_predict": 2048 } }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
+  { "kind": "ollama", "params": { "options": { "min_p": 0.05 }, "top_k": 40 }, "controlsOutputCap": false, "labelParts": ["+ custom params"] },
+  { "kind": "gemini", "params": { "config": { "maxOutputTokens": null } }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
+  { "kind": "gemini", "params": { "config": { "topK": 40 } }, "controlsOutputCap": false, "labelParts": ["+ custom params"] },
+  { "kind": "openai", "params": { "n_predict": 1024 }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
+  { "kind": "ollama", "params": {}, "controlsOutputCap": false, "labelParts": [] }
+]

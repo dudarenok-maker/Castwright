@@ -52,6 +52,19 @@ function geminiConfigAllows(key: string): boolean {
   return (GEMINI_CONFIG_ALLOWLIST as readonly string[]).includes(key);
 }
 
+/* N9 — llama.cpp's native `n_predict` is an endpoint output cap too: a payload that sets it disables Auto
+   and feeds capacity, like `max_tokens` / `max_completion_tokens`. */
+const OUTPUT_CAP: Record<TransportKind, { container: string | null; keys: readonly string[] }> = {
+  openai: { container: null, keys: ['max_tokens', 'max_completion_tokens', 'n_predict'] },
+  ollama: { container: 'options', keys: ['num_predict'] },
+  gemini: { container: 'config', keys: ['maxOutputTokens'] },
+};
+const TEMPERATURE: Record<TransportKind, { container: string | null }> = {
+  openai: { container: null },
+  ollama: { container: 'options' },
+  gemini: { container: 'config' },
+};
+
 function isPlainObject(v: unknown): v is Json {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -202,4 +215,91 @@ export function filterStoredPayload(
     setOwn(value, key, entry);
   }
   return { value, dropped };
+}
+
+export function payloadControlsOutputCap(kind: TransportKind, params: Json | undefined): boolean {
+  if (!params) return false;
+  const { container, keys } = OUTPUT_CAP[kind];
+  const scope = container === null ? params : params[container];
+  return isPlainObject(scope) && keys.some((k) => Object.hasOwn(scope, k));
+}
+
+/** P19 — the output cap a payload imposes: the smallest positive integer it sets; `null` when it
+    controls the cap without one (it removes the key, or Ollama's -1); `undefined` when it does not
+    control the cap. */
+export function payloadOutputCap(kind: TransportKind, params: Json | undefined): number | null | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return undefined;
+  const { container, keys } = OUTPUT_CAP[kind];
+  const scope = (container === null ? params : params[container]) as Json;
+  const caps = keys.map((k) => scope[k]).filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0);
+  return caps.length > 0 ? Math.min(...caps) : null;
+}
+
+/** N13 — the payload key that sets the output cap (`options.num_predict`, `config.maxOutputTokens`,
+    `max_completion_tokens`, `n_predict`, …), for failure copy: the key whose value is the cap, else the
+    first cap key present (a `null` that removes the cap). `undefined` when the payload controls no cap. */
+export function payloadOutputCapKey(kind: TransportKind, params: Json | undefined): string | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return undefined;
+  const { container, keys } = OUTPUT_CAP[kind];
+  const scope = (container === null ? params : params[container]) as Json;
+  const present = keys.filter((k) => Object.hasOwn(scope, k));
+  const cap = payloadOutputCap(kind, params);
+  const key = (cap === null ? undefined : present.find((k) => scope[k] === cap)) ?? present[0];
+  return container === null ? key : `${container}.${key}`;
+}
+
+/** Merged LAST into the native request, after filterStoredPayload (P17). Top-level keys replace;
+    the owned container merges key by key; `null` removes a key inside it. Never mutates `native`. */
+export function mergeExtraParams(
+  kind: TransportKind,
+  native: Json,
+  params: Json | undefined,
+  ctx: { reasoningStyle?: ReasoningStyle } = {},
+): Json {
+  if (!params) return native;
+  const { value: allowed = {}, dropped } = filterStoredPayload(kind, params, ctx);
+  if (dropped.length > 0) {
+    /* P17: names only — a payload value never reaches a log. */
+    console.warn(`[extra-params] ${kind}: ignored stored custom parameters Castwright controls or does not allow: ${dropped.join(', ')}`);
+  }
+  const out: Json = { ...native };
+  if (kind === 'openai' && payloadControlsOutputCap(kind, allowed)) {
+    delete out.max_tokens;
+    delete out.max_completion_tokens;
+  }
+  for (const [key, value] of Object.entries(allowed)) {
+    if (OWNED_CONTAINERS[kind].includes(key)) {
+      const base: Json = isPlainObject(out[key]) ? { ...(out[key] as Json) } : {};
+      for (const [innerKey, innerValue] of Object.entries(value as Json)) {
+        if (innerValue === null) delete base[innerKey];
+        else setOwn(base, innerKey, innerValue); // N12: never a prototype setter
+      }
+      setOwn(out, key, base);
+      continue;
+    }
+    if (value === null) delete out[key];
+    else setOwn(out, key, value);
+  }
+  return out;
+}
+
+/** The validation retry's request: the payload minus its temperature key, so
+    the retry policy's temperature (the transport's native value) applies. */
+export function stripPayloadTemperature(kind: TransportKind, params: Json | undefined): Json | undefined {
+  if (!params) return params;
+  const { container } = TEMPERATURE[kind];
+  if (container === null) {
+    if (!Object.hasOwn(params, 'temperature')) return params;
+    const { temperature: _dropped, ...rest } = params;
+    return rest;
+  }
+  const inner = params[container];
+  if (!isPlainObject(inner) || !Object.hasOwn(inner, 'temperature')) return params;
+  const { temperature: _dropped, ...restInner } = inner;
+  return { ...params, [container]: restInner };
+}
+
+export function requestControlsLabelParts(kind: TransportKind, params: Json | undefined): string[] {
+  if (!params || Object.keys(params).length === 0) return [];
+  return payloadControlsOutputCap(kind, params) ? ['+ custom params', 'max output set by custom params'] : ['+ custom params'];
 }
