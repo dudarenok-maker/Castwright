@@ -4,7 +4,7 @@
 
 ## Wave 5 — Reasoning controls (D8, §8) and custom payload (D9, §9)
 
-**Preconditions for the whole wave.** Waves 1–4 are merged. PR 5a (this file through Task 5.7) is re-pinned and verified at `542d3501` (2026-10-25; see PR 5a's Re-pin notes, which win over any step below them). PR 5b is still verified at `80be2f1d` (re-pinned from `46e62a34`) until it is re-pinned after 5a merges. Re-read any citation against current `main` before editing, since `main` moves. The wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `80be2f1d` either — waves 1-4 land as their own PRs, after this plan's pin commit. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
+**Preconditions for the whole wave.** Waves 1–4 are merged. PR 5a (this file through Task 5.7) is re-pinned and verified at `542d3501` (2026-10-25; see PR 5a's Re-pin notes, which win over any step below them). PR 5a merged as #3834. PR 5b (Task 5.8 through Task 5.13) is re-pinned and verified at `626c3130` (2026-10-29; see PR 5b's Re-pin notes, which win over any step below them). Re-read any citation against current `main` before editing, since `main` moves. The wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `80be2f1d` either — waves 1-4 land as their own PRs, after this plan's pin commit. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
 
 **Conventions used by every task below.**
 - Commands run from the worktree root. Server single file: `npm --prefix server run test -- <path relative to server/>`. Frontend single file: `npm test -- <path>`. None of this wave's test files are in `server/vitest.config.slow.ts` `SLOW_FILES`; do not add assertions to `server/src/analyzer/gemini.test.ts` (slow lane).
@@ -6112,9 +6112,7 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 
 ### PR 5b — Custom request payload
 
-> **Not re-pinned yet.** PR 5b below is still pinned at `80be2f1d`; it will be re-pinned against `main` after PR 5a merges. Do not execute it from this text.
-
-- **Branch:** `feat/server-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server-3084-w5b-payload`, cut after PR 5a merges.
+- **Branch:** `feat/server-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server-3084-w5b-payload`, cut after PR 5a merges. **Already cut (2026-10-29)** off `main` `626c3130` in worktree `C:\Claude\Projects\wt-3084-w5b-payload`; do not run `wt-new.mjs` again.
 - **Delivers:** `server/src/analyzer/runner/extra-params.ts` (validation, merge, temperature precedence, output-cap detection, redaction); `analyzerExtraParamsByEngine` (Ollama, Gemini) and endpoint `extraParams` validated on save, an update judging its payload only when the payload or the reasoning style changes (A7); a persona (free-text) request carrying the payload without its output-cap keys (A4); every transport merges the payload last; a payload temperature sets attempt 1 only; a payload output cap (llama.cpp `n_predict` included) disables Auto, the label says so and overflow copy names the key; Gemini `safetySettings` shape and prototype keys (`__proto__`, `constructor`, `prototype`) validated at save and filtered at merge; payload string values ≥ 8 chars redacted from the errors of the request that carried them, in all three transports (P29), never through the global known secrets; payload never logged or persisted; editors in Advanced settings and the endpoint form; run label "+ custom params" with the e2e assertion; `Closes #3084`.
 - **Must NOT change:** any request for a user with no payload (byte-identical bodies); reasoning or structured-output behaviour; the retry policies' own temperatures; persisted analyzer file formats.
 - **Entry:** PR 5a merged.
@@ -6127,7 +6125,153 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 - **Temperature precedence** is implemented by the runner removing the payload's temperature key from the attempt-2 request (`stripPayloadTemperature`), so the transport's native temperature — the retry policy's — stands. `TransportRequest` is unchanged.
 - **Persona requests and the payload output cap (A4).** Free text takes the model's own length (W4), so a payload cap chosen for chapter work would silently truncate a voice description. `runFreeText` sends the payload through `withoutPayloadOutputCap`, which drops exactly the keys `payloadOutputCapKey` names, and keeps every other key. A persona length stop keeps today's behaviour: text is kept, and an empty answer with reasoning evidence is the overflow.
 
+**Re-pinned 2026-10-29 against `main` `626c3130`** (PR 5b: this block through Task 5.13). PR 5a has merged (#3834), as have waves 1–4, so every 5a symbol PR 5b builds on is now real code, and many line numbers, several snippets and a few decisions below were stale. Five drift audits checked every 5b task against `626c3130`, and the operator answered every owner decision they raised (below). Each task now opens with a **Re-pin notes** block holding its corrected anchors, full replacement code and its child split; **where a Re-pin note and a step differ, the note wins**. The branch is already cut off `626c3130` in worktree `C:\Claude\Projects\wt-3084-w5b-payload`, so do not run `wt-new.mjs` again.
+
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **How a child uses this plan.**
+> - One child = one commit = one row of the Child decomposition table below. Do only that row's steps and mutations. `npm run typecheck` must be green when you commit.
+> - Every child depends on every row above it. Before you start, confirm the row above yours is on the branch: `git -C <worktree> log --oneline origin/main..HEAD` shows its commit subject. If it does not, **STOP** and comment on the ticket.
+> - Earlier children move code. Every `path:line` in these notes is true at `626c3130` only. Re-locate each anchor with `git grep -n '<symbol or quoted text>'` before you edit, and edit by symbol or quoted text, never by line number.
+> - If a symbol a step edits has changed shape in a way no note covers, **STOP**. Do not improvise. Comment on the ticket naming the symbol, the shape the plan expects and the shape you found, and end the run.
+> - Every Playwright run in PR 5b belongs to the e2e child (row 24, Task 5.12f). The 5.8a … 5.12e-ii children run unit tests only.
+> - In a split task, Step 2's "Expected" list, Step 4's run list and Step 6's `git add` apply per child: expect only the failures of the tests your child writes, run your child's tests plus its Keeps-green list, and add only your child's files (each note names them). Likewise a step's single import list is split: each child adds exactly the imports its own code uses (server `noUnusedLocals` fails on an unused one, tests included).
+> - **Record your mutation proof.** Start each mutation from a green baseline, record its observed red output (the failing test's name plus its assertion line) in your commit body AND in your ticket completion comment, then restore and byte-compare (`git -C <worktree> diff --exit-code -- <file>`). A mutation that stays green is reported as such, never silently dropped. The ship child (Task 5.13) assembles the PR body from these receipts.
+> - **Plan authoring bugs.** If a note's own code fails typecheck or its own test for an evident mechanical authoring reason — a wrong type annotation, a missing or unused import, a test placed in the wrong row, a test-harness timing slip — and the fix changes no behaviour, interface or owner decision, make the minimal fix and record it in your receipt under "Plan authoring fixes". Anything that touches behaviour, an interface or an owner decision still means STOP (the rule above).
+> - Commands run from the worktree root, never `cd X && …`: server file `npm --prefix server run test -- <path relative to server/>`; frontend file `npm test -- <path>`; `npm run typecheck`; `npm run check:cycles`; `npm run openapi:types`. Before the first commit, confirm the worktree's hooks and dependencies are real (CLAUDE.md "Worktree setup": `.husky/_` exists, `node_modules` and `server/node_modules` resolve).
+>
+> **Owner decisions (2026-10-29) — binding. The task notes apply each one; no note offers options for them.**
+> 1. **5b-D1 — the payload cap key is stamped on the error.** The overflowing request's payload output-cap key (and whether that key removes the cap) is recorded on `AnalyzerReasoningOverflowError` at throw time, exactly like 5a's `reasoningLevel`. Its `opts` become `{ endpointId?; persona?; reasoningLevel?; payloadCapKey?; payloadCapRemoved? }`. The shared stage runner stamps it (in `send`, through `mapFinish`'s ctx) from the payload that request sent, so it covers the Ollama, Gemini and OpenAI-compatible analyzers alike. `failure-taxonomy.ts` never imports `workspace/user-settings.ts` and gets no new gate. Task 5.10's `payloadCapSettingFor` (a `getCachedUserSettings()` read plus `parseEndpointModelId(err.model)`) and Task 5.11b's `getCachedUserSettings()` call are void.
+> 2. **5b-D2 — inert advice.** The overflow remediation keeps its static `FAILURE_REMEDIATIONS` tail and gains a per-instance sentence naming the payload key (5.5-D1's remediation-override mechanism; `userMessage` stays the F7 headline). When a payload controls the cap, the structured fixes it makes pointless are dropped — `Raise Gemini max output tokens`, `Raise Ollama num_predict`, `Lower <endpoint>'s max output tokens` — and a payload-key fix is added for **all three** engines. The plan's `not.toContain('num_ctx')` and `not.toContain("this endpoint's max output tokens")` assertions are void.
+> 3. **5b-D3 — wording for a cap the payload removes.** `Set a value for the custom parameter "<key>"` when the payload removes the cap; `Raise the custom parameter "<key>"` otherwise.
+> 4. **5b-D4 — the `REQUEST_SHAPING_SETTINGS` custom-payload half** is its own child right after Task 5.11b (row 17, Task 5.11c). Its entries use the editor labels Task 5.12 renders, and it fixes the `failure-taxonomy.ts:828-830` comment.
+> 5. **5b-D5 — the endpoint's Max output tokens while a payload sets the cap:** the stored value is kept and sent; the input is rendered read-only with the note "Ignored while custom parameters set the output cap.". The touch-target rule still applies.
+> 6. **5b-D6 — the endpoint Custom parameters editor** sits full width below the `sm:grid-cols-2` grid, outside it. `FieldRow` is not changed.
+> 7. **5b-D7 — the Gemini payload editor** is always shown, whether or not a Gemini key is set.
+> 8. **5b-D8 — plan 284 at the closing PR:** `status: draft` → `active`, `docs/features/INDEX.md` updated to match, and the body's "implementation follows in waves 1–5" line rewritten to say all five waves shipped and on-box acceptance is owed. Not archived.
+> 9. **5b-D9 — the mocks do not judge payloads:** neither the mock PUT nor the mock endpoint save mirrors the server's protected-key rules (as planned).
+> 10. **5b-D10 — "payload changed" ignores key order:** the server's A7 rule in `parseEndpointInput` compares the stored and sent payloads with an order-insensitive deep equal (`isDeepStrictEqual` from `node:util`), not `JSON.stringify`. (The mock compares nothing, per 5b-D9.)
+> 11. **5b-D11 — redaction:** `payloadSecretValues` lists each string value once; it no longer pushes a JSON-escaped duplicate. `redactKnownSecrets` already derives that spelling after its 8-character floor, so a value under 8 raw characters is never redacted. The main plan's contract line (`2026-09-11-openai-compatible-analyzer.md:626`) is corrected in this re-pin commit.
+> 12. **5b-D12 — types:** `extra-params.ts` uses `import type { ReasoningStyle } from '../reasoning.js'` and `import type { AnalysisEngine } from '../model-id.js'` instead of local copies. The file header and Task 5.9's "imports only `errors.ts` types and `analyzer/redact.ts`" sentence are corrected in the notes.
+> 13. **Coordinator call (bookkeeping, not behaviour) — 5.10's probe wrap:** `withPayloadCap` wraps only the Gemini and Ollama `probeLimits` closures in `modelTestDepsFor`; the endpoint branch already gets the payload cap through the new `resolveCapacity`. Mutation 8's endpoint half (an equivalent mutant) is dropped.
+>
+> **Global drift found at `626c3130`.** Each task's notes carry the details.
+> - **Nothing of PR 5b exists yet.** There is no `runner/extra-params.ts`, `__fixtures__/extra-params-cases.json`, `analyzerExtraParamsByEngine`, `requestControlLabelParts` or `src/lib/extra-params.ts`. What 5a already declared: `TransportRequest.extraParams?` (`runner/transport.ts:80`), `EngineRequestSettings.extraParams?` (`runner/stage-runner.ts:39`), and the runner forwards it (`stage-runner.ts:202`, `:276`). No transport reads it yet, and `parseEndpointInput` (`workspace/analyzer-endpoints.ts:259-261`) and `mockEndpointFromInput` (`src/lib/api.ts:7905-7907`) still refuse a non-empty payload, naming PR 5b.
+> - **Endpoint refusals carry `issues: { path: string[]; message: string }[]`**, not string `details` (`workspace/analyzer-endpoints.ts:87-107`, `:248`). Every `details` and every `'extraParams: …'` string push in Task 5.9 becomes an `{ path: ['extraParams'], message }` issue (5.9b).
+> - **`failure-taxonomy.ts` never imports `workspace/user-settings.ts`** (A9/P23; `failure-taxonomy.ts:49-53`). Endpoints come from the leaf gate `listAnalyzerEndpoints()`, keyed by `err.endpointId` (an endpoint overflow's `err.model` is the bare model name, so `parseEndpointModelId(err.model)` is `null`). 5b-D1 replaces both settings reads the plan had in that file.
+> - **The overflow copy is the remediation, not `userMessage`** (5.5-D1). `userMessage` is the F7 headline byte for byte; per-instance advice is `withCopy`'s fourth argument (`failure-taxonomy.ts:1035-1042`), today `${reasoningRemediationLead(err)} ${static tail}`. There is no `outputSetting` and no three-way ternary; 5a's helper is `reasoningRemediationLead` (`:603`), not `reasoningControlFor`.
+> - **5a moved OpenAI request construction into the exported pure builder `buildOpenAIRequestBody`** (`transports/openai-transport.ts:282-315`), called inline by the private `attempt()` (`:444-447`). There is no `params` variable and no `Object.assign`. The per-attempt `secrets` array is in `attempt()` (`:485-487`), not `send()`.
+> - **5a's Gemini config is named `sentConfig`** (`transports/gemini-transport.ts:267-270`; `abortSignal` set on it at `:295`; the call at `:342-345`), not `configWithReasoning`.
+> - **5a's Playwright spec `e2e/analyzer-request-controls.spec.ts` exists** (126 lines, three tests, file-level serial mode). Task 5.12 modifies it (appends a describe); it never recreates it.
+> - **W3b's `transport-redaction.test.ts` lives at `server/src/analyzer/`**, not under `transports/`, so a `src/analyzer/transports` directory run does not include it.
+> - **The user-settings round-trip guard** (`routes/user-settings.test.ts:414-487`) derives its key list from `userSettingsSchema.shape` and demands a `SAMPLE_VALUES` entry for every field (5.9a).
+> - **The frontend `AnalyzerRequestControls.onSave` opens with `if (blocked) return;`** (#3625, `analyzer-request-controls.tsx:108-120`). The plan's replacement dropped it; the notes keep it (5.12d).
+> - **The mock catalog's `entry(…)` helper takes six parameters** (`src/lib/api.ts:9365`, the last `offered`), and `mockGetAnalyzerModels` reads a `source: MockCatalogSource` (`:9342`, `:9356`), not only `MOCK_USER_SETTINGS`. The server `AnalyzerCatalogEntry` interface (`analyzer/catalog/analyzer-catalog.ts:42-60`) needs the new field before `toEntry` can return it (5.12b, 5.12c).
+> - **Docs moved.** Plan 284 is `status: draft` (`docs/features/284-openai-compatible-analyzer.md:2`; `INDEX.md:71`) and has no Ship notes section. The register's markers are `A119` (`onbox-acceptance-register.md:1863`) and `E115` (`:6926`), the glance table has A 40 / E 15 and the owed line reads `**71 owed.**` (`:735`); the run sheet ends at `## 13.` (`3084-openai-analyzer-onbox-acceptance.md:425`). Re-read all of these at ship time.
+> - **`noUnusedLocals` is on** for the server, tests included; remove anything your own edit orphans.
+> - **Cycles.** `extra-params.ts` imports only types from `errors.ts`, `reasoning.ts` and `model-id.ts`, plus `redact.ts`; none of their import closures reaches a module that imports `extra-params.ts`. madge counts type imports, so run `npm run check:cycles` after every server child that adds an import edge. `server/madge-cycles-allowlist.json` must stay unchanged.
+> - **#3721 console guard (global constraint).** Any `console.*` call this PR adds must not carry a printf placeholder in its first argument's static text (`server/src/console-format-placeholder.guard.test.ts`). The one PR 5b log line (`mergeExtraParams`'s dropped-key names) is a template literal with none.
+>
+> **Owed chores folded into children** (CLAUDE.md "Incidental findings"):
+> - the `REQUEST_SHAPING_SETTINGS` custom-payload half and its stale `failure-taxonomy.ts:828-830` comment (row 17, Task 5.11c, 5b-D4);
+> - the `user-settings.test.ts` `SAMPLE_VALUES` entry the new field makes owed, and a paired test for the mock PUT whitelist (5.9a, 5.9c);
+> - stale comments the work makes false: `analyzer-endpoints.ts:245-247` (5.9b); `api.ts:7892-7893` (5.9d); `runner/transport.ts:78-80`, `openai-transport.ts:281`, `gemini-transport.ts:264-266`, `stage-runner.ts:183-189` (5.10a); `openai.ts:21-24` and `:29-30`, `openai-transport.ts:268-272` (5.10b); `failure-remediations.ts:106-112` (5.10d); the three Ollama redaction comments and `openai-transport.ts:106` (5.11-i, 5.11-iii); `failure-taxonomy.ts:760-763` (5.11b-ii); `model-label.ts:36` and the `model-label.test.ts:35` title (5.12c); the e2e spec header (5.12f); plan 284's line 9 (5.13c);
+> - two defects in the plan's own UI code, fixed in the child that writes it: a server refusal at path `extraParams` would render nowhere (5.12e-i), and the plan's textareas carried no touch target (5.12d, 5.12e-i);
+> - the overflow-copy comment `failure-remediations.ts:106-112`, whose "Task 5.5b adds the matching structured fix" is already true and whose prepend description goes stale (5.10d).
+
+#### Child decomposition (Open Engine) — PR 5b
+
+Twenty-eight children, in this order. All of them land sequentially on `feat/server-3084-w5b-payload` and ship as ONE PR, so a child may leave a seam the next one closes. One child is about one commit, and `npm run typecheck` is green after each. Each child depends on every row above it. Task 5.8 splits into three children, 5.9 into four, 5.10 into four, 5.11 into three, 5.11b into two, 5.12 into seven (5.12a … 5.12f, with 5.12e split in two), and 5.13 into four (three document children, then ship). Task 5.11c is the 5b-D4 chore.
+
+| # | Child | Owns (plan steps, files) | Mutations | Typecheck green after it because | Lane |
+|---|---|---|---|---|---|
+| 1 | **5.8a** validation core | Task 5.8 for `runner/extra-params.ts`'s validation half (`OWNED_CONTAINERS`, `PROTECTED_KEYS`, `GEMINI_CONFIG_ALLOWLIST`, `validateExtraParams`, `filterStoredPayload` and their private helpers), the D12 type imports, and the validation describes of `extra-params.test.ts` | 1 (validate half), 6 (validate half), 9a, 9b, 13, 15 | the module is new, every private helper is used by an export, and nothing imports it yet | auto-cloud |
+| 2 | **5.8b** merge, cap, temperature, label | Task 5.8 for `OUTPUT_CAP`, `TEMPERATURE`, `payloadControlsOutputCap`, `payloadOutputCap`, `payloadOutputCapKey`, `mergeExtraParams`, `stripPayloadTemperature`, `requestControlsLabelParts`, the fixture `__fixtures__/extra-params-cases.json`, and their describes | 1 (merge half), 2, 5, 6 (merge half), 7, 8, 10, 11, 12, 14, 16 | additions to a module nothing imports | auto-cloud |
+| 3 | **5.8c** redaction + resolver | Task 5.8 for `REDACTED` re-export, `collectRedactable` (5b-D11), `payloadSecretValues`, `redactPayloadValues`, `resolveExtraParamsSetting` (5b-D12 `AnalysisEngine`), their describes and the D11 floor case | 3, 4, D11 (new) | every new import is used in the same commit | auto-cloud |
+| 4 | **5.9a** storage + PUT validation | Task 5.9 for `user-settings.ts` (schema field + `DEFAULT_USER_SETTINGS`), `analyzer-request-controls.ts` (patch schema, `StoredRequestControls`, `changedRequestControls`), their tests, the four PUT cases and the `SAMPLE_VALUES` entry | 1, 5, schema-a, default-b, sample-c (new) | the server type and its default land together; the frontend type is the generated `api-types.ts`, untouched here | auto-cloud |
+| 5 | **5.9b** endpoint payload rule | Task 5.9 for `parseEndpointInput` (import, comment, `payloadChanged` with `isDeepStrictEqual`, 5b-D10), `workspace/analyzer-endpoints.test.ts` (four cases), `routes/analyzer-endpoints.test.ts` (flip + protected-key case) | 2, 3, 3b (corrected), 4 (server half), D10 (new) | one function body changes, no signature does; its tests change with it | auto-cloud |
+| 6 | **5.9c** openapi + settings mock | Task 5.9 for `AnalyzerExtraParamsByEngine` and its two `$ref`s, `npm run openapi:types`, `MOCK_USER_SETTINGS`, the `mockPutUserSettings` destructure + literal, the new mock-PUT test | mock-whitelist (new) | the generated fields are optional; openapi, regen and `api.ts` ship together | auto-cloud |
+| 7 | **5.9d** endpoint mock flip | Task 5.9 for `mockEndpointFromInput` (delete the P23 push, reword its comment; 5b-D9) and the flipped `api-analyzer-endpoints-mock.test.ts` case | 4 (mock half) | one push deleted, `AnalyzerEndpointInput.extraParams` already typed | auto-cloud |
+| 8 | **5.10a** payload reaches the wire | Task 5.10 for the three transports' merge, the runner's `stripTemperature` and `runFreeText` strip, `withoutPayloadOutputCap`, `extra-params-wire.test.ts` (+ the Gemini allowlist case), `payload-temperature.test.ts`, `free-text-payload.test.ts` (corrected control), the transport comment chores | 1, 2, 2b, 2c, 2d, 3, 4, 9 | additive; no closure sets a payload yet, so every existing body is byte-identical | auto-cloud |
+| 9 | **5.10b** analyzers + capacity (P19) | Task 5.10 for `requestMaxOutputTokens` (in `extra-params.ts`) + its unit test, the `resolveCapacity` wrapper, the Ollama/Gemini closures, `openAIRequestSettings`, `payload-output-cap.test.ts`, `gemini-payload-allowlist.test.ts`, the `openai-analyzer.test.ts` case, the `openai.ts` / `openai-transport.ts` comment chores | 5, 6, 10, 11, 13 (new) | needs 5.9a's `UserSettings` field; the closure return type and `resolveCapacity`'s signature are unchanged | auto-cloud |
+| 10 | **5.10c** Test probes carry the payload | Task 5.10 for `ModelTestDeps.extraParams?`, `sendStep`, `modelTestDepsFor` (`withPayloadCap` on Gemini and Ollama only, coordinator call 13), `capabilities.payload.test.ts`, three `model-test-deps.test.ts` cases | 7, 8a, 8b | the new deps field is optional | auto-cloud |
+| 11 | **5.10d** overflow copy names the key (N13) | Task 5.10 N13 under 5b-D1/D2/D3: the two error fields, `mapFinish`'s ctx, the runner stamp, `payloadOutputCapStamp`, `customParamsWhere` + `payloadCapAdvice` + the remediation lead, `failure-taxonomy.payload-cap.test.ts` (rewritten), `stage-runner.payload-cap-stamp.test.ts` (new), the `failure-remediations.ts` comment | 12a–12d (new) | every new field is optional; the two new exports are used or exported | auto-cloud |
+| 12 | **5.11-i** Ollama redaction + privacy harness | Task 5.11 for the three Ollama sites and their comments, `extra-params-privacy.test.ts` with the harness and its Ollama + scope cases | 1, 1b, 1c, 1d (×3), 4, 5 | one list append at three call sites, using an existing export | auto-cloud |
+| 13 | **5.11-ii** Gemini redaction | Task 5.11 for the Gemini `catch` and its two appended cases | 2 | one expression at one site | auto-cloud |
+| 14 | **5.11-iii** OpenAI redaction | Task 5.11 for `attempt()`'s `secrets` array, the `OutcomeContext.secrets` comment and its two appended cases | 3, 3a | one array literal gains one spread | auto-cloud |
+| 15 | **5.11b-i** payload fixes: Gemini + Ollama | Task 5.11b for the ctx fields, the classify pass-through, the Gemini and Ollama arms (5b-D2/D3), and their describe | 1–6 (5.11b-i) | the ctx fields are optional | auto-cloud |
+| 16 | **5.11b-ii** payload fix: endpoint | Task 5.11b for the endpoint arm (the key replaces the max-output row; `Read: Custom payload`), the `:760-763` comment, its describe and the ordering guard | 1–7 (5.11b-ii) | one arm changes | auto-cloud |
+| 17 | **5.11c** request-shaping custom half (5b-D4) | `REQUEST_SHAPING_SETTINGS` entries + the `:828-830` comment, an `it.each` in `failure-taxonomy.reasoning.test.ts`. Commit `chore(server): …` | 1 (new, ×3) | a static string array | auto-cloud |
+| 18 | **5.12a** frontend payload lib | Task 5.12 for `src/lib/extra-params.ts` + its test | 5 | nothing imports it yet | auto-cloud |
+| 19 | **5.12b** server label parts + openapi | Task 5.12 for the `AnalyzerCatalogEntry` interface field, `toEntry`, the catalog test, the openapi property + regen | 1 | the field is optional on both sides | auto-cloud |
+| 20 | **5.12c** run label + mock catalog | Task 5.12 for `runLabelSuffixes`, `model-label.test.ts` (new case + retitle), the mock `entry(…)` + `MockCatalogSource`, a mock-catalog test | 1a (unit half), mock-c (new) | the field exists since row 19 | auto-cloud |
+| 21 | **5.12d** request-control editors | Task 5.12 for `analyzer-request-controls.tsx` (state, `onSave` keeping `if (blocked) return;`, the two editors, always shown: 5b-D7) + its tests, both old patch expectations updated | 2, 4a | `s.account.analyzerExtraParamsByEngine` exists since row 6's regen | auto-cloud |
+| 22 | **5.12e-i** endpoint editor field | Task 5.12 for `EndpointDraft.extraParamsText`, `ISSUE_FIELDS` / `ENDPOINT_FIELD_TEST_IDS`, `draftFrom`, `validateEndpointDraft`, the full-width field below the grid (5b-D6) with the server-refusal render, its tests (incl. deep link and touch target) | 4b, 6, 7 (new), 8 (new) | `Record<IssueField,string>` forces both lists together; the draft field and `draftFrom` land together | auto-cloud |
+| 23 | **5.12e-ii** max output read-only (5b-D5) | Task 5.12 for `payloadCapsOutput`, the read-only Max output tokens input and its note, its test | 3 (corrected), 9 (new) | component-local | auto-cloud |
+| 24 | **5.12f** e2e | Task 5.12 for `e2e/analyzer-endpoints.spec.ts` (fill + assertion) and the 5b describe appended to `e2e/analyzer-request-controls.spec.ts` (+ header), every Playwright run of Task 5.12 | 1a (e2e half), 10 (new) | test only | claude |
+| 25 | **5.13a** register + run sheet | Task 5.13 Step 3 items 1–4: mint A/E IDs, markers, glance counts, owed line, change note, run-sheet §14–§15, `register:build`, fill shells, `--check`, `check:onbox-register`; commit + push. NO publish | — | docs | claude |
+| 26 | **5.13b** wiki | Task 5.13 Step 2b: `## Custom payload` on the endpoints page (per-server `###`), the table row, the fix lists on two pages, the Advanced Settings card; commit + push | — | docs | claude |
+| 27 | **5.13c** release notes + plan 284 | Task 5.13 Steps 2 and 4: both release-notes files, plan 284 (5b-D8 status, line 9, invariants, Ship notes), `INDEX.md`; commit + push. NO PR | — | docs | claude |
+| 28 | **ship** | Task 5.13: merge `origin/main` (never rebase), receipts audit, Step 1 checks, the battery, `--against-published` + live-view publish, the PR (`Closes #3084`, the post-merge `wiki:sync` line), `pr-review-gate` at high. Never merges | — | docs | claude |
+
+- **Lanes.** Rows 24–28 need a lane without a short command cap: Playwright, `verify:fast:branch`, the register tooling, the Artifact tool and the live-view `--against-published` comparison all run long.
+- **Commit subjects.** Each note gives its child's subject: server children `feat(server): …` (5.9c `feat(openapi,mocks): …`; 5.9d `feat(mocks): …`; 5.12b `feat(server,openapi): …`); row 17 `chore(server): …`; frontend children `feat(frontend): …` (5.12c `feat(frontend,mocks): …`); row 24 `test(e2e): …`; rows 25–27 `docs(docs): …`.
+
 ### Task 5.8: `extra-params.ts` — validation, merge, temperature, output cap, redaction
+
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> The drift audit extracted Step 1's fixture and test and Step 3's code verbatim into a scratch tree with the server's tsconfig flags: 62/62 tests passed, `tsc` reported no type error and no `TS6133`, and all sixteen mutations went red. So the code stands as written except where notes 2–5 change it.
+>
+> **Three children** (table rows 1–3), one commit each. Each child adds only the symbols its own exports use and only the imports its own code uses (a private helper no export uses is a `TS6133` error).
+> - **5.8a — validation core.** Create `server/src/analyzer/runner/extra-params.ts` with: the header comment (note 2), the first two imports of note 3, `type Json`, `OWNED_CONTAINERS`, `PROTECTED_KEYS`, `GEMINI_CONFIG_ALLOWLIST`, `ENABLE_THINKING_KEY`, `protectedKeySet`, `geminiConfigAllows`, `isPlainObject`, `PROTOTYPE_KEYS`, `setOwn`, `withoutPrototypeKeys`, `SAFETY_SETTINGS_REFUSAL`, `isSafetySettings`, `validateExtraParams` and `filterStoredPayload`, each exactly as Step 3 writes it. Create `server/src/analyzer/runner/extra-params.test.ts` holding only the `geminiRefusal` helper and the describes `protected keys are exactly spec §9; Gemini config is an allowlist (P16)`, `validateExtraParams`, `Gemini safetySettings shape (N11)` **without** its last case (`drops a stored invalid safetySettings at merge and reports its path`, which moves to 5.8b) and `prototype keys (N12)`. Its imports: `describe, it, expect` from `vitest`; `GEMINI_CONFIG_ALLOWLIST, OWNED_CONTAINERS, PROTECTED_KEYS, filterStoredPayload, validateExtraParams` from `./extra-params.js`. Step 2's expected red: `Failed to resolve import "./extra-params.js"`. Mutations: 1 (validate half; red `protects chat_template_kwargs.enable_thinking only for the enable_thinking style`), 6 (validate half; red `per transport`, `names every protected key it refuses`, `Gemini config is an allowlist: httpOptions …`), 9a and 9b (red each: `per transport`, `refuses every endpoint reasoning key and the added Ollama keys (A8)`), 13, 15.
+>   `git add server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/extra-params.test.ts`
+>   Commit: `feat(server): custom payload validation and the stored-payload filter`.
+> - **5.8b — merge, output cap, temperature, label.** Add `OUTPUT_CAP`, `TEMPERATURE`, `payloadControlsOutputCap`, `payloadOutputCap`, `payloadOutputCapKey`, `mergeExtraParams`, `stripPayloadTemperature` and `requestControlsLabelParts`; create `server/src/analyzer/__fixtures__/extra-params-cases.json`. Append the moved `drops a stored invalid safetySettings at merge…` case to the N11 describe, then the describes `mergeExtraParams`, `mergeExtraParams re-applies the rules to a stored payload (P16, P17)`, `payloadOutputCap (P19)`, `payloadOutputCapKey (N13)`, `stripPayloadTemperature` and `output cap and label parts (shared case table)`. Add `vi` to the vitest import, the `cases` JSON import, `import type { TransportKind } from '../errors.js';` and the new function imports. Mutations: 1 (merge half; red `drops endpoint reasoning keys, and enable_thinking only under the enable_thinking style`), 2, 5, 6 (merge half; red `Gemini: only allowlisted config keys survive…`), 7, 8, 10, 11, 12, 14, 16. Task 5.12a's frontend mirror reads the fixture, so keep its shape and field names exactly.
+>   `git add server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/extra-params.test.ts server/src/analyzer/__fixtures__/extra-params-cases.json`
+>   Commit: `feat(server): custom payload merge, output-cap detection and temperature precedence`.
+> - **5.8c — redaction and settings resolver.** Add the last two imports of note 3, `export { REDACTED } from '../redact.js';`, `collectRedactable` (note 5), `payloadSecretValues` (note 5's doc comment), `redactPayloadValues` and `resolveExtraParamsSetting` (note 3's `sel` type). Append the `redactPayloadValues` describe (with note 5's two changed/added cases) and `settings helpers`; import `REDACTED, payloadSecretValues, redactPayloadValues, resolveExtraParamsSetting`. Mutations: 3, 4 (note 4), D11 (note 5). Then run `npm run check:cycles` (allowlist unchanged), `npm run typecheck`, `npm --prefix server run test -- src/console-format-placeholder.guard.test.ts src/analyzer/redact.test.ts`.
+>   `git add server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/extra-params.test.ts`
+>   Commit: `feat(server): custom payload redaction and the settings resolver`.
+>
+> 1. **Anchors at `626c3130`.** None of the three files exists (`git grep -n "extra-params" -- server/src src openapi.yaml` prints nothing; `server/src/analyzer/runner/` and `__fixtures__/` exist). `TransportKind`: `analyzer/errors.ts:9`. `redactKnownSecrets` / `REDACTED`: `analyzer/redact.ts:5-20`, import-free; its 8-character floor is `:11`, it already derives the JSON-escaped spelling of every value that clears the floor (`:12-14`), and sorts longest first (`:14-16`). `ReasoningStyle`: exported by 5a at `analyzer/reasoning.ts:41`. `AnalysisEngine`: `analyzer/model-id.ts:17`. Sibling fixtures use the same `with { type: 'json' }` import (`analyzer/ollama-tag.test.ts:2`).
+> 2. **File header (5b-D12).** Step 3's header comment gains, after its first sentence, the sentence: `Its imports are types from errors.ts, reasoning.ts and model-id.ts, and redact.ts, so it stays a leaf for the workspace modules, capacity.ts and the transports that import it.`
+> 3. **Imports and the two shared types (5b-D12).** Replace Step 3's two imports and its local `type ReasoningStyle = 'reasoning_effort' | 'enable_thinking' | 'not_controllable';` with
+>    ```ts
+>    import type { TransportKind } from '../errors.js';
+>    import type { ReasoningStyle } from '../reasoning.js';
+>    import type { AnalysisEngine } from '../model-id.js';
+>    import { redactKnownSecrets } from '../redact.js';
+>    ```
+>    (5.8a adds the first two lines; 5.8c adds the last two), and delete the local alias. `resolveExtraParamsSetting`'s second parameter becomes `sel: { engine: AnalysisEngine; endpoint?: { extraParams?: Json } }` (the same union as the inline `'local' | 'gemini' | 'openai'`). No cycle: `reasoning.ts` imports `errors`, `model-id`, `catalog/gemini-catalog`, `ollama-tag` and `reasoning-level`, and none of those reaches a module that imports `extra-params.ts`. madge counts type imports, so run `npm run check:cycles` anyway.
+> 4. **Mutation anchors (Step 5).**
+>    - Row 1: the line is in `protectedKeySet`, not `validateExtraParams`, and reads `if (kind === 'openai' && ctx.reasoningStyle === 'enable_thinking') set.add(ENABLE_THINKING_KEY);`. It serves both `validateExtraParams` and `filterStoredPayload`, so its red splits between 5.8a and 5.8b (see the bullets).
+>    - Row 2: `if (OWNED_CONTAINERS[kind].includes(key))` occurs three times; mutate the one in `mergeExtraParams` (the one followed by `const base: Json = …`). Observed red: six cases, a superset of the two named.
+>    - Row 3: `redact.ts`'s `.sort(...)` spans `:14-16` (`.sort(\n    (a, b) => b.length - a.length,\n  )`); remove the whole call. Red: `replaces the longest value first …`, plus `redact.test.ts`'s `longest first` case (record whether it goes red).
+>    - Row 7: if you change both sites, `allowed` becomes unused; vitest does not typecheck, so restore before you commit.
+>    - Rows 9a / 9b are row 9's two halves, run separately.
+>    - Rows 3 and 4 edit W3b's `redact.ts`: byte-compare its restore.
+> 5. **Redaction: one escaping mechanism (5b-D11).** `collectRedactable`'s string arm becomes
+>    ```ts
+>      if (typeof value === 'string') {
+>        /* W3b's redactKnownSecrets applies the 8-character floor and derives the JSON-escaped spelling of each
+>           value that clears it, so a value under 8 raw characters is never redacted. */
+>        out.push(value);
+>        return;
+>      }
+>    ```
+>    `payloadSecretValues`' doc comment becomes `/** Every string value in a payload, nested values included. Each transport adds the values of the payload ITS OWN request carried to the secrets W3b redacts that request's errors against (P22, scoped per request by P29, Task 5.11); the floor and the escaped spelling are redactKnownSecrets'. They never join the global knownAnalyzerSecrets() list. */`. In the test file, the last `redactPayloadValues` case is replaced by these two:
+>    ```ts
+>      it("payloadSecretValues lists every string value (the 8-character floor and the JSON-escaped spelling are W3b's)", () => {
+>        expect(payloadSecretValues({ a: 'json', b: { c: ['say "hi" there'] } })).toEqual(['json', 'say "hi" there']);
+>      });
+>      it('a value under 8 characters is never redacted, even when its JSON-escaped spelling is 8 or more (5b-D11)', () => {
+>        const text = 'upstream echoed x \\"\\"\\"\\"';
+>        expect(redactPayloadValues(text, { a: '""""' })).toBe(text);
+>      });
+>    ```
+>    `redacts the JSON-escaped form of a value` stays as written: its value is 15 characters, and `redactKnownSecrets` derives the escape. **New mutation D11:** put the duplicate back (`const escaped = JSON.stringify(value).slice(1, -1); if (escaped !== value) out.push(escaped);` before `return;`). Expected red: both cases above. Restore.
+> 6. **Keeps green.** `npm --prefix server run test -- src/analyzer/redact.test.ts src/analyzer/transport-redaction.test.ts` after 5.8c (nothing calls the new module yet, so W3b's redaction suites are unchanged).
 
 **Files:**
 - Create: `server/src/analyzer/runner/extra-params.ts`
@@ -6893,6 +7037,187 @@ git commit -m "feat(server): custom payload validation, merge, temperature prece
 
 ### Task 5.9: Storage and save-time validation (`analyzerExtraParamsByEngine`, endpoint `extraParams`), OpenAPI, mocks
 
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Four children** (table rows 4–7), one commit each. All need Task 5.8 on the branch (`git grep -n "export function validateExtraParams" server/src/analyzer/runner/extra-params.ts` is non-empty, else STOP).
+> - **5.9a — storage and PUT validation.** `server/src/workspace/user-settings.ts` (Step 3's schema field after `analyzerReasoningByEngine`, `:415-421`, and `analyzerExtraParamsByEngine: {},` after `analyzerReasoningByEngine: {},` in `DEFAULT_USER_SETTINGS`, `:525`); `server/src/workspace/analyzer-request-controls.ts` (note 3's patch schema; Step 3's `StoredRequestControls` and `changedRequestControls` as written); `analyzer-request-controls.test.ts` (Step 1's patch-schema and `changedRequestControls` describes, plus note 4's lenient-read describe in place of Step 1's); `server/src/routes/user-settings.test.ts` (Step 1's four PUT cases, plus note 5's `SAMPLE_VALUES` entry). Runs: those two test files, `src/workspace/user-settings.test.ts`, `npm run typecheck`, `npm run check:cycles`. Mutations 1 and 5, plus note 4's a/b and note 5's c.
+>   `git add server/src/workspace/user-settings.ts server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/routes/user-settings.test.ts`
+>   Commit: `feat(server): store and validate the per-engine custom payload`.
+> - **5.9b — the endpoint payload rule.** `server/src/workspace/analyzer-endpoints.ts` (note 6), `server/src/workspace/analyzer-endpoints.test.ts` (note 7: replace the case at `:155-162`), `server/src/routes/analyzer-endpoints.test.ts` (Step 1's appended `update refuses a protected endpoint payload key`, and the flip of `until PR 5b, refuses a non-empty payload on update (P23)` at `:103-111` to Step 1's text; both compile as written). Runs: both files, `npm run check:cycles`. Mutations 2, 3, 3b (corrected in note 7), 4 (server half) and D10 (note 7).
+>   `git add server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/analyzer-endpoints.test.ts`
+>   Commit: `feat(server): validate an endpoint's custom payload on save (A7)`.
+> - **5.9c — OpenAPI, regen and the settings mock.** `openapi.yaml` (note 9), `npm run openapi:types` → `src/lib/api-types.ts`, `src/lib/api.ts` (`MOCK_USER_SETTINGS` and `mockPutUserSettings`, note 8), `src/lib/api-put-user-settings-mock.test.ts` (note 8). Runs: `npm test -- src/lib/api-put-user-settings-mock.test.ts src/lib/api-analyzer-endpoints-mock.test.ts`, `npm run typecheck`. Mutation: note 8's.
+>   `git add openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/api-put-user-settings-mock.test.ts`
+>   Commit: `feat(openapi,mocks): the custom payload map in settings and the mock PUT`.
+> - **5.9d — the endpoint mock accepts a payload (5b-D9).** `src/lib/api.ts`'s `mockEndpointFromInput` (note 10) and `src/lib/api-analyzer-endpoints-mock.test.ts` (Step 1's flip of the case at `:101-106`). Runs: that test, `npm run typecheck`, `npm run check:cycles`. Mutation 4 (mock half).
+>   `git add src/lib/api.ts src/lib/api-analyzer-endpoints-mock.test.ts`
+>   Commit: `feat(mocks): the mock endpoint API accepts a custom payload`.
+>
+> 1. **Anchors at `626c3130`.** Stored field precedent: `user-settings.ts:415-421` (`analyzerReasoningByEngine`), default `:525`. Patch schema: `analyzer-request-controls.ts:27-69` (`analyzerRequestControlsPatchSchemaFor`; its `.object({ analyzerReasoningByEngine: reasoningByEngineInput })` is `:29`, `if (!r) return;` is `:32`); `StoredRequestControls` `:74-77`, `isRecord` `:79`, `changedRequestControls` `:88-103`; imports `:6-9`. PUT judgement: `routes/user-settings.ts:200-212` (#3625 guard, then `.parse(changedRequestControls(req.body ?? {}, stored))`), 400 mapping `:216-218`. Endpoint rule: `analyzer-endpoints.ts:244-261` (`levelChanged` `:251`, the P23 push `:259-261`, the comment `:245-247`). Mock: `MOCK_USER_SETTINGS` `api.ts:7198`; `mockPutUserSettings` destructure `:7810-7820`, literal `:7822-7843` (its `analyzerReasoningByEngine: analyzerReasoningByEngine && {…},` entry is multi-line, `:7836-7842`); `mockEndpointFromInput` `:7878-7935` (comment `:7892-7893`, P23 push `:7905-7907`). openapi: `AnalyzerReasoningByEngine` `openapi.yaml:5550-5573`; `UserSettings.analyzerReasoningByEngine` `:5789-5790`; `UserSettingsPatch` `:6104-6105`. `AnalyzerEndpoint.extraParams` / `AnalyzerEndpointInput.extraParams` are already `type: object` + `additionalProperties: true` (`:6164`, `:6186`), so Step 3's fallback ("if not, set it") does not fire.
+> 2. **Refusals are `issues`, not strings (all of 5.9b).** The real push is `problems.push({ path: ['extraParams'], message: … })` (`problems` is `{ path: string[]; message: string }[]`, `:248`), and `AnalyzerEndpointRefusal` has `issues`, no `details` (`.details` is `TS2339`). Note 6 gives the code; note 7 the tests.
+> 3. **Patch schema, full replacement (5.9a).** Add `import { validateExtraParams } from '../analyzer/runner/extra-params.js';` after the `ollama-tag.js` import. Replace the function with:
+>    ```ts
+>    export function analyzerRequestControlsPatchSchemaFor(records: RequestControlsContext) {
+>      return z
+>        .object({
+>          analyzerReasoningByEngine: reasoningByEngineInput,
+>          analyzerExtraParamsByEngine: z.object({ ollama: z.unknown().optional(), gemini: z.unknown().optional() }).optional(),
+>        })
+>        .superRefine((patch, ctx) => {
+>          const r = patch.analyzerReasoningByEngine;
+>          if (r) {
+>            /* …the existing P18 Ollama and Gemini loops (today :33-67), verbatim… */
+>          }
+>          const payloads = patch.analyzerExtraParamsByEngine;
+>          for (const [engineKey, label] of [['ollama', 'Ollama'], ['gemini', 'Gemini']] as const) {
+>            const value = payloads?.[engineKey];
+>            if (value === undefined) continue;
+>            const result = validateExtraParams(engineKey, value, {});
+>            if (!result.ok) {
+>              for (const error of result.errors) {
+>                ctx.addIssue({ code: 'custom', path: ['analyzerExtraParamsByEngine', engineKey], message: `${label} custom parameters: ${error}` });
+>              }
+>            }
+>          }
+>        });
+>    }
+>    ```
+>    Keep the body of today's `:33-67` exactly; only `if (!r) return;` becomes the `if (r) { … }` wrapper. The plan's three-element tuple was redundant (`kind === engineKey`). The existing `:62-90` cases stay green (a patch with neither map is returned as the same object).
+> 4. **Lenient-read test, strengthened (5.9a).** Step 1's `stored schema stays lenient for payloads` passes even when zod strips the field. Replace it with:
+>    ```ts
+>    describe('stored schema stays lenient for payloads', () => {
+>      it('loads a stored payload a newer protected-key list would refuse, and keeps it', () => {
+>        const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, analyzerExtraParamsByEngine: { ollama: { think: true } } });
+>        expect(parsed.success).toBe(true);
+>        expect(parsed.success && parsed.data.analyzerExtraParamsByEngine.ollama).toEqual({ think: true });
+>      });
+>      it('defaults to an empty map', () => {
+>        expect(DEFAULT_USER_SETTINGS.analyzerExtraParamsByEngine).toEqual({});
+>      });
+>    });
+>    ```
+>    New mutations: **(a)** delete the schema field — red `loads a stored payload … and keeps it` (stripped); **(b)** delete the DEFAULT line — red `defaults to an empty map` (and `npm run typecheck` fails: `DEFAULT_USER_SETTINGS: UserSettings` requires it). Restore each.
+> 5. **The round-trip guard's `SAMPLE_VALUES` entry (5.9a, required).** `routes/user-settings.test.ts:414-487` fails `add a SAMPLE_VALUES entry for new field "analyzerExtraParamsByEngine"` the moment the schema field exists. Inside `SAMPLE_VALUES`, after the `analyzerReasoningByEngine` sample (`:452`), add:
+>    ```ts
+>          /* #3084 wave 5b — a valid custom payload per engine (passes the write rules). */
+>          analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } },
+>    ```
+>    New mutation **(c)**: remove the entry — red at that guard. Restore.
+> 6. **`parseEndpointInput` (5.9b, 5b-D10).** Add `import { isDeepStrictEqual } from 'node:util';` at the top (the module stays pure: no I/O) and `import { validateExtraParams } from '../analyzer/runner/extra-params.js';` after the `levelsForReasoningStyle` import (`:12`). Replace the comment at `:245-247`
+>    ```ts
+>      /* #3084 PR 5a — a reasoning level must be one its control style offers. This
+>         replaces P23's "model-default only" refusal. The `extraParams` refusal stays
+>         until PR 5b replaces it with validateExtraParams. */
+>    ```
+>    with
+>    ```ts
+>      /* #3084 PR 5a — a reasoning level must be one its control style offers. This
+>         replaces P23's "model-default only" refusal. */
+>    ```
+>    and replace the P23 push (`:259-261`) with:
+>    ```ts
+>      /* #3084 PR 5b — P23's payload refusal, lifted: a payload must pass validateExtraParams under this
+>         endpoint's reasoning style (chat_template_kwargs.enable_thinking is protected only under
+>         enable_thinking). A7: on an update, only when this save changes the payload or that style; an
+>         unchanged stale payload must not block every later edit, and mergeExtraParams still filters it.
+>         The payload comparison ignores key order (5b-D10): the same payload re-sent with its keys
+>         reordered is unchanged. */
+>      const payloadChanged =
+>        !stored ||
+>        stored.reasoningStyle !== ep.reasoningStyle ||
+>        !isDeepStrictEqual(stored.extraParams, ep.extraParams);
+>      if (ep.extraParams !== undefined && payloadChanged) {
+>        const payload = validateExtraParams('openai', ep.extraParams, { reasoningStyle: ep.reasoningStyle });
+>        if (!payload.ok) for (const error of payload.errors) problems.push({ path: ['extraParams'], message: error });
+>      }
+>    ```
+>    (`ep.reasoningStyle` is the zod enum over `REASONING_STYLES`, assignable to 5.8's `ReasoningStyle`.) **Task 5.9's interface paragraph, corrected (5b-D12):** "that module imports only `errors.ts` types and `analyzer/redact.ts`" now reads "that module imports only types from `errors.ts`, `reasoning.ts` and `model-id.ts`, and `analyzer/redact.ts`; none of them imports `analyzer-endpoints.ts`".
+> 7. **`workspace/analyzer-endpoints.test.ts` (5.9b).** Inside `describe('create / update / delete / key decisions', …)` (`:94`), replace the case at `:155-162` with these four (Step 1's two, rewritten to `issues`, keeping the old case's `{}` assertion; then the two the corrected mutations need):
+>    ```ts
+>      it('accepts a custom payload and refuses a protected key, validated by validateExtraParams', () => {
+>        expect(
+>          applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20, min_p: 0.05, presence_penalty: 1.5 } }).analyzerEndpoints[0]
+>            .extraParams,
+>        ).toEqual({ top_k: 20, min_p: 0.05, presence_penalty: 1.5 });
+>        expect(applyCreate(empty, { ...base, extraParams: {} }).analyzerEndpoints).toHaveLength(1);
+>        const refused = refusal(() =>
+>          applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }),
+>        );
+>        expect(refused).toMatchObject({ status: 400, refusal: 'invalid' });
+>        expect(refused.issues).toEqual([
+>          { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.' },
+>        ]);
+>        /* The key is protected only under the enable_thinking style, so the reasoning style reaches the check. */
+>        expect(applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } }).analyzerEndpoints).toHaveLength(1);
+>      });
+>      it('an update judges the payload only when it changes: an unchanged stale payload saves, a changed one is refused (A7)', () => {
+>        /* A payload stored before a rule existed (or written straight into user-settings.json). */
+>        const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });
+>        const stale = {
+>          ...created,
+>          analyzerEndpoints: [{ ...created.analyzerEndpoints[0], extraParams: { response_format: { type: 'text' } } }],
+>        };
+>        expect(
+>          applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', extraParams: { response_format: { type: 'text' } } }).analyzerEndpoints[0],
+>        ).toMatchObject({ name: 'Lab renamed' });
+>        expect(refusal(() => applyUpdate(stale, 'lab', { ...base, extraParams: { response_format: { type: 'json_object' } } })).issues).toEqual([
+>          { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: response_format.' },
+>        ]);
+>      });
+>      it('an update that only switches the reasoning style re-judges an unchanged payload under the new style (A7)', () => {
+>        const stored = applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } });
+>        const switched = refusal(() =>
+>          applyUpdate(stored, 'lab', { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }),
+>        );
+>        expect(switched.issues).toEqual([
+>          { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.' },
+>        ]);
+>      });
+>      it('the same stale payload re-sent with its keys in another order is not re-judged (5b-D10)', () => {
+>        const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });
+>        const stale = {
+>          ...created,
+>          analyzerEndpoints: [{ ...created.analyzerEndpoints[0], extraParams: { response_format: { type: 'text' }, top_k: 20 } }],
+>        };
+>        expect(
+>          applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', extraParams: { top_k: 20, response_format: { type: 'text' } } }).analyzerEndpoints[0],
+>        ).toMatchObject({ name: 'Lab renamed' });
+>      });
+>    ```
+>    **Mutation 3b, corrected.** First half as written (always judge: red the A7 case at its first assertion). Second half: drop `stored.reasoningStyle !== ep.reasoningStyle ||` from `payloadChanged` — red `an update that only switches the reasoning style …` (the switch is then accepted). The plan's "add the style-change row from Task 5.2's level case" is void; the case above is that proof. **New mutation D10:** replace `!isDeepStrictEqual(stored.extraParams, ep.extraParams)` with `JSON.stringify(stored.extraParams) !== JSON.stringify(ep.extraParams)` — red `the same stale payload re-sent with its keys in another order …`. Restore each.
+> 8. **The settings mock and its test (5.9c).** `MOCK_USER_SETTINGS`: add `analyzerExtraParamsByEngine: {},` after `analyzerReasoningByEngine: {},` (`:7198`). `mockPutUserSettings`: add `analyzerExtraParamsByEngine,` to the destructure after `analyzerReasoningByEngine,` (`:7819`), and to the literal after the closing `},` of the multi-line `analyzerReasoningByEngine: analyzerReasoningByEngine && {…}` entry (`:7842`), before `}).filter(…)`. It is passed through unjudged (5b-D9). Append to `src/lib/api-put-user-settings-mock.test.ts`, after its `analyzerReasoningByEngine` describe (the file uses `api.putUserSettings` and `_setMockUserSettingsForTest`):
+>    ```ts
+>    describe('mockPutUserSettings — analyzerExtraParamsByEngine (#3084 wave 5b)', () => {
+>      it('persists the whole map as sent and returns it; the mock judges no payload (5b-D9)', async () => {
+>        _setMockUserSettingsForTest({ analyzerExtraParamsByEngine: {} });
+>        const payload = { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } };
+>        const out = await api.putUserSettings({ analyzerExtraParamsByEngine: payload });
+>        expect(out.analyzerExtraParamsByEngine).toEqual(payload);
+>      });
+>    });
+>    ```
+>    New mutation (**mock-whitelist**): drop `analyzerExtraParamsByEngine,` from the literal — red at `toEqual`. Restore. Verify, and record in the receipt, that a PUT of `analyzerExtraParamsByEngine: {}` returns `{}` (Task 5.12d's blank editor clears the map through it).
+> 9. **openapi (5.9c).** Step 3's `AnalyzerExtraParamsByEngine` block goes after `openapi.yaml:5573` (before `UserSettings:`); its two `$ref`s after `:5790` and `:6105`. Then `npm run openapi:types`; never hand-edit `api-types.ts`.
+> 10. **`mockEndpointFromInput` (5.9d, 5b-D9).** Replace the comment (`:7892-7893`)
+>    ```ts
+>      /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
+>         payload refusal until PR 5b. */
+>    ```
+>    with
+>    ```ts
+>      /* #3084 — mirrors the server's parseEndpointInput level rule (PR 5a). A payload is accepted as sent:
+>         protected keys are refused by the server only (5b-D9). */
+>    ```
+>    and delete (`:7905-7907`):
+>    ```ts
+>      if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
+>        controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+>      }
+>    ```
+>    The returned `{ ...input, … }` (`:7922-7933`) already carries `extraParams`.
+> 11. **N6 stays as planned.** `changedRequestControls` keeps Step 3's `JSON.stringify` comparison: 5b-D10 names the A7 rule only.
+> 12. **Keeps green.** `src/workspace/user-settings.test.ts`, the reasoning PUT cases (`routes/user-settings.test.ts:489-600`), `analyzer-request-controls.test.ts:62-117`, `src/lib/api-put-user-settings-mock.test.ts:38-70`. The endpoint form keeps re-sending `original.extraParams` unchanged until Task 5.12e-i (`analyzer-endpoints-section.tsx:145`), so A7 never re-judges it there.
+
 **Files:**
 - Modify: `server/src/workspace/user-settings.ts` (schema after PR 5a's `analyzerReasoningByEngine`; `DEFAULT_USER_SETTINGS`)
 - Modify: `server/src/workspace/analyzer-request-controls.ts` (the patch schema from Task 5.2)
@@ -7233,6 +7558,320 @@ git commit -m "feat(server,openapi,mocks): store and validate custom analyzer re
 ```
 
 ### Task 5.10: Transports merge the payload last; runner applies temperature precedence; analyzers pass the payload
+
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Four children** (table rows 8–11), one commit each. All need Tasks 5.8 and 5.9 on the branch (`git grep -n "analyzerExtraParamsByEngine" server/src/workspace/user-settings.ts` is non-empty, else STOP). Commit subject for each: `feat(server): …` as given.
+> - **5.10a — the payload reaches the wire.** `withoutPayloadOutputCap` in `runner/extra-params.ts` (Step 3, as written); `transports/openai-transport.ts` (note 2), `ollama-transport.ts` (note 3), `gemini-transport.ts` (note 4); `runner/stage-runner.ts` (note 5); `runner/transport.ts`'s comment (note 13). Tests: `transports/extra-params-wire.test.ts` (Step 1, plus note 10.1's Gemini case), `runner/payload-temperature.test.ts` (Step 1 as written), `runner/free-text-payload.test.ts` (Step 1 with note 10.2's control). Mutations 1, 2, 2b, 2c, 2d, 3, 4, 9. Runs: the three new files, `src/analyzer/transports`, `src/analyzer/runner`, then typecheck and `check:cycles`.
+>   `git add server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/transport.ts server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/transports/extra-params-wire.test.ts server/src/analyzer/runner/payload-temperature.test.ts server/src/analyzer/runner/free-text-payload.test.ts`
+>   Commit: `feat(server): merge the custom payload last on every transport; retry temperature wins on attempt 2`.
+> - **5.10b — analyzers and capacity carry the payload (P19).** `requestMaxOutputTokens` in `runner/extra-params.ts` + its unit test in `extra-params.test.ts` (note 6), the `resolveCapacity` wrapper in `capacity.ts` (note 6), the `ollama.ts` / `gemini.ts` closures and `openAIRequestSettings` (note 7), their comment chores (note 13). Tests: `payload-output-cap.test.ts` and `gemini-payload-allowlist.test.ts` (Step 1, with note 10.3), the `openai-analyzer.test.ts` case (Step 1, as written). Mutations 5, 6, 10, 11, 13 (new, note 6). Runs: those files, `src/analyzer/capacity.test.ts src/analyzer/capacity-pinning.test.ts src/analyzer/capacity.endpoint.test.ts src/analyzer/ollama.test.ts src/analyzer/voice-style.test.ts src/analyzer/gemini-reasoning-wiring.test.ts src/analyzer/structured-output-settings.test.ts`, the slow-lane `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`, typecheck, `check:cycles`.
+>   `git add server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/extra-params.test.ts server/src/analyzer/capacity.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/openai.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/payload-output-cap.test.ts server/src/analyzer/gemini-payload-allowlist.test.ts server/src/analyzer/openai-analyzer.test.ts`
+>   Commit: `feat(server): a custom payload output cap is every budget's cap (P19)`.
+> - **5.10c — Test probes carry the payload.** `capabilities.ts` (`ModelTestDeps.extraParams?` after `configuredReasoning`, `:84`; `extraParams: deps.extraParams,` after `reasoning,` in the `sendStep` literal, `:371`), `model-test-deps.ts` (note 8). Tests: `capabilities.payload.test.ts` (Step 1 as written), the three `model-test-deps.test.ts` cases of note 10.4. Mutations 7, 8a, 8b. Runs: those files, `src/analyzer/capabilities.test.ts src/analyzer/capabilities.run-model-test.test.ts src/analyzer/capabilities.reasoning.test.ts src/routes/analyzer-models.test.ts`, typecheck, `check:cycles`.
+>   `git add server/src/analyzer/capabilities.ts server/src/analyzer/model-test-deps.ts server/src/analyzer/capabilities.payload.test.ts server/src/analyzer/model-test-deps.test.ts`
+>   Commit: `feat(server): Test probes send the configured custom payload and size against its cap`.
+> - **5.10d — the overflow copy names the payload key (N13, 5b-D1/D2/D3).** Note 9 replaces Step 3's "Overflow copy names a payload cap key" paragraph and its test file entirely. Files: `errors.ts`, `runner/finish.ts`, `runner/stage-runner.ts`, `runner/extra-params.ts` (`payloadOutputCapStamp`), `routes/failure-taxonomy.ts`, `routes/failure-remediations.ts` (comment only); tests `routes/failure-taxonomy.payload-cap.test.ts` (note 9's, not Step 1's) and `runner/stage-runner.payload-cap-stamp.test.ts` (new). Mutations 12a–12d (note 11). Runs: those two files, `src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy.reasoning.test.ts src/routes/failure-taxonomy-fixes.test.ts src/routes/analysis.reasoning-overflow.test.ts src/analyzer/runner/stage-runner.reasoning-overflow-level.test.ts src/analyzer/runner/stage-runner.free-text.test.ts src/analyzer/openai-analyzer.test.ts`, typecheck, `check:cycles`.
+>   `git add server/src/analyzer/errors.ts server/src/analyzer/runner/finish.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/extra-params.ts server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.payload-cap.test.ts server/src/analyzer/runner/stage-runner.payload-cap-stamp.test.ts`
+>   Commit: `feat(server): a reasoning-overflow remediation names the custom parameter that set the output cap`.
+>
+> 1. **Anchors at `626c3130`.** Ollama free-text body `transports/ollama-transport.ts:133-149` (5a reasoning block `:157-161`, `body: JSON.stringify(body),` `:210`); stream body `:284-323` (reasoning block `:325-329`, `JSON.stringify(body)` `:351`). OpenAI: `buildOpenAIRequestBody` `openai-transport.ts:282-315` (doc comment `:281`), called by `attempt()` at `:444-447`; its only other caller is `openai-request-body.test.ts`. Gemini: imports `gemini-transport.ts:11`, `sentConfig` `:267-270` (comment `:263-266`), `includeThoughts` read `:273-274`, `sentConfig.abortSignal = combined;` `:295`, the `generateContentStream({ model: this.model, contents, config: sentConfig })` call `:342-345`. Runner: `send` `stage-runner.ts:253-283` (six parameters; `extraParams: settings.extraParams,` `:276`; the `mapFinish` return `:282`), attempt 1 `:83`, the validation retry `:105`, `runSingleAttempt` `:151-182` (`send` at `:163`), `runFreeText` `:183-228` (doc comment `:183-189`, `extraParams` `:202`, overflow throw `:225`). Closures: `ollama.ts:49-53`, `gemini.ts:45-49`, `openAIRequestSettings` `openai.ts:25-33`. `resolveCapacity` `capacity.ts:68-83` (`resolveEndpointCapacity` `:45-66`; `getCachedUserSettings` already imported `:20`). `ModelTestDeps.configuredReasoning` `capabilities.ts:84`, `sendStep` literal `:361-374`. `modelTestDepsFor` `model-test-deps.ts:32-110`. The overflow branch `failure-taxonomy.ts:1026-1048`.
+> 2. **OpenAI: merge inside `buildOpenAIRequestBody` (5.10a; replaces Step 3's `openai-transport.ts` paragraph).** Add `import { mergeExtraParams } from '../runner/extra-params.js';`. The doc comment `:281` and the builder's `return { … };` become (the `perRequestBound` / `maxTokens` lines above it are unchanged):
+>    ```ts
+>    /** #3084 — reasoning: wave 5a (Task 5.3); the custom payload is merged last: wave 5b (Task 5.10). */
+>    export function buildOpenAIRequestBody(
+>      endpoint: AnalyzerEndpoint,
+>      model: string,
+>      req: TransportRequest,
+>    ): Record<string, unknown> {
+>      /* …the P24 comment, perRequestBound and maxTokens, unchanged… */
+>      const native: Record<string, unknown> = {
+>        model,
+>        /* #3084 W4 — free text sends no empty system turn and leaves temperature / max_tokens to the server. */
+>        messages: [
+>          ...(req.freeText && req.system === '' ? [] : [{ role: 'system', content: req.system }]),
+>          ...req.messages,
+>        ],
+>        stream: true,
+>        stream_options: { include_usage: true },
+>        ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
+>        ...(req.freeText && req.maxOutputTokens === undefined ? {} : { max_tokens: maxTokens }),
+>        ...openAIResponseFormat(req.structuredOutput),
+>        /* #3084 wave 5 — `undefined` keeps the pre-W5 wire (no reasoning field); a level sends exactly
+>           its fragment ('model-default' sends nothing). Free-text (persona) requests use this same
+>           builder, so they carry the level too. */
+>        ...(req.reasoning !== undefined ? reasoningWireFragment('openai', { model, endpoint }, req.reasoning) : {}),
+>      };
+>      /* #3084 wave 5b — the payload is merged LAST, after the level's fragment. The reasoning style lets the
+>         merge drop a stored chat_template_kwargs.enable_thinking when the transport owns it (P17). With no
+>         payload mergeExtraParams returns `native` itself, so the body is byte-identical. */
+>      return mergeExtraParams('openai', native, req.extraParams, { reasoningStyle: endpoint.reasoningStyle });
+>    }
+>    ```
+>    `attempt()` is unchanged. Mutation 4 now drops the `{ reasoningStyle: endpoint.reasoningStyle }` argument of this `return`.
+> 3. **Ollama, both bodies (5.10a).** Add `import { mergeExtraParams } from '../runner/extra-params.js';`. Right after each 5a reasoning block (the `}` closing `if (req.reasoning === undefined) { … } else { … }`, `:161` and `:329`), add `const wireBody = mergeExtraParams('ollama', body, req.extraParams);`, and change the matching `body: JSON.stringify(body),` (`:210`, `:351`) to `body: JSON.stringify(wireBody),`. (Building it once there keeps the merge out of any slot-acquire → `try` window.) Mutations 2 / 2b revert the stream / free-text `JSON.stringify` line respectively.
+> 4. **Gemini (5.10a; replaces Step 3's `gemini-transport.ts` paragraph).** Change `:11` to `import { ApiError, GoogleGenAI, type GenerateContentParameters } from '@google/genai';` and add `import { mergeExtraParams } from '../runner/extra-params.js';`. Replace the call at `:342-345` with:
+>    ```ts
+>          /* #3084 wave 5b — the payload is merged last into the request the transport built. `sentConfig`
+>             (structured-output keys, then the level's thinkingConfig, then abortSignal) is the native `config`;
+>             the payload's `config` merges key by key over it. The Gemini payload is an allowlist that excludes
+>             thinkingConfig, so it cannot undo 5a's thinking config or includeThoughts (read above, before this
+>             merge, and still true after it). The merge copies `config`, so abortSignal survives. */
+>          const request = mergeExtraParams(
+>            'gemini',
+>            { model: this.model, contents, config: sentConfig },
+>            req.extraParams,
+>          ) as unknown as GenerateContentParameters;
+>          const stream = await this.client.models.generateContentStream(request);
+>    ```
+>    The comment at `:263-266` ends "Task 5.10 merges the payload into this same `sentConfig`."; change that sentence to "The payload is merged into the request built from this `sentConfig` (Task 5.10)." Mutation 9 builds `{ model: this.model, contents, config: { ...sentConfig, ...((req.extraParams?.config as object) ?? {}) } }` in place of `mergeExtraParams(…)`.
+> 5. **Runner (5.10a).** Add `import { stripPayloadTemperature, withoutPayloadOutputCap } from './extra-params.js';`. `send` gains the seventh parameter `stripTemperature = false`; right after `const settings = this.settings();` add
+>    ```ts
+>        /* D9: a payload temperature sets attempt 1 only; on the validation retry the retry policy's
+>           temperature (req.temperature, applied natively) must win. */
+>        const extraParams = stripTemperature ? stripPayloadTemperature(this.transport.kind, settings.extraParams) : settings.extraParams;
+>    ```
+>    and change the request's `extraParams: settings.extraParams,` to `extraParams,` (5.10d stamps from this same local). The validation-retry call (`:105`) becomes `this.send(system, retry.messages, retry.temperature, structuredOutput, call, true, true)`; attempt 1 (`:83`) and `runSingleAttempt` (`:163`) are unchanged. `runFreeText`'s entry (`:202`) becomes Step 3's `withoutPayloadOutputCap(this.transport.kind, settings.extraParams)` with its A4 comment, and its doc comment's sentence "It carries the engine's reasoning level and custom payload (wave 5)." becomes "It carries the engine's reasoning level and custom payload (wave 5), minus the payload's output-cap keys (A4)."
+> 6. **`requestMaxOutputTokens` lives in `runner/extra-params.ts`, and the capacity wrapper (5.10b).** Use Step 4's own fallback from the start, so `openai.ts`, `ollama.ts` and `gemini.ts` gain no `capacity.ts` edge. Add to `extra-params.ts`, beside `payloadOutputCap`:
+>    ```ts
+>    /** P19 — a request's maxOutputTokens: the payload's cap when the payload controls it (`null`, a removed key,
+>        becomes `undefined`, the transport default the merge then strips), else the engine's resolver. */
+>    export function requestMaxOutputTokens(kind: TransportKind, extraParams: Json | undefined, resolve: () => number | undefined): number | undefined {
+>      const cap = payloadOutputCap(kind, extraParams);
+>      return cap === undefined ? resolve() : (cap ?? undefined);
+>    }
+>    ```
+>    and append to `extra-params.test.ts` (import `requestMaxOutputTokens`):
+>    ```ts
+>    describe('requestMaxOutputTokens (P19)', () => {
+>      it("uses the payload's cap, maps a removed cap to undefined, and otherwise asks the engine", () => {
+>        expect(requestMaxOutputTokens('ollama', { options: { num_predict: 512 } }, () => 4096)).toBe(512);
+>        expect(requestMaxOutputTokens('openai', { max_tokens: null }, () => 4096)).toBeUndefined();
+>        expect(requestMaxOutputTokens('gemini', { config: { topK: 40 } }, () => 4096)).toBe(4096);
+>        expect(requestMaxOutputTokens('gemini', undefined, () => 4096)).toBe(4096);
+>      });
+>    });
+>    ```
+>    **New mutation 13:** return `resolve()` unconditionally — red that case. Restore. In `capacity.ts`, rename the existing `export function resolveCapacity(…)` (`:68-83`) to a non-exported `function resolveEngineCapacity(…)`, body unchanged, and add Step 3's exported `resolveCapacity` wrapper exactly as written, with `import { payloadOutputCap, resolveExtraParamsSetting } from './runner/extra-params.js';` (no `TransportKind` import is needed: `sel.engine === 'local' ? 'ollama' : sel.engine` already types as one). Do **not** add Step 3's `requestMaxOutputTokens` to `capacity.ts`. `getCachedUserSettings().analyzerEndpoints` is non-optional (`:48`), so the wrapper's `.find` needs no `?.`.
+> 7. **Closures (5.10b).** `ollama.ts`: add `import { requestMaxOutputTokens, resolveExtraParamsSetting } from './runner/extra-params.js';` and replace the `settings: () => ({ … }),` entry (`:47-53`, keep its comment) with
+>    ```ts
+>            settings: () => {
+>              const extraParams = resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' });
+>              return {
+>                structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
+>                /* P19 — num_predict, or the payload's own cap. */
+>                maxOutputTokens: requestMaxOutputTokens('ollama', extraParams, resolveNumPredict),
+>                reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model: opts.model }),
+>                extraParams,
+>              };
+>            },
+>    ```
+>    `gemini.ts` (`:43-49`) likewise, with `engine: 'gemini'`, `maxOutputTokens: requestMaxOutputTokens('gemini', extraParams, () => resolveGeminiMaxOutputTokens(opts.model)),` and its `model: opts.model` reasoning line. `openAIRequestSettings` (`openai.ts:25-33`) is Step 3's replacement body verbatim, but import `requestMaxOutputTokens` together with `resolveExtraParamsSetting` from `./runner/extra-params.js` (not from `./capacity.js`). Comment chores in the same child: `openai.ts:21-24`'s "`maxOutputTokens` is always a number" becomes "`maxOutputTokens` is a number, except `undefined` when a custom payload removes the cap (P19)"; the `:29-30` sentence "Task 5.10 adds extraParams." is deleted; the `OpenAIAnalyzer` closure comment "openAIRequestSettings keeps maxOutputTokens a number either way" (`:48-49`) becomes "…a number unless a payload removes the cap"; `resolveEndpointMaxOutputTokens`' doc (`openai-transport.ts:268-272`) gains "A custom payload cap replaces it (openAIRequestSettings, P19)."
+> 8. **Test probes: wrap Gemini and Ollama only (5.10c, coordinator call 13).** In `modelTestDepsFor` make `const extraParams = resolveExtraParamsSetting(settings, reasoningSelectionFor(settings, modelId));` the first statement and add `extraParams` to the `offered` object. Wrap only the Gemini closure (`probeLimits: withPayloadCap('gemini', extraParams, () => ({ …unchanged… })),`) and the Ollama closure (`withPayloadCap('ollama', extraParams, () => { …unchanged… })`). The endpoint closure is unchanged: it calls `resolveCapacity({ engine: 'openai', model: parsed.model, endpoint })`, which applies the payload cap since 5.10b. Add Step 3's `withPayloadCap` helper with `kind: 'gemini' | 'ollama'`, and import `payloadOutputCap, resolveExtraParamsSetting` from `./runner/extra-params.js`. `reasoningSelectionFor` does not throw on a missing endpoint, so the first statement is safe before the openai branch's own check.
+> 9. **N13 under 5b-D1/D2/D3 (5.10d; replaces Step 3's "Overflow copy names a payload cap key (N13)" paragraph, its `payloadCapSettingFor`, and Step 1's `failure-taxonomy.payload-cap.test.ts`).**
+>    - **`errors.ts`** — three edits; keep `persona` and `reasoningLevel`. After `readonly reasoningLevel?: ReasoningLevel;` add
+>      ```ts
+>        /** #3084 wave 5b (N13, 5b-D1) — the custom-payload key that set the overflowing request's output cap
+>            (`options.num_predict`, `config.maxOutputTokens`, `max_completion_tokens`, `n_predict`, …), stamped at the
+>            throw site from the payload that request sent. Never re-derived from live settings. */
+>        readonly payloadCapKey?: string;
+>        /** #3084 wave 5b (5b-D3) — true when that key removes the cap (`null`, or -1) rather than setting a number. */
+>        readonly payloadCapRemoved?: boolean;
+>      ```
+>      change `opts` to `opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel; payloadCapKey?: string; payloadCapRemoved?: boolean },` and add `this.payloadCapKey = opts?.payloadCapKey;` and `this.payloadCapRemoved = opts?.payloadCapRemoved;` after `this.reasoningLevel = opts?.reasoningLevel;`.
+>    - **`runner/finish.ts`** — `mapFinish`'s ctx becomes `{ kind: TransportKind; model: string; reasoningLevel?: ReasoningLevel; payloadCapKey?: string; payloadCapRemoved?: boolean }`, and its throw becomes `throw new AnalyzerReasoningOverflowError(ctx.kind, ctx.model, r.usage?.reasoningTokens, { reasoningLevel: ctx.reasoningLevel, payloadCapKey: ctx.payloadCapKey, payloadCapRemoved: ctx.payloadCapRemoved });`.
+>    - **`runner/extra-params.ts`** — add beside `payloadOutputCapKey`:
+>      ```ts
+>      /** N13 (5b-D1, 5b-D3) — what a reasoning-overflow error records about the output cap of the payload the
+>          overflowing request sent: the key that set it, and whether it removes the cap (`payloadOutputCap` is
+>          `null`: a `null` value or -1) rather than setting a number. `{}` when the payload controls no cap. */
+>      export function payloadOutputCapStamp(kind: TransportKind, params: Json | undefined): { payloadCapKey?: string; payloadCapRemoved?: boolean } {
+>        const payloadCapKey = payloadOutputCapKey(kind, params);
+>        return payloadCapKey === undefined ? {} : { payloadCapKey, payloadCapRemoved: payloadOutputCap(kind, params) === null };
+>      }
+>      ```
+>    - **`runner/stage-runner.ts`** — import `payloadOutputCapStamp` too; `send`'s return becomes
+>      ```ts
+>          return mapFinish(withThinkEvidence(result), {
+>            kind: this.transport.kind,
+>            model: this.transport.model,
+>            reasoningLevel: settings.reasoning,
+>            /* N13 (5b-D1) — stamped from the payload THIS request sent (the `extraParams` local above). */
+>            ...payloadOutputCapStamp(this.transport.kind, extraParams),
+>          });
+>      ```
+>      `runFreeText`'s throw is unchanged; add above it `/* A persona request sends no payload cap (A4), so its overflow names no payload key. */`. Every analyzer runs through this runner, so the stamp covers Ollama, Gemini and every endpoint; `OpenAIAnalyzer` still stamps `endpointId` on the same object.
+>    - **`routes/failure-taxonomy.ts`** — no new import edge (no `extra-params.js`, no `user-settings.js`). Beside `reasoningRemediationLead` add:
+>      ```ts
+>      /* #3084 wave 5b (N13) — where a payload lives, for copy and fixes. */
+>      export function customParamsWhere(transport: TransportKind, endpointName: string | undefined): string {
+>        return transport === 'openai'
+>          ? endpointName
+>            ? `the "${endpointName}" endpoint's custom parameters`
+>            : "this endpoint's custom parameters"
+>          : `the ${transport === 'ollama' ? 'Ollama' : 'Gemini'} custom parameters (Advanced settings → Analyzer request controls)`;
+>      }
+>
+>      /** #3084 wave 5b (N13, 5b-D3) — the advice for a payload key that set or removed the output cap. One phrase
+>          for the remediation lead below and Task 5.11b's structured fixes, so the two cannot drift. */
+>      export function payloadCapAdvice(transport: TransportKind, key: string, removed: boolean | undefined, endpointName: string | undefined): string {
+>        const where = customParamsWhere(transport, endpointName);
+>        return removed ? `Set a value for the custom parameter "${key}" in ${where}` : `Raise the custom parameter "${key}" in ${where}`;
+>      }
+>
+>      /* #3084 wave 5b (N13, 5b-D1/D2) — the remediation sentence for a payload key that set the overflowing
+>         request's output cap. Read from the error (stamped at throw time), never from live settings: this module
+>         never imports workspace/user-settings.ts (A9); an endpoint is named through the leaf gate by err.endpointId.
+>         undefined when no payload key controlled the cap. */
+>      function payloadCapRemediationLead(err: AnalyzerReasoningOverflowError): string | undefined {
+>        if (!err.payloadCapKey) return undefined;
+>        const endpoint = err.transport === 'openai' && err.endpointId
+>          ? listAnalyzerEndpoints().find((e) => e.id === err.endpointId)
+>          : undefined;
+>        return `${payloadCapAdvice(err.transport, err.payloadCapKey, err.payloadCapRemoved, endpoint?.name)}: it sets this request's output cap, so a max output tokens setting has no effect while it is there.`;
+>      }
+>      ```
+>      and the overflow branch's fourth `withCopy` argument (`:1041`) becomes
+>      ```ts
+>              /* #3084 wave 5a (5.5-D1) — per-instance remediation: name the reasoning control that governs
+>                 THIS model, then (5b-D2) the payload key that set its output cap, then the static per-code
+>                 steps. userMessage stays the F7 headline. With no payload key this is 5a's text, byte for byte. */
+>              [reasoningRemediationLead(err), payloadCapRemediationLead(err), FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation]
+>                .filter((part): part is string => part !== undefined)
+>                .join(' '),
+>      ```
+>    - **`routes/failure-remediations.ts:106-112`** (comment chore) — the comment becomes: `/* #3084 F7 — a step list, ending in the sentence F7 requires verbatim. classifyAnalysisFailure prepends per-instance sentences to this text: a reasoning lead (#3084 wave 5a, 5.5-D1) — 'Lower reasoning in <control>.' when reasoningOverflowFixes offers a reasoning fix (level above the control's floor), otherwise 'Reasoning: <control>.' (failure-taxonomy.ts reasoningRemediationLead) — then, when a custom payload set the output cap, the payload key to raise (wave 5b, payloadCapRemediationLead). reasoningOverflowFixes carries the matching structured fixes. */`. The `remediation` string itself is unchanged.
+>    - **`routes/failure-taxonomy.payload-cap.test.ts`** (replaces Step 1's file):
+>      ```ts
+>      import { describe, it, expect, beforeEach } from 'vitest';
+>      import { classifyAnalysisFailure } from './failure-taxonomy.js';
+>      import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+>      import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+>      import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+>      import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+>
+>      beforeEach(() => _resetUserSettingsCache());
+>      const STATIC = FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation;
+>
+>      describe('analyzer-reasoning-overflow names the payload key that set the output cap (#3084 wave 5b, N13, 5b-D1/D2/D3)', () => {
+>        it('Ollama: the key from the error, in the Ollama custom parameters; the static steps still follow; the headline is unchanged', () => {
+>          const err = new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 400, { payloadCapKey: 'options.num_predict', payloadCapRemoved: false });
+>          const f = classifyAnalysisFailure(err, 'Ollama (qwen3.5:4b)');
+>          expect(f.code).toBe('analyzer-reasoning-overflow');
+>          expect(f.remediation).toContain(
+>            'Raise the custom parameter "options.num_predict" in the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+>          );
+>          expect(f.remediation.endsWith(STATIC)).toBe(true);
+>          expect(f.userMessage).not.toContain('custom parameter');
+>        });
+>        it("an endpoint: the key in that endpoint's custom parameters, named through the leaf gate by err.endpointId", () => {
+>          _setUserSettingsCacheForTest({
+>            analyzerEndpoints: [analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768 })],
+>          });
+>          const err = new AnalyzerReasoningOverflowError('openai', 'qwen3-30b', undefined, { endpointId: 'lab', payloadCapKey: 'max_completion_tokens', payloadCapRemoved: false });
+>          expect(classifyAnalysisFailure(err, 'Lab box · qwen3-30b').remediation).toContain(
+>            'Raise the custom parameter "max_completion_tokens" in the "Lab box" endpoint\'s custom parameters',
+>          );
+>        });
+>        it('a payload that removes the cap says "Set a value for" (5b-D3)', () => {
+>          const err = new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8192, { payloadCapKey: 'config.maxOutputTokens', payloadCapRemoved: true });
+>          const f = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+>          expect(f.remediation).toContain('Set a value for the custom parameter "config.maxOutputTokens" in the Gemini custom parameters');
+>          expect(f.remediation).not.toContain('Raise the custom parameter');
+>        });
+>        it("no payload key: the remediation is 5a's (a reasoning lead, then the static steps)", () => {
+>          const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8192), 'Gemini 3.6 Flash');
+>          expect(f.remediation).not.toContain('custom parameter');
+>          expect(f.remediation.startsWith('Lower reasoning in') || f.remediation.startsWith('Reasoning:')).toBe(true);
+>          expect(f.remediation.endsWith(STATIC)).toBe(true);
+>        });
+>        it('the key is read from the error, never from live settings: a saved cap the request did not carry names nothing', () => {
+>          _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 512 } } } });
+>          const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 400), 'Ollama (qwen3.5:4b)');
+>          expect(f.remediation).not.toContain('custom parameter');
+>        });
+>      });
+>      ```
+>    - **`runner/stage-runner.payload-cap-stamp.test.ts`** (new): copy the harness of 5a's `runner/stage-runner.reasoning-overflow-level.test.ts` verbatim (its `vi.hoisted` handoff mock with a new `dirName`, e.g. `` `castwright-w5b-capstamp-${process.pid}-${Date.now()}` ``, `OVERFLOW`, `schema`, `stageSpec`, `fakeTransport`), then:
+>      ```ts
+>      const CAP: Record<'ollama' | 'gemini' | 'openai', [Record<string, unknown>, string]> = {
+>        ollama: [{ options: { num_predict: 512 } }, 'options.num_predict'],
+>        gemini: [{ config: { maxOutputTokens: 2048 } }, 'config.maxOutputTokens'],
+>        openai: [{ max_completion_tokens: 4096 }, 'max_completion_tokens'],
+>      };
+>      const runnerFor = (kind: 'ollama' | 'gemini' | 'openai', extraParams: Record<string, unknown> | undefined) =>
+>        new StageRunner({
+>          transport: fakeTransport(kind),
+>          policy: OLLAMA_RETRY_POLICY,
+>          settings: () => ({ structuredOutput: 'json', maxOutputTokens: undefined, extraParams }),
+>          adaptSchema: (s) => ({ schema: s, dropped: [] }),
+>        });
+>
+>      describe.each(['ollama', 'gemini', 'openai'] as const)('%s: the overflow error carries the payload cap key (5b-D1)', (kind) => {
+>        it('runStage: the key of the cap the payload set', async () => {
+>          const [payload, key] = CAP[kind];
+>          const err = await runnerFor(kind, payload).runStage(stageSpec, {}).catch((e: unknown) => e);
+>          expect(err).toBeInstanceOf(AnalyzerReasoningOverflowError);
+>          expect((err as AnalyzerReasoningOverflowError).payloadCapKey).toBe(key);
+>          expect((err as AnalyzerReasoningOverflowError).payloadCapRemoved).toBe(false);
+>        });
+>        it('runStage: a payload that sets no cap stamps no key', async () => {
+>          const err = await runnerFor(kind, { top_k: 1 }).runStage(stageSpec, {}).catch((e: unknown) => e);
+>          expect((err as AnalyzerReasoningOverflowError).payloadCapKey).toBeUndefined();
+>        });
+>        it('runFreeText: the persona request drops the cap (A4), so its overflow names none', async () => {
+>          const err = await runnerFor(kind, CAP[kind][0]).runFreeText({ prompt: 'p' }).catch((e: unknown) => e);
+>          expect(err).toBeInstanceOf(AnalyzerReasoningOverflowError);
+>          expect((err as AnalyzerReasoningOverflowError).payloadCapKey).toBeUndefined();
+>        });
+>      });
+>
+>      it('a payload that removes the cap is stamped as removed (5b-D3)', async () => {
+>        const err = await runnerFor('openai', { max_tokens: null }).runStage(stageSpec, {}).catch((e: unknown) => e);
+>        expect((err as AnalyzerReasoningOverflowError).payloadCapKey).toBe('max_tokens');
+>        expect((err as AnalyzerReasoningOverflowError).payloadCapRemoved).toBe(true);
+>      });
+>      ```
+>      Step 2's expected red for 5.10d: the `runStage` key cases fail `expected undefined to be 'options.num_predict'` (and the others); the payload-cap test's first three cases fail `toContain`; the last two pass from the start (they pin the unchanged copy).
+> 10. **Test corrections (Step 1).**
+>     1. `extra-params-wire.test.ts` (5.10a): append to `describe('Gemini payload merge', …)` a transport-level case so mutation 9 is killable without the settings closure:
+>        ```ts
+>          it('a stored config.httpOptions never reaches generateContentStream; allowlisted keys do (P16)', async () => {
+>            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+>            const captured: Array<{ config: Record<string, unknown> }> = [];
+>            const client = {
+>              models: {
+>                generateContentStream: vi.fn(async (params: { config: Record<string, unknown> }) => {
+>                  captured.push(params);
+>                  return (async function* () { yield { text: '{"ok":true}', candidates: [{ finishReason: 'STOP' }] }; })();
+>                }),
+>              },
+>            } as unknown as GoogleGenAI;
+>            await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req({ config: { httpOptions: { baseUrl: 'http://evil' }, topK: 40 } }));
+>            expect(captured[0].config).not.toHaveProperty('httpOptions');
+>            expect(captured[0].config.topK).toBe(40);
+>            expect(JSON.stringify(captured[0])).not.toContain('evil');
+>            warn.mockRestore();
+>          });
+>        ```
+>     2. `free-text-payload.test.ts` (5.10a): the control case's `runSingleAttempt({ system: '', messages: […], call: {} })` does not compile — the real signature is `runSingleAttempt(spec, call)` with `spec = { manuscriptId, key, promptMd, grammarSchema, validationSchema }` (`stage-runner.ts:151-154`), and it calls `writeInbox` / `persistResponse`, so the suite DOES need the handoff mock. Copy the `vi.hoisted` + `vi.mock('../../handoff/protocol.js', …)` block from `runner/stage-runner.request-controls.test.ts:7-22` (new `dirName`, e.g. `castwright-w5b-freetext-…`), add `import { z } from 'zod';`, and write the control as
+>        ```ts
+>          it('the escalation single attempt keeps the payload cap (CONTROL: only free text strips it)', async () => {
+>            const transport = new Recording('ollama');
+>            const schema = z.object({ ok: z.literal(true) });
+>            await runnerFor(transport, { options: { num_predict: 64, min_p: 0.05 } }).runSingleAttempt(
+>              { manuscriptId: 'm1', key: 'escalation-ch1-w0', promptMd: 'p', grammarSchema: schema, validationSchema: schema },
+>              {},
+>            );
+>            expect((transport.requests[0].extraParams as { options: Record<string, unknown> }).options.num_predict).toBe(64);
+>          });
+>        ```
+>        (`'A warm voice.'` fails parsing, so `runSingleAttempt` returns `null` after a `console.warn`; the assertion reads the request.) Delete the paragraph after the code block that says this suite needs no `handoff/protocol.js` mock.
+>     3. `gemini-payload-allowlist.test.ts` (5.10b): the first `console.warn` may not be `mergeExtraParams`'s; assert `expect(warn.mock.calls.some(([m]) => String(m).includes('config.httpOptions'))).toBe(true);` instead of reading `calls[0][0]`.
+>     4. `model-test-deps.test.ts` (5.10c): replace Step 1's single endpoint case with three, in the file's own style (`settings(over)`, `lab`, `:14-15`): an Ollama case (`settings({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 2048 } } } })`, `modelTestDepsFor('q:4b', s)`; `expect(d.extraParams).toEqual({ options: { num_predict: 2048 } })` and `expect(d.probeLimits().maxOutputTokens).toBe(2048)`); a Gemini case (`{ gemini: { config: { maxOutputTokens: 2048 } } }`, a Gemini key set the way the file's existing Gemini case sets one; same two assertions); and Step 1's endpoint case (`lab` with `extraParams: { max_completion_tokens: 2048 }`). The endpoint case is green via `resolveCapacity` (5.10b) and is kept as the P19 proof for that branch; it owns no `withPayloadCap` mutation (coordinator call 13).
+> 11. **Mutation list, corrected (Step 5).** 1–3 as written. 4: the `{ reasoningStyle: endpoint.reasoningStyle }` argument of `buildOpenAIRequestBody`'s `return` (note 2). 5–7 as written. **8a:** unwrap the Gemini `probeLimits` — red the Gemini `model-test-deps` case's `probeLimits().maxOutputTokens`. **8b:** unwrap the Ollama one — red the Ollama case. (The plan's endpoint-branch mutation 8 is dropped: an equivalent mutant.) 9: note 4's form — red the note 10.1 case and `gemini-payload-allowlist.test.ts`'s case (record both; 5.10a owns it, so 5.10a records the transport case and 5.10b re-runs it against the allowlist test). 10–11 as written. **12 is replaced by:** **12a** — in `send`, delete `...payloadOutputCapStamp(this.transport.kind, extraParams),` — red the three `runStage: the key of the cap the payload set` cases and the removed-cap case; **12b** — in `mapFinish`, drop `payloadCapKey` / `payloadCapRemoved` from the throw's opts — red the same; **12c** — make `payloadCapAdvice` return the "Raise" phrase unconditionally — red `a payload that removes the cap says "Set a value for"`; **12d** — drop `payloadCapRemediationLead(err)` from the remediation array — red the payload-cap test's first three cases. **13** — note 6. Restore after each.
+> 12. **Keeps green (add to Step 4's list).** `src/analyzer/capacity.endpoint.test.ts`, `src/analyzer/capabilities.test.ts`, `src/analyzer/capabilities.run-model-test.test.ts`, `src/analyzer/capabilities.reasoning.test.ts`, `src/analyzer/gemini-reasoning-wiring.test.ts`, `src/analyzer/structured-output-settings.test.ts`, `src/analyzer/unreachable-failure-taxonomy.test.ts`, `src/analyzer/transport-redaction.test.ts`, `src/routes/failure-taxonomy-fixes.test.ts`, `src/routes/analysis.reasoning-overflow.test.ts`. The `src/analyzer/transports` and `src/analyzer/runner` directory runs cover `reasoning-wire`, `gemini-request-thinks`, `openai-request-body` and `stage-runner.request-controls`; they stay green because `mergeExtraParams`, `stripPayloadTemperature` and `withoutPayloadOutputCap` return the same object when there is nothing to do.
+> 13. **Comment chores (in the child that makes each one false).** 5.10a: `runner/transport.ts:78-80` — "the engine/endpoint custom payload, merged last by the transport (PR 5b)" becomes "…merged last by the transport (mergeExtraParams); a persona request carries it without its output-cap keys"; the `openai-transport.ts:281` and `gemini-transport.ts:263-266` sentences (notes 2, 4); `stage-runner.ts`'s `runFreeText` doc (note 5). 5.10b: the `openai.ts` and `openai-transport.ts:268-272` sentences (note 7). 5.10d: `failure-remediations.ts:106-112` (note 9).
 
 **Files:**
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` (streaming body **and** W4's non-streaming `sendFreeText` body), `gemini-transport.ts`, `openai-transport.ts` (request construction, after PR 5a's reasoning block)
@@ -8028,6 +8667,73 @@ git commit -m "feat(server): merge the custom payload last on every transport; r
 
 ### Task 5.11: Redact payload values from upstream error text; prove the payload is never logged or persisted
 
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Three children** (table rows 12–14), one commit each. Entry check: `git grep -n "payloadSecretValues" server/src/analyzer/runner/extra-params.ts` and `git grep -n "mergeExtraParams" server/src/analyzer/transports/ollama-transport.ts` are both non-empty (Tasks 5.8 and 5.10a on the branch), else STOP. 5b-D1 changes nothing in this task.
+> - **5.11-i — Ollama sites and the privacy harness.** Create `server/src/analyzer/runner/extra-params-privacy.test.ts` with Step 1's harness (mock, `startServer`, `everythingLogged` / `everythingPersisted`, `runnerFor`, hooks — with note 4's T2 env save/restore) and ONLY these cases: `a stage with a validation retry sends the payload but writes and logs none of it`, `Ollama: a 400 that echoes the request …` (note 4's T1 form), `Ollama persona (free-text) call …`, `Ollama in-stream error …`, and the N15 scope case. Edit `transports/ollama-transport.ts` at all three sites (note 2). Imports only what those cases use (note 4's T4). Runs: `npm --prefix server run test -- src/analyzer/runner/extra-params-privacy.test.ts src/analyzer/transport-redaction.test.ts src/analyzer/transports src/routes/failure-taxonomy.test.ts`, then `npm run check:cycles`. Mutations 1, 1b, 1c, 1d (×3 sites), 4, 5.
+>   `git add server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/runner/extra-params-privacy.test.ts`
+>   Commit: `feat(server): redact custom payload values from Ollama error text and lock payload privacy`.
+> - **5.11-ii — the Gemini site.** Append Step 1's two Gemini cases (`Gemini: the SDK error is rebuilt …`, `a Gemini error from a payload-carrying request stays redacted through classifyAnalysisFailure's envelope detail`), adding `ApiError, type GoogleGenAI` and `GeminiTransport` (and `classifyAnalysisFailure` if 5.11-i did not import it). Edit the Gemini `catch` (note 3). Mutation 2.
+>   `git add server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/runner/extra-params-privacy.test.ts`
+>   Commit: `feat(server): redact custom payload values from Gemini error text`.
+> - **5.11-iii — the OpenAI-compatible site.** Append Step 1's two OpenAI cases (`a 400 naming the parameter value is redacted`, `a value straddling the 500-character excerpt cut leaves no fragment`), adding `OpenAITransport` and `analyzerEndpointSchema` (T3: no `OPENAI_RETRY_POLICY`). Edit `attempt()`'s `secrets` (note 5). Mutations 3, 3a.
+>   `git add server/src/analyzer/transports/openai-transport.ts server/src/analyzer/runner/extra-params-privacy.test.ts`
+>   Commit: `feat(server): redact custom payload values from OpenAI-compatible error text`.
+>
+> 1. **Anchors at `626c3130`.** `transports/ollama-transport.ts`: `sendFreeText` non-OK `:226-242` (comment `:230-233`, `const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);` `:235`); stream non-OK `:362-378` (comment `:365-369`, the same line `:371`); in-stream `:457-463` (comment `:458-460`, `const streamError = redactKnownSecrets(String(parsed.error), await loadKnownAnalyzerSecrets());` `:461`); `req` is in scope at all three (`sendFreeText(req, …)` `:130`, `send(req)` `:279`); imports `:45`, `:48`. Gemini: `const safe = redactGeminiError(err, await loadKnownAnalyzerSecrets());` `gemini-transport.ts:539` (comment `:538`; `redactGeminiError` `:61-69` already rebuilds the `ApiError`). OpenAI: the secrets array is in the private `attempt(req)` (`openai-transport.ts:405`; `:485-487`), **not** `send()` (`:372-396` only wraps `withTransportRetry(() => this.attempt(req), …)`); the `OutcomeContext.secrets` doc is `:106`. W3b's `transport-redaction.test.ts` is `server/src/analyzer/transport-redaction.test.ts`.
+> 2. **Ollama, three sites (5.11-i).** Add `import { payloadSecretValues } from '../runner/extra-params.js';`. Each line becomes Step 3's (3b's `loadKnownAnalyzerSecrets()` term kept, the payload term appended, still redacted before the slice). Each comment above it is now false by omission; rewrite them:
+>    - `sendFreeText` (`:230-233`): `/* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was \`excerpt\`). The redaction is PR 3b's (W3b Task 3b.6a), carried through the move, plus this request's own custom-payload values (#3084 P29): every known analyzer secret and every payload string value is removed BEFORE the body is sliced (P22). With neither in the body the message text is byte-identical to main's. */`
+>    - stream (`:365-369`): `/* Reachable but errored — hard-fail. Surface the body so the operator can diagnose ("model not found", "invalid format", …), with every known analyzer secret AND this request's custom-payload string values removed where the error is built (#3084 P22, P29). Redacted BEFORE truncating, so a value the slice would cut in half cannot survive. With neither in the body the text is byte-identical. */`
+>    - in-stream (`:458-460`): `/* #3084 P22, P29, A8 — the daemon's in-stream error can echo request text; every known analyzer secret and this request's custom-payload values are removed where the error is built. With neither the message is byte-identical. */`
+> 3. **Gemini (5.11-ii).** Add `import { payloadSecretValues } from '../runner/extra-params.js';` beside the other `../` imports (`:14-16`). Replace `:538-539` with Step 3's comment and statement.
+> 4. **Privacy test, corrected.**
+>    - **T1 — the Ollama stage 400 case could not fail.** The runner's system turn is the 6.8 KB skill, which serialises before `options` and the payload, so neither the sentinel nor `[redacted]` falls inside the 500-character excerpt: `not.toContain(SENTINEL)` passes before the fix and `toContain(REDACTED)` fails after it. Echo the request without `messages`, and guard the precondition:
+>      ```ts
+>        it('Ollama: a 400 that echoes the request is redacted in the error, the log, and the failure copy', async () => {
+>          /* The echo omits `messages`: the runner's system turn is the 6.8 KB skill, which would push the payload past
+>             the 500-character excerpt and make every assertion below vacuous. */
+>          let echoed = '';
+>          const url = await startServer((raw) => {
+>            const body = JSON.parse(raw) as Record<string, unknown>;
+>            delete body.messages;
+>            echoed = `invalid options in ${JSON.stringify(body)}`;
+>            return { status: 400, type: 'application/json', body: JSON.stringify({ error: echoed }) };
+>          });
+>          const payload = { user_tag: SENTINEL };
+>          const err = await runnerFor(new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }), OLLAMA_RETRY_POLICY, payload)
+>            .runStage(spec, {})
+>            .catch((e: unknown) => e);
+>          /* Precondition: the value really sits inside the excerpt window, so the assertions below can fail. */
+>          expect(echoed.indexOf(SENTINEL)).toBeGreaterThan(-1);
+>          expect(echoed.indexOf(SENTINEL)).toBeLessThan(450);
+>          expect(err).toBeInstanceOf(AnalyzerHttpError);
+>          expect((err as AnalyzerHttpError).message).not.toContain(SENTINEL);
+>          expect((err as AnalyzerHttpError).bodyExcerpt).not.toContain(SENTINEL);
+>          expect((err as AnalyzerHttpError).message).toContain(REDACTED);
+>          const failure = classifyAnalysisFailure(err, 'Ollama (q:4b)');
+>          expect(`${failure.userMessage}\n${failure.detail ?? ''}`).not.toContain(SENTINEL);
+>          expect(everythingLogged()).not.toContain(SENTINEL);
+>        });
+>      ```
+>      The persona case stays as written (its system is `''` and its user turn short).
+>    - **T2 — the env key.** `getResolvedGeminiApiKey()` prefers `GEMINI_API_KEY` (`user-settings.ts:1973-1979`), so on a box with it set the in-stream case's `not.toContain(SAVED)` fails. In `beforeEach` save and `delete process.env.GEMINI_API_KEY`; in `afterEach` restore it — copy `transport-redaction.test.ts:23`, `:29`, `:43-44`.
+>    - **T3 — the orphan import.** Drop `OPENAI_RETRY_POLICY` from the `retry-policy.js` import and delete `void OPENAI_RETRY_POLICY;`.
+>    - **T4 — per-child imports** (`noUnusedLocals`). 5.11-i: vitest, `node:http` / `node:net` / `node:fs` / `node:os` / `node:path`, `Agent`, `z`, `StageRunner`, `OLLAMA_RETRY_POLICY`, `REDACTED`, `OllamaTransport`, `AnalyzerHttpError`, `geminiRateLimiter`, `_resetUserSettingsCache`, `_setUserSettingsCacheForTest`, `knownAnalyzerSecrets`, `classifyAnalysisFailure`, `type ChatTransport`, `type TransportRequest`. 5.11-ii adds `ApiError`, `type GoogleGenAI`, `GeminiTransport`. 5.11-iii adds `OpenAITransport`, `analyzerEndpointSchema`.
+> 5. **OpenAI, in `attempt()` (5.11-iii).** Add `import { payloadSecretValues } from '../runner/extra-params.js';` beside `:51-53`. Replace `:485-487` with
+>    ```ts
+>        /* P22, P29 — every error this attempt builds is redacted against this endpoint's key, every saved
+>           analyzer secret (read from settings if the cache is still cold), and the values of the payload
+>           THIS request carries. */
+>        const secrets = [
+>          ...(this.apiKey ? [this.apiKey] : []),
+>          ...(await loadKnownAnalyzerSecrets()),
+>          ...payloadSecretValues(req.extraParams),
+>        ];
+>    ```
+>    and the `OutcomeContext.secrets` doc (`:106`) with `/** P22, P29: redacted from every error this builds (the endpoint's key, every saved analyzer secret and the values of the payload this request carried) */`. Step 3's "`req` is `send`'s request parameter" means `attempt`'s.
+> 6. **Mutation list, corrected (Step 5).** 1/1b/1c valid once T1 is applied (without T1, 1 cannot go red). 1d valid (`transport-redaction.test.ts:74-143` covers all three Ollama sites). 3: "In `OpenAITransport.attempt()`". 3a valid verbatim (`openai-transport.ts:181`). 4 valid (`knownAnalyzerSecrets` `user-settings.ts:1986-1992`; push before `return out;`). 5 valid (the temporary `console.debug` has no placeholder; remove it).
+> 7. **Step 4's run list** adds `src/analyzer/transport-redaction.test.ts` (it is not under `src/analyzer/transports`).
+
 **Files:**
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` — W3b Task 3b.6a's construction-time redaction in the streaming non-OK branch, the same line W4 Task 4.2 put in `sendFreeText`'s non-OK branch, and the in-stream `parsed.error` branch (moved from `ollama.ts:793-795` at `80be2f1d`, re-pinned from `:792-794`)
 - Modify: `server/src/analyzer/transports/gemini-transport.ts` — W3b Task 3b.6a's `redactGeminiError(err, …)` call in `generate`'s `catch`
@@ -8394,6 +9100,187 @@ git commit -m "feat(server): redact custom payload values from upstream error te
 
 ### Task 5.11b: `reasoningOverflowFixes` — endpoint payload `max_tokens` fix (F7)
 
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Scope changed by 5b-D1 and 5b-D2.** This task now gives **all three** engines a payload-key fix and drops the fixes a payload cap makes pointless, and it reads the key from `ctx` (stamped on the error by Task 5.10d), never from settings. Everything the steps below say about `getCachedUserSettings()`, `resolveExtraParamsSetting` and `payloadOutputCapKey` inside `failure-taxonomy.ts` is void, and so is "Task 5.11's `customParamsWhere`": it is Task 5.10d's, already exported, together with `payloadCapAdvice`. `ALL_FIXTURE_FIXES_LISTS` does not exist; the guards iterate `CONTEXTS` (`failure-taxonomy-fixes.test.ts:34-40`).
+>
+> **Two children** (table rows 15–16), one commit each. Entry check: `git grep -n "export function payloadCapAdvice" server/src/routes/failure-taxonomy.ts` is non-empty (5.10d on the branch), else STOP. Both edit `server/src/routes/failure-taxonomy.ts` and append to `server/src/routes/failure-taxonomy-fixes.test.ts` (which already imports `existsSync`, `afterEach`, `classifyAnalysisFailure`, `AnalyzerReasoningOverflowError`, `analyzerEndpointSchema`, `_resetUserSettingsCache`, `_setUserSettingsCacheForTest`, `_resetGeminiCatalogForTest`, `_seedGeminiCatalogForTest`, and defines `wikiDir` and `CONTEXTS`: no new imports). Runs per child: `npm --prefix server run test -- src/routes/failure-taxonomy-fixes.test.ts src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy.reasoning.test.ts src/routes/failure-taxonomy.payload-cap.test.ts src/routes/analysis.reasoning-overflow.test.ts`, typecheck. `git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts`.
+> - **5.11b-i — the ctx fields, the pass-through, the Gemini and Ollama arms.** Notes 1–4. Mutations 1–6 of note 4. Commit: `feat(server): a payload output cap replaces the Gemini and Ollama fixes it overrides (F7)`.
+> - **5.11b-ii — the endpoint arm.** Notes 5–6. Mutations 1–7 of note 6. Commit: `feat(server): point the reasoning-overflow fix list at an endpoint's own payload output cap`.
+>
+> 1. **Anchors at `626c3130`.** `reasoningOverflowFixes` `failure-taxonomy.ts:650-793` (ctx `:650-659`; Gemini arm `:662-720` with the conditional `Raise Gemini max output tokens` block `:673-680`; Ollama arm `:721-758` with `numPredictPinned` `:725` and the `Raise Ollama num_predict` push `:740-745`; endpoint arm `:759-788`, its comment `:760-763`, the gate lookup `const endpoint = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId);` `:764`, the four pushes `:766-771`, 5a's reasoning fix `:772-781`, the `Read: When a model thinks…` push `:783-786`; `return [...fixes, ...reads];` `:792`); the classify call `:1046`. `nonStoryOverflowWarningMessage` (`routes/analysis.ts:4433`) passes the stored error object itself as the ctx, so naming the new ctx fields exactly as the error's fields carries them there with no edit.
+> 2. **ctx and the pass-through (5.11b-i).** Add to the ctx type, after `reasoningLevel?`:
+>    ```ts
+>      /** #3084 wave 5b (N13, 5b-D1) — the payload key that set the overflowing request's output cap, and whether it
+>          removed it. Stamped at throw time; these are AnalyzerReasoningOverflowError's own field names, so the
+>          classify branch and nonStoryOverflowWarningMessage pass the error straight through. */
+>      payloadCapKey?: string;
+>      payloadCapRemoved?: boolean;
+>    ```
+>    and change the classify call (`:1046`) to `fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel, payloadCapKey: err.payloadCapKey, payloadCapRemoved: err.payloadCapRemoved }),`. `reasoningRemediationLead`'s own call is unchanged (it only asks whether a reasoning fix exists).
+> 3. **The Gemini and Ollama arms (5.11b-i, 5b-D2/D3).** The payload fixes are label-only (no `settingKey`, no `wikiPage`): the payload editors have no per-row deep link, the same shape as F13's `Switch to a different analyzer model`.
+>    - Gemini: wrap the existing conditional max-output block (`configuredOutputCap` … the `Raise Gemini max output tokens` push) as the `else` of
+>      ```ts
+>          if (ctx.payloadCapKey) {
+>            /* #3084 wave 5b (5b-D2) — a payload key sets this request's output cap (P19), so the Gemini max output
+>               tokens setting changes nothing: name the payload key instead. */
+>            fixes.push({ label: payloadCapAdvice('gemini', ctx.payloadCapKey, ctx.payloadCapRemoved, undefined) });
+>          } else {
+>            /* …the existing configuredOutputCap / knownOutputLimit block, unchanged… */
+>          }
+>      ```
+>    - Ollama: `const numPredictPinned = configValue<number>('analyzer.ollama.numPredict') > 0;` becomes
+>      ```ts
+>          /* 5b-D2 — a payload num_predict overrides analyzer.ollama.numPredict (P19), so its own value decides whether
+>             the reply is bounded first: a number pins it, a removed cap (null / -1) does not. */
+>          const numPredictPinned = ctx.payloadCapKey ? !ctx.payloadCapRemoved : configValue<number>('analyzer.ollama.numPredict') > 0;
+>      ```
+>      and the `if (numPredictPinned) { fixes.push({ label: 'Raise Ollama num_predict …', … }); }` becomes
+>      ```ts
+>          if (ctx.payloadCapKey) {
+>            /* 5b-D2 — the payload key, not the num_predict setting it overrides. */
+>            fixes.push({ label: payloadCapAdvice('ollama', ctx.payloadCapKey, ctx.payloadCapRemoved, undefined) });
+>          } else if (numPredictPinned) {
+>            fixes.push({
+>              label: 'Raise Ollama num_predict (or set it back to -1, unlimited)',
+>              settingKey: 'analyzer.ollama.numPredict',
+>            });
+>          }
+>      ```
+>      (The `numPredictPinned` change keeps the `num_ctx` label's "(the binding limit)" claim true: a payload `num_predict` that is a number bounds the reply first, exactly like the setting.)
+> 4. **5.11b-i tests** — append:
+>    ```ts
+>    describe('reasoningOverflowFixes — a payload output cap replaces the Gemini and Ollama fixes it overrides (#3084 wave 5b, 5b-D1/D2/D3)', () => {
+>      afterEach(() => {
+>        _resetGeminiCatalogForTest();
+>        delete process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+>        delete process.env.ANALYZER_NUM_PREDICT;
+>      });
+>
+>      it('Gemini: names the payload key and drops "Raise Gemini max output tokens", even where 2b would offer it', () => {
+>        _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+>        process.env.ANALYZER_MAX_OUTPUT_TOKENS = '4096'; // below the known limit: the raise fix's own condition
+>        const fixes = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash', payloadCapKey: 'config.maxOutputTokens', payloadCapRemoved: false });
+>        expect(fixes.some((f) => f.settingKey === 'analyzer.gemini.maxOutputTokens')).toBe(false);
+>        expect(fixes[0]).toEqual({
+>          label: 'Raise the custom parameter "config.maxOutputTokens" in the Gemini custom parameters (Advanced settings → Analyzer request controls)',
+>        });
+>      });
+>
+>      it('Ollama: names the payload key and drops "Raise Ollama num_predict"; a numeric payload cap makes num_ctx not the binding limit', () => {
+>        process.env.ANALYZER_NUM_PREDICT = '2048';
+>        const fixes = reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict', payloadCapRemoved: false });
+>        expect(fixes.some((f) => f.settingKey === 'analyzer.ollama.numPredict')).toBe(false);
+>        expect(fixes[0]).toEqual({
+>          label: 'Raise the custom parameter "options.num_predict" in the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+>        });
+>        expect(fixes.find((f) => f.settingKey === 'analyzer.ollama.numCtx')?.label).toBe('Raise Ollama num_ctx');
+>      });
+>
+>      it('Ollama: a payload that removes the cap says "Set a value for", and num_ctx is the binding limit again (5b-D3)', () => {
+>        process.env.ANALYZER_NUM_PREDICT = '2048'; // overridden by the payload, which removes the cap
+>        const fixes = reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict', payloadCapRemoved: true });
+>        expect(fixes[0].label).toBe(
+>          'Set a value for the custom parameter "options.num_predict" in the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+>        );
+>        expect(fixes.find((f) => f.settingKey === 'analyzer.ollama.numCtx')?.label).toBe('Raise Ollama num_ctx (the binding limit)');
+>      });
+>
+>      it('classifyAnalysisFailure passes the stamped key through to the fixes', () => {
+>        const f = classifyAnalysisFailure(
+>          new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:9b', 300, { payloadCapKey: 'options.num_predict', payloadCapRemoved: false }),
+>          'Ollama (qwen3.5:9b)',
+>        );
+>        expect(f.fixes?.[0]?.label).toContain('"options.num_predict"');
+>      });
+>    });
+>    ```
+>    Without a payload key both arms are 5a's exactly; the existing `the RIGHT key, not just a valid one` cases pin that. **Mutations (5.11b-i):** 1 — in the Gemini arm, drop the `if (ctx.payloadCapKey)` branch so the max-output block always runs → red the Gemini case; 2 — delete the Gemini payload push only → red the Gemini case (`fixes[0]`); 3 — make the Ollama `else if` an `if` → red the first Ollama case (`numPredict` present); 4 — revert `numPredictPinned` to the setting alone → red the removed-cap case (`num_ctx` label); 5 — hand-type the "Raise …" label in place of `payloadCapAdvice` in the Ollama push → red the removed-cap case; 6 — drop the two fields from the classify call → red the pass-through case. Restore after each.
+> 5. **The endpoint arm (5.11b-ii; replaces Step 3).** The first of the four pushes (`:767`) becomes a ternary, and the `Read: Custom payload` entry is pushed into `reads` before the existing one:
+>    ```ts
+>        fixes.push(
+>          ctx.payloadCapKey
+>            ? /* 5b-D2 — a payload key sets this request's output cap (P19), overriding this endpoint's Max output tokens. */
+>              { label: payloadCapAdvice('openai', ctx.payloadCapKey, ctx.payloadCapRemoved, endpoint?.name), endpointField: { endpointId: ctx.endpointId, field: 'extraParams' } }
+>            : { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
+>          { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
+>          { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
+>          { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
+>        );
+>        /* …5a's reasoning fix, unchanged… */
+>        if (ctx.payloadCapKey) {
+>          /* #3084 wave 5b — the page's "Custom payload" section (Task 5.13b). Its own list-level entry; the payload fix carries no wikiPage. */
+>          reads.push({ label: 'Read: Custom payload', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' });
+>        }
+>        /* …the existing Read: When a model thinks past its output limit push… */
+>    ```
+>    (`ctx.endpointId` is narrowed to `string` by the branch condition: no `!`.) Like the max-output fix it replaces, the payload fix is offered for a deleted endpoint too, named "this endpoint's custom parameters". The comment `:760-763`'s "no payload rows (5b)" becomes "when a payload set the output cap, its key replaces the max-output row (5b-D2)".
+> 6. **5.11b-ii tests** — append (replaces Step 1's two cases and its `ALL_FIXTURE_FIXES_LISTS` guard):
+>    ```ts
+>    describe('reasoningOverflowFixes — endpoint custom-payload output cap (#3084 wave 5b, F7, 5b-D1/D2)', () => {
+>      afterEach(() => _resetUserSettingsCache());
+>      const seedLab = (extraParams?: Record<string, unknown>) =>
+>        _setUserSettingsCacheForTest({
+>          analyzerEndpoints: [analyzerEndpointSchema.parse({
+>            id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768,
+>            ...(extraParams ? { extraParams } : {}),
+>          })],
+>        });
+>      const capCtx = { transport: 'openai' as const, model: 'm', endpointId: 'lab', payloadCapKey: 'max_completion_tokens', payloadCapRemoved: false };
+>
+>      it("names the payload key in the endpoint's custom parameters, deep-links extraParams, and links Custom payload", () => {
+>        seedLab({ max_completion_tokens: 4096 });
+>        const fixes = reasoningOverflowFixes(capCtx);
+>        expect(fixes.find((f) => f.endpointField?.field === 'extraParams')).toEqual({
+>          label: 'Raise the custom parameter "max_completion_tokens" in the "Lab box" endpoint\'s custom parameters',
+>          endpointField: { endpointId: 'lab', field: 'extraParams' },
+>        });
+>        const readFix = fixes.find((f) => f.label === 'Read: Custom payload');
+>        expect(readFix?.wikiPage).toBe('OpenAI-Compatible-Analyzer-Endpoints');
+>        expect(existsSync(`${wikiDir}${readFix!.wikiPage}.md`), readFix!.wikiPage).toBe(true);
+>      });
+>
+>      it("drops \"Lower <name>'s max output tokens\" while a payload sets the cap, and keeps it otherwise (5b-D2)", () => {
+>        seedLab();
+>        expect(reasoningOverflowFixes(capCtx).some((f) => f.endpointField?.field === 'maxOutputTokens')).toBe(false);
+>        expect(reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' }).some((f) => f.endpointField?.field === 'maxOutputTokens')).toBe(true);
+>      });
+>
+>      it('the key comes from the overflowing request, not the payload saved now (5b-D1)', () => {
+>        seedLab({ top_k: 40 }); // edited after the overflow
+>        expect(reasoningOverflowFixes(capCtx).find((f) => f.endpointField?.field === 'extraParams')?.label).toContain('"max_completion_tokens"');
+>      });
+>
+>      it('without a payload key: no payload fix and no Read: Custom payload entry, whatever is saved now', () => {
+>        seedLab({ max_completion_tokens: 4096 });
+>        const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+>        expect(fixes.some((f) => f.endpointField?.field === 'extraParams')).toBe(false);
+>        expect(fixes.some((f) => f.label === 'Read: Custom payload')).toBe(false);
+>      });
+>
+>      it("a deleted endpoint: the payload fix names \"this endpoint's custom parameters\"", () => {
+>        _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+>        expect(reasoningOverflowFixes(capCtx).find((f) => f.endpointField?.field === 'extraParams')?.label).toContain("this endpoint's custom parameters");
+>      });
+>
+>      it('no actionable fix ever follows a Read: entry, for every guard context and the payload contexts', () => {
+>        seedLab();
+>        const payloadContexts = [
+>          capCtx,
+>          { transport: 'gemini' as const, model: 'gemini-3.6-flash', payloadCapKey: 'config.maxOutputTokens' },
+>          { transport: 'ollama' as const, model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict' },
+>        ];
+>        for (const ctx of [...CONTEXTS, ...payloadContexts]) {
+>          const fixes = reasoningOverflowFixes(ctx);
+>          const firstRead = fixes.findIndex((f) => f.label.startsWith('Read: '));
+>          if (firstRead === -1) continue;
+>          expect(fixes.slice(firstRead).every((f) => f.label.startsWith('Read: ')), JSON.stringify(fixes.slice(firstRead))).toBe(true);
+>        }
+>      });
+>    });
+>    ```
+>    `CONTEXTS` itself stays unchanged. **Mutations (5.11b-ii, replace Step 5):** 1 — replace the ternary with the max-output entry alone → red the first two cases; 2 — delete only the `reads.push({ label: 'Read: Custom payload', … })` → red the first case's `readFix`; 3 — add `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` to the payload fix → red the first case's `toEqual`; 4 — rename the Read entry's `wikiPage` to a nonexistent page → red the `existsSync` line; 5 — add `reads.push({ label: 'Bogus extra fix' })` after the Custom payload push → red the ordering case; 6 — name the key from the saved payload instead (`payloadOutputCapKey('openai', endpoint?.extraParams)`, a temporary import) → red `the key comes from the overflowing request …`; 7 — gate the Read push on `endpoint?.extraParams` instead of `ctx.payloadCapKey` → red `without a payload key …`. Restore after each.
+
 **Precondition:** Task 5.5b's endpoint reasoning fix is in place; this task adds a second endpoint fix beside it, for the endpoint's custom payload, once that payload can affect the output cap (Task 5.8's `payloadOutputCapKey`).
 
 **Corrected (review pass 1 + wave 3 review + review pass 2, 2026-09-13):** `payloadOutputCapKey` takes the transport kind as its first argument (`payloadOutputCapKey(kind: TransportKind, params: Json | undefined): string | undefined`, Task 5.8) — an earlier draft called it with one argument. The payload itself is resolved through `resolveExtraParamsSetting(settings, { engine, endpoint })` (Task 5.8), the same call Task 5.11's `payloadCapSettingFor` already makes. **No redeclared `endpoint` (corrected, review pass 3, item 5; review pass 2, item 8 retired).** 3b's `openai` branch already resolves `const endpoint = getCachedUserSettings().analyzerEndpoints.find((e) => e.id === ctx.endpointId);` inside `if (ctx.transport === 'openai' && ctx.endpointId)`; this task's fix lands inside that same block and reuses that `endpoint` — no second `const endpoint = …`, no separate `if (ctx.transport === 'openai' …)` (see Step 3 below, "do not resolve it twice"). The fix's phrase reuses Task 5.11's own `customParamsWhere(transport, endpointName)` instead of hand-typing a second copy of "the … endpoint's custom parameters". **The payload fix itself carries no `wikiPage` (review pass 2, item 10b)** — `wikiPage` names a single, list-level "Read: <section>" entry, not a property every fix repeats (Task 5.5b's rule, same here). Instead, when the payload fix applies, this task appends **one additional, separate entry, into `reads` rather than `fixes` (review pass 3, item 1)**: `{ label: 'Read: Custom payload', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }` — the page's "Custom payload" section (created in this same PR, Task 5.12, so the page exists when the fix ships).
@@ -8485,7 +9372,282 @@ git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy
 git commit -m "feat(server): point the reasoning-overflow fix list at an endpoint's own payload output cap"
 ```
 
+### Task 5.11c: chore(server) — the `REQUEST_SHAPING_SETTINGS` custom-payload half (owner decision 5b-D4; re-pin child, row 17)
+
+> **Re-pin notes (2026-10-29, against 626c3130).** Added by the re-pin (5b-D4). `failure-taxonomy.ts:828-830` says "Wave 5b adds the custom-payload settings" to `REQUEST_SHAPING_SETTINGS`, and the spec says an `analyzer-request-rejected` remediation names the custom-payload settings, but no 5b task added them (5a added only the reasoning half, `:836`, `:841`, `:846`). The entries use the editor labels Task 5.12 renders: "Ollama custom parameters" and "Gemini custom parameters" (5.12d) and the endpoint field "Custom parameters" (5.12e-i).
+
+**Files:** Modify `server/src/routes/failure-taxonomy.ts`; Test: `server/src/routes/failure-taxonomy.reasoning.test.ts` (append beside `a reasoning refusal remediation names the reasoning setting (REQUEST_SHAPING_SETTINGS)`, `:83`).
+
+- [ ] **Step 1: Failing test.** Append inside the describe that holds the `:83` case:
+```ts
+  it.each([
+    ['qwen3.5:4b', 'Ollama (qwen3.5:4b)', 'the Ollama custom parameters (Advanced settings → Analyzer request controls)'],
+    ['gemini-3.6-flash', 'Gemini 3.6 Flash', 'the Gemini custom parameters (Advanced settings → Analyzer request controls)'],
+    ['openai:lab::m', 'Lab · m', "the endpoint's Custom parameters field"],
+  ])('a refusal remediation for %s names its custom parameters (REQUEST_SHAPING_SETTINGS, 5b-D4)', (modelId, label, expected) => {
+    const f = classifyAnalysisFailure(new AnalyzerCapabilityRejectedError(modelId, 'reasoning', 'on', '2026-09-11T10:00:00.000Z'), label);
+    expect(f.remediation).toContain(expected);
+  });
+```
+- [ ] **Step 2: Run** `npm --prefix server run test -- src/routes/failure-taxonomy.reasoning.test.ts`. Expected: FAIL, all three rows, at `toContain`.
+- [ ] **Step 3: Fix.** Replace the comment and the constant (`failure-taxonomy.ts:828-848`) with:
+```ts
+/* #3084 PR 3b — the settings that shape a request, per transport, named in an
+   analyzer-request-rejected remediation: structured output, context and output
+   size, reasoning (5a) and custom parameters (5b). */
+const REQUEST_SHAPING_SETTINGS: Record<TransportKind, string[]> = {
+  ollama: [
+    'Ollama structured output (analyzer.ollama.structuredOutput)',
+    'Ollama num_ctx (analyzer.ollama.numCtx)',
+    'Ollama num_predict (analyzer.ollama.numPredict)',
+    'the Ollama reasoning setting (Advanced settings → Analyzer request controls)',
+    'the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+  ],
+  gemini: [
+    'Gemini structured output (analyzer.gemini.structuredOutput)',
+    'Gemini max output tokens (analyzer.gemini.maxOutputTokens)',
+    'the Gemini reasoning setting (Advanced settings → Analyzer request controls)',
+    'the Gemini custom parameters (Advanced settings → Analyzer request controls)',
+  ],
+  openai: [
+    "the endpoint's Structured output field",
+    "the endpoint's Context size field",
+    "the endpoint's Reasoning setting",
+    "the endpoint's Custom parameters field",
+  ],
+};
+```
+- [ ] **Step 4: Run** the same file, then `npm --prefix server run test -- src/routes/failure-taxonomy.test.ts` (its request-rejected cases, `:1334-1375`, use `toContain`, so they stay green) and `npm run typecheck`.
+- [ ] **Step 5: Mutation proof.** Delete one entry at a time — the Ollama custom-parameters line, then the Gemini one, then the endpoint one. Expected red each time: that row alone. Restore.
+- [ ] **Step 6: Commit.** `git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.reasoning.test.ts` — `git commit -m "chore(server): name the custom parameters in the request-rejected remediation (refs #3084)"`. Ship (Task 5.13) declares it under "Also fixed, found in passing".
+
 ### Task 5.12: Run label "+ custom params", payload editors, e2e
+
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Seven children** (table rows 18–24), one commit each. Entry check for every 5.12 child: `git grep -n "requestControlsLabelParts" server/src/analyzer/runner/extra-params.ts` and `git grep -n "analyzerExtraParamsByEngine" src/lib/api-types.ts` are both non-empty, and `git grep -n "until PR 5b" -- server/src src` prints nothing (Task 5.9 lifted both refusals), else STOP. Rows 18–23 run unit tests only; every Playwright run is row 24's.
+> - **5.12a — the frontend payload lib.** Create `src/lib/extra-params.ts` and `src/lib/extra-params.test.ts` exactly as written (verified compile-safe; the server fixture import has precedent at `src/lib/api-analyzer-endpoints-mock.test.ts:5`, and `PayloadKind` equals the server's `TransportKind`). Run that test and typecheck. Mutation 5.
+>   `git add src/lib/extra-params.ts src/lib/extra-params.test.ts` — Commit: `feat(frontend): payload helpers for the custom parameter editors`.
+> - **5.12b — server label parts and openapi.** Note 2. Run `npm --prefix server run test -- src/analyzer/catalog/analyzer-catalog.test.ts`, `npm run openapi:types`, typecheck, `check:cycles`. Mutation 1.
+>   `git add server/src/analyzer/catalog/analyzer-catalog.ts server/src/analyzer/catalog/analyzer-catalog.test.ts openapi.yaml src/lib/api-types.ts` — Commit: `feat(server,openapi): run-label parts from the custom payload`.
+> - **5.12c — the run label and the mock catalog.** Note 3. Run `npm test -- src/lib/model-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts`, typecheck. Mutations 1a (unit half) and mock-c.
+>   `git add src/lib/model-label.ts src/lib/model-label.test.ts src/lib/api.ts src/lib/api-analyzer-catalog-mock.test.ts` — Commit: `feat(frontend,mocks): show + custom params in the run label`.
+> - **5.12d — the request-control editors.** Note 4. Run `npm test -- src/components/settings/analyzer-request-controls.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx`, typecheck, `npm run lint`. Mutations 2, 4a.
+>   `git add src/components/settings/analyzer-request-controls.tsx src/components/settings/analyzer-request-controls.test.tsx` — Commit: `feat(frontend): custom parameter editors in Advanced settings`.
+> - **5.12e-i — the endpoint editor's Custom parameters field.** Note 5. Run `npm test -- src/components/settings/analyzer-endpoints-section.test.tsx src/test/a11y.test.tsx`, typecheck, lint. Mutations 4b, 6, 7, 8.
+>   `git add src/components/settings/analyzer-endpoints-section.tsx src/components/settings/analyzer-endpoints-section.test.tsx` — Commit: `feat(frontend): a Custom parameters field on the analyzer endpoint editor`.
+> - **5.12e-ii — Max output tokens read-only while a payload sets the cap (5b-D5).** Note 6. Same runs. Mutations 3 (corrected), 9.
+>   Same `git add` — Commit: `feat(frontend): the endpoint's Max output tokens is read-only while custom parameters set the cap`.
+> - **5.12f — e2e (lane `claude`).** Note 7. Mutations 1a (e2e half), 10.
+>   `git add e2e/analyzer-endpoints.spec.ts e2e/analyzer-request-controls.spec.ts` — Commit: `test(e2e): the custom parameter editors and the + custom params label`.
+>
+> 1. **Anchors at `626c3130`.** `AnalyzerRequestControls`: `src/components/settings/analyzer-request-controls.tsx` (212 lines; `SELECT_CLASS` `:18-19`; the reasoning state + effects `:39-45`; `onSave` `:108-120`, opening with `if (blocked) return;`; the Gemini block ends `:181`; the errors list `:183`). Its tests: the two exact-patch cases `analyzer-request-controls.test.tsx:90` and `:102`; the #3625 cases `:125`, `:134`. Endpoint form `src/components/settings/analyzer-endpoints-section.tsx`: `EndpointDraft` `:31-48`, `ISSUE_FIELDS` / `DraftErrors` `:51-53` (`DraftErrors = Partial<Record<IssueField | 'key', string>>`, so it needs no edit), `ENDPOINT_FIELD_TEST_IDS` `:56-69`, `INPUT` `:71` (carries `min-h-[44px] fine-pointer:min-h-0` since 5.6d), `draftFrom` `:88-107`, `validateEndpointDraft` `:109-148` (its early return `:129`, the `extraParams` pass-through `:145`), `splitEndpointIssues` `:164-181`, the `hostChanged` memo `:207-210`, the deep-link focus effect `:222-242`, the `sm:grid-cols-2` grid `:438` … its closing `</div>` after the Max input tokens row (`:500`), the Max output tokens input `:493`, `endpoint-save-error` `:501`. Its tests: `renderSection` `:40`, the `updateAnalyzerEndpoint` mock (called `(id, input)`), the deep-link grammar (`store.dispatch(uiSlice.actions.openModelManager({ endpointId, endpointField }))`, `:315-321`, `:379-384`), the refusal-render case `:386-396`, the touch-target `it.each` `:398-408`. There is no `renderSectionAtHash` and no 3d.8 note flagging `extraParams` (the only hit is the pass-through `:145`). Catalog: the server `AnalyzerCatalogEntry` interface `analyzer/catalog/analyzer-catalog.ts:42-60`, `toEntry` `:267-330` (its return's `structuredOutput: {…}` `:315-322`); openapi `AnalyzerCatalogEntry` `openapi.yaml:5946` (`required` `:5952`). Frontend: `runLabelSuffixes` `src/lib/model-label.ts:35-39` (doc line `:36`); `model-label.test.ts:35`; the mock `MockCatalogSource` `src/lib/api.ts:9342`, `mockGetAnalyzerModels` `:9356`, `entry(…)` `:9365` (six parameters; `offeredReasoningLevels: [...offered],` `:9389`). e2e: `e2e/analyzer-request-controls.spec.ts` EXISTS (header `:1-8`, imports `:10-11`, `MODEL` / `ROW_ID` / `HIGHLIGHT_CLASS` `:13-15`, its `E2eStore` type, serial mode `:61`, one describe of three tests `:63-125`); `e2e/analyzer-endpoints.spec.ts` (first test `:24`, the first `endpoint-save` click `:44` must still fail with the context error, the fill of `'32768'` `:46`, the second save `:47`, `label` `:53`, the placeholder comment `:56`).
+> 2. **Server label parts (5.12b).** Add to the `AnalyzerCatalogEntry` interface, after `structuredOutput`:
+>    ```ts
+>      /** #3084 wave 5b — run-label parts from the saved custom payload ("+ custom params", "max output set by custom params"); [] when none. */
+>      requestControlLabelParts?: string[];
+>    ```
+>    Without it, `toEntry`'s new key is an excess-property error. Then Step 3's import and the return-object key, after `structuredOutput: {…},`; Step 3's openapi property inside `AnalyzerCatalogEntry.properties` (not in `required`) and `npm run openapi:types`; Step 1's catalog test as written. Re-read the merged `resolveExtraParamsSetting` signature first; if it differs from Task 5.8's, STOP.
+> 3. **The run label and the mock catalog (5.12c).** `runLabelSuffixes` and its doc comment as Step 3 writes them. `model-label.test.ts`: Step 1's case, and retitle the `:35` case to `catalogEntryFor + runLabelSuffixes expose the structured-output label` (its "(W5 appends custom params)" is a stale promise). Mock: add `'analyzerExtraParamsByEngine'` to the `MockCatalogSource` `Pick` (`:9342`), `import { requestControlsLabelParts } from './extra-params';` with the other lib imports, and in `entry(…)` after `offeredReasoningLevels: [...offered],`:
+>    ```ts
+>          requestControlLabelParts: requestControlsLabelParts(
+>            engine === 'local' ? 'ollama' : engine,
+>            engine === 'openai'
+>              ? source.analyzerEndpoints?.find((e) => e.id === parseEndpointModelId(id)?.endpointId)?.extraParams
+>              : (source.analyzerExtraParamsByEngine?.[engine === 'local' ? 'ollama' : 'gemini'] as Record<string, unknown> | undefined),
+>          ),
+>    ```
+>    (read `source`, not `MOCK_USER_SETTINGS`, for both halves; `MOCK_USER_SETTINGS` is the default `source`, so mock mode behaves as Step 3 says). Append to `src/lib/api-analyzer-catalog-mock.test.ts` a case that calls `mockGetAnalyzerModels(false, source)` with a `source` whose endpoint `lab` has `extraParams: { min_p: 0.05 }` and whose `analyzerExtraParamsByEngine` is `{ ollama: { options: { num_predict: 2048 } } }`, and asserts the Ollama entry's `requestControlLabelParts` is `['+ custom params', 'max output set by custom params']` and the `lab` entry's is `['+ custom params']` (build `source` the way that file's existing cases do). **New mutation mock-c:** read `MOCK_USER_SETTINGS.analyzerExtraParamsByEngine` instead of `source.analyzerExtraParamsByEngine` — red the Ollama half of that case.
+> 4. **The request-control editors (5.12d; replaces Step 3's `analyzer-request-controls.tsx` paragraph).** Import `parseExtraParamsText, payloadSetsOutputCap, type PayloadKind` from `'../../lib/extra-params'`. After `useEffect(() => setGemini(savedGemini ?? {}), [savedGemini]);` add Step 3's state block (`savedPayloads`, `payloadText`, its resync effect, `parsedPayloads`). Replace `onSave` with:
+>    ```tsx
+>      const onSave = async () => {
+>        if (blocked) return;
+>        setErrors([]);
+>        if (!parsedPayloads.ollama.ok || !parsedPayloads.gemini.ok) return;
+>        const ollamaPatch = Object.fromEntries(Object.entries(ollama).filter(([, level]) => level !== 'off'));
+>        const geminiPatch = Object.fromEntries(Object.entries(gemini).filter(([, level]) => level !== 'model-default'));
+>        /* The whole map is sent every save (openapi: a PUT replaces it), so a blank editor clears that engine. */
+>        const analyzerExtraParamsByEngine: Record<string, Record<string, unknown>> = {};
+>        if (parsedPayloads.ollama.value) analyzerExtraParamsByEngine.ollama = parsedPayloads.ollama.value;
+>        if (parsedPayloads.gemini.value) analyzerExtraParamsByEngine.gemini = parsedPayloads.gemini.value;
+>        const action = await dispatch(
+>          saveAccountSettings({ analyzerReasoningByEngine: { ollama: ollamaPatch, gemini: geminiPatch }, analyzerExtraParamsByEngine }),
+>        );
+>        if (saveAccountSettings.rejected.match(action)) {
+>          setErrors(settingsIssueMessages(action.error.message ?? ''));
+>          return;
+>        }
+>        setShowSaved(true);
+>        setTimeout(() => setShowSaved(false), 2400);
+>      };
+>    ```
+>    It keeps 5a's `if (blocked) return;` (#3625) and 5a's `ollamaPatch` filter, both of which Step 3's version dropped. (If `Record<string, Record<string, unknown>>` is not assignable to the regenerated `UserSettingsPatch['analyzerExtraParamsByEngine']`, type it `NonNullable<UserSettingsPatch['analyzerExtraParamsByEngine']>` — a Plan authoring fix.) The `if (blocked) return;` line owns no mutation: the button is `disabled={blocked}` and React fires no click on a disabled button, so deleting the line alone is an equivalent mutant. Render Step 3's two-editor block between the Gemini block and the errors list, always — not under the `geminiModels.length > 0` condition (5b-D7) — with one change: the textarea's class is
+>    ```tsx
+>                  className="mt-2 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white font-mono text-xs text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0"
+>    ```
+>    (CLAUDE.md touch rule; written out rather than `${SELECT_CLASS} font-mono text-xs`, because `SELECT_CLASS` carries `text-sm` and Tailwind resolves two font-size utilities by stylesheet order, not by class order). Tests: update BOTH exact-patch expectations — `:90` → `toEqual({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'low' }, gemini: { 'gemini-3.8-flash': 'low' } }, analyzerExtraParamsByEngine: {} })`, `:102` → `toEqual({ analyzerReasoningByEngine: { ollama: {}, gemini: {} }, analyzerExtraParamsByEngine: {} })` — and append Step 1's three cases, plus:
+>    ```tsx
+>      it('renders both payload editors with the touch target, the Gemini one even with no Gemini models listed (5b-D7)', async () => {
+>        renderControls();
+>        for (const engine of ['ollama', 'gemini']) {
+>          expect(await screen.findByTestId(`analyzer-extra-params-${engine}`)).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+>        }
+>      });
+>    ```
+>    (If `renderControls()`'s fixture lists Gemini models, render it with a catalog that has none, the way the file builds its fixtures, so the case proves 5b-D7.) Mutations 2 and 4a as written (4a: delete the credentials sentence from the editors' shared help).
+> 5. **The endpoint Custom parameters field (5.12e-i; replaces Step 3's endpoint-form bullets and render, and Step 1's endpoint-form describe and deep-link case).**
+>    - Import `parseExtraParamsText` from `'../../lib/extra-params'` (5.12e-ii adds `payloadSetsOutputCap`).
+>    - `EndpointDraft`: add `extraParamsText: string;` after `reasoning: ReasoningLevel;`. `draftFrom`: add `extraParamsText: e?.extraParams ? JSON.stringify(e.extraParams, null, 2) : '',` after the `reasoning:` line. `DraftErrors`: no edit.
+>    - `ISSUE_FIELDS`: append `'extraParams'`; `ENDPOINT_FIELD_TEST_IDS`: add `extraParams: 'endpoint-extra-params',` (typed `Record<IssueField, string>`, so both land together). This also routes a server refusal at path `extraParams` into `fieldErrors.extraParams` — which is why the render below shows `errors.extraParams`.
+>    - `validateEndpointDraft`: before `if (Object.keys(errors).length > 0) return …` (`:129`) add `const payload = parseExtraParamsText(d.extraParamsText);` and `if (!payload.ok) errors.extraParams = payload.error;`; replace `...(original?.extraParams ? { extraParams: original.extraParams } : {}),` (`:145`) with `...(payload.ok && payload.value ? { extraParams: payload.value } : {}),`.
+>    - In the component body, after the `hostChanged` memo: `const payloadParse = parseExtraParamsText(draft.extraParamsText);`.
+>    - Render (5b-D6): between the grid's closing `</div>` (after the Max input tokens row) and `{saveError && …}` — full width, outside the grid, `FieldRow` unchanged:
+>      ```tsx
+>                {/* #3084 wave 5b (5b-D6) — full width below the two-column grid: a JSON editor needs the room. */}
+>                <FieldRow label="Custom parameters" sublabel='JSON merged last into every request to this endpoint, e.g. {"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}. chat_template_kwargs merges key by key; null removes a key. A temperature here sets the first attempt only. Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. Not a place for credentials: put this endpoint key in the API key field above. OpenAI reasoning models need max_completion_tokens instead of max_tokens; llama.cpp n_predict also sets the output cap.'>
+>                  <textarea
+>                    data-testid="endpoint-extra-params"
+>                    value={draft.extraParamsText}
+>                    onChange={(e) => set('extraParamsText', e.target.value)}
+>                    rows={4}
+>                    spellCheck={false}
+>                    className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white font-mono text-xs text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0"
+>                  />
+>                  {/* A server refusal at path extraParams (Task 5.9's protected-key messages) lands in errors.extraParams; the live parse error shows while typing. */}
+>                  {(errors.extraParams || !payloadParse.ok) && (
+>                    <p data-testid="endpoint-extra-params-error" className="mt-1 text-xs text-rose-700">
+>                      {errors.extraParams ?? (payloadParse.ok ? '' : payloadParse.error)}
+>                    </p>
+>                  )}
+>                </FieldRow>
+>      ```
+>      (The class is written out, not `${INPUT} font-mono text-xs`: `INPUT` carries `text-sm`.)
+>    - Tests — append to `analyzer-endpoints-section.test.tsx`:
+>      ```tsx
+>      describe('endpoint form — custom payload (#3084 wave 5b)', () => {
+>        it('shows a JSON error under the field and refuses the save while it is invalid; says it is not a place for credentials', async () => {
+>          renderSection({ endpoints: [LAB] });
+>          fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>          fireEvent.change(screen.getByTestId('endpoint-extra-params'), { target: { value: '{bad' } });
+>          expect(screen.getByTestId('endpoint-extra-params-error')).toHaveTextContent('Not valid JSON.');
+>          fireEvent.click(screen.getByTestId('endpoint-save'));
+>          expect(api.updateAnalyzerEndpoint).not.toHaveBeenCalled();
+>          expect(screen.getByText(/Not a place for credentials: put this endpoint key in the API key field/)).toBeInTheDocument(); // P29
+>        });
+>
+>        it('sends the parsed payload, never the draft text; an untouched edit re-sends the saved payload', async () => {
+>          vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+>          renderSection({ endpoints: [{ ...LAB, extraParams: { top_k: 20 } }] });
+>          fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>          expect(screen.getByTestId('endpoint-extra-params')).toHaveValue(JSON.stringify({ top_k: 20 }, null, 2));
+>          fireEvent.click(screen.getByTestId('endpoint-save'));
+>          await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+>          const sent = vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1];
+>          expect(sent).toMatchObject({ extraParams: { top_k: 20 } });
+>          expect(sent).not.toHaveProperty('extraParamsText');
+>        });
+>
+>        it('a blank field sends no payload, so the saved one is cleared', async () => {
+>          vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+>          renderSection({ endpoints: [{ ...LAB, extraParams: { top_k: 20 } }] });
+>          fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>          fireEvent.change(screen.getByTestId('endpoint-extra-params'), { target: { value: '' } });
+>          fireEvent.click(screen.getByTestId('endpoint-save'));
+>          await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+>          expect(vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1]).not.toHaveProperty('extraParams');
+>        });
+>
+>        it('sits full width, outside the two-column grid (5b-D6)', async () => {
+>          renderSection({ endpoints: [LAB] });
+>          fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>          expect(screen.getByTestId('endpoint-extra-params').closest('.grid')).toBeNull();
+>          expect(screen.getByTestId('endpoint-max-output-tokens').closest('.grid')).not.toBeNull();
+>        });
+>
+>        it("a payload-fix deep link focuses the endpoint's Custom parameters field", async () => {
+>          const store = renderSection({ endpoints: [LAB] });
+>          store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'extraParams' }));
+>          expect(await screen.findByTestId('endpoint-editor')).toBeInTheDocument();
+>          await waitFor(() => expect(screen.getByTestId('endpoint-extra-params')).toHaveFocus());
+>        });
+>
+>        it('a refusal at path extraParams shows under the Custom parameters field, not the general error', async () => {
+>          vi.mocked(api.updateAnalyzerEndpoint).mockRejectedValue(
+>            new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', [
+>              { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: response_format.' },
+>            ]),
+>          );
+>          renderSection({ endpoints: [LAB] });
+>          fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>          fireEvent.click(screen.getByTestId('endpoint-save'));
+>          expect(await screen.findByTestId('endpoint-extra-params-error')).toHaveTextContent('cannot be set here: response_format');
+>          expect(screen.queryByTestId('endpoint-save-error')?.textContent ?? '').not.toContain('cannot be set here');
+>        });
+>      });
+>      ```
+>      and add `'endpoint-extra-params'` to the touch-target `it.each` list (`:399`). **Mutations (5.12e-i):** 4b — delete the credentials sentence from the sublabel → red the first case; 6 — drop `'extraParams'` from `ISSUE_FIELDS` and its `ENDPOINT_FIELD_TEST_IDS` entry together (typecheck needs both) → red the deep-link case and the refusal case; **7 (new)** — render `{!payloadParse.ok && …payloadParse.error}` only (drop `errors.extraParams ??` and its condition half) → red the refusal case; **8 (new)** — move the `FieldRow` inside the grid → red `sits full width …`. Restore after each.
+> 6. **Max output tokens read-only (5.12e-ii, 5b-D5; replaces Step 3's `disabled={payloadCapsOutput}` and its note).** Add `payloadSetsOutputCap` to the import and, after `payloadParse`, `const payloadCapsOutput = payloadParse.ok && payloadSetsOutputCap('openai', payloadParse.value);`. On the `endpoint-max-output-tokens` input add `readOnly={payloadCapsOutput}` (not `disabled`: its stored value is kept and still sent, and it keeps `INPUT`'s touch target), and after its `errors.maxOutputTokens` line add:
+>    ```tsx
+>                  {payloadCapsOutput && (
+>                    <p data-testid="endpoint-max-output-controlled" className="mt-1 text-xs text-amber-800">
+>                      Ignored while custom parameters set the output cap.
+>                    </p>
+>                  )}
+>    ```
+>    `validateEndpointDraft` is unchanged: it still sends `maxOutputTokens`. Test — append to the 5b describe:
+>    ```tsx
+>      it('a payload that sets the cap makes Max output tokens read-only with a note, and its saved value is still sent (5b-D5)', async () => {
+>        vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+>        renderSection({ endpoints: [{ ...LAB, maxOutputTokens: 8192 }] });
+>        fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+>        const maxOutput = screen.getByTestId('endpoint-max-output-tokens');
+>        const payload = screen.getByTestId('endpoint-extra-params');
+>        fireEvent.change(payload, { target: { value: '{"top_k": 40}' } });
+>        expect(maxOutput).not.toHaveAttribute('readonly');
+>        expect(screen.queryByTestId('endpoint-max-output-controlled')).toBeNull();
+>        fireEvent.change(payload, { target: { value: '{"max_completion_tokens": 4096}' } });
+>        expect(maxOutput).toHaveAttribute('readonly');
+>        expect(maxOutput).toHaveValue(8192);
+>        expect(maxOutput).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+>        expect(screen.getByTestId('endpoint-max-output-controlled')).toHaveTextContent('Ignored while custom parameters set the output cap.');
+>        fireEvent.click(screen.getByTestId('endpoint-save'));
+>        await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+>        expect(vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1]).toMatchObject({ maxOutputTokens: 8192, extraParams: { max_completion_tokens: 4096 } });
+>      });
+>    ```
+>    **Mutations (5.12e-ii):** 3 (corrected) — delete the note block → red at `endpoint-max-output-controlled`; **9 (new)** — drop `readOnly={payloadCapsOutput}` → red at `toHaveAttribute('readonly')`. Restore.
+> 7. **e2e (5.12f; replaces Step 1's `e2e/analyzer-request-controls.spec.ts` file — do NOT recreate it).** `e2e/analyzer-endpoints.spec.ts`: Step 1's two edits as written (the fill goes right before the second `endpoint-save` click, `:47`; the replaced placeholder comment is `:56`). `e2e/analyzer-request-controls.spec.ts`: append after the existing describe, reusing the file's `MODEL`, `ROW_ID`, `Page` import, `waitForRouteReady` and serial mode, and extend the header comment with one sentence: "Wave 5b (Task 5.12f) adds the custom parameter editors: an Ollama payload saved with a level, and invalid JSON shown under the Gemini editor (always rendered, 5b-D7)."
+>    ```ts
+>    async function readAccount(page: Page) {
+>      return page.evaluate(() => {
+>        const w = window as unknown as { __store__: { getState: () => { account: Record<string, unknown> } } };
+>        return w.__store__.getState().account;
+>      });
+>    }
+>
+>    test.describe('#3084 wave 5b — custom parameter editors', () => {
+>      test('saves an Ollama reasoning level and payload through the settings round-trip', async ({ page }) => {
+>        await page.goto('/#/advanced');
+>        await waitForRouteReady(page);
+>        await expect(page.getByTestId('analyzer-request-controls')).toBeVisible();
+>        await page.getByTestId(ROW_ID).selectOption('on');
+>        await page.getByTestId('analyzer-extra-params-ollama').fill('{"options": {"min_p": 0.05}}');
+>        await page.getByTestId('analyzer-request-controls-save').click();
+>        await expect(page.getByText('Saved.')).toBeVisible({ timeout: 5_000 });
+>        await expect.poll(async () => (await readAccount(page)).analyzerReasoningByEngine).toEqual({ ollama: { [MODEL]: 'on' }, gemini: {} });
+>        await expect.poll(async () => (await readAccount(page)).analyzerExtraParamsByEngine).toEqual({ ollama: { options: { min_p: 0.05 } } });
+>      });
+>
+>      test('invalid JSON under the Gemini editor shows a visible reason, with no Gemini key set (5b-D7)', async ({ page }) => {
+>        await page.goto('/#/advanced');
+>        await waitForRouteReady(page);
+>        await page.getByTestId('analyzer-extra-params-gemini').fill('{"config": ');
+>        await expect(page.getByTestId('analyzer-extra-params-gemini-error')).toHaveText('Not valid JSON.');
+>      });
+>    });
+>    ```
+>    If the file already declares a reader of the same shape, reuse it rather than adding `readAccount`. Mock state does not survive `page.reload()`; assert nothing across one. Runs: `npx playwright test --project=chromium e2e/analyzer-request-controls.spec.ts e2e/analyzer-endpoints.spec.ts e2e/advanced-settings.spec.ts e2e/advanced-settings-save-error.spec.ts e2e/reasoning-overflow-fixes.spec.ts`. Expected: PASS; a failing case is a defect in rows 18–23 — report it, do not weaken the spec. **Mutations (5.12f):** 1a (e2e half) — drop `...(entry.requestControlLabelParts ?? [])` from `runLabelSuffixes` → red the `toContainText('+ custom params')`; **10 (new)** — drop `analyzerExtraParamsByEngine` from `onSave`'s dispatched patch → red the second `expect.poll`. Restore.
+> 8. **Step 4's run list** is per child (above). Keeps green across the task: Task 5.6's RTL cases (with both updated patch expectations), `src/views/advanced.test.tsx`, `src/test/a11y.test.tsx`, W3c's `model-label.test.ts` and `analyzer-catalog.test.ts` (an entry without a payload gets `requestControlLabelParts: []`, so every existing label is unchanged), and the rest of W3d's `e2e/analyzer-endpoints.spec.ts`. Step 6's two `git add` lines are replaced by the per-child lists above.
 
 **Files:**
 - Modify: W3c's server-side label composer, `toEntry` in `server/src/analyzer/catalog/analyzer-catalog.ts` (Task 3c.5; it sets each entry's `structuredOutput.label`), and its test file `server/src/analyzer/catalog/analyzer-catalog.test.ts`
@@ -8889,6 +10051,40 @@ git commit -m "feat(frontend,server,e2e): custom payload editors and the + custo
 ```
 
 ### Task 5.13: Ship PR 5b (closes #3084)
+
+> **Re-pin notes (2026-10-29, against 626c3130) — read first; these override the steps below where they differ.**
+>
+> **Four children** (table rows 25–28), all lane `claude`. The three document children (5.13a–c) edit documents only, each commits once and pushes once (`git -C <worktree> push`, a single foreground call), and none opens the PR or publishes the live view — both belong to the ship child (row 28). The document children run in this order because 5.13c's plan-284 invariants cite the register IDs 5.13a mints.
+> - **5.13a — register and run sheet (row 25):** Step 3, with note 3, items 1–4. Commit `docs(docs): on-box rows and run-sheet sections for custom analyzer payloads (refs #3084)`. Record the two minted IDs in your receipt.
+> - **5.13b — wiki (row 26):** Step 2b, with note 4. Commit `docs(docs): wiki — custom request parameters for every analyzer engine (refs #3084)`.
+> - **5.13c — release notes and plan 284 (row 27):** Steps 2 and 4, with notes 2 and 5. Commit `docs(docs): release notes and plan 284 ship notes for custom analyzer payloads (refs #3084)`.
+> - **ship (row 28):** notes 0, A and 6–7, Step 1, Step 5, note 3 item 5 (live-view publish) and Step 6's PR and review gate. It never merges.
+>
+> 0. **(ship) Bring the branch current first — merge, never rebase.** `git -C <worktree> fetch origin` then `git -C <worktree> merge origin/main` (a merge commit; never rebase the shared branch). Resolve conflicts and re-run the affected children's tests. If `main` advanced the register (new rows, or a group's `next-id` marker moved past an ID 5.13a minted), re-mint those IDs from the merged markers and renumber them everywhere (register, run sheet, live view, plan 284), then `npm run register:build`, fill any new shells, `npm run register:build -- --check`, `npm run check:onbox-register`, and commit.
+> A. **(ship) Receipts audit.** For every child commit on the branch (`git -C <worktree> log --format='%h %s%n%b' origin/main..HEAD`) and its ticket completion comment, confirm each mutation the child owns (Child decomposition table) has a recorded red output (test name plus assertion line), and collect every "Plan authoring fixes" entry. A missing proof is re-run by this child (apply the mutation, run, record the red, restore, confirm a clean tree) — never assumed. Assemble the PR body's mutation-proof section and a "Plan authoring fixes" section from them.
+> 1. **Files.** Add to the Files list above: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` (the per-feature run sheet; CLAUDE.md Before-shipping step 3 requires it to move in the same PR), `docs/wiki/Advanced-Settings.md` and `docs/wiki/Analysis-and-the-Analyzer.md` (note 4), and `docs/features/INDEX.md` (5b-D8). The release-notes section `## 🗣️ Analyzer, script review & manuscript` is `docs/release-notes-next.md:316`; 5a's entry is at `:436` (ends `(#3834)`) with its two in-passing lines `:437-438`; append after the last #3084 line there (re-locate by grep). `RELEASE_NOTES.md`'s top in-progress section is `# Castwright 1.15.0` (5a's line `:4`, its in-passing lines `:5-6`).
+> 2. **Release-notes text corrections (Step 2, 5.13c).** Re-read each clause against the merged code before you commit it. In the technical entry:
+>    - replace "And the run label says so, and a reasoning-overflow failure names that payload key." with "And the run label says so. A reasoning-overflow failure names that payload key — in its remediation and as a structured fix, for all three engines — and drops the fixes the payload makes pointless (`Raise Gemini max output tokens`, `Raise Ollama num_predict`, `Lower <endpoint>'s max output tokens`); a payload that removes the cap is told to set a value rather than raise it. The key is recorded on the error when the request overflows, never re-read from settings.";
+>    - after "an endpoint update judges its payload only when the payload or its reasoning style changes", add " (the payload is compared regardless of key order)";
+>    - after "in all three transports, and never from another request's errors (P29)", add "; a value under 8 characters is never redacted";
+>    - add two sentences before `(#PR)`: "The endpoint editor's Custom parameters field sits full width below the other fields, and its Max output tokens field turns read-only, with a note, while custom parameters set the cap; its saved value is kept. Both payload editors in Advanced settings are always shown, Gemini's included before a key is set. An `analyzer-request-rejected` remediation now names each engine's custom parameters among the settings that shape a request."
+>    In `RELEASE_NOTES.md`'s line, after "if a provider error repeats one back, Castwright hides it.", add: "And if a run stops because the model spent a cap you set there on thinking, the failure tells you which of your parameters to change." Leave `(#PR)` as it is; the ship child fills it.
+> 3. **Step 3, register — corrected procedure (items 1–4: 5.13a; item 5: ship).**
+>    1. Mint one Group A and one Group E ID from the markers at ship time and bump each marker by one in the same commit. At `626c3130` they would be **A119** (`<!-- next-id: A119 -->`, `docs/testing/onbox-acceptance-register.md:1863`) and **E115** (`:6926`); re-read the markers and never hard-code those numbers.
+>    2. Update the At-a-glance counts (A +1, E +1; `:721-731`, at `626c3130` A 40 → 41, E 15 → 16) **and** the hand-edited owed line `**71 owed.** …` (`:735`; +2, re-read first). Add a new `> **Last change: …**` note in the register's own style naming the two IDs, the group deltas and the marker bumps, and handle the previous `Last change` note the way the register itself does (read how 5a's note treated its predecessor).
+>    3. In the run sheet `docs/testing/3084-openai-analyzer-onbox-acceptance.md` (it ends at `## 13. Gemini reasoning levels — register row E114`, `:425`), add `## 14. Custom payload on real servers — register row <A-id>` and `## 15. Gemini config payload — register row <E-id>`, each with Preconditions / Procedure / Pass / `Result:` in the existing sections' shape. Step 3's Observe text becomes their Procedure / Pass, plus, in §14, the 5b-D1/D2 check only a real model can make: an endpoint with `{"max_tokens": 64}` on a thinking model overflows (`analyzer-reasoning-overflow`); its remediation names `max_tokens` ("Raise the custom parameter …"), its fixes include that payload fix and `Read: Custom payload`, and offer no `Lower <name>'s max output tokens`; with `{"max_tokens": null}` the wording is "Set a value for …". Each register row's "criteria live in" points at its section.
+>    4. Run `npm run register:build`. It writes a placeholder shell for each new row into `docs/testing/onbox-acceptance-register-live-view.html`. Fill each shell's body, then run `npm run register:build -- --check` (it fails while any `body-placeholder` remains) and `npm run check:onbox-register`.
+>    5. **(ship) Live-view publish:** the register's four-step procedure, unchanged — save the page live at the URL recorded in the register's header (`https://claude.ai/code/artifact/adf22b7b-12dd-49fe-874c-4a340585b26a` at `626c3130`; re-read it), run `npm run check:onbox-register -- --against-published <saved file>`, and publish **the html file** with that recorded `url` (never without it, never the `.md`).
+>    5.13a's `git add`: `docs/testing/onbox-acceptance-register.md docs/testing/onbox-acceptance-register-live-view.html docs/testing/3084-openai-analyzer-onbox-acceptance.md`.
+> 4. **Step 2b, wiki (5.13b) — corrected.** `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` has no payload text today; its top-level headings are `## The fields` (`:18`), `## Servers` (`:37`, per-server `###` at `:42`, `:63`, `:92`, `:111`, `:130`, `:158`), `## Fallback` (`:170`), `## Chunk size` (`:189`), `## When a model thinks past its output limit` (`:203`), `## Voice descriptions` (`:223`), `## Troubleshooting` (`:229`). 5a added table rows, not per-server Reasoning subsections.
+>    - Add **`## Custom payload`** — that exact text, the section Task 5.11b-ii's `Read: Custom payload` entry names — between `## Chunk size` and `## When a model thinks past its output limit`, with Step 2b's per-server `###` subsections, protected-key list, credential warning and "verify at implementation" / tool-version rule. Name no heading the page already has.
+>    - "The fields" table: add a **Custom parameters** row after the Max input tokens per request row (`:35`): JSON merged last; full width below the other fields; Max output tokens turns read-only while it sets the cap (5b-D5, 5b-D6).
+>    - "When a model thinks past its output limit" (on this page, `:203+`, and on `docs/wiki/Analysis-and-the-Analyzer.md`, `:47+`): both fix lists gain the payload fix 5.11b adds — when custom parameters set the output cap, the failure names that parameter ("Raise …", or "Set a value for …" when the payload removes the cap) in place of the max-output setting it overrides.
+>    - `docs/wiki/Advanced-Settings.md`: in the Analyzer request controls subsection 5a added before `## 1.`, a short paragraph on the two payload editors (always shown, Gemini's too; JSON; invalid JSON blocks the save; a cap note; not a place for credentials). Keep the knob count line unchanged: no registry knob is added.
+>    5.13b's `git add`: `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md docs/wiki/Advanced-Settings.md docs/wiki/Analysis-and-the-Analyzer.md`.
+> 5. **Step 4, plan doc (5.13c) — corrected for 5b-D8.** "Status stays `active`" is wrong: the frontmatter is `status: draft`, `shipped: null` (`docs/features/284-openai-compatible-analyzer.md:2-3`). Change `status: draft` → `status: active`, and `docs/features/INDEX.md:71`'s `` `draft` `` → `` `active` `` for this entry (read the rest of the line; change nothing else). Rewrite the body's line 9 ("> Status: draft. … implementation follows in waves 1–5 after wave 0 (#3139, #3141) merges.") to: "> Status: active. All five waves have shipped (see Ship notes); on-box acceptance for waves 2–5 is still owed as register rows, so the plan is not archived." The invariants go under `## Invariants to preserve` (`:53`) as a new item **10. Custom request payload (wave 5b)** after item 9 (`:70`), with Step 4's list plus: the overflow error carries the payload cap key and whether it removes the cap, stamped at throw time (5b-D1); the remediation names it and the fixes it overrides are dropped, for all three engines (5b-D2), "Set a value for" when it removes the cap (5b-D3); the endpoint's Max output tokens is read-only but kept while a payload sets the cap (5b-D5); the A7 payload comparison ignores key order (5b-D10); a value under 8 raw characters is never redacted (5b-D11); the two register row IDs 5.13a minted. Add a **new `## Ship notes`** section (`docs/features/TEMPLATE.md`'s shape): every wave's PR number and merge SHA (derive them with `git -C <worktree> log --merges --oneline --grep 3084 origin/main` and `gh pr list --search 3084 --state merged`; verify each, including 5a's #3834), this PR's number (its merge SHA is filled after merge — say so), and the sentence that CLAUDE.md step 8 (archive, `stable`) does not apply yet because on-box rows are owed. 5.13c's `git add`: `docs/release-notes-next.md RELEASE_NOTES.md docs/features/284-openai-compatible-analyzer.md docs/features/INDEX.md`.
+> 6. **(ship) Step 1 and Step 5.** Step 1's `git diff --exit-code main -- src/data/help-failures.ts` uses `origin/main` (a worktree's local `main` can be stale); re-run the two help tests and trust their output, not the 28 / 54 figures. `npm run config:check` must pass unchanged (no knob added). Step 5: `npm run typecheck`, `npm run check:cycles`, `npm run lint`, `npm run verify:fast:branch`, and `npx playwright test --project=chromium e2e/analyzer-request-controls.spec.ts e2e/analyzer-endpoints.spec.ts e2e/advanced-settings.spec.ts`.
+> 7. **(ship) Step 6, the PR.** Step 6's `git add` / commit / push lines are void: the document children committed and pushed. Open the PR with Step 6's title. Its body adds, beyond Step 6's: the 13 owner decisions in one short list; a `## Post-merge` line "Run `npm run wiki:sync` to publish the three wiki pages (P33), and fill this PR's merge SHA into plan 284's Ship notes."; "Also fixed, found in passing:" naming Task 5.11c (`REQUEST_SHAPING_SETTINGS`), the `SAMPLE_VALUES` entry, the stale comments (see PR 5b's owed-chores list) and the `model-label.test.ts` retitle; note A's mutation-proof and "Plan authoring fixes" sections; **`Closes #3084`**. Then fill `(#PR)` in `docs/release-notes-next.md` (commit + push), and run the `pr-review-gate` skill at **high** depth once the PR exists, everything is pushed and cloud `verify.yml` is green; fold findings per its loop, and leave the merge to the operator.
 
 **Files:**
 - Modify: `docs/release-notes-next.md` (`## 🗣️ Analyzer, script review & manuscript`), `RELEASE_NOTES.md` (top section)
