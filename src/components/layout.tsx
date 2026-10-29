@@ -1258,6 +1258,12 @@ export function Layout() {
         state: { title: entry.title, author: entry.author, series: entry.series },
       }),
     );
+    /* #3784 P12-2 — the editor is up on these details before the first full
+       read lands, so typing can start here. Record the entry's manuscript, so
+       that read can still tell a re-import under the same id. */
+    if (!metaReadFor.current.has(bookId) && entry.manuscriptId) {
+      metaReadFor.current.set(bookId, entry.manuscriptId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, stageKind, libraryBooks, bookMetaSavedKeys]);
 

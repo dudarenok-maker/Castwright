@@ -3544,7 +3544,8 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     const store = makeStoreWithScopeAndPersistence();
     const disk = wireDisk();
     disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'From disk' });
-    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'complete', tags: [] }] }] }] };
+    /* The entry carries the manuscript id, as the server's does (#3784 P12-2). */
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', manuscriptId: 'mns_A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'complete', tags: [] }] }] }] };
     vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
     let releaseRead!: () => void;
     const gate = new Promise<void>((r) => (releaseRead = r));
@@ -3808,6 +3809,121 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
       expect(disk.books.get('A')!.state).toMatchObject({ title: 'New title', notes: 'bundle notes' });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-2 (review pass 12) — a book whose first full read has not
+     landed shows the library entry's details, so the user can type on it
+     before any read records its manuscript. */
+  const libWithA = {
+    authors: [
+      {
+        name: 'Della Renwick',
+        series: [
+          {
+            name: 'Standalones',
+            books: [
+              {
+                bookId: 'A',
+                manuscriptId: 'mns_A',
+                title: 'T0',
+                author: 'Della Renwick',
+                series: 'Standalones',
+                isStandalone: true,
+                status: 'complete',
+                tags: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  /* Same tab: the user leaves before the read lands, deletes A, and imports a
+     book under its slug. The delete clears the draft (P12-1). */
+  it('P12-2: typing on library-seeded details is not inherited by a re-import made in this tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    vi.mocked(api.getLibrary).mockResolvedValue(libWithA as never);
+    const read = getBookStateMock.getMockImplementation()!;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (id === 'A') return new Promise(() => {});
+      return read(id);
+    });
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+      getBookStateMock.mockImplementation(read);
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('fresh import notes');
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  /* Another tab: it deletes A and imports a book under its slug while A's
+     first read of the session is out. The library entry's manuscript id is
+     what the read is checked against. */
+  it('P12-2: typing on library-seeded details is not inherited by a re-import made in another tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    vi.mocked(api.getLibrary).mockResolvedValue(libWithA as never);
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((r) => (releaseRead = r));
+    const read = getBookStateMock.getMockImplementation()!;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (id === 'A') await gate;
+      return read(id);
+    });
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+
+      disk.remove('A');
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      releaseRead();
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
       vi.useRealTimers();
     }
   });
