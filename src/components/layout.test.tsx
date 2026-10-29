@@ -3961,11 +3961,14 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
 
   /* #3784 P12-3 (review pass 12; pre-existing on main) — a bundle import
      touches no slice, so after a delete they still hold the deleted book
-     under its id, and the reopen read only revisions: the screen showed the
-     deleted book, and the first cast write (an edit, or Confirm's automatic
-     voice match) put its roster over the restored one. The delete marks the
-     book for a full read. */
-  it("P12-3: a book re-imported from its bundle after a delete shows, and keeps, the bundle's cast", async () => {
+     under its id, and the reopen read only revisions: the screen kept showing
+     the deleted book. The delete marks the book for a full read, so the
+     reopen reads it in full and shows the bundle's cast once that read lands.
+     This pins only the mark. Until the read lands the slices still hold the
+     deleted book, and a cast write in that window (an edit, or Confirm's
+     automatic voice match) can put its roster back on disk; that, and the
+     paths that use the mark up first, are #3841. */
+  it("P12-3: a book re-imported from its bundle after a delete is read in full on reopen", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
     const disk = wireDisk();
@@ -3978,44 +3981,18 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       await act(async () => { await vi.advanceTimersByTimeAsync(600); });
 
       await libraryDeleteA(disk);
+      expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBeGreaterThan(0);
       disk.reimport('A', {
         state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
         cast: { characters: [{ ...eliza, name: 'Bundle Eliza' }] },
       });
 
-      /* A slow reopen read: nothing may write the old roster meanwhile. */
-      let releaseRead!: () => void;
-      const gate = new Promise<void>((r) => (releaseRead = r));
-      const read = getBookStateMock.getMockImplementation()!;
-      getBookStateMock.mockImplementation(async (id: string) => {
-        if (id === 'A') await gate;
-        return read(id);
-      });
       const before = reads();
       openAt(store as never, 'A');
-      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-      expect(castOnDisk()).toEqual(['Bundle Eliza']);
-      releaseRead();
       await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
       expect(reads()).toBe(before + 1);
       expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
-
-      /* Confirm's voice match ran on the bundle's roster, and an edit keeps it. */
-      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-      expect(matchVoicesMock).toHaveBeenLastCalledWith({
-        bookId: 'A',
-        characters: [expect.objectContaining({ name: 'Bundle Eliza' })],
-      });
-      const current = store.getState().cast.characters[0];
-      act(() => { store.dispatch(castActions.updateCharacter({ ...current, role: 'lead' })); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
       expect(castOnDisk()).toEqual(['Bundle Eliza']);
-      expect(
-        disk.log
-          .filter((p) => p.bookId === 'A' && p.slice === 'cast' && p.outcome === 'ok')
-          .slice(-1)
-          .map((p) => (p.patch.characters as Array<{ name: string; role: string }>).map((c) => `${c.name}/${c.role}`)),
-      ).toEqual([['Bundle Eliza/lead']]);
     } finally {
       vi.useRealTimers();
     }
@@ -4100,26 +4077,34 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
-  /* #3784 P12-3 — a mark made while Confirm's voice match is out cancels that
-     match's result, so the match runs again once the full read lands. */
-  it("P12-3: Confirm's voice match re-runs after a full read marked while it was out", async () => {
+  /* #3784 review pass 13, R1 — Confirm's voice match runs once per visit. A
+     later full-read mark (the language guard's Save, a stale refusal) must not
+     run it again over the voice the user picked after it applied. Whether the
+     match may replace a locked voice at all is #3842. */
+  it('P13 R1: a mark after Confirm\'s voice match applied does not run it again over the user\'s voice', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
     const disk = wireDisk();
+    matchVoicesMock.mockResolvedValue({
+      matches: [{ characterId: 'eliza', candidates: [{ voiceId: 'auto-voice', fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }] }],
+    } as never);
+    const voiceOnDisk = () => disk.books.get('A')!.cast!.characters[0] as { voiceId?: string; voiceState?: string };
     try {
-      matchVoicesMock.mockReturnValueOnce(new Promise(() => {}));
       renderWithLibrary(store);
       await openA(store);
-      await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      const c = store.getState().cast.characters[0];
+      act(() => { store.dispatch(castActions.updateCharacter({ ...c, voiceId: 'user-voice', voiceState: 'locked' } as never)); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(voiceOnDisk()).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
 
-      disk.write('A', 'cast', { characters: [{ ...eliza, name: 'Renamed Eliza' }] });
       act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
-      await waitFor(() => expect(store.getState().cast.characters[0]?.name).toBe('Renamed Eliza'));
-      await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
-      expect(matchVoicesMock).toHaveBeenLastCalledWith({
-        bookId: 'A',
-        characters: [expect.objectContaining({ name: 'Renamed Eliza' })],
-      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(store.getState().ui.stage.kind).toBe('confirm');
+      expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+      expect(store.getState().cast.characters[0]).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
+      expect(voiceOnDisk()).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
     } finally {
       vi.useRealTimers();
     }
