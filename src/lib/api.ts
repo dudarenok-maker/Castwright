@@ -3020,7 +3020,9 @@ function analysisRefusalFromBody(status: number, body: string, codes: readonly s
   } catch {
     return null;
   }
-  const { error, message } = (parsed ?? {}) as { error?: unknown; message?: unknown };
+  const { error, message, code } = (parsed ?? {}) as { error?: unknown; message?: unknown; code?: unknown };
+  /* #3829 - the restructure routes' shape: the curated sentence is in `error`, the code in `code`. */
+  if (code === 'hints_out_of_sync' && typeof error === 'string' && error) return new AnalysisError(error, code);
   if (typeof error !== 'string' || !codes.includes(error)) return null;
   return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
 }

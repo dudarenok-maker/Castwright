@@ -8455,9 +8455,17 @@ export interface operations {
              *     (its in-flight model calls are being aborted); a non-fresh start is refused until
              *     it has. `chapters_restructuring`: a chapter restructure
              *     (merge, split, reorder, exclude, rename or refresh-titles) is in
-             *     flight on this book; try again when it finishes. The same refusal
-             *     codes can also arrive as a terminal SSE `error` event when the
-             *     conflict appears after the stream opened.
+             *     flight on this book; try again when it finishes.
+             *     `hints_out_of_sync` (#3829): the book's chapter hints came from a fresh
+             *     parse whose chapter count or ids no longer match its state.json
+             *     (a book merged before its hints were saved, or one imported
+             *     before a parser change that splits its plain text into a
+             *     different number of chapters); body `{ error: <curated sentence>, code:
+             *     hints_out_of_sync }`, where `error` says to re-parse the book from
+             *     its Library menu. Nothing was written and no job was registered.
+             *     This code is a 409 only; it never arrives as an SSE event. The other
+             *     refusal codes above can also arrive as a terminal SSE `error` event
+             *     when the conflict appears after the stream opened.
              */
             409: {
                 headers: {
@@ -8466,6 +8474,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /**
+                         * @description Present only on `hints_out_of_sync` (#3829); then `error` holds the curated sentence rather than a code.
+                         * @enum {string}
+                         */
+                        code?: "hints_out_of_sync";
                         /** @description User-facing reason (both #3435 refusals). */
                         message?: string;
                         /** @description Present on `main_analysis_running`: always true here. */
@@ -8527,7 +8540,12 @@ export interface operations {
              *     `draining` and `message`) when the main run registered after the
              *     stream opened. A chapter restructure in flight on the book
              *     refuses the same way with `error: chapters_restructuring` and a
-             *     `message` (no `draining`).
+             *     `message` (no `draining`). `hints_out_of_sync` (#3829): the
+             *     book's chapter hints came from a fresh parse whose chapter count
+             *     or ids no longer match its state.json (a book merged before its
+             *     hints were saved, or one imported before a parser change that
+             *     splits its plain text into a different number of chapters); body `{ error: <curated sentence>, code }`
+             *     and nothing was written.
              */
             409: {
                 headers: {
@@ -8540,6 +8558,11 @@ export interface operations {
                         /** @description Present on `main_analysis_running`: false while the main run is live; true while it is finishing after a pause or halt. */
                         draining?: boolean;
                         message: string;
+                    } | {
+                        /** @description Curated sentence: re-parse the book from its Library menu. */
+                        error: string;
+                        /** @enum {string} */
+                        code: "hints_out_of_sync";
                     };
                 };
             };

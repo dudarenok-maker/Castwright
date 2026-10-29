@@ -531,6 +531,48 @@ recite:
     leftover (a restored copy of the deleted file) and asserting the reader's
     outcome, alongside the genuinely stale case that must still be refused.
 
+45. **An exact comparison against a value re-derived from a producer that has
+    changed since the stored copy was made** — PR #3835 passes 1-4 (#3829,
+    `workspace/restructure.ts` `parseTitlesPairWithState`): state.json holds
+    chapter titles as the parser wrote them at import; the check compared each
+    to what TODAY's parser produces, position by position. Every unversioned
+    parser change (entity decoding, heading normalisation) then read as a
+    mismatch, and the refusal's advice (re-parse) destroys analysis, cast and
+    audio, so a never-restructured book would have been locked out of work that
+    was harmless before. Checkable: for every guard that recomputes a value and
+    compares it to a stored one, has the producer changed since the oldest
+    stored copy (git log on the producer, and whether its version constant
+    moved)? If so, equality is not a safe test; and extending a shared check to
+    a new caller widens who is exposed to that drift, so measure it on a book
+    in an older producer's form before reusing it. Four rounds of rule changes
+    did not settle which weaker test is safe; that design is tracked in #3837.
+46. **An app-made placeholder compared as identity evidence** — PR #3835 passes
+    2-3 (#3829, same function): the parser's fallback title for an untitled
+    section is `Chapter N` (a position number), and a real heading elsewhere can
+    carry the same text, so an untouched import was read as a reorder. A
+    special case for the placeholder (exempt it at its own position) also
+    exempted a real heading moved onto that position that happened to read
+    `Chapter 1`. Any placeholder the app invents (a position-numbered title, a
+    default name, a synthesized id) collides with real data of the same text.
+    Checkable: for each value used as evidence of which item something is, can
+    the app itself have produced it? If so, test a fresh, untouched import with
+    the placeholder equal to a real value elsewhere (must pass), and the case
+    where a real value of that same text sits on the placeholder's position
+    (must still be caught), before trusting any exemption.
+
+47. **A skip honoured where a value is tested as the subject, but not where the
+    same value is read as evidence about another item** — PR #3835 pass 4
+    (#3829, `parseTitlesPairWithState`): `titleOverridden` (the user's own
+    wording) exempted a chapter from being checked, but that chapter's title
+    was still used as the "home" of a parse title when deciding whether ANOTHER
+    chapter had moved, so renaming a real "Chapter 1" heading made an app-made "Chapter 1" elsewhere look like that heading moved, and a book that was never restructured was refused.
+    Any exemption (overridden, synthesized, excluded, unreadable) has two roles
+    to decide: is the item itself checked, and may its value vouch for or
+    against its neighbours? Checkable: for each skip in a comparison loop,
+    find every other place the skipped item's value is read, and ask whether
+    the skip should apply there too. Then test a skipped item next to a moved
+    one, in both orders.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
