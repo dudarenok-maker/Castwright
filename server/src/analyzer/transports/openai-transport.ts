@@ -52,7 +52,7 @@ import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { allowlistedFetch } from './allowlisted-fetch.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
-import { mergeExtraParams } from '../runner/extra-params.js';
+import { mergeExtraParams, payloadSecretValues } from '../runner/extra-params.js';
 import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
@@ -104,7 +104,7 @@ export interface OutcomeContext {
   sawFinish: boolean;
   elapsedMs: number;
   model: string;
-  /** P22: redacted from every error this builds (the endpoint's key and every saved analyzer secret) */
+  /** P22, P29: redacted from every error this builds (the endpoint's key, every saved analyzer secret and the values of the payload this request carried) */
   secrets: readonly string[];
 }
 
@@ -488,9 +488,14 @@ export class OpenAITransport implements ChatTransport {
       release();
     }
 
-    /* P22 — every error this attempt builds is redacted against this endpoint's key and
-       every saved analyzer secret, read from settings if the cache is still cold. */
-    const secrets = [...(this.apiKey ? [this.apiKey] : []), ...(await loadKnownAnalyzerSecrets())];
+    /* P22, P29 — every error this attempt builds is redacted against this endpoint's key, every saved
+       analyzer secret (read from settings if the cache is still cold), and the values of the payload
+       THIS request carries. */
+    const secrets = [
+      ...(this.apiKey ? [this.apiKey] : []),
+      ...(await loadKnownAnalyzerSecrets()),
+      ...payloadSecretValues(req.extraParams),
+    ];
     const failure = classifyOpenAIOutcome(streamError, {
       callerAborted: caller?.aborted === true,
       ceilingAborted: ceiling.aborted,

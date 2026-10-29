@@ -12,8 +12,10 @@ import { OLLAMA_RETRY_POLICY } from './retry-policy.js';
 import { REDACTED } from './extra-params.js';
 import { OllamaTransport } from '../transports/ollama-transport.js';
 import { GeminiTransport } from '../transports/gemini-transport.js';
+import { OpenAITransport } from '../transports/openai-transport.js';
 import { AnalyzerHttpError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
+import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest, knownAnalyzerSecrets } from '../../workspace/user-settings.js';
 import { classifyAnalysisFailure } from '../../routes/failure-taxonomy.js';
 import type { ChatTransport, TransportRequest } from './transport.js';
@@ -213,6 +215,36 @@ describe('the custom payload is never logged or persisted', () => {
     const err = await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req).catch((e: unknown) => e);
     const failure = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
     expect(`${failure.userMessage}\n${failure.detail ?? ''}`).not.toContain(SENTINEL);
+  });
+
+  it('OpenAI-compatible: a 400 naming the parameter value is redacted', async () => {
+    const base = await startServer(() => ({
+      status: 400, type: 'application/json',
+      body: JSON.stringify({ error: { message: `unsupported parameter user_tag=${SENTINEL}`, type: 'invalid_request_error' } }),
+    }));
+    const endpoint = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768, extraParams: { user_tag: SENTINEL } });
+    /* No saved settings: this request's payload values join the attempt's secrets (P29), which W3b's
+       classifyOpenAIOutcome applies to the excerpt, the causeCode and rule 7's rebuild alike. */
+    const req: TransportRequest = { system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, extraParams: { user_tag: SENTINEL }, estimatedInputTokens: 5, call: {} };
+    const err = await new OpenAITransport({ endpoint, apiKey: null, model: 'm', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    expect(`${(err as AnalyzerHttpError).message}\n${(err as AnalyzerHttpError).bodyExcerpt}`).not.toContain(SENTINEL);
+    expect(everythingLogged()).not.toContain(SENTINEL);
+  });
+
+  it('OpenAI-compatible: a value straddling the 500-character excerpt cut leaves no fragment', async () => {
+    const LONG = `cw-straddle-${'x'.repeat(40)}`;
+    const base = await startServer(() => ({
+      status: 400, type: 'application/json',
+      body: JSON.stringify({ error: { message: `${'p'.repeat(470)}${LONG}`, type: 'invalid_request_error' } }),
+    }));
+    const endpoint = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768, extraParams: { user_tag: LONG } });
+    /* This request's payload feeds the attempt's secrets, which classifyOpenAIOutcome applies to the whole body before it slices. */
+    const req: TransportRequest = { system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, extraParams: { user_tag: LONG }, estimatedInputTokens: 5, call: {} };
+    const err = await new OpenAITransport({ endpoint, apiKey: null, model: 'm', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    /* Sliced first, the excerpt ends inside the value, and a partial value matches no redaction. */
+    expect(`${(err as AnalyzerHttpError).message}\n${(err as AnalyzerHttpError).bodyExcerpt}`).not.toContain('cw-');
   });
 
   it("payload values are redacted only from their own request's errors: BLOCK_NONE stays in an unrelated engine's error (N15, P29)", async () => {
