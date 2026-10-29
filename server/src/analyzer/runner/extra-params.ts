@@ -239,6 +239,13 @@ export function payloadOutputCap(kind: TransportKind, params: Json | undefined):
   return caps.length > 0 ? Math.min(...caps) : null;
 }
 
+/** P19 — a request's maxOutputTokens: the payload's cap when the payload controls it (`null`, a removed key,
+    becomes `undefined`, the transport default the merge then strips), else the engine's resolver. */
+export function requestMaxOutputTokens(kind: TransportKind, extraParams: Json | undefined, resolve: () => number | undefined): number | undefined {
+  const cap = payloadOutputCap(kind, extraParams);
+  return cap === undefined ? resolve() : (cap ?? undefined);
+}
+
 /** N13 — the payload key that sets the output cap (`options.num_predict`, `config.maxOutputTokens`,
     `max_completion_tokens`, `n_predict`, …), for failure copy: the key whose value is the cap, else the
     first cap key present (a `null` that removes the cap). `undefined` when the payload controls no cap. */

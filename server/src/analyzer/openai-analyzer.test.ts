@@ -168,6 +168,23 @@ describe('OpenAIAnalyzer (#3084 PR 3b)', () => {
     expect((bodies[bodies.length - 1] as unknown as Record<string, unknown>).reasoning_effort).toBe('none');
   });
 
+  it('openAIRequestSettings carries the endpoint payload, whose output cap replaces Auto and the served limit (#3084 wave 5, P19)', async () => {
+    const lab = 'http://127.0.0.1:8080/v1';
+    expect(openAIRequestSettings(endpoint(lab, { extraParams: { top_k: 20 } }))).toEqual({
+      structuredOutput: 'schema',
+      maxOutputTokens: 29_491,
+      reasoning: 'model-default',
+      extraParams: { top_k: 20 },
+    });
+    expect(
+      openAIRequestSettings(endpoint(lab, { maxOutputTokens: 8_192, extraParams: { max_completion_tokens: 4_096 } }), 16_384).maxOutputTokens,
+    ).toBe(4_096);
+    expect(openAIRequestSettings(endpoint(lab, { extraParams: { max_tokens: null } }), 16_384).maxOutputTokens).toBeUndefined();
+    const url = await start((_n, res) => streamText(res, VALID));
+    await new OpenAIAnalyzer({ endpoint: endpoint(url, { extraParams: { top_k: 20 } }), apiKey: null, model: 'qwen3:30b' }).runStage1Chapter(ID, 1, '# p', {});
+    expect((bodies[bodies.length - 1] as unknown as Record<string, unknown>).top_k).toBe(20);
+  });
+
   it('a 502 whose body says ECONNREFUSED fails as that HTTP error and never falls back to Gemini (P21)', async () => {
     const url = await start((_n, res) => {
       res.writeHead(502, { 'content-type': 'application/json' });

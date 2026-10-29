@@ -270,7 +270,8 @@ export function endpointAutoOutputMargin(contextTokens: number): number {
     EngineRequestSettings.maxOutputTokens, a number (wave 2b resolves every engine's
     cap). A manual value is clamped to the served output limit when one is known (PR 3c, P15).
     Auto returns min(served output limit if known, contextTokens − margin). The
-    request builder then takes each request's estimated input off Auto. */
+    request builder then takes each request's estimated input off Auto. A custom payload
+    cap replaces it (openAIRequestSettings, P19). */
 export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): number {
   if (endpoint.maxOutputTokens > 0) {
     return servedOutputLimit !== undefined ? Math.min(endpoint.maxOutputTokens, servedOutputLimit) : endpoint.maxOutputTokens;

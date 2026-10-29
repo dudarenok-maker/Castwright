@@ -24,6 +24,7 @@ import { resolveMaxInputTokensPerRequest } from './token-budget.js';
 import { endpointModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
 import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
+import { payloadOutputCap, resolveExtraParamsSetting } from './runner/extra-params.js';
 
 export interface EngineCapacity {
   family: 'context' | 'requestCap';
@@ -65,7 +66,7 @@ function resolveEndpointCapacity(sel: { model: string; endpoint?: AnalyzerEndpoi
   };
 }
 
-export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
+function resolveEngineCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
   if (sel.engine === 'openai') return resolveEndpointCapacity(sel);
   if (sel.engine === 'local') return TODAY_LOCAL_CAPACITY();
   const cap = resolveMaxInputTokensPerRequest();
@@ -80,6 +81,25 @@ export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; en
        tpm). tpm is Infinity for "unlimited", which leaves the cap. */
     perRequestInputCap: Math.min(cap, resolveLimits(sel.model).tpm),
   };
+}
+
+/** P19 — a custom payload that sets or removes the output cap is the cap chunk sizing and the Test action's
+    probe cap size against. The catalog's `outputTokens` does not read this: it stays the model's listed
+    maximum (analyzer-catalog.ts, 5b-D15). An endpoint request's own cap is openAIRequestSettings', which
+    applies the same rule through requestMaxOutputTokens. No payload → W2/W3c's value. */
+export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
+  /* Runs first, so a missing endpoint throws AnalyzerEndpointMissingError exactly as before. */
+  const capacity = resolveEngineCapacity(sel);
+  /* The endpoint is found exactly as resolveEndpointCapacity finds it (`sel.endpoint`, else the parsed id, else
+     `sel.model`), and the settings file is read only when the payload lives there. */
+  const payload =
+    sel.engine === 'openai'
+      ? (sel.endpoint ??
+          getCachedUserSettings().analyzerEndpoints.find((e) => e.id === (parseEndpointModelId(sel.model)?.endpointId ?? sel.model)))
+          ?.extraParams
+      : resolveExtraParamsSetting(getCachedUserSettings(), { engine: sel.engine });
+  const cap = payloadOutputCap(sel.engine === 'local' ? 'ollama' : sel.engine, payload);
+  return cap === undefined ? capacity : { ...capacity, maxOutputTokens: cap };
 }
 
 /** The maxOutputTokens a Gemini request sends (spec §7). 0 (the default) is

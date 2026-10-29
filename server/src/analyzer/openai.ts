@@ -16,19 +16,25 @@ import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { AnalyzerReasoningOverflowError } from './errors.js';
 import { resolveReasoningSetting } from './reasoning.js';
+import { requestMaxOutputTokens, resolveExtraParamsSetting } from './runner/extra-params.js';
 import type { StageCall } from './types.js';
 
 /** #3084 P24 — the request settings an endpoint's runner reads. `maxOutputTokens` is
-    always a number: a manual value, or Auto's min(served output limit if known,
-    contextTokens − margin). The transport takes each request's estimated input off
+    a number — a manual value, or Auto's min(served output limit if known,
+    contextTokens − margin) — except `undefined` when a custom payload removes the cap (P19). The transport takes each request's estimated input off
     Auto. PR 3c passes the served output limit its prepare() warms. */
 export function openAIRequestSettings(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): EngineRequestSettings {
+  const extraParams = resolveExtraParamsSetting({}, { engine: 'openai', endpoint });
   return {
     structuredOutput: endpoint.structuredOutput,
-    maxOutputTokens: resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit),
+    /* P19 — a payload that sets or removes max_tokens / max_completion_tokens is the request's cap and
+       the overflow rule's budget; otherwise P24's manual value or Auto. */
+    maxOutputTokens: requestMaxOutputTokens('openai', extraParams, () => resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit)),
     /* #3084 wave 5 — an endpoint carries its own level. resolveReasoningSetting reads neither the
-       settings file nor the model for engine 'openai', so neither is passed. Task 5.10 adds extraParams. */
+       settings file nor the model for engine 'openai', so neither is passed. */
     reasoning: resolveReasoningSetting({}, { engine: 'openai', model: '', endpoint }),
+    /* The payload as saved. mergeExtraParams filters it again at send time (P17). */
+    extraParams,
   };
 }
 
@@ -46,7 +52,7 @@ export class OpenAIAnalyzer extends TransportAnalyzer {
         }),
         policy: OPENAI_RETRY_POLICY,
         /* P15 / P24: the served output limit prepare() warmed for this base URL (undefined when
-           unknown); openAIRequestSettings keeps maxOutputTokens a number either way. */
+           unknown); openAIRequestSettings keeps maxOutputTokens a number unless a payload removes the cap. */
         settings: () => openAIRequestSettings(opts.endpoint, getEndpointServedLimits(opts.endpoint.baseUrl, opts.model)?.maxOutputTokens),
         adaptSchema: adaptSchemaForOpenAI,
       }),

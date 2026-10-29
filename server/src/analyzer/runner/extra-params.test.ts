@@ -13,6 +13,7 @@ import {
   payloadSecretValues,
   redactPayloadValues,
   requestControlsLabelParts,
+  requestMaxOutputTokens,
   resolveExtraParamsSetting,
   stripPayloadTemperature,
   validateExtraParams,
@@ -332,5 +333,14 @@ describe('settings helpers', () => {
     expect(resolveExtraParamsSetting(s, { engine: 'gemini' })).toEqual({ config: { topK: 2 } });
     expect(resolveExtraParamsSetting(s, { engine: 'openai', endpoint: { extraParams: { top_k: 3 } } })).toEqual({ top_k: 3 });
     expect(resolveExtraParamsSetting({}, { engine: 'local' })).toBeUndefined();
+  });
+});
+
+describe('requestMaxOutputTokens (P19)', () => {
+  it("uses the payload's cap, maps a removed cap to undefined, and otherwise asks the engine", () => {
+    expect(requestMaxOutputTokens('ollama', { options: { num_predict: 512 } }, () => 4096)).toBe(512);
+    expect(requestMaxOutputTokens('openai', { max_tokens: null }, () => 4096)).toBeUndefined();
+    expect(requestMaxOutputTokens('gemini', { config: { topK: 40 } }, () => 4096)).toBe(4096);
+    expect(requestMaxOutputTokens('gemini', undefined, () => 4096)).toBe(4096);
   });
 });
