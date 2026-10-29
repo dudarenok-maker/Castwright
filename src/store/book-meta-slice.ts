@@ -229,6 +229,17 @@ export const bookMetaSlice = createSlice({
       if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
+    /* #3784 P12-1 — the book was deleted: forget its commit snapshot, and the
+       draft when it was typed on this book (`ownsDraft`, decided by the
+       persistence middleware, which knows the book the draft belongs to). A
+       re-import under the same id, from the book's own bundle, keeps both of
+       its ids, so nothing later can tell the old book's typing from the new
+       book's. */
+    forgetBook: (s, a: PayloadAction<{ bookId: string; ownsDraft: boolean }>) => {
+      if (s.lastCommitted) delete s.lastCommitted[a.payload.bookId];
+      if (a.payload.ownsDraft) s.draft = null;
+    },
+
     /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`).
        #3784 P1 — `refused` names book-meta fields the server refused as
        stale: they stop being the user's pending edit, so a rollback does not

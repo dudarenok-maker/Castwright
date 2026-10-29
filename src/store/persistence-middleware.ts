@@ -376,7 +376,8 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
    that book's slices are re-read in full (Layout's full hydrate, with
    `onFullRead`: the user has seen the failure and the revert, so a kept save
    landing later would contradict what they see) and when the book is deleted
-   (hygiene: nothing is left for a gone book). On a full read a kept
+   (hygiene: nothing is left for a gone book; the delete also forgets the
+   book's details draft and snapshot, #3784 P12-1). On a full read a kept
    `state`-slice save that carries a base stays, and the server refuses it if
    the book moved since (#3784 P2). A based whole-slice save (cast, manuscript,
    changeLog) still goes: the read puts the screen back to disk without it.
@@ -708,6 +709,14 @@ export const persistenceMiddleware: Middleware = (store) => {
           box.delete(u);
         }
         if (box.size === 0) outbox.delete(key);
+      }
+      /* #3784 P12-1 — without `onFullRead` this is the book's delete: forget
+         its details snapshot, and the draft if it was typed on that book. Done
+         here because only the middleware knows which book the shared draft
+         belongs to (`lastOpenBookId`, below). */
+      if (!onRead) {
+        const ownsDraft = a.payload === lastOpenBookId;
+        store.dispatch(bookMetaActions.forgetBook({ bookId: a.payload, ownsDraft }));
       }
       return result;
     }

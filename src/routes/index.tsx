@@ -157,7 +157,9 @@ export function BooksRoute() {
            under the same id reads as a different book (OD31: and drop its
            preview — the new take stays live, nothing is restored). Its kept
            saves go too, for hygiene: a re-import's new edit epoch already
-           makes the server refuse them (plan 289, D8b). */
+           makes the server refuse them (plan 289, D8b). Dropping them also
+           forgets the book's details draft and commit snapshot (#3784 P12-1):
+           a re-import from the book's own bundle keeps both of its ids. */
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(dropRetainedSaves(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));

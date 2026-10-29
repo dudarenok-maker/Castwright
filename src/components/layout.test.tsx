@@ -50,6 +50,7 @@ const pollRevisionsMock = vi.fn();
 const pollRevisionsBulkMock = vi.fn();
 const putBookStateMock = vi.fn();
 const restoreBookBackupMock = vi.fn();
+const deleteBookMock = vi.fn();
 /* Task 22 — the A/B player's per-op routes. */
 const acceptRevisionMock = vi.fn();
 const rejectRevisionMock = vi.fn();
@@ -86,6 +87,8 @@ vi.mock('../lib/api', async (importOriginal) => {
         { file: '20260101-000000.json', sizeBytes: 1024, createdAt: '2026-01-01T00:00:00.000Z' },
       ],
       restoreBookBackup: (...args: unknown[]) => restoreBookBackupMock(...args),
+      /* Library -> Delete (the #3784 pass-12 delete cases). */
+      deleteBook: (...args: unknown[]) => deleteBookMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
       getAnalysisState: (...args: unknown[]) => getAnalysisStateMock(...args),
@@ -206,14 +209,27 @@ const libraryEdit = vi.hoisted(() => ({
   current: null as null | { book: { bookId: string; title: string }; patch: Record<string, unknown> },
 }));
 vi.mock('../views/book-library', () => ({
-  BookLibraryView: (p: { onEditBook: (b: unknown, patch: unknown) => Promise<void> }) => (
-    <button
-      type="button"
-      data-testid="library-edit"
-      onClick={() => void p.onEditBook(libraryEdit.current!.book, libraryEdit.current!.patch)}
-    >
-      Edit
-    </button>
+  BookLibraryView: (p: {
+    onEditBook: (b: unknown, patch: unknown) => Promise<void>;
+    onDeleteBook: (b: unknown) => Promise<void>;
+  }) => (
+    <>
+      <button
+        type="button"
+        data-testid="library-edit"
+        onClick={() => void p.onEditBook(libraryEdit.current!.book, libraryEdit.current!.patch)}
+      >
+        Edit
+      </button>
+      {/* #3784 pass 12 — the delete cases drive the real `onDeleteBook`. */}
+      <button
+        type="button"
+        data-testid="library-delete"
+        onClick={() => void p.onDeleteBook(libraryEdit.current!.book)}
+      >
+        Delete
+      </button>
+    </>
   ),
 }));
 
@@ -356,6 +372,8 @@ beforeEach(() => {
   putBookStateMock.mockReset();
   putBookStateMock.mockResolvedValue(undefined);
   restoreBookBackupMock.mockReset();
+  deleteBookMock.mockReset();
+  deleteBookMock.mockResolvedValue(undefined);
   acceptRevisionMock.mockReset();
   rejectRevisionMock.mockReset();
   restorePreviousUnrecordedMock.mockReset();
@@ -3706,6 +3724,89 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
       await waitFor(() => expect(savedTitle(store)).toBe('Reparsed'));
       expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* Library -> Delete of A, through BooksRoute's real `onDeleteBook`. */
+  async function libraryDeleteA(disk: ReturnType<typeof createBookStateDisk>) {
+    deleteBookMock.mockImplementation(async (id: string) => {
+      disk.remove(id);
+    });
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+    fireEvent.click(await screen.findByTestId('library-delete'));
+    await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+  }
+
+  /* #3784 P12-1 (review pass 12) — A's own portable bundle, re-imported after
+     A was deleted, keeps both of A's ids (`placeFresh` keeps a free bookId
+     and manuscriptId), so the manuscript check cannot tell it is a new book.
+     Deleting the book clears the draft typed on it instead. */
+  it('P12-1: a draft typed on a deleted book does not carry into its re-import from a bundle', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      /* The bundle import: same bookId, same manuscriptId. */
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+        cast: { characters: [eliza] },
+      });
+      /* Something marks A for a full read (a Library Edit, say). */
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      /* Save writes nothing of the old book. */
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('bundle notes');
+      expect(disk.log.filter((p) => p.bookId === 'A' && 'notes' in p.patch)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-1 — the same for a commit's rollback snapshot. A details save
+     given up on after the user left is kept, with its snapshot; the delete
+     drops the save, and must drop the snapshot too, or the re-import's next
+     commit folds the old book's notes into its own PUT. */
+  it("P12-1: a kept details save's snapshot of a deleted book does not ride into its re-import's next save", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(4, (id, req) => id === 'A' && req.slice === 'state');
+      commit(store, 'notes', 'old book note');
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+      expect(store.getState().bookMeta.lastCommitted?.A).toBeDefined();
+
+      await libraryDeleteA(disk);
+      expect(store.getState().bookMeta.lastCommitted?.A).toBeUndefined();
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+
+      commit(store, 'title', 'New title');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'New title', notes: 'bundle notes' });
     } finally {
       vi.useRealTimers();
     }

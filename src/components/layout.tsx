@@ -854,10 +854,14 @@ export function Layout() {
      switch to a different book (#3754, #3782), so a draft that is still here
      was typed on this book. The one exception is a read of a different
      manuscript under the same id (#3784 P11-1): a book id is a slug, so a
-     book deleted and re-imported under the same id is a new manuscript, and
-     must not inherit the old book's draft. A re-parse or a manuscript replace
-     keeps the manuscript id. Kept per book, not just for the last read, so
-     a visit whose read never landed cannot hide a re-import. */
+     book deleted and re-imported under the same id can be a new book, and
+     must not inherit the old book's draft. A file import mints a new
+     manuscript id; a re-parse or a manuscript replace keeps it. A bundle
+     import keeps the bundle's, so a book re-imported from its own bundle
+     reads as the same manuscript: the delete itself clears the draft in this
+     tab (#3784 P12-1), and another tab's delete plus bundle re-import is a
+     known limitation (plan 289). Kept per book, not just for the last read,
+     so a visit whose read never landed cannot hide a re-import. */
   const metaReadFor = useRef(new Map<string, string | undefined>());
 
   /* Plan 289 (D7) — a book marked `needsFullRead` (a save refused as stale, or
