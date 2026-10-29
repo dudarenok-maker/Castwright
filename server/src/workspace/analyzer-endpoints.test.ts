@@ -152,13 +152,54 @@ describe('create / update / delete / key decisions', () => {
       applyCreate(empty, { ...base, unloadUrl: 'http://127.0.0.1:8080/api/models/unload/{model}' }).analyzerEndpoints,
     ).toHaveLength(1);
   });
-  it('until PR 5b, refuses a non-empty payload, naming the PR that enables it (P23)', () => {
-    const payload = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20 } }));
-    expect(payload).toMatchObject({ status: 400, refusal: 'invalid' });
-    expect(payload.issues).toEqual([
-      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
-    ]);
+  it('accepts a custom payload and refuses a protected key, validated by validateExtraParams', () => {
+    expect(
+      applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20, min_p: 0.05, presence_penalty: 1.5 } }).analyzerEndpoints[0]
+        .extraParams,
+    ).toEqual({ top_k: 20, min_p: 0.05, presence_penalty: 1.5 });
     expect(applyCreate(empty, { ...base, extraParams: {} }).analyzerEndpoints).toHaveLength(1);
+    const refused = refusal(() =>
+      applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }),
+    );
+    expect(refused).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(refused.issues).toEqual([
+      { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.' },
+    ]);
+    /* The key is protected only under the enable_thinking style, so the reasoning style reaches the check. */
+    expect(applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } }).analyzerEndpoints).toHaveLength(1);
+  });
+  it('an update judges the payload only when it changes: an unchanged stale payload saves, a changed one is refused (A7)', () => {
+    /* A payload stored before a rule existed (or written straight into user-settings.json). */
+    const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });
+    const stale = {
+      ...created,
+      analyzerEndpoints: [{ ...created.analyzerEndpoints[0], extraParams: { response_format: { type: 'text' } } }],
+    };
+    expect(
+      applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', extraParams: { response_format: { type: 'text' } } }).analyzerEndpoints[0],
+    ).toMatchObject({ name: 'Lab renamed' });
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, extraParams: { response_format: { type: 'json_object' } } })).issues).toEqual([
+      { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: response_format.' },
+    ]);
+  });
+  it('an update that only switches the reasoning style re-judges an unchanged payload under the new style (A7)', () => {
+    const stored = applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } });
+    const switched = refusal(() =>
+      applyUpdate(stored, 'lab', { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }),
+    );
+    expect(switched.issues).toEqual([
+      { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.' },
+    ]);
+  });
+  it('the same stale payload re-sent with its keys in another order is not re-judged (5b-D10)', () => {
+    const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });
+    const stale = {
+      ...created,
+      analyzerEndpoints: [{ ...created.analyzerEndpoints[0], extraParams: { response_format: { type: 'text' }, top_k: 20 } }],
+    };
+    expect(
+      applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', extraParams: { top_k: 20, response_format: { type: 'text' } } }).analyzerEndpoints[0],
+    ).toMatchObject({ name: 'Lab renamed' });
   });
   it('accepts a reasoning level its control style offers, and refuses one it does not, naming the style (5a rules)', () => {
     expect(applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off' }).analyzerEndpoints[0].reasoning).toBe('off');
