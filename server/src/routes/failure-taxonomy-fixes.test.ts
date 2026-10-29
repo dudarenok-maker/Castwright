@@ -393,3 +393,58 @@ describe('reasoningOverflowFixes — reasoningSetting guards (#3084 wave 5a, F7)
     });
   });
 });
+
+describe('reasoningOverflowFixes — a payload output cap replaces the Gemini and Ollama fixes it overrides (#3084 wave 5b, 5b-D1/D2/D3)', () => {
+  afterEach(() => {
+    _resetGeminiCatalogForTest();
+    delete process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+    delete process.env.ANALYZER_NUM_PREDICT;
+  });
+
+  it('Gemini: names the payload key and drops "Raise Gemini max output tokens", even where 2b would offer it', () => {
+    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+    process.env.ANALYZER_MAX_OUTPUT_TOKENS = '4096'; // below the known limit: the raise fix's own condition
+    const fixes = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash', payloadCapKey: 'config.maxOutputTokens', payloadCapRemoved: false });
+    expect(fixes.some((f) => f.settingKey === 'analyzer.gemini.maxOutputTokens')).toBe(false);
+    expect(fixes[0]).toEqual({
+      label: 'Raise the custom parameter "config.maxOutputTokens" in the Gemini custom parameters (Advanced settings → Analyzer request controls)',
+    });
+    const readFix = fixes.find((f) => f.label === 'Read: Custom payload');
+    expect(readFix?.wikiPage).toBe('Advanced-Settings'); // 5b-D13, 5b-D16
+    expect(existsSync(`${wikiDir}${readFix!.wikiPage}.md`), readFix!.wikiPage).toBe(true); // the 3d.9a page-existence guard
+  });
+
+  it('Ollama: names the payload key and drops "Raise Ollama num_predict"; a numeric payload cap makes num_ctx not the binding limit', () => {
+    process.env.ANALYZER_NUM_PREDICT = '2048';
+    const fixes = reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict', payloadCapRemoved: false });
+    expect(fixes.some((f) => f.settingKey === 'analyzer.ollama.numPredict')).toBe(false);
+    expect(fixes[0]).toEqual({
+      label: 'Raise the custom parameter "options.num_predict" in the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+    });
+    expect(fixes.find((f) => f.settingKey === 'analyzer.ollama.numCtx')?.label).toBe('Raise Ollama num_ctx');
+    expect(fixes.find((f) => f.label === 'Read: Custom payload')?.wikiPage).toBe('Advanced-Settings'); // 5b-D13, 5b-D16
+  });
+
+  it('no payload key: neither arm adds a Read: Custom payload entry', () => {
+    for (const ctx of [{ transport: 'gemini' as const, model: 'gemini-3.6-flash' }, { transport: 'ollama' as const, model: 'qwen3.5:9b' }]) {
+      expect(reasoningOverflowFixes(ctx).some((f) => f.label === 'Read: Custom payload')).toBe(false);
+    }
+  });
+
+  it('Ollama: a payload that removes the cap says "Set a value for", and num_ctx is the binding limit again (5b-D3)', () => {
+    process.env.ANALYZER_NUM_PREDICT = '2048'; // overridden by the payload, which removes the cap
+    const fixes = reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict', payloadCapRemoved: true });
+    expect(fixes[0].label).toBe(
+      'Set a value for the custom parameter "options.num_predict" in the Ollama custom parameters (Advanced settings → Analyzer request controls)',
+    );
+    expect(fixes.find((f) => f.settingKey === 'analyzer.ollama.numCtx')?.label).toBe('Raise Ollama num_ctx (the binding limit)');
+  });
+
+  it('classifyAnalysisFailure passes the stamped key through to the fixes', () => {
+    const f = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:9b', 300, { payloadCapKey: 'options.num_predict', payloadCapRemoved: false }),
+      'Ollama (qwen3.5:9b)',
+    );
+    expect(f.fixes?.[0]?.label).toContain('"options.num_predict"');
+  });
+});

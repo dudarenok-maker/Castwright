@@ -691,6 +691,11 @@ export function reasoningOverflowFixes(ctx: {
   endpointId?: string;
   /** The level the overflowing request actually ran at (set at throw time; never re-derived from settings). */
   reasoningLevel?: ReasoningLevel;
+  /** #3084 wave 5b (N13, 5b-D1) — the payload key that set the overflowing request's output cap, and whether it
+      removed it. Stamped at throw time; these are AnalyzerReasoningOverflowError's own field names, so the
+      classify branch and nonStoryOverflowWarningMessage pass the error straight through. */
+  payloadCapKey?: string;
+  payloadCapRemoved?: boolean;
 }): AnalysisFailureFix[] {
   const fixes: AnalysisFailureFix[] = []; // actionable — settingKey or label-only
   const reads: AnalysisFailureFix[] = []; // wiki-link entries only ("Read: …")
@@ -708,7 +713,11 @@ export function reasoningOverflowFixes(ctx: {
        omitted entirely rather than offered as a guess. */
     const configuredOutputCap = configValue<number>('analyzer.gemini.maxOutputTokens');
     const knownOutputLimit = getCachedGeminiModelInfo(ctx.model)?.outputTokenLimit;
-    if (configuredOutputCap !== 0 && knownOutputLimit !== undefined && configuredOutputCap < knownOutputLimit) {
+    if (ctx.payloadCapKey) {
+      /* #3084 wave 5b (5b-D2) — a payload key sets this request's output cap (P19), so the Gemini max output
+         tokens setting changes nothing: name the payload key instead. */
+      fixes.push({ label: payloadCapAdvice('gemini', ctx.payloadCapKey, ctx.payloadCapRemoved, undefined) });
+    } else if (configuredOutputCap !== 0 && knownOutputLimit !== undefined && configuredOutputCap < knownOutputLimit) {
       fixes.push({
         label: 'Raise Gemini max output tokens (or set it back to Auto)',
         settingKey: 'analyzer.gemini.maxOutputTokens',
@@ -750,6 +759,10 @@ export function reasoningOverflowFixes(ctx: {
     /* F13 — label-only: no settingKey (and no wikiPage), so the renderer shows
        plain text rather than a link to a setting that cannot fix this. */
     fixes.push({ label: 'Switch to a different analyzer model' });
+    if (ctx.payloadCapKey) {
+      /* #3084 wave 5b (5b-D13, 5b-D16) — the payload is the setting to read about: Advanced Settings' Custom payload section. Its own list-level entry, no deep link. */
+      reads.push({ label: 'Read: Custom payload', wikiPage: 'Advanced-Settings' });
+    }
     reads.push({
       label: 'Read: When a model thinks past its output limit',
       wikiPage: 'Analysis-and-the-Analyzer',
@@ -758,7 +771,9 @@ export function reasoningOverflowFixes(ctx: {
     /* num_ctx is the binding limit only while num_predict is unlimited (-1, the
        default). A positive num_predict bounds the reply first — raising num_ctx
        would change nothing — so name it first and drop the "binding" claim. */
-    const numPredictPinned = configValue<number>('analyzer.ollama.numPredict') > 0;
+    /* 5b-D2 — a payload num_predict overrides analyzer.ollama.numPredict (P19), so its own value decides whether
+       the reply is bounded first: a number pins it, a removed cap (null / -1) does not. */
+    const numPredictPinned = ctx.payloadCapKey ? !ctx.payloadCapRemoved : configValue<number>('analyzer.ollama.numPredict') > 0;
     /* #3084 wave 5a (F7) — offered at on, a named level, or model-default (no `think` field is sent
        there, so the model can still think); never at an explicit off or when no level was set. */
     if (
@@ -773,7 +788,10 @@ export function reasoningOverflowFixes(ctx: {
         reasoningSetting: { engine: 'ollama', model: ctx.model },
       });
     }
-    if (numPredictPinned) {
+    if (ctx.payloadCapKey) {
+      /* 5b-D2 — the payload key, not the num_predict setting it overrides. */
+      fixes.push({ label: payloadCapAdvice('ollama', ctx.payloadCapKey, ctx.payloadCapRemoved, undefined) });
+    } else if (numPredictPinned) {
       fixes.push({
         label: 'Raise Ollama num_predict (or set it back to -1, unlimited)',
         settingKey: 'analyzer.ollama.numPredict',
@@ -788,6 +806,10 @@ export function reasoningOverflowFixes(ctx: {
       { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
       { label: 'Switch to a different analyzer model' },
     );
+    if (ctx.payloadCapKey) {
+      /* #3084 wave 5b (5b-D13, 5b-D16) — the payload is the setting to read about: Advanced Settings' Custom payload section. Its own list-level entry, no deep link. */
+      reads.push({ label: 'Read: Custom payload', wikiPage: 'Advanced-Settings' });
+    }
     reads.push({
       label: 'Read: When a model thinks past its output limit',
       wikiPage: 'Analysis-and-the-Analyzer',
@@ -1082,7 +1104,7 @@ export function classifyAnalysisFailure(
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called
          with no cast. */
-      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel }),
+      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel, payloadCapKey: err.payloadCapKey, payloadCapRemoved: err.payloadCapRemoved }),
     };
   }
   if (err instanceof AnalyzerTimeoutError) {
