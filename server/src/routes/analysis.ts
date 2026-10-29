@@ -3712,9 +3712,11 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (!job.controller.signal.aborted) job.controller.abort();
   job.watermark?.releaseAll();
   if (finalEv) broadcastToJob(job, finalEv);
-  /* Cold-boot snapshot transition. Fire-and-forget; we still tear
-     down subscribers + deregister synchronously below so the route
-     response isn't held up by the disk write.
+  /* Cold-boot snapshot transition. Not awaited here: the writes are
+     collected into `job.terminalWrites` (#3711), which `settleJob` awaits
+     before the book-op lease is released. We still tear down subscribers +
+     deregister synchronously below so the route response isn't held up by
+     the disk write.
 
      Plan 32 D1: a subset job's terminal success never deletes a MAIN
      run's snapshot (a paused main's Resume affordance must survive a
