@@ -3778,6 +3778,37 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
+  /* #3784 P12-1 (control) — deleting a different book leaves the draft typed
+     on A alone: A -> Library -> A keeps the typing (#3754). */
+  it('P12-1 (control): deleting another book keeps the draft typed on the open one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'mine' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      deleteBookMock.mockImplementation(async (id: string) => {
+        disk.remove(id);
+      });
+      libraryEdit.current = { book: { bookId: 'B', title: 'Book B' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'mine' });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /* #3784 P12-1 — the same for a commit's rollback snapshot. A details save
      given up on after the user left is kept, with its snapshot; the delete
      drops the save, and must drop the snapshot too, or the re-import's next
