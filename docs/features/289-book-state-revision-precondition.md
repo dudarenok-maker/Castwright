@@ -507,15 +507,17 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **Leaving a book** (S3): `flushBookNow(bookId)` clears every debounce timer of that book and pumps every key. A running flight continues, and what was queued rides its next attempt or its follow-up. **This changes timing:** at head, an edit sent on leaving goes at once as its own sequence. Under C it waits behind the in-flight request or backoff (up to 4 s, OD-C1). That is within the owner's accepted cost. There is no unload flush (pre-existing), so a tab closed inside that window loses the edit, as it would during a debounce today.
 - **`flushBookPersistence(bookId)`** (Layout's flush-before-re-read, and restructure) calls `flushBookNow`, then resolves when every flight of the book has ended, follow-ups included (they are in the same loop). It resolves `null` when none ran. The outcome shape is unchanged.
 - **Kept and re-sent after leaving (owner decision, 2026-10-25):** natural. A give-up with the book not open removes nothing, so the entries stay idle, and the book's next flush or next edit sends them with their bases.
-- **Full read (F1, amended by P2 of review pass 8):** `dropRetainedSaves(bookId, true)` removes the outbox of every key of the book that is idle, except one kind of `state` entry: (P2) a `state` entry that carries a base stays, and goes with the book's next send for the server to judge. Cast, manuscript and changeLog entries are still dropped, based or not: the read puts the screen back to disk, and a kept whole-slice save landing later would leave screen and disk disagreeing (fa0d78e2). Entries with a live timer or a flight are live edits and stay. **Delete success** dispatches `dropRetainedSaves(bookId)`, which drops everything (D8b hygiene). (Pass 8's second exception, a `state` key held for the read (P1), was removed in pass 9.)
+- **Full read (F1, amended by P2 of review pass 8):** `dropRetainedSaves(bookId, true)` removes the outbox of every key of the book that is idle, except one kind of `state` entry: (P2) a `state` entry that carries a base stays, and goes with the book's next send for the server to judge. Cast, manuscript and changeLog entries are still dropped, based or not: the read puts the screen back to disk, and a kept whole-slice save landing later would leave screen and disk disagreeing (fa0d78e2). Entries with a live timer or a flight are live edits and stay. **Delete success** dispatches `dropRetainedSaves(bookId)`, which drops everything (D8b hygiene). That delete form also forgets the book's details snapshot (`lastCommitted[bookId]`) and, when the draft was typed on that book (`lastOpenBookId`), the draft (P12-1); and the delete marks the book `needsFullRead` (P12-3), so a re-import's first open reads it in full. (Pass 8's second exception, a `state` key held for the read (P1), was removed in pass 9.)
 - **A book-details save sends only the fields typed since the last accepted save (P1, redone in pass 9).** A `bookMeta/commitDraft` sends the keys of `lastCommitted[bookId].draft`, which is exactly what a rollback reverts, not all eight `saved` fields. A value refused as stale and still on screen therefore cannot ride a later commit back to disk. `markNeedsFullRead`'s `refused` list prunes a stale-refused field from that set, so a rollback does not restore it and a later commit does not send it again. Nothing is held: pass 8's hold of a marked book's `state` sends until the read (bbb9f733, 8a316704, and the P1 half of ca09d9ad) was removed in ae6bb325 after review pass 9 found it unsafe (P9-1, P9-2, P9-3). A failed full read is retried by Layout only while the book stays open; if the user leaves first, nothing waits for it.
 - **Every full read of the open book keeps the details draft (PB, review pass 10, owner decision on #3784, 2026-10-28; widened by the owner decisions on review pass 11, 2026-10-29).** Layout passes `keepDraft` to `bookMeta.hydrateFromBookState` on every full read, the first after opening the book included, unless the book was last read from a different manuscript.
   - **Why it is safe:** the middleware clears the draft on a switch to a different book (#3754, #3782), so a draft still present at a read was typed on this book.
-  - **The one exception is a re-import under the same id (P11-1).** A book id is its author/series/title slug, so deleting a book and importing one with the same slug reuses the id. Every import mints a new `manuscriptId`, and the read of that new manuscript wipes the old book's draft. A re-parse or a manuscript replace keeps the manuscript id (pinned on the server), so it keeps the draft.
+  - **The one exception is a re-import under the same id (P11-1).** A book id is its author/series/title slug, so deleting a book and importing one with the same slug reuses the id. A file import (`POST /api/import`, samples) mints a new `manuscriptId`, and the read of that new manuscript wipes the old book's draft. A re-parse or a manuscript replace keeps the manuscript id (pinned on the server), so it keeps the draft.
+  - **The bundle import keeps both ids (P12-1, review pass 12).** `placeFresh` keeps the bundle's `bookId` and `manuscriptId` when they are free, as they are after a delete, so a book re-imported from its own bundle reads as the same manuscript, and the check above cannot see it. In the deleting tab the delete itself clears the draft and the snapshot (above). In another tab nothing the client can see tells that re-import from a re-parse, so it is a known limitation (C11).
+  - **A book with no landed read yet (P12-2).** The library-entry fallback seeds `saved` before the first full read lands, so the editor is up and the user can type. It records the entry's `manuscriptId` in `metaReadFor` when the book has no record, so that read can still tell a re-import. An entry without a `manuscriptId` (the field is optional) records nothing, and the read keeps the draft.
   - **`metaReadFor`** is a per-book map of the manuscript each book's details were last read from. It is not reset by navigation. It is per book rather than "the last read", so a visit whose read never landed cannot hide a re-import made in another tab.
   - **What the read does:** it refreshes `saved`, so an outside write shows on every field the user is not editing. It keeps `draft`, so a field the user is typing in, or a draft a failed save restored (#2230, #3754), still shows the user's value.
   - **The pending commit snapshot is kept too (P11-2).** A `keepDraft` hydrate rebases `lastCommitted[bookId].saved` onto the read instead of deleting it. A commit queued or in flight across the read therefore still restores its typing if that save then fails, and its rollback reverts to the read, keeping the outside write the read brought. The send is unchanged: still exactly the snapshot's typed fields.
-  - **A hydrate without `keepDraft`** wipes the draft and deletes the snapshot. That is the re-import read, and the library-entry fallback, which runs only while `saved` holds nothing for the book.
+  - **A hydrate without `keepDraft`** wipes the draft and deletes the snapshot. That is the re-import read, and the library-entry fallback, which runs only while `saved` holds nothing for the book (so it never wipes typing).
 - **Does the outbox just persist per book?** Yes. It is keyed per (book, slice) and never cleared by navigation, only by an answer, a full read, or a delete.
 
 #### C8 — Book-meta rollback and drafts: what is now natural, what needs code
@@ -590,6 +592,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
   - This fails open, at `main` parity. A deep compare of the roster would close it; it is not worth it for a cast-only, fail-open case.
 - **A 200 can teach a token for a value the client did not write.** `pickString` keeps disk's title when the sent title is empty (`book-state.ts:~1256`). This fails open, and is unreachable from the Listen editor's normal path.
 - **A stale screen re-asserted by a book-details commit.** (Before pass 9 this was an eight-field snapshot; `commitDraft` now sends only the typed fields, but a typed field is still sent unconditionally over another tab's newer value.) This happens when another tab writes the book while this tab shows it. `main` has the same behaviour, and it is out of scope (cross-tab); D7's marks cover every same-tab outside writer.
+- **A delete plus a bundle re-import made in another tab (owner decision on #3784, 2026-10-29, from review pass 12: document, don't close).** The bundle import keeps both of the book's ids, and `editEpoch` rotates on a re-parse and a replace too, so nothing this tab can see tells that re-import from an operation that keeps the book. This tab's unsaved details draft is therefore kept by the re-import's read, shows on the new book, and is saved into it on Save. Closing it needs an id every import mints on both paths; the owner chose not to add one. The deleting tab is covered (P12-1).
 
 ### OWNER DECISIONS
 
@@ -625,7 +628,7 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 - **C-I7.** A give-up rolls back only while the book is open; everything else stays as kept.
 - **C-I8.** A kept save is a key's idle outbox. A timer-fired send or a flush of the book sends it first; a delete removes it, and a full read removes it except based `state` entries (P2). A `commitDraft` sends only the typed fields (the keys of `lastCommitted.draft`, less any `refused` by a stale 409). A flight's settle never starts a flight.
 - **C-I9.** The middleware holds none of `pending`, `toastPending`, `rollbackFields`, `generation`, `kept`, `carriedKept`, `sequences`, `mergeSaves`, `sendBase`, `resendRetained` or `leaveBehind`. The export names are unchanged, but `dropRetainedSaves` gained an `onFullRead` parameter (P2), which Layout's full hydrate passes.
-- **C-I10.** Every full read of the open book, the first after opening it included, refreshes `saved`, keeps `bookMeta.draft`, and rebases `lastCommitted[bookId].saved` onto the read. The exception is a book last read from a different manuscript (a re-import under the same id): that read wipes the draft and deletes the snapshot, as does the library-entry fallback hydrate. A switch to a different book clears the draft in the middleware. (PB, review pass 10; P11-1, P11-2 and the first-read decision, review pass 11.)
+- **C-I10.** Every full read of the open book, the first after opening it included, refreshes `saved`, keeps `bookMeta.draft`, and rebases `lastCommitted[bookId].saved` onto the read. The exception is a book last read from a different manuscript (a re-import under the same id): that read wipes the draft and deletes the snapshot, as does the library-entry fallback hydrate. A switch to a different book clears the draft in the middleware, and so does a delete of the book it was typed on, with that book's snapshot. The fallback hydrate records the library entry's `manuscriptId` for a book with no record. (PB, review pass 10; P11-1, P11-2 and the first-read decision, review pass 11; P12-1 and P12-2, review pass 12.) A delete plus a bundle re-import in another tab is not covered (C11).
 
 ### Test plan (C)
 
@@ -875,7 +878,7 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
 - **The per-field `landedAt` pin cannot be red at head.** "a full read is ignored only for the fields a PUT landed on since it was stamped" cannot be made red against the old engine. It is pinned by mutation instead (the battery in T3).
 - **The disk model logs `refused` and `lost` outcomes** (`refuseNext` and `loseResponse`), beside `ok`, `503`, `409`, `404` and `400`, so a test can assert the exact sequence of answers.
 - **A stale refusal that drops nothing is final (a14b0727).** The server cannot produce one (it names only fields that had a base), but a mock or a future server could, and the engine would otherwise re-send the same send forever.
-- **N8a is defence in depth.** The `POST /api/books` epoch mint has no observable effect: every import mints a fresh `manuscriptId` (`server/src/routes/import.ts:378`), and the tokens are salted with it. It is kept so every new book has an epoch.
+- **N8a is defence in depth.** The `POST /api/books` epoch mint has no observable effect: every file import mints a fresh `manuscriptId` (`server/src/routes/import.ts:378`), and the tokens are salted with it. *Corrected 2026-10-29 (pass-12 C3): this said "every import"; the bundle import keeps the bundle's.* It is kept so every new book has an epoch.
 - **The R3 choreography is pinned only by M8** (C3, "a live build carries no base"). No other mutation reproduces it.
 
 ### Review pass 8 fixes (PR #3775, all #3784)
@@ -915,7 +918,7 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
 These are the owner decisions on #3784 (2026-10-29), from review pass 11 (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461).
 
 - **P11-1, e106d9ca:** a book deleted and re-imported under the same id no longer inherits the old book's details draft.
-  - The same-book check keys on the manuscript id as well as the book id: a book id is a slug, and every import mints a new `manuscriptId`.
+  - The same-book check keys on the manuscript id as well as the book id: a book id is a slug, and a file import mints a new `manuscriptId`. *Corrected 2026-10-29 (pass-12 C3): this said every import mints one; the bundle import keeps the bundle's, which review pass 12 found (P12-1).*
   - Re-parse and replace keep the manuscript id, so they still count as the same book.
   - **Tests:** Layout P11-1 (pass 11's R2: delete, re-import under the same id, open; the draft is null and Save writes none of the old text), red at 95e96a62. Controls: a re-parse on the client, and server pins in `book-state.reparse` and `book-state.replace-manuscript` that both keep `manuscriptId`.
 - **P11-2, 96315e01:** a same-book read keeps a pending commit's `lastCommitted` snapshot and rebases its `saved` onto the read, instead of deleting it.
@@ -943,6 +946,57 @@ These are the owner decisions on #3784 (2026-10-29), from review pass 11 (https:
 - **Fuzz:** pass 11's harness, with Layout's new keep rule and its D3 oracle (a rollback that finds no snapshot) restored, over 3,000 runs. At head: D1, D2 and D3 are 0, and O4b 1 and O5 2 are D6's by-design hits on seeds 71, 271 and 1588. The positive controls fire: `keepDraft` off gives D1 2,094; no `refused` prune (M2) gives D2 13; the snapshot deleted as before gives D3 21, pass 11's head figure on the same seeds.
 - **Text (pass-11 C1–C3):** the "defence in depth" note in "Review pass 10 fixes" and the PR body; the catalogue cites in the finding map and the task breakdown (now 48 and 49, after the renumbering); and the pass-10 fuzz claim in "Review pass 9 fixes".
 - **Catalogue (C4):** entry 54 is widened to the pending commit snapshot. Entry 55 is added: an identity check keyed on an id the system reuses after a delete and re-create.
+
+### Review pass 12 fixes (PR #3775, all #3784)
+
+These are the owner decisions on #3784 (2026-10-29), from review pass 12 (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6481083193).
+
+- **P12-1, c8739fe4:** deleting a book clears its details draft and its commit snapshot in the deleting tab.
+  - **Why the manuscript check did not catch it:** the portable-bundle import keeps both of the bundle's ids when they are free (`placeFresh`), as they are after a delete. A book re-imported from its own bundle is therefore "the same manuscript", and its full read kept the deleted book's draft, which Save then wrote into it.
+  - **Where:** the delete form of the middleware's `dropRetained` (no `onFullRead`; only `onDeleteBook` dispatches it) dispatches `bookMeta/forgetBook`. That reducer deletes `lastCommitted[bookId]`, and clears the draft when `ownsDraft`. `ownsDraft` is decided by the middleware as `bookId === lastOpenBookId`. The middleware is the one place that knows which book the shared draft was typed on, because it already clears the draft on a switch. A delete of another book leaves the draft alone.
+  - **Tests:** Layout P12-1 (pass 12's Q1b through BooksRoute's real `onDeleteBook`) and the kept-save snapshot case, both red at ea26df4d. Control: deleting another book keeps the open book's draft (a90a2701).
+- **P12-2, bcf91cca:** the library-entry fallback records the entry's `manuscriptId` in `metaReadFor` when the book has no record, so the first full read can still tell a re-import (C7).
+  - **Tests:** Layout P12-2 in another tab (pass 12's Q4), red at ea26df4d and at c8739fe4. The same-tab case (Q3) is red at ea26df4d and closed by c8739fe4; it is kept as a pin, and is now covered by both fixes. The P11-3 first-read fixture's library entry gains a `manuscriptId`, as the server's does.
+- **P12-3, 7008ff03 (pre-existing on main, found in passing):** a delete marks the book `needsFullRead`.
+  - **The problem:** a bundle import touches no slice. After a delete the slices still held the deleted book under its id, so the re-import's reopen read only its revisions. The screen showed the deleted book, and its first cast write put the deleted roster over the restored one. That write is an edit, or Confirm's automatic voice match.
+  - **The mark alone left a window.** While the reopen's full read was out, the slices still claimed the book, and Confirm's voice match PUT the old roster. The match now waits while the open book is marked (`fullReadMarks > 0`). Clearing the mark re-runs it. A mark that cancels a match already out re-arms the once-guard, so the match runs on the read's roster.
+  - **Tests:** Layout P12-3 (pass 12's Q7 with a slow reopen read: the match and a later edit keep the bundle's cast), red at ea26df4d and still red with the mark alone. A second pin: the match re-runs after a mark made while it was out.
+- **Cleanups (6f381441):**
+  - C1: pass 12's Q5 and Q9 are lifted as pins. Q9's library entry carries no `manuscriptId`, so the no-record clause is the one under test: with an id, P12-2 records it and the `size === 0` mutant would survive.
+  - C2: the P11-3 pin restores `api.getLibrary`.
+  - C4: `wireDisk` sends PUTs through `disk.serve`, so `hold` works across the block. The P11-2 pin's local override is removed.
+- **Text (C3):** "every import mints a new `manuscriptId`" is corrected in `layout.tsx`'s `metaReadFor` comment, C7, the pass-11 Ship notes, N8a, `docs/release-notes-next.md` and the PR body. Catalogue entry 55 is widened: a key that one create path copies from an export is not something only the original holds.
+- **Known limitation (owner decision):** a delete plus a bundle re-import made in another tab can still carry this tab's unsaved draft onto the new book (C11).
+- **Mutants:** 10 over a green 318-test baseline (Layout, book-meta slice, persistence middleware, routes). Each file was restored byte-for-byte (sha checked).
+
+  | Mutant | Red |
+  |---|---|
+  | the delete never clears the draft | 1 (P12-1 Q1b) |
+  | the delete keeps the snapshot | 1 (P12-1 snapshot) |
+  | `forgetBook` never dispatched | 2 (both P12-1) |
+  | the draft cleared on every delete | 0, then 1 once a90a2701's control was added |
+  | the fallback records nothing | 1 (P12-2 another tab) |
+  | the delete does not mark | 1 (P12-3 Q7) |
+  | the match does not wait for a marked read | 2 (both P12-3) |
+  | the once-guard not re-armed | 1 (P12-3 re-run) |
+  | the map frozen on its first manuscript (pass 12's C1) | 1 (Q5) |
+  | only the session's first read keeps (pass 12's C1) | 1 (Q9) |
+
+- **Fuzz:** pass 12's harness (D4 oracle, delete and re-import events), 3,000 runs per row, against the real middleware and slice.
+
+  | Row | Result |
+  |---|---|
+  | head | K 781, O4b 1, O5 2. D1, D2 and D3 are 0, as in pass 12. |
+  | file re-imports | **D4 0.** D1 157 is by design, as in pass 12. D3 4: 1893 and 2964 are pass 12's. 538 and 1114 are new and come from P12-1 (they vanish without the snapshot forget). |
+  | bundle re-imports | **D4s 0** (pass 12: 196). D4x 244 is the documented cross-tab residual (C11). D3 2: 538 and 1114. |
+  | bundle, `forgetBook` removed (control) | D4s 196, D4x 247: pass 12's figures. |
+  | file, always keep, `forgetBook` removed (control) | D4s 196, D4x 247 |
+  | `keepDraft` off (control) | D1 2,094 |
+  | no `refused` prune (control) | D2 13, O1 51 |
+  | the snapshot deleted on every hydrate (control) | D3 21 |
+
+  - **The new D3s are by design** (seed 538 traced). A details save for the book was still in its retry loop when the same-tab delete ran, so the drop skipped it, but `forgetBook` cleared its snapshot. When it was later refused against the re-imported book, its rollback found no snapshot, and restored nothing of the deleted book onto the new one, which is what P12-1 is for.
+- **Size:** `persistence-middleware.ts` is 812 lines (33 over 100 characters), up 9 from 803.
 
 ### Not owed
 

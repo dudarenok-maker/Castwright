@@ -690,10 +690,22 @@ recite:
     comment named the reuse. Checkable: for every "is this still the same X"
     check, ask whether the key can be reissued to a different X (a slug, a
     name, a path, a recycled counter) and, if so, key it on something only
-    the original holds (here the manuscript id each import mints). Test by
-    deleting X, re-creating one under the same key, and asserting nothing of
-    the old X carries over, with a control that an operation which keeps the
-    identity (a re-parse) still counts as the same X.
+    the original holds. Widened by review pass 12
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6481083193,
+    P12-1): pass 11's fix keyed it on the manuscript id, on the claim that
+    every import mints one, but the portable-bundle import keeps the bundle's
+    `manuscriptId` (and its `bookId`) when they are free, as they are after a
+    delete, so a book re-imported from its own bundle was again "the same
+    book". A key that one create path copies from an export (a bundle, a
+    backup, a template) is not something only the original holds: enumerate
+    every create path and check which keys each one mints and which it
+    copies. Where none is minted on every path, act at the delete instead
+    (here the delete clears the draft in its own tab), and record what that
+    leaves open (another tab's delete). Test by deleting X, re-creating one
+    under the same key on every create path (here a file import and a bundle
+    import), and asserting nothing of the old X carries over, with a control
+    that an operation which keeps the identity (a re-parse) still counts as
+    the same X.
 
 ### Keeping the catalogue current
 
