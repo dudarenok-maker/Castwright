@@ -434,6 +434,13 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
           seed.job.terminalWrites,
           new Promise((r) => setTimeout(r, 10_000)),
         ]);
+        /* terminalWrites covers only TRACKED writes. An UNTRACKED detached write
+           to the old path (the #2165 shape) is not in it, so give one time to
+           land before the negative assertions below. This sleep cannot turn a
+           correct run red: nothing writes the old folder, and job.ended stops
+           any later running snapshot overwriting the paused file. Do not
+           remove it as "another fixed sleep". */
+        await new Promise((r) => setTimeout(r, 400));
       } finally {
         seed.releasePhase0();
         if (jobPromise) await jobPromise.catch(() => {});
