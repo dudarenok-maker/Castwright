@@ -560,6 +560,19 @@ recite:
     where a real value of that same text sits on the placeholder's position
     (must still be caught), before trusting any exemption.
 
+47. **A skip honoured where a value is tested as the subject, but not where the
+    same value is read as evidence about another item** — PR #3835 pass 4
+    (#3829, `parseTitlesPairWithState`): `titleOverridden` (the user's own
+    wording) exempted a chapter from being checked, but that chapter's title
+    was still used as the "home" of a parse title when deciding whether ANOTHER
+    chapter had moved, so a rename could make a displaced title look settled.
+    Any exemption (overridden, synthesized, excluded, unreadable) has two roles
+    to decide: is the item itself checked, and may its value vouch for or
+    against its neighbours? Checkable: for each skip in a comparison loop,
+    find every other place the skipped item's value is read, and ask whether
+    the skip should apply there too. Then test a skipped item next to a moved
+    one, in both orders.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

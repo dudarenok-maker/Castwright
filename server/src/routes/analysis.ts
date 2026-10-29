@@ -3942,11 +3942,15 @@ function releaseBusyAndPin(job: AnalysisJob): void {
 }
 
 /** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs one-to-one
-    with state.json (a merged book before #3703 persisted its hints: a different chapter count or an id
-    state lacks) would rebuild `state.chapters` from the parse: chapters reappear, a uuid lands on
+    with state.json (a different chapter count or an id state lacks) would rebuild `state.chapters` from the parse: chapters reappear, a uuid lands on
     another chapter and rendered audio is orphaned. Answered before the SSE headers open, with the 409
     the restructure routes use. Fail-open on an unreadable or foreign state.json, like the `loadState`
     read in the runners. Persisted hints are not checked here: they carry their own staleness check.
+    A count/id mismatch has two causes: (a) a merge made before #3703 persisted its hints, and (b) a
+    chapter-splitting parser change after import (a4ba11aa, non-English plaintext; 532654fe, CJK
+    plaintext), which makes today's parse split the book differently. Both are refused. Accepted cost:
+    an affected book with no rendered audio needs a re-parse, which discards its cast (analysis used
+    to re-split such a book itself).
     The count/id check ONLY: `parseTitles` is deliberately not passed. Its title arm cannot tell a
     same-count reorder from title drift without refusing never-restructured books, so a same-count
     reorder from before #3703 is still analysed, as on main (design owed in #3837). */
