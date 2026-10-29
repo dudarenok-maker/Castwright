@@ -114,6 +114,25 @@ describe('modelTestDepsFor (#3084)', () => {
     expect(modelTestDepsFor('gemini-3.6-flash', settings()).probeLimits().maxOutputTokens).toBe(8192);
   });
 
+  it('an Ollama payload output cap is the Test probe cap (P19)', () => {
+    const d = modelTestDepsFor('q:4b', settings({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 2048 } } } }));
+    expect(d.extraParams).toEqual({ options: { num_predict: 2048 } });
+    expect(d.probeLimits().maxOutputTokens).toBe(2048);
+  });
+
+  it('a Gemini payload output cap is the Test probe cap (P19)', () => {
+    process.env.GEMINI_API_KEY = 'k';
+    const d = modelTestDepsFor('gemini-3.6-flash', settings({ analyzerExtraParamsByEngine: { gemini: { config: { maxOutputTokens: 2048 } } } }));
+    expect(d.extraParams).toEqual({ config: { maxOutputTokens: 2048 } });
+    expect(d.probeLimits().maxOutputTokens).toBe(2048);
+  });
+
+  it('an endpoint payload output cap is the Test probe cap, through resolveCapacity (P19)', () => {
+    const d = modelTestDepsFor('openai:lab::qwen3-30b', settings({ analyzerEndpoints: [{ ...lab, extraParams: { max_completion_tokens: 2048 } }] }));
+    expect(d.extraParams).toEqual({ max_completion_tokens: 2048 });
+    expect(d.probeLimits().maxOutputTokens).toBe(2048);
+  });
+
   it('a missing endpoint throws AnalyzerEndpointMissingError', () => {
     expect(() => modelTestDepsFor('openai:gone::m', settings())).toThrow(AnalyzerEndpointMissingError);
   });
