@@ -565,7 +565,7 @@ recite:
     (#3829, `parseTitlesPairWithState`): `titleOverridden` (the user's own
     wording) exempted a chapter from being checked, but that chapter's title
     was still used as the "home" of a parse title when deciding whether ANOTHER
-    chapter had moved, so a rename could make a displaced title look settled.
+    chapter had moved, so renaming a "Chapter N" heading made it look moved and refused a book that was never restructured.
     Any exemption (overridden, synthesized, excluded, unreadable) has two roles
     to decide: is the item itself checked, and may its value vouch for or
     against its neighbours? Checkable: for each skip in a comparison loop,
