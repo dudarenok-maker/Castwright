@@ -13,6 +13,10 @@
    (P17), never their values. */
 import type { TransportKind } from '../errors.js';
 import type { ReasoningStyle } from '../reasoning.js';
+import type { AnalysisEngine } from '../model-id.js';
+import { redactKnownSecrets } from '../redact.js';
+
+export { REDACTED } from '../redact.js';
 
 type Json = Record<string, unknown>;
 
@@ -302,4 +306,49 @@ export function stripPayloadTemperature(kind: TransportKind, params: Json | unde
 export function requestControlsLabelParts(kind: TransportKind, params: Json | undefined): string[] {
   if (!params || Object.keys(params).length === 0) return [];
   return payloadControlsOutputCap(kind, params) ? ['+ custom params', 'max output set by custom params'] : ['+ custom params'];
+}
+
+function collectRedactable(value: unknown, out: string[]): void {
+  if (typeof value === 'string') {
+    /* W3b's redactKnownSecrets applies the 8-character floor and derives the JSON-escaped spelling of each
+       value that clears it, so a value under 8 raw characters is never redacted. */
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectRedactable(v, out);
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const v of Object.values(value)) collectRedactable(v, out);
+  }
+}
+
+/** Every string value in a payload, nested values included. Each transport adds the values of the payload
+    ITS OWN request carried to the secrets W3b redacts that request's errors against (P22, scoped per request
+    by P29, Task 5.11); the floor and the escaped spelling are redactKnownSecrets'. They never join the global
+    knownAnalyzerSecrets() list. */
+export function payloadSecretValues(params: unknown): string[] {
+  const values: string[] = [];
+  collectRedactable(params, values);
+  return [...new Set(values)];
+}
+
+export function redactPayloadValues(text: string, params: unknown): string {
+  if (!text || params === undefined || params === null) return text;
+  return redactKnownSecrets(text, payloadSecretValues(params));
+}
+
+export function resolveExtraParamsSetting(
+  settings: { analyzerExtraParamsByEngine?: { ollama?: Json; gemini?: Json } },
+  sel: { engine: AnalysisEngine; endpoint?: { extraParams?: Json } },
+): Json | undefined {
+  switch (sel.engine) {
+    case 'local':
+      return settings.analyzerExtraParamsByEngine?.ollama;
+    case 'gemini':
+      return settings.analyzerExtraParamsByEngine?.gemini;
+    case 'openai':
+      return sel.endpoint?.extraParams;
+  }
 }

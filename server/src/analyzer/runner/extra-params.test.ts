@@ -4,12 +4,16 @@ import {
   GEMINI_CONFIG_ALLOWLIST,
   OWNED_CONTAINERS,
   PROTECTED_KEYS,
+  REDACTED,
   filterStoredPayload,
   mergeExtraParams,
   payloadControlsOutputCap,
   payloadOutputCap,
   payloadOutputCapKey,
+  payloadSecretValues,
+  redactPayloadValues,
   requestControlsLabelParts,
+  resolveExtraParamsSetting,
   stripPayloadTemperature,
   validateExtraParams,
 } from './extra-params.js';
@@ -293,5 +297,40 @@ describe('output cap and label parts (shared case table)', () => {
   it('no payload → no cap, no label', () => {
     expect(payloadControlsOutputCap('openai', undefined)).toBe(false);
     expect(requestControlsLabelParts('openai', undefined)).toEqual([]);
+  });
+});
+
+describe('redactPayloadValues', () => {
+  it('redacts string values of 8+ characters anywhere in the payload, not shorter ones', () => {
+    const params = { api_extra: 'sk-lab-0123456789', mode: 'json', nested: { list: ['tenant-alpha-7', 'auto'] } };
+    const text = 'upstream said: key sk-lab-0123456789 for tenant-alpha-7 in json auto mode';
+    expect(redactPayloadValues(text, params)).toBe(`upstream said: key ${REDACTED} for ${REDACTED} in json auto mode`);
+  });
+  it('redacts the JSON-escaped form of a value', () => {
+    const params = { prompt_prefix: 'say "hello" now' };
+    expect(redactPayloadValues('{"error":"bad value say \\"hello\\" now"}', params)).toBe(`{"error":"bad value ${REDACTED}"}`);
+  });
+  it('replaces the longest value first so a shorter overlapping value leaves no fragment', () => {
+    expect(redactPayloadValues('abcdefghij', { a: 'abcdefgh', b: 'abcdefghij' })).toBe(REDACTED);
+  });
+  it('is a no-op without a payload', () => {
+    expect(redactPayloadValues('text', undefined)).toBe('text');
+  });
+  it("payloadSecretValues lists every string value (the 8-character floor and the JSON-escaped spelling are W3b's)", () => {
+    expect(payloadSecretValues({ a: 'json', b: { c: ['say "hi" there'] } })).toEqual(['json', 'say "hi" there']);
+  });
+  it('a value under 8 characters is never redacted, even when its JSON-escaped spelling is 8 or more (5b-D11)', () => {
+    const text = 'upstream echoed x \\"\\"\\"\\"';
+    expect(redactPayloadValues(text, { a: '""""' })).toBe(text);
+  });
+});
+
+describe('settings helpers', () => {
+  it('resolves the payload per engine and per endpoint', () => {
+    const s = { analyzerExtraParamsByEngine: { ollama: { top_k: 1 }, gemini: { config: { topK: 2 } } } };
+    expect(resolveExtraParamsSetting(s, { engine: 'local' })).toEqual({ top_k: 1 });
+    expect(resolveExtraParamsSetting(s, { engine: 'gemini' })).toEqual({ config: { topK: 2 } });
+    expect(resolveExtraParamsSetting(s, { engine: 'openai', endpoint: { extraParams: { top_k: 3 } } })).toEqual({ top_k: 3 });
+    expect(resolveExtraParamsSetting({}, { engine: 'local' })).toBeUndefined();
   });
 });
