@@ -52,6 +52,7 @@ import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { allowlistedFetch } from './allowlisted-fetch.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
+import { mergeExtraParams } from '../runner/extra-params.js';
 import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
@@ -278,7 +279,7 @@ export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, serve
   return servedOutputLimit !== undefined ? Math.min(servedOutputLimit, contextBound) : contextBound;
 }
 
-/** #3084 — reasoning: wave 5a (Task 5.3); extraParams: wave 5b (Task 5.10). */
+/** #3084 — reasoning: wave 5a (Task 5.3); the custom payload is merged last: wave 5b (Task 5.10). */
 export function buildOpenAIRequestBody(
   endpoint: AnalyzerEndpoint,
   model: string,
@@ -295,7 +296,7 @@ export function buildOpenAIRequestBody(
     endpoint.maxOutputTokens > 0 && req.maxOutputTokens !== undefined
       ? req.maxOutputTokens
       : Math.min(req.maxOutputTokens ?? perRequestBound, perRequestBound);
-  return {
+  const native: Record<string, unknown> = {
     model,
     /* #3084 W4 — free text sends no empty system turn and leaves temperature / max_tokens to the server. */
     messages: [
@@ -312,6 +313,10 @@ export function buildOpenAIRequestBody(
        builder, so they carry the level too. */
     ...(req.reasoning !== undefined ? reasoningWireFragment('openai', { model, endpoint }, req.reasoning) : {}),
   };
+  /* #3084 wave 5b — the payload is merged LAST, after the level's fragment. The reasoning style lets the
+     merge drop a stored chat_template_kwargs.enable_thinking when the transport owns it (P17). With no
+     payload mergeExtraParams returns `native` itself, so the body is byte-identical. */
+  return mergeExtraParams('openai', native, req.extraParams, { reasoningStyle: endpoint.reasoningStyle });
 }
 
 interface StreamChunk {

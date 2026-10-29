@@ -8,7 +8,8 @@
    content blocks are reported through `finish` and mapped to errors by
    the runner (finish.ts). It DOES throw abort / idle / HTTP / quota
    errors so the retry helper can classify and retry them. */
-import { ApiError, GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI, type GenerateContentParameters } from '@google/genai';
+import { mergeExtraParams } from '../runner/extra-params.js';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
@@ -262,8 +263,8 @@ export class GeminiTransport implements ChatTransport {
     };
     Object.assign(config, geminiStructuredConfig(req.structuredOutput));
     /* #3084 wave 5 — the level's fragment, merged AFTER the structured-output keys and BEFORE
-       abortSignal is attached below (the merge returns a new object). Task 5.10 merges the payload
-       into this same `sentConfig`. */
+       abortSignal is attached below (the merge returns a new object). The payload is merged into the
+       request built from this `sentConfig` (Task 5.10). */
     const sentConfig =
       req.reasoning === undefined
         ? config
@@ -339,11 +340,17 @@ export class GeminiTransport implements ChatTransport {
     try {
       /* #3084 P5 — no answer text yet: bounded by the thinking window. */
       armIdleTimer(false);
-      const stream = await this.client.models.generateContentStream({
-        model: this.model,
-        contents,
-        config: sentConfig,
-      });
+      /* #3084 wave 5b — the payload is merged last into the request the transport built. `sentConfig`
+         (structured-output keys, then the level's thinkingConfig, then abortSignal) is the native `config`;
+         the payload's `config` merges key by key over it. The Gemini payload is an allowlist that excludes
+         thinkingConfig, so it cannot undo 5a's thinking config or includeThoughts (read above, before this
+         merge, and still true after it). The merge copies `config`, so abortSignal survives. */
+      const request = mergeExtraParams(
+        'gemini',
+        { model: this.model, contents, config: sentConfig },
+        req.extraParams,
+      ) as unknown as GenerateContentParameters;
+      const stream = await this.client.models.generateContentStream(request);
       const start = Date.now();
       let lastChunkAt = start;
       let buf = '';

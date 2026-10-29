@@ -4,9 +4,14 @@ import type { AddressInfo } from 'node:net';
 import { Agent } from 'undici';
 import { z } from 'zod';
 import { StageRunner } from './stage-runner.js';
-import { OLLAMA_RETRY_POLICY, type ValidationRetryPolicy } from './retry-policy.js';
+import { GEMINI_RETRY_POLICY, OLLAMA_RETRY_POLICY, OPENAI_RETRY_POLICY, type ValidationRetryPolicy } from './retry-policy.js';
 import { parseAndValidate } from './parse.js';
 import { OllamaTransport } from '../transports/ollama-transport.js';
+import { OpenAITransport } from '../transports/openai-transport.js';
+import { GeminiTransport } from '../transports/gemini-transport.js';
+import { geminiRateLimiter } from '../rate-limit.js';
+import type { GoogleGenAI } from '@google/genai';
+import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
 import type { ChatTransport } from './transport.js';
 
 const hoisted = vi.hoisted(() => ({ dirName: `castwright-w5b-temp-${process.pid}-${Date.now()}` }));
@@ -52,6 +57,9 @@ async function startSequence(contentType: string, responses: string[]): Promise<
 const ollamaText = (content: string) =>
   JSON.stringify({ message: { role: 'assistant', content }, done: false }) + '\n' +
   JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop' }) + '\n';
+const sseText = (content: string) =>
+  `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n` +
+  `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`;
 const dispatcher = () => new Agent({ headersTimeout: 0, bodyTimeout: 0, connect: { timeout: 10_000 } });
 
 function expectedRetryTemperature(policy: ValidationRetryPolicy): number {
@@ -83,5 +91,37 @@ describe('a payload temperature sets attempt 1 only', () => {
     expect(second.temperature).toBe(expectedRetryTemperature(OLLAMA_RETRY_POLICY));
     expect(second.temperature).not.toBe(0.95);
     expect(second.min_p).toBe(0.05);
+  });
+
+  it('OpenAI policy: attempt 2 uses the retry policy temperature, other payload keys survive', async () => {
+    const base = await startSequence('text/event-stream', [sseText('not json'), sseText('{"ok":true}')]);
+    const endpoint = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768 });
+    await runWith(new OpenAITransport({ endpoint, apiKey: null, model: 'm', dispatcher: dispatcher() }), OPENAI_RETRY_POLICY, { temperature: 0.95, top_k: 20 });
+    expect(bodies[0].temperature).toBe(0.95);
+    expect(bodies[1].temperature).toBe(expectedRetryTemperature(OPENAI_RETRY_POLICY));
+    expect(bodies[1].temperature).not.toBe(0.95);
+    expect(bodies[1].top_k).toBe(20);
+  });
+
+  it('Gemini policy: attempt 2 uses the retry policy temperature, other payload config keys survive', async () => {
+    const captured: Array<{ config: Record<string, unknown> }> = [];
+    const texts = ['not json', '{"ok":true}'];
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async (params: { config: Record<string, unknown> }) => {
+          captured.push(params);
+          const text = texts[captured.length - 1];
+          return (async function* () {
+            yield { text, candidates: [{ finishReason: 'STOP' }] };
+          })();
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    geminiRateLimiter._reset();
+    await runWith(new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }), GEMINI_RETRY_POLICY, { config: { temperature: 0.95, topK: 40 } });
+    expect(captured[0].config.temperature).toBe(0.95);
+    expect(captured[1].config.temperature).toBe(expectedRetryTemperature(GEMINI_RETRY_POLICY));
+    expect(captured[1].config.temperature).not.toBe(0.95);
+    expect(captured[1].config.topK).toBe(40);
   });
 });

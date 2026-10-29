@@ -2,13 +2,22 @@ import { describe, it, expect, beforeAll, afterEach, beforeEach, vi } from 'vite
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Agent } from 'undici';
+import type { GoogleGenAI } from '@google/genai';
 import { OllamaTransport } from './ollama-transport.js';
+import { OpenAITransport } from './openai-transport.js';
+import { GeminiTransport } from './gemini-transport.js';
+import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
+import { geminiRateLimiter } from '../rate-limit.js';
 import type { TransportRequest } from '../runner/transport.js';
 import type { ReasoningLevel } from '../reasoning.js';
 
 const OLLAMA_OK =
   JSON.stringify({ model: 'q:4b', message: { role: 'assistant', content: '{"ok":true}' }, done: false }) + '\n' +
   JSON.stringify({ model: 'q:4b', message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop' }) + '\n';
+
+const sseChunk = (delta: object, finish: string | null) =>
+  `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+const OPENAI_OK = sseChunk({ role: 'assistant', content: '{"ok":true}' }, null) + sseChunk({}, 'stop') + 'data: [DONE]\n\n';
 
 let server: Server | null = null;
 const bodies: Array<Record<string, unknown>> = [];
@@ -32,7 +41,7 @@ const req = (extraParams: Record<string, unknown> | undefined, reasoning?: Reaso
 });
 
 beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
-beforeEach(() => { bodies.length = 0; });
+beforeEach(() => { bodies.length = 0; geminiRateLimiter._reset(); });
 afterEach(async () => {
   if (server) { server.closeAllConnections(); await new Promise<void>((r) => server!.close(() => r())); server = null; }
 });
@@ -102,5 +111,68 @@ describe('Ollama payload merge', () => {
     await t.send({ ...req({ options: { num_gpu: 99 } }), freeText: { onCpu: true, keepAlive: 0 } });
     expect(bodies.map((b) => (b.options as Record<string, unknown>).num_gpu)).toEqual([0, 0]);
     vi.restoreAllMocks();
+  });
+});
+
+describe('OpenAI-compatible payload merge', () => {
+  const endpointAt = (base: string, reasoningStyle: 'reasoning_effort' | 'enable_thinking') =>
+    analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768, reasoningStyle });
+  it('sends the reporter payload and drops max_tokens when the payload sets max_completion_tokens', async () => {
+    const base = await startCapture('text/event-stream', OPENAI_OK);
+    await new OpenAITransport({ endpoint: endpointAt(base, 'reasoning_effort'), apiKey: null, model: 'm', dispatcher: dispatcher() })
+      .send(req({ top_k: 20, min_p: 0.05, presence_penalty: 1.5, max_completion_tokens: 4096 }));
+    expect(bodies[0]).toMatchObject({ top_k: 20, min_p: 0.05, presence_penalty: 1.5, max_completion_tokens: 4096 });
+    expect('max_tokens' in bodies[0]).toBe(false);
+  });
+  it('keeps enable_thinking from the reasoning level when the payload adds template kwargs', async () => {
+    const base = await startCapture('text/event-stream', OPENAI_OK);
+    await new OpenAITransport({ endpoint: endpointAt(base, 'enable_thinking'), apiKey: null, model: 'm', dispatcher: dispatcher() })
+      .send(req({ chat_template_kwargs: { add_generation_prompt: true } }, 'off'));
+    expect(bodies[0].chat_template_kwargs).toEqual({ enable_thinking: false, add_generation_prompt: true });
+  });
+  it('drops a stored chat_template_kwargs.enable_thinking under the enable_thinking style (P17)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const base = await startCapture('text/event-stream', OPENAI_OK);
+    await new OpenAITransport({ endpoint: endpointAt(base, 'enable_thinking'), apiKey: null, model: 'm', dispatcher: dispatcher() })
+      .send(req({ chat_template_kwargs: { enable_thinking: true } }, 'off'));
+    expect(bodies[0].chat_template_kwargs).toEqual({ enable_thinking: false });
+    vi.restoreAllMocks();
+  });
+});
+
+describe('Gemini payload merge', () => {
+  it('merges config key by key; payload temperature wins on this request', async () => {
+    const captured: Array<{ config: Record<string, unknown> }> = [];
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async (params: { config: Record<string, unknown> }) => {
+          captured.push(params);
+          return (async function* () { yield { text: '{"ok":true}', candidates: [{ finishReason: 'STOP' }] }; })();
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req({ config: { topK: 40, temperature: 0.9 } }));
+    expect(captured[0].config.topK).toBe(40);
+    expect(captured[0].config.temperature).toBe(0.9);
+    expect(captured[0].config.responseMimeType).toBe('application/json');
+    expect(captured[0].config.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('a stored config.httpOptions never reaches generateContentStream; allowlisted keys do (P16)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const captured: Array<{ config: Record<string, unknown> }> = [];
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async (params: { config: Record<string, unknown> }) => {
+          captured.push(params);
+          return (async function* () { yield { text: '{"ok":true}', candidates: [{ finishReason: 'STOP' }] }; })();
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req({ config: { httpOptions: { baseUrl: 'http://evil' }, topK: 40 } }));
+    expect(captured[0].config).not.toHaveProperty('httpOptions');
+    expect(captured[0].config.topK).toBe(40);
+    expect(JSON.stringify(captured[0])).not.toContain('evil');
+    warn.mockRestore();
   });
 });
