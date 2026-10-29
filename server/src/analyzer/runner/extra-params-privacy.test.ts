@@ -148,6 +148,27 @@ describe('the custom payload is never logged or persisted', () => {
     expect(everythingLogged()).not.toContain(SENTINEL);
   });
 
+  it("Ollama in-stream error: the daemon's echo is redacted against the payload AND the saved secrets (P22, P29)", async () => {
+    const SAVED = 'AIzaSy-privacy-saved-secret-1';
+    _setUserSettingsCacheForTest({ geminiApiKey: SAVED });
+    /* An error line inside an open 200 stream, echoing the request body and a saved key. */
+    const url = await startServer((raw) => ({
+      status: 200,
+      type: 'application/x-ndjson',
+      body: `${JSON.stringify({ error: `bad options ${raw} for key ${SAVED}` })}\n`,
+    }));
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' },
+      temperature: 0.2, extraParams: { user_tag: SENTINEL }, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect((err as Error).message).toContain('stream error:');
+    expect((err as Error).message).not.toContain(SENTINEL); // this task adds the payload values
+    expect((err as Error).message).not.toContain(SAVED); // PR 3b's known secrets are still redacted
+    expect((err as Error).message).toContain(REDACTED);
+    expect(everythingLogged()).not.toContain(SENTINEL);
+  });
+
   it("payload values are redacted only from their own request's errors: BLOCK_NONE stays in an unrelated engine's error (N15, P29)", async () => {
     _setUserSettingsCacheForTest({
       analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }] } } },

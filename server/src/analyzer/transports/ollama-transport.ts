@@ -461,10 +461,13 @@ export class OllamaTransport implements ChatTransport {
             }
 
             if (parsed.error) {
-              /* #3084 P22, A8 — the daemon's in-stream error can echo request text; every
-                 known analyzer secret is removed where the error is built. With no secret
-                 the message is byte-identical. */
-              const streamError = redactKnownSecrets(String(parsed.error), await loadKnownAnalyzerSecrets());
+              /* #3084 P22, P29, A8 — the daemon's in-stream error can echo request text; every known
+                 analyzer secret and this request's custom-payload values are removed where the error is
+                 built. With neither the message is byte-identical. */
+              const streamError = redactKnownSecrets(String(parsed.error), [
+                ...(await loadKnownAnalyzerSecrets()),
+                ...payloadSecretValues(req.extraParams),
+              ]);
               throw new Error(`Ollama ${this.url} stream error: ${streamError}`);
             }
             if (parsed.done) {
