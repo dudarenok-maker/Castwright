@@ -388,8 +388,8 @@ describe('a reasoning overflow stops new spend and aborts work in flight (#3084 
       expect(events.some((e) => e.kind === 'result')).toBe(false);
 
       /* Read the persisted snapshot, not only the first event: nothing after the end may
-         overwrite the terminal state or its code. endJob's snapshot write is fire-and-forget,
-         so under load it can land after a fixed sleep: wait for the halted write first. */
+         overwrite the terminal state or its code. endJob does not await its snapshot write
+         (it is collected into job.terminalWrites, #3711), so under load it can land after a fixed sleep: wait for the halted write first. */
       await vi.waitFor(
         () =>
           expect(JSON.parse(readFileSync(analysisStateJsonPath(seed.bookDir), 'utf8'))).toMatchObject({
@@ -551,7 +551,7 @@ describe('a reasoning overflow stops new spend and aborts work in flight (#3084 
       expect(events.some((e) => e.kind === 'result')).toBe(false);
       /* #3435 decision E — every ending aborts the job's controller (N4 no longer holds). */
       expect(job.controller.signal.aborted).toBe(true);
-      /* endJob's snapshot write is fire-and-forget. */
+      /* endJob does not await its snapshot write (collected into job.terminalWrites, #3711). */
       const { analysisStateJsonPath } = await import('../workspace/paths.js');
       await vi.waitFor(
         () =>

@@ -9369,8 +9369,8 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       __testRegisterJobForTest(job);
       endJob(job, { kind: 'error', code: 'cast_incomplete', message: 'route-test synthetic failure' });
 
-      /* endJob's outcome write is fire-and-forget (void, same pattern as the
-         pre-existing persistTerminalSnapshot calls) — wait for it to actually
+      /* endJob does not await its outcome write (it is collected into
+         job.terminalWrites, #3711, like the persistTerminalSnapshot calls) — wait for it to actually
          land on disk before POSTing, or the rejoin can race the write and see
          no file yet (same pattern as rejoin-miss.test.ts's waitForOutcome). */
       const { readAnalysisLastOutcome } = await import('../store/analysis-state.js');
