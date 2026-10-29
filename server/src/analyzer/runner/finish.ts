@@ -15,7 +15,7 @@ export function hasReasoningEvidence(r: TransportResult): boolean {
   return (r.usage?.reasoningTokens ?? 0) > 0 || r.reasoningSeen;
 }
 
-export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string; reasoningLevel?: ReasoningLevel }): string {
+export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string; reasoningLevel?: ReasoningLevel; payloadCapKey?: string; payloadCapRemoved?: boolean }): string {
   if (r.finish === 'blocked') throw new GeminiContentBlockedError(ctx.model, r.blockReason);
   /* #3084 wave 2 — the 'length' rule runs FIRST for every transport (spec §7).
      Wave 1 kept Ollama's pre-extraction order (empty check first; ollama.ts:830
@@ -24,7 +24,11 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
   if (r.finish === 'length') {
     const answer = stripThink(r.text);
     if (answer.text.trim() === '' && (hasReasoningEvidence(r) || answer.unterminated)) {
-      throw new AnalyzerReasoningOverflowError(ctx.kind, ctx.model, r.usage?.reasoningTokens, { reasoningLevel: ctx.reasoningLevel });
+      throw new AnalyzerReasoningOverflowError(ctx.kind, ctx.model, r.usage?.reasoningTokens, {
+        reasoningLevel: ctx.reasoningLevel,
+        payloadCapKey: ctx.payloadCapKey,
+        payloadCapRemoved: ctx.payloadCapRemoved,
+      });
     }
     throw new AnalyzerTruncatedError(ctx.kind, r.finishReason ?? 'length', r.receivedBytes, r.usage?.outputTokens);
   }

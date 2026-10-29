@@ -9,7 +9,7 @@ import type { StageCall } from '../types.js';
 import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../errors.js';
 import type { ReasoningLevel } from '../reasoning-level.js';
 import { hasReasoningEvidence, mapFinish, withThinkEvidence } from './finish.js';
-import { stripPayloadTemperature, withoutPayloadOutputCap } from './extra-params.js';
+import { payloadOutputCapStamp, stripPayloadTemperature, withoutPayloadOutputCap } from './extra-params.js';
 import { parseAndValidate, persistResponse, stripThink, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
 import type { ValidationRetryPolicy } from './retry-policy.js';
@@ -226,6 +226,7 @@ export class StageRunner {
       throw new GeminiContentBlockedError(this.transport.model, answer.blockReason, { transport: this.transport.kind });
     }
     if (answer.finish === 'length' && answer.text.trim() === '' && hasReasoningEvidence(answer)) {
+      /* A persona request sends no payload cap (A4), so its overflow names no payload key. */
       throw new AnalyzerReasoningOverflowError(this.transport.kind, this.transport.model, answer.usage?.reasoningTokens, { persona: true, reasoningLevel: settings.reasoning });
     }
     return answer.text;
@@ -293,7 +294,13 @@ export class StageRunner {
         onEvalTiming: withEvalTiming ? call.onEvalTiming : undefined,
       },
     });
-    return mapFinish(withThinkEvidence(result), { kind: this.transport.kind, model: this.transport.model, reasoningLevel: settings.reasoning });
+    return mapFinish(withThinkEvidence(result), {
+      kind: this.transport.kind,
+      model: this.transport.model,
+      reasoningLevel: settings.reasoning,
+      /* N13 (5b-D1) — stamped from the payload THIS request sent (the `extraParams` local above). */
+      ...payloadOutputCapStamp(this.transport.kind, extraParams),
+    });
   }
 }
 

@@ -614,6 +614,42 @@ function reasoningRemediationLead(err: AnalyzerReasoningOverflowError): string {
   return lowerable ? `Lower reasoning in ${control}.` : `Reasoning: ${control}.`;
 }
 
+/* #3084 wave 5b (N13) — where a payload lives, for copy and fixes. */
+export function customParamsWhere(transport: TransportKind, endpointName: string | undefined): string {
+  return transport === 'openai'
+    ? endpointName
+      ? `the "${endpointName}" endpoint's custom parameters`
+      : "this endpoint's custom parameters"
+    : `the ${transport === 'ollama' ? 'Ollama' : 'Gemini'} custom parameters (Advanced settings → Analyzer request controls)`;
+}
+
+/** #3084 wave 5b (N13, 5b-D3) — the advice for a payload key that set or removed the output cap. One phrase
+    for the remediation lead below and Task 5.11b's structured fixes, so the two cannot drift. */
+export function payloadCapAdvice(transport: TransportKind, key: string, removed: boolean | undefined, endpointName: string | undefined): string {
+  const where = customParamsWhere(transport, endpointName);
+  return removed ? `Set a value for the custom parameter "${key}" in ${where}` : `Raise the custom parameter "${key}" in ${where}`;
+}
+
+/* Each engine's own output-cap control, the one a payload cap overrides (registry labels `Ollama num_predict`
+   and `Gemini max output tokens`; the endpoint form's Max output tokens field). */
+const PAYLOAD_OVERRIDDEN_CAP_CONTROL: Record<TransportKind, string> = {
+  ollama: "the 'Ollama num_predict' setting",
+  gemini: "the 'Gemini max output tokens' setting",
+  openai: "this endpoint's Max output tokens field",
+};
+
+/* #3084 wave 5b (N13, 5b-D1/D2) — the remediation sentence for a payload key that set the overflowing
+   request's output cap. Read from the error (stamped at throw time), never from live settings: this module
+   never imports workspace/user-settings.ts (A9); an endpoint is named through the leaf gate by err.endpointId.
+   undefined when no payload key controlled the cap. */
+function payloadCapRemediationLead(err: AnalyzerReasoningOverflowError): string | undefined {
+  if (!err.payloadCapKey) return undefined;
+  const endpoint = err.transport === 'openai' && err.endpointId
+    ? listAnalyzerEndpoints().find((e) => e.id === err.endpointId)
+    : undefined;
+  return `${payloadCapAdvice(err.transport, err.payloadCapKey, err.payloadCapRemoved, endpoint?.name)}: it sets this request's output cap, so ${PAYLOAD_OVERRIDDEN_CAP_CONTROL[err.transport]} has no effect while it is there.`;
+}
+
 /* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
 
    A per-instance, machine-readable companion to the static per-code
@@ -1037,8 +1073,11 @@ export function classifyAnalysisFailure(
         `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped.`,
         `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
         /* #3084 wave 5a (5.5-D1) — per-instance remediation: name the reasoning control that governs
-           THIS model, then the static per-code steps. userMessage stays the F7 headline. */
-        `${reasoningRemediationLead(err)} ${FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation}`,
+           THIS model, then (5b-D2) the payload key that set its output cap, then the static per-code
+           steps. userMessage stays the F7 headline. With no payload key this is 5a's text, byte for byte. */
+        [reasoningRemediationLead(err), payloadCapRemediationLead(err), FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation]
+          .filter((part): part is string => part !== undefined)
+          .join(' '),
       ),
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called

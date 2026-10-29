@@ -259,6 +259,19 @@ export function payloadOutputCapKey(kind: TransportKind, params: Json | undefine
   return container === null ? key : `${container}.${key}`;
 }
 
+/** N13 (5b-D1, 5b-D3) — what a reasoning-overflow error records about the output cap of the payload the
+    overflowing request sent: the key that set it, and whether that key's own value removes the cap. Only
+    `null` and -1 remove it (5b-D3, narrowed 2026-10-30); 0, another negative, a fraction or a string does
+    not, even though payloadOutputCap is `null` for them too. `{}` when the payload controls no cap. */
+export function payloadOutputCapStamp(kind: TransportKind, params: Json | undefined): { payloadCapKey?: string; payloadCapRemoved?: boolean } {
+  const payloadCapKey = payloadOutputCapKey(kind, params);
+  if (payloadCapKey === undefined || !params) return {};
+  const { container } = OUTPUT_CAP[kind];
+  const scope = (container === null ? params : params[container]) as Json;
+  const value = scope[container === null ? payloadCapKey : payloadCapKey.slice(container.length + 1)];
+  return { payloadCapKey, payloadCapRemoved: value === null || value === -1 };
+}
+
 /** A4 — `params` without the keys that set the output cap (`payloadOutputCapKey`'s table): what a
     persona (free-text) request sends. The same object when the payload sets no cap; `undefined` for
     no payload. Never mutates `params`. */
