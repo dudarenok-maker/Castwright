@@ -135,10 +135,11 @@ async function buildJob(
   return job;
 }
 
-/** `writeAnalysisLastOutcome` inside `endJob` is fire-and-forget (`void`,
-    same pattern as the pre-existing `persistTerminalSnapshot` calls) —
-    `endJob` itself is synchronous and returns before the write settles. Poll
-    briefly rather than asserting immediately after the call. */
+/** `writeAnalysisLastOutcome` inside `endJob` is not awaited by `endJob`
+    (collected into `job.terminalWrites`, #3711, like the
+    `persistTerminalSnapshot` calls) — `endJob` itself is synchronous and
+    returns before the write settles. Poll briefly rather than asserting
+    immediately after the call. */
 async function waitForOutcome(bookDir: string): Promise<AnalysisLastOutcome | null> {
   const { readAnalysisLastOutcome } = await import('../store/analysis-state.js');
   const deadline = Date.now() + 2_000;
