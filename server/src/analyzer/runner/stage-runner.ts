@@ -9,6 +9,7 @@ import type { StageCall } from '../types.js';
 import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../errors.js';
 import type { ReasoningLevel } from '../reasoning-level.js';
 import { hasReasoningEvidence, mapFinish, withThinkEvidence } from './finish.js';
+import { stripPayloadTemperature, withoutPayloadOutputCap } from './extra-params.js';
 import { parseAndValidate, persistResponse, stripThink, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
 import type { ValidationRetryPolicy } from './retry-policy.js';
@@ -102,7 +103,7 @@ export class StageRunner {
       );
 
       const retry = this.policy.buildRetry({ messages: firstMessages, firstRaw: firstText, failure: firstAttempt });
-      const secondText = await this.send(system, retry.messages, retry.temperature, structuredOutput, call, true);
+      const secondText = await this.send(system, retry.messages, retry.temperature, structuredOutput, call, true, true);
 
       const secondAttempt = parseAndValidate(secondText, spec.validationSchema);
       if (secondAttempt.ok) {
@@ -183,7 +184,7 @@ export class StageRunner {
   /** #3084 W4 — one unstructured, single-attempt call (persona generation, spec §10).
       No schema, no validation retry, no chunking, and NO engine output cap: free text gets the
       model's default length, as the persona calls had before they ran through a transport.
-      It carries the engine's reasoning level and custom payload (wave 5).
+      It carries the engine's reasoning level and custom payload (wave 5), minus the payload's output-cap keys (A4).
       Returns the answer text with a leading <think> block removed. An empty string is returned
       as-is for the caller to judge; a blocked response and a length stop that produced only
       reasoning throw, so neither failure is collapsed into an empty answer. */
@@ -199,7 +200,10 @@ export class StageRunner {
       temperature: input.temperature,
       maxOutputTokens: undefined,
       reasoning: settings.reasoning,
-      extraParams: settings.extraParams,
+      /* A4 — a persona request carries the engine's payload WITHOUT its output-cap keys: free text
+         takes the model's own length (W4), and a cap chosen for chapter work would truncate a voice
+         description. Every other payload key applies (P19). */
+      extraParams: withoutPayloadOutputCap(this.transport.kind, settings.extraParams),
       /* The persona limiter estimate from voice-style.ts:219 at 6c3a0a49 (its Gemini branch's `const estTokens`): ~chars/4 plus a flat margin. */
       estimatedInputTokens: Math.ceil((system.length + input.prompt.length) / 4) + 200,
       signal: input.signal,
@@ -257,6 +261,7 @@ export class StageRunner {
     structuredOutput: StructuredOutputRequest,
     call: StageCall,
     withEvalTiming: boolean,
+    stripTemperature = false,
   ): Promise<string> {
     /* #3084 wave 2b — warm whatever settings resolution reads synchronously
        (the Gemini model catalog behind Auto max output tokens) BEFORE reading
@@ -266,6 +271,9 @@ export class StageRunner {
        depend on prepare(). */
     await this.transport.prepare?.(call.signal);
     const settings = this.settings();
+    /* D9: a payload temperature sets attempt 1 only; on the validation retry the retry policy's
+       temperature (req.temperature, applied natively) must win. */
+    const extraParams = stripTemperature ? stripPayloadTemperature(this.transport.kind, settings.extraParams) : settings.extraParams;
     const result = await this.transport.send({
       system,
       messages,
@@ -273,7 +281,7 @@ export class StageRunner {
       temperature,
       maxOutputTokens: settings.maxOutputTokens,
       reasoning: settings.reasoning,
-      extraParams: settings.extraParams,
+      extraParams,
       estimatedInputTokens: estimateInputTokens(
         system,
         messages.map((m) => ({ role: m.role === 'assistant' ? ('model' as const) : ('user' as const), parts: [{ text: m.content }] })),

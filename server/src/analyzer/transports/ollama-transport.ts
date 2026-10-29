@@ -44,6 +44,7 @@ import type { RawEvalTiming } from '../analyzer-eval-stats.js';
 import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
+import { mergeExtraParams } from '../runner/extra-params.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
@@ -159,6 +160,8 @@ export class OllamaTransport implements ChatTransport {
     } else {
       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
     }
+    /* #3084 wave 5b — the custom payload is merged LAST; built once here, outside any slot-acquire window. */
+    const wireBody = mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams);
 
     /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
        else must bound this call — and unlike chat() (whose StageCall carries the
@@ -207,7 +210,7 @@ export class OllamaTransport implements ChatTransport {
         response = await undiciFetch(`${url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(wireBody),
           signal,
           dispatcher: this.dispatcher, // CHANGED: the field is non-optional (defaulted to ANALYZER_DISPATCHER in the constructor), so the injected test dispatcher is honoured, like send()
         });
@@ -327,6 +330,8 @@ export class OllamaTransport implements ChatTransport {
     } else {
       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
     }
+    /* #3084 wave 5b — the custom payload is merged LAST (same rule as the free-text body above). */
+    const wireBody = mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams);
 
     /* Short-circuit if the caller has already aborted (e.g. the SSE client
        disconnected while a previous chapter was still running). Saves a
@@ -348,7 +353,7 @@ export class OllamaTransport implements ChatTransport {
         response = await undiciFetch(`${this.url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(wireBody),
           signal,
           dispatcher: this.dispatcher,
         });

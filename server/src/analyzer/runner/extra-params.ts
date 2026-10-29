@@ -252,6 +252,20 @@ export function payloadOutputCapKey(kind: TransportKind, params: Json | undefine
   return container === null ? key : `${container}.${key}`;
 }
 
+/** A4 — `params` without the keys that set the output cap (`payloadOutputCapKey`'s table): what a
+    persona (free-text) request sends. The same object when the payload sets no cap; `undefined` for
+    no payload. Never mutates `params`. */
+export function withoutPayloadOutputCap(kind: TransportKind, params: Json | undefined): Json | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return params;
+  const { container, keys } = OUTPUT_CAP[kind];
+  if (container === null) return Object.fromEntries(Object.entries(params).filter(([key]) => !keys.includes(key))) as Json;
+  const inner = params[container] as Json;
+  return {
+    ...params,
+    [container]: Object.fromEntries(Object.entries(inner).filter(([key]) => !keys.includes(key))),
+  };
+}
+
 /** Merged LAST into the native request, after filterStoredPayload (P17). Top-level keys replace;
     the owned container merges key by key; `null` removes a key inside it. Never mutates `native`. */
 export function mergeExtraParams(
