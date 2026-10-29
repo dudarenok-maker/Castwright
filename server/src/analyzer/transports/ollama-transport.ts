@@ -44,7 +44,7 @@ import type { RawEvalTiming } from '../analyzer-eval-stats.js';
 import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
-import { mergeExtraParams } from '../runner/extra-params.js';
+import { mergeExtraParams, payloadSecretValues } from '../runner/extra-params.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
@@ -230,12 +230,12 @@ export class OllamaTransport implements ChatTransport {
         throw classifyConnectError(err, url);
       }
       if (!response.ok) {
-        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The
-           redaction is PR 3b's (W3b Task 3b.6a), carried through the move: every known analyzer secret
-           is removed BEFORE the body is sliced (P22). With no secret in the body the message text is
-           byte-identical to main's. */
+        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The redaction
+           is PR 3b's (W3b Task 3b.6a), carried through the move, plus this request's own custom-payload values
+           (#3084 P29): every known analyzer secret and every payload string value is removed BEFORE the body
+           is sliced (P22). With neither in the body the message text is byte-identical to main's. */
         const text = await response.text().catch(() => '');
-        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+        const bodyExcerpt = redactKnownSecrets(text, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
@@ -369,11 +369,12 @@ export class OllamaTransport implements ChatTransport {
       if (!response.ok) {
         /* Reachable but errored — hard-fail. Surface the body so the operator can
            diagnose ("model not found", "invalid format", …), with every known
-           analyzer secret removed where the error is built (#3084 P22). Redacted
-           BEFORE truncating, so a secret the slice would cut in half cannot
-           survive. With no secret in the body the text is byte-identical. */
+           analyzer secret AND this request's custom-payload string values removed
+           where the error is built (#3084 P22, P29). Redacted BEFORE truncating, so
+           a value the slice would cut in half cannot survive. With neither in the
+           body the text is byte-identical. */
         const text = await response.text().catch(() => '');
-        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+        const bodyExcerpt = redactKnownSecrets(text, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
