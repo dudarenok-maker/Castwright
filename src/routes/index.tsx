@@ -163,6 +163,11 @@ export function BooksRoute() {
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(dropRetainedSaves(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
+        /* #3784 P12-3 — the other slices may still hold the deleted book under
+           its id, and a bundle import touches none of them, so a re-import's
+           next open would read only its revisions and show (and write back)
+           the deleted book. Mark it so that open reads it in full. */
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());

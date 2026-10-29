@@ -1299,6 +1299,15 @@ export function Layout() {
     if (!bookId) return;
     if (characters.length === 0) return;
     if (manuscript.bookId !== bookId) return;
+    /* #3784 P12-3 — a book marked for a full read may hold slices older than
+       disk under its own id (a book deleted and re-imported from its bundle),
+       so the match waits for that read; clearing the mark re-runs this. A
+       mark made after the match fired cancelled its result (the cleanup
+       below), so the once-guard is re-armed for the read's roster. */
+    if (fullReadMarks > 0) {
+      if (voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
+      return;
+    }
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
@@ -1309,7 +1318,7 @@ export function Layout() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length, manuscript.bookId]);
+  }, [stageKind, bookId, characters.length, manuscript.bookId, fullReadMarks]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
