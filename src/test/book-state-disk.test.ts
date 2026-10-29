@@ -95,4 +95,16 @@ describe('book-state disk model: server parity (plan 289, C)', () => {
     expect(answered).toBe(true);
     expect(disk.maxInTransit('b1', 'state')).toBe(1);
   });
+
+  /* #3784 pass 13, C1 — `put` cannot hold a PUT, so a test whose PUTs bypass
+     `serve` would see its hold do nothing. It throws instead. */
+  it('a PUT that matches a hold but is made through put throws, and writes nothing', () => {
+    const disk = seeded();
+    disk.hold((id, req) => id === 'b1' && req.slice === 'state');
+    expect(() => disk.put('b1', { slice: 'state', patch: { title: 'T1' } } as never)).toThrow(/disk\.serve/);
+    expect(disk.books.get('b1')!.state.title).toBe('T0');
+    expect(disk.log).toEqual([]);
+    disk.put('b1', { slice: 'cast', patch: { characters: [] } } as never);
+    expect(disk.log.at(-1)!.outcome).toBe('ok');
+  });
 });

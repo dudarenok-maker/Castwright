@@ -20,7 +20,9 @@
      the request carries, as the server's `carriedFields` does.
    - `serve` is the async face of `put`: `hold` keeps a matching PUT in transit
      until released, and `maxInTransit` reports the most PUTs ever in transit
-     at once per `${bookId}:${slice}`.
+     at once per `${bookId}:${slice}`. A PUT that matches a registered hold
+     but is made through `put` throws: `put` cannot keep it in transit, so the
+     hold would otherwise silently do nothing (#3784 pass 13, C1).
    - `log` records every PUT in order. */
 
 import type { SliceRevision, StateSlice, PutStateRequest, PutStateResponse } from '../lib/types';
@@ -87,6 +89,16 @@ export function createBookStateDisk() {
   const inTransit = new Map<string, number>();
   const peak = new Map<string, number>();
   let nextEpoch = 1;
+  /* True while `serve` lands a PUT through `put`, which then skips the hold check. */
+  let serving = false;
+  const land = (bookId: string, req: PutStateRequest): PutStateResponse => {
+    serving = true;
+    try {
+      return disk.put(bookId, req);
+    } finally {
+      serving = false;
+    }
+  };
   const disk = {
     books,
     log,
@@ -174,15 +186,15 @@ export function createBookStateDisk() {
       peak.set(key, Math.max(peak.get(key) ?? 0, now));
       try {
         const i = holds.findIndex((h) => h.match(bookId, req));
-        if (i < 0) return disk.put(bookId, req);
+        if (i < 0) return land(bookId, req);
         const [h] = holds.splice(i, 1);
         if (!h.afterWrite) {
           await h.gate;
-          return disk.put(bookId, req);
+          return land(bookId, req);
         }
         let answer: () => PutStateResponse;
         try {
-          const res = disk.put(bookId, req);
+          const res = land(bookId, req);
           answer = () => res;
         } catch (err) {
           answer = () => {
@@ -197,6 +209,11 @@ export function createBookStateDisk() {
     },
 
     put(bookId: string, req: PutStateRequest): PutStateResponse {
+      if (!serving && holds.some((h) => h.match(bookId, req))) {
+        throw new Error(
+          `disk.hold matches this ${bookId}:${req.slice} PUT, but it was made through disk.put, which cannot hold it; route it through disk.serve`,
+        );
+      }
       const patch = (req.patch ?? {}) as Record<string, unknown>;
       const entry = (outcome: DiskPut['outcome']) =>
         log.push({ bookId, slice: req.slice, patch, base: !!req.baseRevision, outcome });
