@@ -9,7 +9,7 @@
    the runner (finish.ts). It DOES throw abort / idle / HTTP / quota
    errors so the retry helper can classify and retry them. */
 import { ApiError, GoogleGenAI, type GenerateContentParameters } from '@google/genai';
-import { mergeExtraParams } from '../runner/extra-params.js';
+import { mergeExtraParams, payloadSecretValues } from '../runner/extra-params.js';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
@@ -542,8 +542,9 @@ export class GeminiTransport implements ChatTransport {
          `details[]` payload — the only useful diagnostic for a 5xx/4xx that
          withTransportRetry classifies 'no-retry' or exhausts its retries on.
          Moved from pre-W1 generate()'s own catch (gemini.ts:710-726). */
-      /* #3084 P22 — redacted before it is logged or rethrown. */
-      const safe = redactGeminiError(err, await loadKnownAnalyzerSecrets());
+      /* #3084 P22, P29 — redacted before it is logged or rethrown: every known analyzer secret, plus the values
+         of the payload THIS request carried (never another request's). */
+      const safe = redactGeminiError(err, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]);
       const status = (err as { status?: number })?.status;
       const message = (safe as Error)?.message ?? String(safe);
       const userTurn = contents[contents.length - 1]?.parts[0]?.text ?? '';

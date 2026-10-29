@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent } from 'undici';
 import { z } from 'zod';
+import { ApiError, type GoogleGenAI } from '@google/genai';
 import { StageRunner } from './stage-runner.js';
 import { OLLAMA_RETRY_POLICY } from './retry-policy.js';
 import { REDACTED } from './extra-params.js';
 import { OllamaTransport } from '../transports/ollama-transport.js';
+import { GeminiTransport } from '../transports/gemini-transport.js';
 import { AnalyzerHttpError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest, knownAnalyzerSecrets } from '../../workspace/user-settings.js';
@@ -167,6 +169,50 @@ describe('the custom payload is never logged or persisted', () => {
     expect((err as Error).message).not.toContain(SAVED); // PR 3b's known secrets are still redacted
     expect((err as Error).message).toContain(REDACTED);
     expect(everythingLogged()).not.toContain(SENTINEL);
+  });
+
+  it('Gemini: the SDK error is rebuilt with a redacted message AND stack before it is logged or rethrown', async () => {
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async () => {
+          throw new ApiError({
+            status: 400,
+            message: `got status: 400 INVALID_ARGUMENT. {"error":{"code":400,"message":"Invalid value at 'safety_settings[0].category' (${SENTINEL})","status":"INVALID_ARGUMENT"}}`,
+          });
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2,
+      extraParams: { config: { safetySettings: [{ category: SENTINEL, threshold: 'BLOCK_NONE' }] } }, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError); // W3b's redactGeminiError rebuilds an ApiError as an ApiError
+    expect((err as { status?: number }).status).toBe(400); // the retry classifier and the taxonomy still read it
+    expect((err as Error).message).not.toContain(SENTINEL);
+    expect((err as Error).message).toContain(REDACTED);
+    expect((err as Error).stack ?? '').not.toContain(SENTINEL);
+    expect(everythingLogged()).not.toContain(SENTINEL);
+  });
+
+  it("a Gemini error from a payload-carrying request stays redacted through classifyAnalysisFailure's envelope detail", async () => {
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async () => {
+          throw new ApiError({
+            status: 400,
+            message: `got status: 400 INVALID_ARGUMENT. {"error":{"code":400,"message":"bad","status":"INVALID_ARGUMENT","details":[{"note":"${SENTINEL}"}]}}`,
+          });
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2,
+      extraParams: { config: { safetySettings: [{ category: SENTINEL, threshold: 'BLOCK_NONE' }] } }, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req).catch((e: unknown) => e);
+    const failure = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(`${failure.userMessage}\n${failure.detail ?? ''}`).not.toContain(SENTINEL);
   });
 
   it("payload values are redacted only from their own request's errors: BLOCK_NONE stays in an unrelated engine's error (N15, P29)", async () => {
