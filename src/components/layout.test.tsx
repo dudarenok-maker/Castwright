@@ -3013,7 +3013,8 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
         sliceRevisions: disk.revisions(id),
       });
     });
-    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    /* Through the async serve, so a test's hold takes effect. */
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
     return disk;
   }
 
@@ -3131,7 +3132,7 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     await waitFor(() => expect(disk.books.get('A')!.state.title).toBe('T2'));
     await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A).toBe(1));
 
-    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.put(id, req));
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
     openAt(store as never, 'A');
     await waitFor(() => expect(savedTitle(store)).toBe('T2'));
     commit(store, 'notes', 'A note');
@@ -3565,6 +3566,7 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
 
       expect(store.getState().bookMeta.draft).toEqual({ notes: 'typed before read' });
     } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
       vi.useRealTimers();
     }
   });
@@ -3591,8 +3593,6 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
       await act(async () => { await vi.advanceTimersByTimeAsync(100); });
 
-      /* `hold` needs the disk's async `serve`. */
-      putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
       const releasePut = disk.hold((id, req) => id === 'A' && req.slice === 'state');
       disk.refuseNext('book_busy', (id, req) => id === 'A' && req.slice === 'state');
       commit(store, 'notes', 'Mine');
@@ -3986,6 +3986,85 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
           .map((p) => (p.patch.characters as Array<{ name: string; role: string }>).map((c) => `${c.name}/${c.role}`)),
       ).toEqual([['Bundle Eliza/lead']]);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 pass 12, C1 — after a re-import under the same id the book's record
+     moves to the new manuscript, so typing on the new book survives its next
+     full read. */
+  it('P12 C1: typing on a re-imported book survives its next full read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh'));
+
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'typing on new' })); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, notes: 'outside' });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('outside'));
+      expect(store.getState().bookMeta.draft).toEqual({ title: 'typing on new' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 pass 12, C1 — the first full read of a book opened after another
+     book was read keeps the typing too, not only the session's first read.
+     The library entry here has no manuscript id (the field is optional), so
+     the book has no record when its read lands. */
+  it('P12 C1: typing before the first full read of a book opened after another book survives it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'From disk' });
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'complete', tags: [] }] }] }] };
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'typed before read' })); });
+      releaseRead();
+      await waitFor(() => expect(savedTitle(store)).toBe('From disk'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'typed before read' });
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
       vi.useRealTimers();
     }
   });
