@@ -448,3 +448,65 @@ describe('reasoningOverflowFixes — a payload output cap replaces the Gemini an
     expect(f.fixes?.[0]?.label).toContain('"options.num_predict"');
   });
 });
+
+describe('reasoningOverflowFixes — endpoint custom-payload output cap (#3084 wave 5b, F7, 5b-D1/D2)', () => {
+  afterEach(() => _resetUserSettingsCache());
+  const seedLab = (extraParams?: Record<string, unknown>) =>
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [analyzerEndpointSchema.parse({
+        id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768,
+        ...(extraParams ? { extraParams } : {}),
+      })],
+    });
+  const capCtx = { transport: 'openai' as const, model: 'm', endpointId: 'lab', payloadCapKey: 'max_completion_tokens', payloadCapRemoved: false };
+
+  it("names the payload key in the endpoint's custom parameters, deep-links extraParams, and links Custom payload", () => {
+    seedLab({ max_completion_tokens: 4096 });
+    const fixes = reasoningOverflowFixes(capCtx);
+    expect(fixes.find((f) => f.endpointField?.field === 'extraParams')).toEqual({
+      label: 'Raise the custom parameter "max_completion_tokens" in the "Lab box" endpoint\'s custom parameters',
+      endpointField: { endpointId: 'lab', field: 'extraParams' },
+    });
+    const readFix = fixes.find((f) => f.label === 'Read: Custom payload');
+    expect(readFix?.wikiPage).toBe('OpenAI-Compatible-Analyzer-Endpoints');
+    expect(existsSync(`${wikiDir}${readFix!.wikiPage}.md`), readFix!.wikiPage).toBe(true);
+  });
+
+  it("drops \"Lower <name>'s max output tokens\" while a payload sets the cap, and keeps it otherwise (5b-D2)", () => {
+    seedLab();
+    expect(reasoningOverflowFixes(capCtx).some((f) => f.endpointField?.field === 'maxOutputTokens')).toBe(false);
+    expect(reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' }).some((f) => f.endpointField?.field === 'maxOutputTokens')).toBe(true);
+  });
+
+  it('the key comes from the overflowing request, not the payload saved now (5b-D1)', () => {
+    seedLab({ top_k: 40 }); // edited after the overflow
+    expect(reasoningOverflowFixes(capCtx).find((f) => f.endpointField?.field === 'extraParams')?.label).toContain('"max_completion_tokens"');
+  });
+
+  it('without a payload key: no payload fix and no Read: Custom payload entry, whatever is saved now', () => {
+    seedLab({ max_completion_tokens: 4096 });
+    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+    expect(fixes.some((f) => f.endpointField?.field === 'extraParams')).toBe(false);
+    expect(fixes.some((f) => f.label === 'Read: Custom payload')).toBe(false);
+  });
+
+  it("a deleted endpoint: the payload fix names \"this endpoint's custom parameters\"", () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    expect(reasoningOverflowFixes(capCtx).find((f) => f.endpointField?.field === 'extraParams')?.label).toContain("this endpoint's custom parameters");
+  });
+
+  it('no actionable fix ever follows a Read: entry, for every guard context and the payload contexts', () => {
+    seedLab();
+    const payloadContexts = [
+      capCtx,
+      { transport: 'gemini' as const, model: 'gemini-3.6-flash', payloadCapKey: 'config.maxOutputTokens' },
+      { transport: 'ollama' as const, model: 'qwen3.5:9b', payloadCapKey: 'options.num_predict' },
+    ];
+    for (const ctx of [...CONTEXTS, ...payloadContexts]) {
+      const fixes = reasoningOverflowFixes(ctx);
+      const firstRead = fixes.findIndex((f) => f.label.startsWith('Read: '));
+      if (firstRead === -1) continue;
+      expect(fixes.slice(firstRead).every((f) => f.label.startsWith('Read: ')), JSON.stringify(fixes.slice(firstRead))).toBe(true);
+    }
+  });
+});

@@ -818,11 +818,15 @@ export function reasoningOverflowFixes(ctx: {
     /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
        stage input fractions. Named by saved name, falling back to the id when the
        endpoint was deleted after the failure. A reasoning row only for a controllable
-       endpoint above its style's floor (5a, 5.5-D2); no payload rows (5b). */
+       endpoint above its style's floor (5a, 5.5-D2); when a payload set the output cap, its key
+       replaces the max-output row (5b-D2). */
     const endpoint = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId);
     const name = endpoint?.name ?? ctx.endpointId;
     fixes.push(
-      { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
+      ctx.payloadCapKey
+        ? /* 5b-D2 — a payload key sets this request's output cap (P19), overriding this endpoint's Max output tokens. */
+          { label: payloadCapAdvice('openai', ctx.payloadCapKey, ctx.payloadCapRemoved, endpoint?.name), endpointField: { endpointId: ctx.endpointId, field: 'extraParams' } }
+        : { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
       { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
       { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
       { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
@@ -836,6 +840,10 @@ export function reasoningOverflowFixes(ctx: {
       ctx.reasoningLevel !== levelsForReasoningStyle(endpoint.reasoningStyle)[1]
     ) {
       fixes.push({ label: `Lower ${name}'s reasoning level`, endpointField: { endpointId: ctx.endpointId, field: 'reasoning' } });
+    }
+    if (ctx.payloadCapKey) {
+      /* #3084 wave 5b — the page's "Custom payload" section (Task 5.13b). Its own list-level entry; the payload fix carries no wikiPage. */
+      reads.push({ label: 'Read: Custom payload', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' });
     }
     /* #3084 P33 — the endpoints wiki page ships with this PR; this entry links it, and its label names the section. */
     reads.push({

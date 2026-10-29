@@ -6962,7 +6962,7 @@ components:
           description: Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix.
         endpointField:
           type: object
-          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields).'
+          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields; from wave 5b, its custom parameters (`extraParams`) when a payload set the output cap).'
           required: [endpointId, field]
           properties:
             endpointId: { type: string }
