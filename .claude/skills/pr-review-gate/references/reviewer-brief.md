@@ -706,6 +706,26 @@ recite:
     import), and asserting nothing of the old X carries over, with a control
     that an operation which keeps the identity (a re-parse) still counts as
     the same X.
+56. **A once-guard re-armed on a broad signal, without checking whether the
+    guarded action already applied** — PR #3775 review pass 13
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6492345913),
+    P13-1 (#3784): Confirm's automatic voice match runs once per visit,
+    behind a `voiceMatchFiredFor` ref. A fix made it wait while the book was
+    marked for a full read and, to recover a match whose result a mark had
+    cancelled, reset the ref on any mark. Nothing checked whether the match
+    had already landed, so a later mark (the language guard's Save, a stale
+    refusal of one of the book's saves) ran it again, and its result replaced
+    the voices the user had picked since, locked ones included, and saved
+    them. The comment, the plan and the PR body all described the narrow
+    case ("a mark that cancels a match already out"), and the code did the
+    broad one. Checkable: for every reset of a once-guard (a fired-for ref,
+    a done flag, a dedup set), list every source of the signal that resets
+    it, and ask what happens when it fires after the guarded action has
+    applied and the user has acted on its result. A re-arm should key on
+    "the result never applied", not on "something happened". Test by letting
+    the action apply, making a user edit over its result, firing the signal,
+    and asserting the action does not run again and the edit stays on screen
+    and on disk.
 
 ### Keeping the catalogue current
 
