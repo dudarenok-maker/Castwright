@@ -7196,6 +7196,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
   analyzerReasoningByEngine: {},
+  analyzerExtraParamsByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   analyzerEndpoints: [],
@@ -7817,6 +7818,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerKeepAliveByModel,
     analyzerRateLimitsByModel,
     analyzerReasoningByEngine,
+    analyzerExtraParamsByEngine,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7839,6 +7841,8 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
             ? { ollama: Object.fromEntries(Object.entries(analyzerReasoningByEngine.ollama).map(([m, l]) => [mockNormalizeTag(m), l])) }
             : {}),
         },
+        /* 5b-D9 — passed through unjudged: protected keys are refused by the server only. */
+        analyzerExtraParamsByEngine,
       }).filter(([, v]) => v !== undefined),
     ),
   );
