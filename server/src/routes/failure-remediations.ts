@@ -104,12 +104,14 @@ export const FAILURE_REMEDIATIONS = {
       'The analyzer model spent its whole output budget reasoning and returned no answer, so the analysis ' +
       'stopped: the same settings would overflow again on every chapter, and splitting never shrinks reasoning.',
     /* #3084 F7 — a step list, ending in the sentence F7 requires verbatim.
-       The reasoning control is named per instance: classifyAnalysisFailure
-       prepends a reasoning lead to this text (#3084 wave 5a, 5.5-D1):
-       'Lower reasoning in <control>.' when reasoningOverflowFixes offers a
-       reasoning fix (level above the control's floor), otherwise
-       'Reasoning: <control>.' (failure-taxonomy.ts reasoningRemediationLead).
-       Task 5.5b adds the matching structured fix. */
+       classifyAnalysisFailure prepends per-instance sentences to this text: a
+       reasoning lead (#3084 wave 5a, 5.5-D1) — 'Lower reasoning in <control>.'
+       when reasoningOverflowFixes offers a reasoning fix (level above the
+       control's floor), otherwise 'Reasoning: <control>.'
+       (failure-taxonomy.ts reasoningRemediationLead) — then, when a custom
+       payload set the output cap, the payload key to raise (wave 5b,
+       payloadCapRemediationLead). reasoningOverflowFixes carries the matching
+       structured fixes. */
     remediation:
       "Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below " +
       "Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different " +

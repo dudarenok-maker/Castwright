@@ -83,6 +83,16 @@ is highlighted for you):
   help here: Gemini's input and output limits are separate, so a smaller body
   buys no extra room for the answer.) On Auto there's nothing to raise, so
   switch model.
+- **Custom parameters (all three engines):** when your own custom parameters set the output
+  cap (Ollama `options.num_predict`, Gemini `config.maxOutputTokens`, or an endpoint's
+  `max_tokens`, `max_completion_tokens` or `n_predict`), the failure names that parameter instead
+  of the max-output setting it overrides: **Raise the custom parameter "<key>"**, or **Set a
+  value for the custom parameter "<key>"** when the payload removes the cap (the key's value is
+  `null` or `-1`). The fixes that no longer apply (**Raise Gemini max output tokens**, **Raise Ollama
+  num_predict**, **Lower <endpoint>'s max output tokens**) are not listed, and a **Read:
+  Custom payload** entry opens the relevant wiki page. See **Custom payload** in
+  [Advanced Settings](Advanced-Settings) and in
+  [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).
 - **Reasoning level (all three engines):** the fix opens that model's row under
   **Advanced Settings → Analyzer request controls** (the row is highlighted).
   - **Ollama:** **Turn reasoning off for <model>**, offered when the model's level is `on`, a

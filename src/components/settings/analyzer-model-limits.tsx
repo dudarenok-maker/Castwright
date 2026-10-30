@@ -28,9 +28,12 @@ export function AnalyzerModelLimits() {
   useEffect(() => {
     void dispatch(fetchAnalyzerCatalog(undefined));
   }, [dispatch]);
+  /* Keyed on the saved value, not the map: every settings save replaces the map by reference, which would wipe an
+     unsaved limit that did not change. */
+  const savedKey = JSON.stringify(saved);
   useEffect(() => {
     setDraft(saved);
-  }, [saved]);
+  }, [savedKey]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the value
 
   const setField = (id: string, field: Field, raw: string) => {
     setDraft((prev) => {

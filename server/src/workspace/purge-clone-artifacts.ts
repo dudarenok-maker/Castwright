@@ -11,7 +11,7 @@
    between the evict and the unlink. */
 
 import { readdir, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 // Review I5 — qwenVoicePtPath now comes from paths.js, its actual home
 // (alongside its qwenVoiceSidecarPath/qwenVoiceWavPath siblings), not from
 // routes/qwen-voice.js. That route module re-exports it only for its own
@@ -27,11 +27,35 @@ import {
   xttsVoiceLatentsPath,
   xttsVoiceSidecarPath,
   xttsVoicesDir,
+  WORKSPACE_ROOT,
 } from './paths.js';
 import { entryDir, removeEntryDir, updateEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { CLONE_ENGINE_LIST, cloneStorageKey } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
+
+/** #3720 — client-facing form of a purge `failed` list. `purgeCloneArtifacts`
+    keeps returning (and logging) absolute paths for the operator; the routes
+    pass the list through here so a response never carries the workspace
+    layout. File entries become paths relative to `WORKSPACE_ROOT` with `/`
+    separators; `sweep:<dir>` keeps its prefix over a relative dir; the
+    `sidecar:<engine>:<voiceId>` marker is a storage key, not a path, and is
+    returned as is. A path that is not under the workspace root (every purge
+    path is built from paths.ts, so none is expected) falls back to its
+    basename: it names the file without any layout, and there is no existing
+    out-of-root precedent in this codebase to follow. */
+export function toClientPurgePaths(failed: readonly string[]): string[] {
+  const toRelative = (p: string): string => {
+    const rel = relative(WORKSPACE_ROOT, p);
+    if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return rel.replace(/\\/g, '/');
+    return basename(p);
+  };
+  return failed.map((entry) => {
+    if (entry.startsWith('sidecar:')) return entry;
+    if (entry.startsWith('sweep:')) return `sweep:${toRelative(entry.slice('sweep:'.length))}`;
+    return toRelative(entry);
+  });
+}
 
 /** Review I-2 — a single file's best-effort unlink. `force: true` already
     swallows "doesn't exist" (the common case — most callers only have SOME

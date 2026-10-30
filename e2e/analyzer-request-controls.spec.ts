@@ -5,7 +5,10 @@
  * offered `model-default`/`off`/`on`; the Gemini group needs an API key, so every case uses the Ollama row.
  * Mock module state (`MOCK_USER_SETTINGS`) does not survive a full reload, so persistence is asserted across
  * an in-app hash navigation, never `page.reload()`. The terminal failure frame is delivered through
- * `window.__store__` exactly as e2e/reasoning-overflow-fixes.spec.ts explains. */
+ * `window.__store__` exactly as e2e/reasoning-overflow-fixes.spec.ts explains.
+ *
+ * Wave 5b (Task 5.12f) adds the custom parameter editors: an Ollama payload saved with a level, and invalid
+ * JSON shown under the Gemini editor (always rendered, 5b-D7). */
 
 import { test, expect, type Page } from '@playwright/test';
 import { bootFreshBookIntoAnalysing, waitForRouteReady } from './helpers';
@@ -122,5 +125,33 @@ test.describe('#3084 wave 5a — analyzer reasoning editor', () => {
     );
     await waitForRouteReady(page);
     await expect(page.locator(`[id="${ROW_ID}"]`)).toHaveClass(HIGHLIGHT_CLASS, { timeout: 5_000 });
+  });
+});
+
+async function readAccount(page: Page) {
+  return page.evaluate(() => {
+    const w = window as unknown as { __store__: { getState: () => { account: Record<string, unknown> } } };
+    return w.__store__.getState().account;
+  });
+}
+
+test.describe('#3084 wave 5b — custom parameter editors', () => {
+  test('saves an Ollama reasoning level and payload through the settings round-trip', async ({ page }) => {
+    await page.goto('/#/advanced');
+    await waitForRouteReady(page);
+    await expect(page.getByTestId('analyzer-request-controls')).toBeVisible();
+    await page.getByTestId(ROW_ID).selectOption('on');
+    await page.getByTestId('analyzer-extra-params-ollama').fill('{"options": {"min_p": 0.05}}');
+    await page.getByTestId('analyzer-request-controls-save').click();
+    await expect(page.getByText('Saved.')).toBeVisible({ timeout: 5_000 });
+    await expect.poll(async () => (await readAccount(page)).analyzerReasoningByEngine).toEqual({ ollama: { [MODEL]: 'on' }, gemini: {} });
+    await expect.poll(async () => (await readAccount(page)).analyzerExtraParamsByEngine).toEqual({ ollama: { options: { min_p: 0.05 } } });
+  });
+
+  test('invalid JSON under the Gemini editor shows a visible reason, with no Gemini key set (5b-D7)', async ({ page }) => {
+    await page.goto('/#/advanced');
+    await waitForRouteReady(page);
+    await page.getByTestId('analyzer-extra-params-gemini').fill('{"config": ');
+    await expect(page.getByTestId('analyzer-extra-params-gemini-error')).toHaveText('Not valid JSON.');
   });
 });

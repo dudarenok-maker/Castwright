@@ -44,6 +44,7 @@ import type { RawEvalTiming } from '../analyzer-eval-stats.js';
 import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError, AnalyzerTimeoutError } from '../errors.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
+import { mergeExtraParams, payloadSecretValues } from '../runner/extra-params.js';
 /* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
@@ -159,6 +160,8 @@ export class OllamaTransport implements ChatTransport {
     } else {
       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
     }
+    /* #3084 wave 5b — the custom payload is merged LAST; built once here, outside any slot-acquire window. */
+    const wireBody = mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams);
 
     /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
        else must bound this call — and unlike chat() (whose StageCall carries the
@@ -207,7 +210,7 @@ export class OllamaTransport implements ChatTransport {
         response = await undiciFetch(`${url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(wireBody),
           signal,
           dispatcher: this.dispatcher, // CHANGED: the field is non-optional (defaulted to ANALYZER_DISPATCHER in the constructor), so the injected test dispatcher is honoured, like send()
         });
@@ -227,12 +230,12 @@ export class OllamaTransport implements ChatTransport {
         throw classifyConnectError(err, url);
       }
       if (!response.ok) {
-        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The
-           redaction is PR 3b's (W3b Task 3b.6a), carried through the move: every known analyzer secret
-           is removed BEFORE the body is sliced (P22). With no secret in the body the message text is
-           byte-identical to main's. */
+        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The redaction
+           is PR 3b's (W3b Task 3b.6a), carried through the move, plus this request's own custom-payload values
+           (#3084 P29): every known analyzer secret and every payload string value is removed BEFORE the body
+           is sliced (P22). With neither in the body the message text is byte-identical to main's. */
         const text = await response.text().catch(() => '');
-        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+        const bodyExcerpt = redactKnownSecrets(text, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
@@ -327,6 +330,8 @@ export class OllamaTransport implements ChatTransport {
     } else {
       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
     }
+    /* #3084 wave 5b — the custom payload is merged LAST (same rule as the free-text body above). */
+    const wireBody = mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams);
 
     /* Short-circuit if the caller has already aborted (e.g. the SSE client
        disconnected while a previous chapter was still running). Saves a
@@ -348,7 +353,7 @@ export class OllamaTransport implements ChatTransport {
         response = await undiciFetch(`${this.url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(wireBody),
           signal,
           dispatcher: this.dispatcher,
         });
@@ -364,11 +369,12 @@ export class OllamaTransport implements ChatTransport {
       if (!response.ok) {
         /* Reachable but errored — hard-fail. Surface the body so the operator can
            diagnose ("model not found", "invalid format", …), with every known
-           analyzer secret removed where the error is built (#3084 P22). Redacted
-           BEFORE truncating, so a secret the slice would cut in half cannot
-           survive. With no secret in the body the text is byte-identical. */
+           analyzer secret AND this request's custom-payload string values removed
+           where the error is built (#3084 P22, P29). Redacted BEFORE truncating, so
+           a value the slice would cut in half cannot survive. With neither in the
+           body the text is byte-identical. */
         const text = await response.text().catch(() => '');
-        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+        const bodyExcerpt = redactKnownSecrets(text, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
@@ -455,10 +461,13 @@ export class OllamaTransport implements ChatTransport {
             }
 
             if (parsed.error) {
-              /* #3084 P22, A8 — the daemon's in-stream error can echo request text; every
-                 known analyzer secret is removed where the error is built. With no secret
-                 the message is byte-identical. */
-              const streamError = redactKnownSecrets(String(parsed.error), await loadKnownAnalyzerSecrets());
+              /* #3084 P22, P29, A8 — the daemon's in-stream error can echo request text; every known
+                 analyzer secret and this request's custom-payload values are removed where the error is
+                 built. With neither the message is byte-identical. */
+              const streamError = redactKnownSecrets(String(parsed.error), [
+                ...(await loadKnownAnalyzerSecrets()),
+                ...payloadSecretValues(req.extraParams),
+              ]);
               throw new Error(`Ollama ${this.url} stream error: ${streamError}`);
             }
             if (parsed.done) {

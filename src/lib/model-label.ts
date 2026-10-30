@@ -33,7 +33,7 @@ export function modelLabel(id: string, catalog?: AnalyzerCatalog | null): string
 }
 
 /** Suffixes a run label shows after the model name. W3: the structured-output label.
-    W5 (custom payload) appends '+ custom params' here. */
+    Then the server-sent request-control parts (wave 5). */
 export function runLabelSuffixes(entry: AnalyzerCatalogEntry | undefined): string[] {
-  return entry ? [entry.structuredOutput.label] : [];
+  return entry ? [entry.structuredOutput.label, ...(entry.requestControlLabelParts ?? [])] : [];
 }
