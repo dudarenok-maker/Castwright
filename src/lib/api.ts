@@ -1390,8 +1390,13 @@ function mockSliceRevisions(bookId: string, state: BookStateResponse): Record<St
   };
 }
 
-export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
+export async function mockGetBookState(
+  bookId: string,
+  signal?: AbortSignal,
+): Promise<BookStateResponse | null> {
+  signal?.throwIfAborted();
   await wait(60);
+  signal?.throwIfAborted();
   const stored =
     DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)
       ? HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null
@@ -2456,8 +2461,11 @@ async function realImportManuscript({ text, file, fileName }: UploadArgs): Promi
   throw new Error('importManuscript requires either `text` or `file`.');
 }
 
-async function realGetBookState(bookId: string): Promise<BookStateResponse | null> {
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`);
+async function realGetBookState(
+  bookId: string,
+  signal?: AbortSignal,
+): Promise<BookStateResponse | null> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/state`, { signal });
   if (res.status === 404) return null;
   if (!res.ok)
     throw new Error(

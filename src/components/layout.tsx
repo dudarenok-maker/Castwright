@@ -192,14 +192,21 @@ const BOOK_READ_TIMEOUT_MS = 15000;
 const retryDelayMs = (attempt: number) =>
   Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
 
-/* #3426 — settle `p`, or reject after `ms` if it hasn't. Does not cancel `p`;
-   its late answer is discarded. `timers` collects the bound's timer so the
+/* #3426 — settle `p`, or reject after `ms` if it hasn't. `onExpire` (after the
+   rejection) lets the caller abort the request; otherwise `p` is not cancelled
+   and its late answer is discarded. `timers` collects the bound's timer so the
    caller's cleanup can clear it. */
-function within<T>(p: Promise<T>, ms: number, timers: Set<ReturnType<typeof setTimeout>>): Promise<T> {
+function within<T>(
+  p: Promise<T>,
+  ms: number,
+  timers: Set<ReturnType<typeof setTimeout>>,
+  onExpire?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
       reject(new Error(`timed out after ${ms} ms`));
+      onExpire?.();
     }, ms);
     timers.add(timer);
     p.then(
@@ -937,9 +944,13 @@ export function Layout() {
     /* #3395 pass 4, S2 (OD3) — a failed FULL load is retried with bounded
        backoff until it lands, with a notice shown while it can't. A failed
        revisions-only re-read is dropped silently instead (Task 18): the next
-       30 s poll repairs it, and nothing else on this book was waiting on it.
+       30 s poll repairs it (on the ready stage; on Confirm and Analysing the
+       next stage change does), and nothing else on this book was waiting on it.
        A read that has not settled in 15 s is treated as a failed read (#3426). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    /* The attempt's request, aborted on expiry and on cleanup so at most one
+       read of this book is ever open (#3426). */
+    let readCtrl: AbortController | null = null;
     const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
        never carries over onto the next book (#3395 pass 5, minor c). */
@@ -952,7 +963,9 @@ export function Layout() {
       /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
          so a save that lands while it is in flight wins over what it read. */
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
-      within(api.getBookState(bookId), BOOK_READ_TIMEOUT_MS, boundTimers)
+      const ctrl = new AbortController();
+      readCtrl = ctrl;
+      within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, boundTimers, () => ctrl.abort())
         .then((res) => {
           if (cancelled) return;
           if (!revisionsOnly) {
@@ -1204,11 +1217,13 @@ export function Layout() {
               console.warn('[listen-progress] hydrate skipped:', (err as Error).message);
             });
         }, (err) => {
+          /* Our own abort (superseded): the expiry already counted as the failure. */
+          if (err?.name === 'AbortError') return;
           console.warn('[book-state] hydrate failed, retrying:', err?.message);
           if (cancelled) return;
           fullReadInFlight.current = null;
           if (revisionsOnly) {
-            console.warn('[book-state] revisions re-read failed; the next poll repairs it:', err?.message);
+            console.warn('[book-state] revisions re-read failed; the 30 s poll repairs it on the ready stage, elsewhere the next stage change:', err?.message);
             return;
           }
           dispatch(
@@ -1244,7 +1259,7 @@ export function Layout() {
         () => {
           if (cancelled) return;
           if (manuscriptReady && marksFor(bookId) === 0) {
-            console.warn('[book-state] save before the revisions re-read still in flight after 15 s; the next poll repairs it');
+            console.warn('[book-state] save before the revisions re-read still in flight after 15 s; the 30 s poll repairs it on the ready stage, elsewhere the next stage change');
             return;
           }
           console.warn('[book-state] save before the re-read still in flight after 15 s, retrying');
@@ -1264,6 +1279,7 @@ export function Layout() {
     return () => {
       cancelled = true;
       fullReadInFlight.current = null;
+      readCtrl?.abort();
       if (retryTimer) clearTimeout(retryTimer);
       for (const t of boundTimers) clearTimeout(t);
       boundTimers.clear();

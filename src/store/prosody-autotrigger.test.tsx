@@ -409,7 +409,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     /* getBookState is called but prosodyEnabled:false → no pass. */
     await waitFor(() => {
-      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+      expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
     });
     expect(runProsodyPassesMock).not.toHaveBeenCalled();
   });
@@ -439,7 +439,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     });
 
     await waitFor(() => {
-      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+      expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
     });
     expect(runProsodyPassesMock).not.toHaveBeenCalled();
   });
