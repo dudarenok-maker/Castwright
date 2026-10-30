@@ -329,7 +329,7 @@
 
 - **A cover can no longer break your m4b export.** An uploaded JPEG with extra data tucked on the end, or a GIF or WebP cover from a cover provider, could make the export fail. Castwright now saves every cover as a fresh JPEG, whether you upload it, it's downloaded for you, or it arrives inside an imported book bundle. The trade-off: an uploaded JPEG is re-compressed once, at quality 85, and loses its embedded metadata, though its rotation is applied first so it still sits the right way up.
 - **Some server log lines now show the values they were meant to.** A handful of messages about voice deletion, voice style, queue and export problems printed a raw `%s` placeholder where the book or voice belonged, with the actual name tacked on at the end of the line. They now name the book, voice or file in place. Behind the scenes, an IP-address library used by the server is updated to its latest security release.
-- **When a voice can't be fully erased, Castwright no longer shows where your files live on disk.** If revoking consent or deleting a cloned voice leaves something behind, the message now names the file within your workspace, not its full location on this computer.
+- **When a voice can't be fully erased, Castwright no longer shows where your files live on disk.** If revoking consent or deleting a cloned voice leaves something behind, the reply a device on your network receives no longer reveals where your files sit on this computer.
 
 # Castwright 1.14.0
 
