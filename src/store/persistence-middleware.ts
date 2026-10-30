@@ -358,7 +358,7 @@ export interface BookFlushOutcome {
 }
 /* #3421 — gaps before each resend of a failed book-state PUT: 3 resends after
    the first attempt, sent at about 0 s, 1 s, 3 s and 7 s. Precedent: the
-   per-book hydrate's doubling backoff from 1 s (layout.tsx
+   per-book hydrate's doubling read-retry backoff (layout.tsx
    REVISIONS_HYDRATE_RETRY_BASE_MS) and the bounded reconnect loop (api.ts
    RECONNECT_MAX_ATTEMPTS / RECONNECT_BACKOFF_MS). Bounded, unlike the
    hydrate's, because a flush has a waiter (the re-read) that must eventually

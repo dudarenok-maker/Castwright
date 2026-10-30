@@ -6,11 +6,14 @@
      <slug>.mp3 / .m4a / .ogg  the audio itself (the book's output format)
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
-     <slug>.previous.mp3 / <slug>.previous.segments.json
+     <slug>.previous.mp3 / .previous.segments.json /
+     <slug>.previous.peaks.json / .previous.lufs.json
                            the A/B take's preserved prior render
                            (audio/previous-audio.ts) — follows the live
                            audio, else a chapter that inherits the slug
-                           inherits another chapter's previous take (#3400)
+                           inherits another chapter's previous take (#3400).
+                           A stale `.previous.*` at any slug a chapter newly
+                           occupies is removed before the move (#3704).
      <slug>.lufs.json / .embeddings.json / .render-integrity.json /
      <slug>.render-integrity-attempted.json
                            per-chapter loudness + QA sidecars; describe THIS
@@ -44,17 +47,25 @@ const COMPANION_SUFFIXES = [
   'peaks.json',
   'previous.mp3',
   'previous.segments.json',
+  'previous.peaks.json',
+  'previous.lufs.json',
   'lufs.json',
   'embeddings.json',
   'render-integrity.json',
   'render-integrity-attempted.json',
 ] as const;
+/** The A/B take's `.previous.*` entries — the subset cleared at a rename target. */
+const PREVIOUS_SUFFIXES = COMPANION_SUFFIXES.filter((s) => s.startsWith('previous.')) as Array<
+  Extract<(typeof COMPANION_SUFFIXES)[number], `previous.${string}`>
+>;
 type CompanionSuffix =
   | ChapterAudioExt
   | 'segments.json'
   | 'peaks.json'
   | 'previous.mp3'
   | 'previous.segments.json'
+  | 'previous.peaks.json'
+  | 'previous.lufs.json'
   | 'lufs.json'
   | 'embeddings.json'
   | 'render-integrity.json'
@@ -76,10 +87,19 @@ export interface AudioSlugRewriteSummary {
   renamed: Array<{ from: string; to: string; suffix: CompanionSuffix }>;
   /** Companion files deleted. */
   deleted: Array<{ slug: string; suffix: CompanionSuffix }>;
-  /** Errors caught during the batch — string `message` plus context for
+  /** Errors caught during the batch — a path-free string `message` plus context for
       diagnosis. The op is otherwise reported as not-done; downstream
       regen still works because the audio file is either gone or stale. */
   errors: Array<{ op: ChapterAudioOp; message: string; suffix?: CompanionSuffix }>;
+}
+
+/** A fixed, path-free `errors[].message`: the raw error (whose message embeds the absolute
+    workspace path) goes to the log, the response body (served over LAN HTTPS) gets the label plus
+    the fs `code`. */
+function failureMessage(label: string, e: unknown): string {
+  console.error(`[rewrite-chapter-slugs] ${label}`, e);
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? `${label} (${code})` : label;
 }
 
 function suffixPath(audioRoot: string, slug: string, suffix: CompanionSuffix): string {
@@ -90,6 +110,9 @@ function suffixPath(audioRoot: string, slug: string, suffix: CompanionSuffix): s
 export async function rewriteChapterSlugs(
   audioRoot: string,
   ops: ChapterAudioOp[],
+  /** Extra slugs whose `.previous.*` is stale and must be cleared (#3704): chapters that newly
+      occupy a slug without a rename op (unrendered ones). Rename targets are always cleared. */
+  clearPreviousAt: readonly string[] = [],
 ): Promise<AudioSlugRewriteSummary> {
   const summary: AudioSlugRewriteSummary = {
     renamed: [],
@@ -121,7 +144,7 @@ export async function rewriteChapterSlugs(
         if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `delete failed: ${(e as Error).message}`,
+          message: failureMessage('delete failed', e),
           suffix,
         });
       }
@@ -152,7 +175,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `phase 1 rename to temp failed: ${(e as Error).message}`,
+          message: failureMessage('phase 1 rename to temp failed', e),
           suffix,
         });
       }
@@ -177,7 +200,35 @@ export async function rewriteChapterSlugs(
         if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `delete failed: ${(e as Error).message}`,
+          message: failureMessage('delete failed', e),
+          suffix,
+        });
+      }
+    }
+  }
+
+  // Phase 1c: clear any stale `.previous.*` at each slug a chapter newly occupies (#3704): every
+  // rename target, plus the caller's `clearPreviousAt` (unrendered chapters have no op). Every
+  // rename source now sits at its temp slug, every delete has run, and no rename
+  // has landed yet; slugs are unique in the new state, so nothing at
+  // `<slug>.previous.*` belongs to a chapter. It is an orphan (or a source whose
+  // Phase 1 stage failed, already in `errors`) and must not be inherited as the
+  // incoming chapter's A take.
+  const clearTargets = new Set([...staged.map(({ op }) => op.to), ...clearPreviousAt]);
+  for (const slug of clearTargets) {
+    const op: ChapterAudioOp = staged.find((s) => s.op.to === slug)?.op ?? { kind: 'delete', from: slug };
+    for (const suffix of PREVIOUS_SUFFIXES) {
+      const path = suffixPath(audioRoot, slug, suffix);
+      if (!existsSync(path)) continue;
+      try {
+        await rm(path, { force: true });
+        summary.deleted.push({ slug, suffix });
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code === 'ENOENT') continue;
+        summary.errors.push({
+          op,
+          message: failureMessage('stale previous delete failed', e),
           suffix,
         });
       }
@@ -195,7 +246,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `phase 2 rename to dest failed: ${(e as Error).message}`,
+          message: failureMessage('phase 2 rename to dest failed', e),
           suffix,
         });
       }
@@ -224,7 +275,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `${suffix} metadata rewrite failed: ${(e as Error).message}`,
+          message: failureMessage(`${suffix} metadata rewrite failed`, e),
           suffix,
         });
       }
@@ -247,7 +298,7 @@ export async function rewriteChapterSlugs(
     } catch (e) {
       summary.errors.push({
         op,
-        message: `render-integrity.json chapterId rewrite failed: ${(e as Error).message}`,
+        message: failureMessage('render-integrity.json chapterId rewrite failed', e),
         suffix: 'render-integrity.json',
       });
     }

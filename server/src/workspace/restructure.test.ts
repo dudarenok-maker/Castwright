@@ -21,6 +21,7 @@ import {
   backfillTitleSynthesized,
   computeBodySplitIndex,
   touchedChapterIds,
+  pendingMovesAfterRestructure,
   carryMergedAwayKeys,
   type RefreshTitlesOptions,
   type RestructureSentence,
@@ -1122,5 +1123,27 @@ describe('applyRefreshTitles warning on the positional path (#3828)', () => {
     });
     expect(result.warnings.join(' ')).toContain('but state has 1');
     expect(result.warnings.join(' ')).toContain('or the parser now splits the manuscript differently');
+  });
+});
+
+describe('pendingMovesAfterRestructure (#3704)', () => {
+  const old = [
+    { id: 3, slug: '03-c' },
+    { id: 4, slug: '04-d' },
+    { id: 5, slug: '05-e' },
+  ];
+  const ops = [
+    { kind: 'rename', from: '03-c', to: '05-c', newChapterId: 5, newChapterTitle: 'C' },
+    { kind: 'rename', from: '04-d', to: '03-d', newChapterId: 3, newChapterTitle: 'D' },
+    { kind: 'delete', from: '05-e' },
+  ] as never;
+  it('maps a rename whose old slug had its .previous.mp3 moved', () => {
+    expect([...pendingMovesAfterRestructure(old as never, ops, new Set(['03-c']))]).toEqual([[3, 5]]);
+  });
+  it('does not map a rename whose slug is absent from previousMovedFrom', () => {
+    expect(pendingMovesAfterRestructure(old as never, ops, new Set(['03-c'])).has(4)).toBe(false);
+  });
+  it('never maps a delete', () => {
+    expect(pendingMovesAfterRestructure(old as never, ops, new Set(['05-e'])).size).toBe(0);
   });
 });
