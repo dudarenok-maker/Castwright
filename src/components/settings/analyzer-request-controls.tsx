@@ -42,8 +42,12 @@ export function AnalyzerRequestControls() {
   const [errors, setErrors] = useState<string[]>([]);
   const [showSaved, setShowSaved] = useState(false);
 
-  useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllama]);
-  useEffect(() => setGemini(savedGemini ?? {}), [savedGemini]);
+  /* Keyed on each engine's saved value, not its map: every settings save replaces the maps by reference, which
+     would wipe an unsaved pick for reasoning that did not change. */
+  const savedOllamaKey = JSON.stringify(savedOllama ?? {});
+  const savedGeminiKey = JSON.stringify(savedGemini ?? {});
+  useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllamaKey]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the value
+  useEffect(() => setGemini(savedGemini ?? {}), [savedGeminiKey]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the value
   const savedPayloads = useAppSelector((s) => s.account.analyzerExtraParamsByEngine);
   /* Keyed on each engine's saved text, not the map: every settings save replaces the map by reference, which
      would wipe unsaved editor text for a payload that did not change. */

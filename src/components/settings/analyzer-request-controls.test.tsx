@@ -143,6 +143,40 @@ describe('AnalyzerRequestControls — reasoning', () => {
     expect(mockPut).not.toHaveBeenCalled();
     expect(screen.getByTestId('analyzer-request-controls-unreadable')).toHaveTextContent(/haven.t loaded yet/);
   });
+  it('keeps an unsaved reasoning pick when another setting saves with equal-valued reasoning maps', async () => {
+    const store = renderControls({
+      analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } },
+    });
+    const ollamaSelect = (await screen.findByTestId('analyzer-reasoning-ollama-q:4b')) as HTMLSelectElement;
+    const geminiSelect = (await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash')) as HTMLSelectElement;
+    fireEvent.change(ollamaSelect, { target: { value: 'low' } });
+    fireEvent.change(geminiSelect, { target: { value: 'high' } });
+    /* Any other settings save replaces the maps by reference; the reasoning values are unchanged. */
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-reasoning-ollama-q:4b') as HTMLSelectElement).value).toBe('low');
+    expect((screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash') as HTMLSelectElement).value).toBe('high');
+  });
+  it("resyncs a select when that engine's saved reasoning really changes", async () => {
+    const store = renderControls({
+      analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } },
+    });
+    await screen.findByTestId('analyzer-reasoning-ollama-q:4b');
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:4b'), { target: { value: 'low' } });
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash'), { target: { value: 'high' } });
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerReasoningByEngine: { ollama: { 'q:9b': 'off' }, gemini: { 'gemini-3.8-flash': 'medium' } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-reasoning-ollama-q:4b') as HTMLSelectElement).value).toBe('off');
+    expect((screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash') as HTMLSelectElement).value).toBe('medium');
+  });
 });
 
 describe('AnalyzerRequestControls — custom payload', () => {
