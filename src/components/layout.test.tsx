@@ -4287,6 +4287,71 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       vi.useRealTimers();
     }
   });
+
+  it('#3841 R7: a full read in flight across the delete does not refill the deleted book’s slices', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [{ ...eliza, id: 'bob', name: 'Bob' }] } });
+    try {
+      renderWithLibrary(store);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      let resolveDelete!: () => void;
+      deleteBookMock.mockReturnValue(
+        new Promise<void>((r) => (resolveDelete = () => { disk.remove('A'); r(); })),
+      );
+      let releaseLibrary!: () => void;
+      const libraryGate = new Promise<void>((r) => (releaseLibrary = r));
+      vi.mocked(api.getLibrary).mockImplementation(async () => {
+        await libraryGate;
+        return { authors: [] } as never;
+      });
+      libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+
+      /* A is opened while the RPC is out; the slices hold B, so this is a full
+         read. The server answers it from disk before the delete removes the
+         folder, and the response arrives after the delete's. */
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      let gateNext = true;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A' && gateNext) {
+          gateNext = false;
+          const snap = await read(id);
+          await readGate;
+          return snap;
+        }
+        return read(id);
+      });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await act(async () => { resolveDelete(); await vi.advanceTimersByTimeAsync(50); });
+      await act(async () => { releaseRead(); await vi.advanceTimersByTimeAsync(500); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      releaseLibrary();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      act(() => { store.dispatch(uiActions.goHome()); });
+      const logFrom = disk.log.length;
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {

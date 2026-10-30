@@ -938,7 +938,13 @@ export function Layout() {
             /* The full read clears the marks made before it was issued; one
                made since means disk moved again, so read again. */
             dispatch(bookMetaActions.clearNeedsFullRead({ bookId, upTo: marks }));
-            if (marksFor(bookId) > 0) setFullReadTick((t) => t + 1);
+            if (marksFor(bookId) > 0) {
+              setFullReadTick((t) => t + 1);
+              /* #3841 — a mark made since this read went out (a delete that
+                 overtook it, a refused save) means what it read may already be
+                 gone from disk: don't hydrate it, the re-read this triggers supersedes it. */
+              return;
+            }
           }
           if (attempt > 0) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
           /* null = no persisted state for this book (mock fresh boot, or
