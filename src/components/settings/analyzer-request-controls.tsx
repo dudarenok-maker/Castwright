@@ -14,6 +14,7 @@ import {
   type ReasoningLevel,
 } from '../../lib/reasoning-levels';
 import { settingsIssueMessages } from '../../lib/settings-issues';
+import { parseExtraParamsText, payloadSetsOutputCap, type PayloadKind } from '../../lib/extra-params';
 
 const SELECT_CLASS =
   'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0';
@@ -41,8 +42,27 @@ export function AnalyzerRequestControls() {
   const [errors, setErrors] = useState<string[]>([]);
   const [showSaved, setShowSaved] = useState(false);
 
-  useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllama]);
-  useEffect(() => setGemini(savedGemini ?? {}), [savedGemini]);
+  /* Keyed on each engine's saved value, not its map: every settings save replaces the maps by reference, which
+     would wipe an unsaved pick for reasoning that did not change. */
+  const savedOllamaKey = JSON.stringify(savedOllama ?? {});
+  const savedGeminiKey = JSON.stringify(savedGemini ?? {});
+  useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllamaKey]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the value
+  useEffect(() => setGemini(savedGemini ?? {}), [savedGeminiKey]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the value
+  const savedPayloads = useAppSelector((s) => s.account.analyzerExtraParamsByEngine);
+  /* Keyed on each engine's saved text, not the map: every settings save replaces the map by reference, which
+     would wipe unsaved editor text for a payload that did not change. */
+  const savedOllamaText = savedPayloads?.ollama ? JSON.stringify(savedPayloads.ollama, null, 2) : '';
+  const savedGeminiText = savedPayloads?.gemini ? JSON.stringify(savedPayloads.gemini, null, 2) : '';
+  const [payloadText, setPayloadText] = useState<Record<'ollama' | 'gemini', string>>({
+    ollama: savedOllamaText,
+    gemini: savedGeminiText,
+  });
+  useEffect(() => setPayloadText((t) => ({ ...t, ollama: savedOllamaText })), [savedOllamaText]);
+  useEffect(() => setPayloadText((t) => ({ ...t, gemini: savedGeminiText })), [savedGeminiText]);
+  const parsedPayloads = {
+    ollama: parseExtraParamsText(payloadText.ollama),
+    gemini: parseExtraParamsText(payloadText.gemini),
+  };
   useEffect(() => {
     if (catalog === null) void dispatch(fetchAnalyzerCatalog(undefined));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: Layout, Test and endpoint saves refresh it
@@ -108,9 +128,16 @@ export function AnalyzerRequestControls() {
   const onSave = async () => {
     if (blocked) return;
     setErrors([]);
+    if (!parsedPayloads.ollama.ok || !parsedPayloads.gemini.ok) return;
     const ollamaPatch = Object.fromEntries(Object.entries(ollama).filter(([, level]) => level !== 'off'));
     const geminiPatch = Object.fromEntries(Object.entries(gemini).filter(([, level]) => level !== 'model-default'));
-    const action = await dispatch(saveAccountSettings({ analyzerReasoningByEngine: { ollama: ollamaPatch, gemini: geminiPatch } }));
+    /* The whole map is sent every save (openapi: a PUT replaces it), so a blank editor clears that engine. */
+    const analyzerExtraParamsByEngine: Record<string, Record<string, unknown>> = {};
+    if (parsedPayloads.ollama.value) analyzerExtraParamsByEngine.ollama = parsedPayloads.ollama.value;
+    if (parsedPayloads.gemini.value) analyzerExtraParamsByEngine.gemini = parsedPayloads.gemini.value;
+    const action = await dispatch(
+      saveAccountSettings({ analyzerReasoningByEngine: { ollama: ollamaPatch, gemini: geminiPatch }, analyzerExtraParamsByEngine }),
+    );
     if (saveAccountSettings.rejected.match(action)) {
       setErrors(settingsIssueMessages(action.error.message ?? ''));
       return;
@@ -179,6 +206,41 @@ export function AnalyzerRequestControls() {
           ))}
         </div>
       )}
+
+      {(['ollama', 'gemini'] as const).map((engine) => {
+        const kind: PayloadKind = engine;
+        const parsed = parsedPayloads[engine];
+        const label = engine === 'ollama' ? 'Ollama' : 'Gemini';
+        return (
+          <label key={engine} className="block">
+            <span className="block text-sm font-medium text-ink">{label} custom parameters</span>
+            <span className="block text-xs text-ink/55 mt-0.5">
+              {engine === 'ollama'
+                ? 'JSON merged last into every Ollama request, e.g. {"options": {"min_p": 0.05}}. "options" merges key by key; null removes a key. A temperature here sets the first attempt only.'
+                : 'JSON with a "config" object merged key by key into every Gemini request, e.g. {"config": {"topK": 40}}. Only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed and safetySettings are accepted. A temperature here sets the first attempt only.'}{' '}
+              Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. Not a place for credentials: keys belong in their own fields (the endpoint API key field, or the Gemini API key).
+            </span>
+            <textarea
+              data-testid={`analyzer-extra-params-${engine}`}
+              value={payloadText[engine]}
+              onChange={(e) => setPayloadText((t) => ({ ...t, [engine]: e.target.value }))}
+              rows={4}
+              spellCheck={false}
+              className="mt-2 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white font-mono text-xs text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0"
+            />
+            {!parsed.ok && (
+              <span data-testid={`analyzer-extra-params-${engine}-error`} className="block text-xs text-rose-700 mt-1">
+                {parsed.error}
+              </span>
+            )}
+            {parsed.ok && payloadSetsOutputCap(kind, parsed.value) && (
+              <span data-testid={`analyzer-extra-params-${engine}-cap-note`} className="block text-xs text-amber-800 mt-1">
+                This sets the output cap: {engine === 'ollama' ? 'Ollama num_predict' : 'Gemini max output tokens'} is not used for {label}, and the run label says so.
+              </span>
+            )}
+          </label>
+        );
+      })}
 
       {errors.length > 0 && (
         <ul data-testid="analyzer-request-controls-errors" className="text-xs text-rose-700 space-y-1">

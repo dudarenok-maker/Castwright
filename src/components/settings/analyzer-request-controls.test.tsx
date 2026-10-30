@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import { accountSlice } from '../../store/account-slice';
+import { accountSlice, fetchAccountSettings } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import type { Stage } from '../../lib/types';
 import { AnalyzerRequestControls } from './analyzer-request-controls';
@@ -87,7 +87,10 @@ describe('AnalyzerRequestControls — reasoning', () => {
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
     /* Per model (P18). `off` is the Ollama default, so q:9b, set back to off, is not saved. */
-    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'low' }, gemini: { 'gemini-3.8-flash': 'low' } } });
+    expect(mockPut.mock.calls[0][0]).toEqual({
+      analyzerReasoningByEngine: { ollama: { 'q:4b': 'low' }, gemini: { 'gemini-3.8-flash': 'low' } },
+      analyzerExtraParamsByEngine: {},
+    });
   });
 
   it('keeps a saved Gemini level the model no longer offers selected, and Model default clears it on save', async () => {
@@ -99,7 +102,7 @@ describe('AnalyzerRequestControls — reasoning', () => {
     fireEvent.change(select, { target: { value: 'model-default' } });
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
-    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: {}, gemini: {} } });
+    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: {}, gemini: {} }, analyzerExtraParamsByEngine: {} });
   });
 
   it('renders a Gemini row for a saved key even when the model offers one level or is not in the catalog', async () => {
@@ -139,6 +142,109 @@ describe('AnalyzerRequestControls — reasoning', () => {
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     expect(mockPut).not.toHaveBeenCalled();
     expect(screen.getByTestId('analyzer-request-controls-unreadable')).toHaveTextContent(/haven.t loaded yet/);
+  });
+  it('keeps an unsaved reasoning pick when another setting saves with equal-valued reasoning maps', async () => {
+    const store = renderControls({
+      analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } },
+    });
+    const ollamaSelect = (await screen.findByTestId('analyzer-reasoning-ollama-q:4b')) as HTMLSelectElement;
+    const geminiSelect = (await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.8-flash')) as HTMLSelectElement;
+    fireEvent.change(ollamaSelect, { target: { value: 'low' } });
+    fireEvent.change(geminiSelect, { target: { value: 'high' } });
+    /* Any other settings save replaces the maps by reference; the reasoning values are unchanged. */
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-reasoning-ollama-q:4b') as HTMLSelectElement).value).toBe('low');
+    expect((screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash') as HTMLSelectElement).value).toBe('high');
+  });
+  it("resyncs a select when that engine's saved reasoning really changes", async () => {
+    const store = renderControls({
+      analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'low' } },
+    });
+    await screen.findByTestId('analyzer-reasoning-ollama-q:4b');
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:4b'), { target: { value: 'low' } });
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash'), { target: { value: 'high' } });
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerReasoningByEngine: { ollama: { 'q:9b': 'off' }, gemini: { 'gemini-3.8-flash': 'medium' } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-reasoning-ollama-q:4b') as HTMLSelectElement).value).toBe('off');
+    expect((screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash') as HTMLSelectElement).value).toBe('medium');
+  });
+});
+
+describe('AnalyzerRequestControls — custom payload', () => {
+  it('saves both engine payloads with the reasoning levels in one patch', async () => {
+    mockPut.mockResolvedValue({} as never);
+    renderControls();
+    await waitFor(() => expect(screen.getByTestId('analyzer-extra-params-ollama')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('analyzer-extra-params-ollama'), { target: { value: '{"options":{"min_p":0.05}}' } });
+    fireEvent.change(screen.getByTestId('analyzer-extra-params-gemini'), { target: { value: '{"config":{"topK":40}}' } });
+    fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
+    await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
+    expect(mockPut.mock.calls[0][0]).toEqual({
+      analyzerReasoningByEngine: { ollama: {}, gemini: {} },
+      analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } },
+    });
+  });
+  it('blocks the save on invalid JSON and says why', async () => {
+    renderControls();
+    await waitFor(() => expect(screen.getByTestId('analyzer-extra-params-ollama')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('analyzer-extra-params-ollama'), { target: { value: '{oops' } });
+    expect(screen.getByTestId('analyzer-extra-params-ollama-error')).toHaveTextContent('Not valid JSON.');
+    fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+  it('notes when the payload takes over the output cap', async () => {
+    renderControls();
+    await waitFor(() => expect(screen.getByTestId('analyzer-extra-params-gemini')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('analyzer-extra-params-gemini'), { target: { value: '{"config":{"maxOutputTokens":2048}}' } });
+    expect(screen.getByTestId('analyzer-extra-params-gemini-cap-note')).toHaveTextContent('Gemini max output tokens is not used for Gemini');
+    fireEvent.change(screen.getByTestId('analyzer-extra-params-ollama'), { target: { value: '{"options":{"num_predict":512}}' } });
+    expect(screen.getByTestId('analyzer-extra-params-ollama-cap-note')).toHaveTextContent('Ollama num_predict is not used for Ollama');
+    /* P29 — both payload editors say a payload is not a place for credentials. */
+    expect(screen.getAllByText(/Not a place for credentials/)).toHaveLength(2);
+  });
+  it('keeps unsaved payload text when another setting saves with an equal-valued payload map', async () => {
+    const store = renderControls({ analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } });
+    const editor = await screen.findByTestId('analyzer-extra-params-gemini');
+    fireEvent.change(editor, { target: { value: '{"config":{"topK":' } });
+    /* Any other settings save replaces the map by reference; the payload values are unchanged. */
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-extra-params-gemini') as HTMLTextAreaElement).value).toBe('{"config":{"topK":');
+  });
+  it("resyncs the editor when that engine's saved payload really changes", async () => {
+    const store = renderControls({ analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } });
+    const editor = (await screen.findByTestId('analyzer-extra-params-ollama')) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '{"options":{"min_p":0.9}}' } });
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.1 } } } },
+      });
+    });
+    expect(JSON.parse(editor.value)).toEqual({ options: { min_p: 0.1 } });
+  });
+  it('renders both payload editors with the touch target, the Gemini one with no Gemini model listed (5b-D7)', async () => {
+    /* The file's CATALOG lists three Gemini models; this case must render with none, or it cannot fail. */
+    mockModels.mockResolvedValue({ groups: [CATALOG.groups[0]] } as never);
+    renderControls();
+    await screen.findByTestId('analyzer-reasoning-ollama-q:4b'); // the catalog has loaded
+    expect(screen.queryAllByTestId(/^analyzer-reasoning-gemini-/)).toHaveLength(0);
+    for (const engine of ['ollama', 'gemini']) {
+      expect(screen.getByTestId(`analyzer-extra-params-${engine}`)).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+    }
   });
 });
 

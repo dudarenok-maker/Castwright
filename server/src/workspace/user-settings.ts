@@ -418,6 +418,16 @@ export const userSettingsSchema = z.object({
       gemini: z.record(z.string(), z.string()).optional(),
     })
     .default({}),
+  /* #3084 wave 5 — custom request payload per engine (endpoints carry their own
+     `extraParams`). Lenient on read; protected-key rules run on write
+     (analyzer-request-controls.ts). Never logged, never written to analyzer
+     files. General PUT is the write path. */
+  analyzerExtraParamsByEngine: z
+    .object({
+      ollama: z.record(z.string(), z.unknown()).optional(),
+      gemini: z.record(z.string(), z.unknown()).optional(),
+    })
+    .default({}),
   /* #3084 — per-model analyzer rate limits (Advanced → Analyzer rate limits). Sparse:
      model id (Gemini id or `openai:<endpointId>::<model>`) → any of rpm/tpm/rpd.
      Gemini ids: env → this map → built-in table; endpoint ids: this map → unlimited.
@@ -523,6 +533,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   analyzerKeepAliveByModel: {},
   /* #3084 wave 5 — empty = today's behaviour (Ollama off, Gemini model-default). */
   analyzerReasoningByEngine: {},
+  analyzerExtraParamsByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   /* #3084 — no endpoints and no keys on a fresh install. */

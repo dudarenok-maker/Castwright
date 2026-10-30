@@ -84,6 +84,17 @@ describe('mockPutUserSettings — analyzerReasoningByEngine (#3084)', () => {
   });
 });
 
+describe('mockPutUserSettings — analyzerExtraParamsByEngine (#3084 wave 5b)', () => {
+  it('persists the whole map as sent and returns it; the mock judges no payload (5b-D9)', async () => {
+    _setMockUserSettingsForTest({ analyzerExtraParamsByEngine: {} });
+    const payload = { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } };
+    const out = await api.putUserSettings({ analyzerExtraParamsByEngine: payload });
+    expect(out.analyzerExtraParamsByEngine).toEqual(payload);
+    /* A blank editor clears the map through an empty PUT (Task 5.12d). */
+    expect((await api.putUserSettings({ analyzerExtraParamsByEngine: {} })).analyzerExtraParamsByEngine).toEqual({});
+  });
+});
+
 describe('mockPutUserSettings — analyzer.fallback.target refusal, as the server does (#3084 P30)', () => {
   const endpoint = { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768, reasoningStyle: 'not_controllable', reasoning: 'model-default' };
   const put = (target: string) => api.putUserSettings({ configOverrides: { 'analyzer.fallback.target': target } } as never);
