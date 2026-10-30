@@ -5227,7 +5227,7 @@ Revert the PR. Everything PR 2 changes that a user, an old client or an operator
 1. **The client never writes revisions.json.** An old tab's revisions `PUT` gets `400 revisions_server_owned`, logged to its console only. Disk is unchanged.
 2. **The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` answer `410 moved`.** An old tab's Accept/Reject toasts an error; nothing on disk changes.
 3. **Every render records or drops A/B state on the server:** a splice records an entry; a plain generation or QA repair drops the chapter's entry; a preview render records one when the chapter already had audio.
-4. **Restructure drops pending entries** for every chapter it touched.
+4. **Restructure drops pending entries** for every chapter it touched (narrowed by #3704: a renamed or renumbered chapter keeps its pending entry, re-keyed to its new id; excluding a chapter does not touch it).
 5. **`GET /state`'s `revisions` is normalised** (no `drift`, no `schema`; stale legacy entries filtered); `null` plus `revisionsError` when unreadable (the book still opens; one toast).
 6. **`GET /api/revisions` gains `errors`** and no longer fails as a whole for one bad book.
 7. **Revisions 500s answer fixed sentences** instead of the error's own text — and so do `qa-report`'s two handlers (OD26) and the reparse / replace revisions reset (Task 4). A newer-schema file still answers its own "upgrade the server" sentence.
