@@ -143,15 +143,27 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(characters[1].matchedFrom?.bookId).toBe('other');
   });
 
-  it('does not demote a tuned voice to reused but still stamps the link', async () => {
-    const characters: LinkableCharacter[] = [
-      { id: 'wren-tuned', name: 'Wren', gender: 'female', ageRange: 'teen', voiceState: 'tuned' },
-    ];
-    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
-    expect(linked).toBe(1);
-    expect(characters[0].matchedFrom?.bookId).toBe(BOOK1);
-    expect(characters[0].voiceState).toBe('tuned');
-  });
+  it.each(['tuned', 'locked'] as const)(
+    'leaves a %s character completely untouched (#3842)',
+    async (voiceState) => {
+      const characters: LinkableCharacter[] = [
+        {
+          id: 'wren-user',
+          name: 'Wren',
+          gender: 'female',
+          ageRange: 'teen',
+          voiceId: 'v_user',
+          voiceState,
+        },
+      ];
+      const before = JSON.parse(JSON.stringify(characters));
+      const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+      expect(linked).toBe(0);
+      expect(characters).toEqual(before);
+      expect(characters[0].matchedFrom).toBeUndefined();
+      expect(characters[0].overrideTtsVoices).toBeUndefined();
+    },
+  );
 
   it('returns 0 for a standalone / out-of-library book', async () => {
     const characters: LinkableCharacter[] = [{ id: 'x', name: 'Wren' }];
@@ -199,7 +211,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
 
     /* Analyzer renamed the narrator to "Author" but kept the stable id/voiceId. */
     const characters: LinkableCharacter[] = [
-      { id: 'narrator', name: 'Author', voiceId: 'narrator', voiceState: 'tuned' },
+      { id: 'narrator', name: 'Author', voiceId: 'narrator' },
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, options);
 
@@ -210,8 +222,6 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(narrator.ttsEngine).toBe('qwen');
     expect(narrator.overrideTtsVoices?.qwen?.name).toBe('qwen-narrator');
     expect(narrator.voiceStyle).toBe('a warm, articulate British narrator');
-    /* A user-tuned voiceState is not demoted, but the link still stamps. */
-    expect(narrator.voiceState).toBe('tuned');
   });
 
   /* A stable-key match must still respect an explicit notLinkedTo decision —

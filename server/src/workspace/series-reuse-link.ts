@@ -23,8 +23,8 @@
      - never link a `notLinkedTo` pair (intentional same-name-different-person);
      - only link against EARLIER books (lower seriesPosition) and skip the run
        entirely for the earliest book in the series (nothing prior);
-     - never overwrite an existing `matchedFrom`, nor flip a tuned/locked voice
-       state.
+     - never overwrite an existing `matchedFrom`, nor touch a tuned/locked
+       character at all (#3842).
 
    Additive: the client `applyVoiceMatches` path stays as a fallback. */
 
@@ -363,6 +363,8 @@ export async function linkSeriesReuseAtAnalysis(
   for (const c of characters) {
     if (SKIP_IDS.has(c.id)) continue;
     if (c.matchedFrom) continue; // never overwrite an existing link
+    /* A voice the user locked or tuned is never replaced by an automatic match (#3842). */
+    if (c.voiceState === 'locked' || c.voiceState === 'tuned') continue;
 
     const input: CharacterMatchInput = {
       id: c.id,
@@ -417,8 +419,7 @@ export async function linkSeriesReuseAtAnalysis(
       bookTitle: best.voice.bookTitle,
       confidence: best.score,
     };
-    /* Don't demote a user-tuned/locked voice to 'reused'. */
-    if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'reused';
+    c.voiceState = 'reused';
 
     const nextAliases = unionAliases(c.name, c.aliases, best.voice.name, best.voice.aliases);
     if (nextAliases) c.aliases = nextAliases;
