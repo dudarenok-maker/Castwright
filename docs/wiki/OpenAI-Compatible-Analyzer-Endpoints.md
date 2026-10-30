@@ -230,7 +230,7 @@ Reasoning control is `chat_template_kwargs.enable_thinking`, that key is protect
 
 **The output cap.** A payload that sets `max_tokens`, `max_completion_tokens` or llama.cpp's
 `n_predict` takes over the output cap. Castwright then stops sending its own `max_tokens`, sizes
-chunks and the **Test** action against your number, and the run label reads "max output set by
+the **Test** action against your number, and the run label reads "max output set by
 custom params". The endpoint's **Max output tokens** keeps its saved value but is ignored, so it
 shows read-only. If both `max_tokens` and `n_predict` are set, the smaller one is used.
 

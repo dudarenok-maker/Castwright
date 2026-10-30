@@ -83,8 +83,8 @@ function resolveEngineCapacity(sel: { engine: AnalysisEngine; model: string; end
   };
 }
 
-/** P19 — a custom payload that sets or removes the output cap is the cap chunk sizing and the Test action's
-    probe cap size against. The catalog's `outputTokens` does not read this: it stays the model's listed
+/** P19 — a custom payload that sets or removes the output cap is the cap the Test action's probe cap size
+    against. The catalog's `outputTokens` does not read this: it stays the model's listed
     maximum (analyzer-catalog.ts, 5b-D15). An endpoint request's own cap is openAIRequestSettings', which
     applies the same rule through requestMaxOutputTokens. No payload → W2/W3c's value. */
 export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
