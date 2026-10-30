@@ -611,7 +611,7 @@ describe('OpenAITransport — credentials', () => {
   });
 
   it('OPENAI_CUSTOM_HEADERS in the host env never reaches the wire; the endpoint key does (P22)', async () => {
-    /* The SDK merges this env into every request after its own auth header (client.mjs:240-249). */
+    /* The SDK merges this env into every request after its own auth header (the `OpenAI` constructor in client.mjs). */
     process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer stolen\nX-Leak: 1';
     try {
       const url = await start((_req, res) => {
@@ -669,7 +669,7 @@ describe('OpenAITransport — credentials', () => {
       res.end(chunk({ content: '{}' }, 'stop') + DONE);
     });
     /* undici throws `Headers.append: "Bearer <key>" is an invalid header value.` before
-       dispatching; the SDK wraps it as APIConnectionError's cause (client.mjs:817-820). */
+       dispatching; the SDK wraps it as APIConnectionError's cause (`makeRequest` in client.mjs). */
     const err = await failure(transport(url, {}, 'sk-inject-secret-1\nX-Injected: 1').send(request()));
     expect(err).toBeInstanceOf(errors.AnalyzerTransportError);
     expect(seen).toHaveLength(0);

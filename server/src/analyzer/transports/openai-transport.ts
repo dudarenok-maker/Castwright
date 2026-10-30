@@ -5,7 +5,7 @@
    global fetch rejects an npm-undici Agent) and a long-call dispatcher (no header
    or body timeout, 10 s connect), SDK retries off, SDK logging off. The SDK DOES
    read OPENAI_* environment variables when it is constructed: it merges
-   OPENAI_CUSTOM_HEADERS into every request after its auth header (client.mjs:240-249).
+   OPENAI_CUSTOM_HEADERS into every request after its auth header (the `OpenAI` constructor in client.mjs).
    Every option it would take from env is passed explicitly, and allowlistedFetch
    rebuilds the outgoing headers from an allowlist, so no host env header reaches
    an endpoint and the key goes only to its own origin (P22).
@@ -14,7 +14,7 @@
    created AFTER the endpoint semaphore is acquired, so queue time is never
    charged to the request. The idle watchdog arms on the first delta (answer
    OR reasoning). The SDK ends a stream SILENTLY on abort (openai
-   core/streaming.ts:171-186), so a clean loop end is never trusted:
+   `Stream.fromSSEResponse` in core/streaming), so a clean loop end is never trusted:
    classifyOpenAIOutcome decides from our own signals. */
 
 import OpenAI, { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from 'openai';

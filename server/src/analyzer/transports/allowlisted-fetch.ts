@@ -4,9 +4,9 @@
    import it without an import cycle.
 
    The SDK builds each request's headers from its own defaults (Accept, User-Agent,
-   X-Stainless-*: openai client.mjs:1150-1168), the host's OPENAI_CUSTOM_HEADERS env
-   (merged after its auth header: :240-249) and the placeholder key, then calls
-   `fetch(url, { headers, … })` (fetchWithTimeout, :960-982). NONE of that is
+   X-Stainless-*: `buildHeaders` in openai client.mjs), the host's OPENAI_CUSTOM_HEADERS env
+   (merged after its auth header: the `OpenAI` constructor) and the placeholder key, then calls
+   `fetch(url, { headers, … })` (`fetchWithTimeout` in client.mjs). NONE of that is
    forwarded. The wire carries exactly FIXED_HEADERS, plus `Authorization: Bearer
    <key>` when the request URL is on the origin the key was resolved for. No
    `x-stainless-*` header is ever sent. undici drops `authorization` on a cross-origin
