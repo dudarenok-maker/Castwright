@@ -45,6 +45,8 @@ const STANDALONE = 'Some Standalone';
 
 let workspaceRoot: string;
 let app: Express;
+/* Real book-state router for the link-then-PUT product flow (#3842). */
+let putApp: Express;
 let keeperBookId: string;
 let newBookId: string;
 let otherBookId: string;
@@ -132,6 +134,11 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', castLinkPriorRouter);
+
+  const { bookStateRouter } = await import('./book-state.js');
+  putApp = express();
+  putApp.use(express.json());
+  putApp.use('/api/books', bookStateRouter);
 });
 
 /* Re-seed the books before every test so the alias-mutation cases don't
@@ -389,6 +396,66 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       expect(after.overrideTtsVoices).toBeUndefined();
       expect(after.voiceStyle).toBeUndefined();
       /* ...while the profile merge applyManualMatch also applies still lands. */
+      expect(after.description).toBe('a quirky, earnest boy genius');
+    },
+  );
+
+  it.each(['tuned', 'locked'] as const)(
+    'link then the cast PUT the same click sends leaves a %s row on its own voice (#3842)',
+    async (voiceState) => {
+      writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+        {
+          id: 'hart',
+          name: 'Hart',
+          role: 'character',
+          color: 'unset',
+          voiceId: 'v_hart',
+          description: 'a quirky, earnest boy genius',
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: 'qwen-hart' } },
+          voiceStyle: 'a quirky, earnest boy genius',
+        },
+      ]);
+      const mine = {
+        id: 'hartwell-brennan-vale',
+        name: 'Hartwell Brennan Vale',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_mine',
+        voiceState,
+        ttsEngine: null,
+      };
+      writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [mine]);
+
+      const res = await callLink(newBookId, {
+        sourceCharacterId: 'hartwell-brennan-vale',
+        targetBookId: keeperBookId,
+        targetCharacterId: 'hart',
+      });
+      expect(res.status).toBe(200);
+      /* The echoed voiceId is the one kept on the row, not the target's. */
+      expect(res.body.voiceId).toBe('v_mine');
+
+      /* applyManualMatch's output for a locked/tuned row: the row as the
+         client held it, plus the merged profile, and NO matchedFrom (see
+         cast-slice.test.ts). persistence-middleware PUTs exactly this. */
+      const clientRow = { ...mine, ...res.body.profile };
+      const put = await request(putApp)
+        .put(`/api/books/${newBookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({ slice: 'cast', patch: { characters: [clientRow] } });
+      expect(put.status).toBe(200);
+
+      const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+        (c) => c.id === 'hartwell-brennan-vale',
+      ) as Record<string, unknown>;
+      expect(after.voiceId).toBe('v_mine');
+      expect(after.voiceState).toBe(voiceState);
+      expect(after.ttsEngine).toBeNull();
+      expect(after.overrideTtsVoices).toBeUndefined();
+      expect(after.voiceStyle).toBeUndefined();
+      expect(after.matchedFrom).toBeUndefined();
       expect(after.description).toBe('a quirky, earnest boy genius');
     },
   );

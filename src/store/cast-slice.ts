@@ -543,8 +543,10 @@ export const castSlice = createSlice({
        (no candidates list, no factors): write matchedFrom + voiceId +
        voiceState='reused' so the confirm card's "Continuity preserved"
        footer + "Sync profile" checkbox light up exactly like the
-       auto-match path. Tuned voice (voiceState='locked' / 'tuned') is
-       preserved — the user already invested effort in it. */
+       auto-match path. A locked/tuned row records NO matchedFrom: it keeps
+       its own voice, and a link would make every hydrate site (and PUT
+       /state) copy the other book's voice onto it. The profile merge still
+       applies (#3842). */
     applyManualMatch: (
       s,
       a: PayloadAction<{
@@ -570,8 +572,8 @@ export const castSlice = createSlice({
       const { characterId, matchedFrom, voiceId, profile } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      c.matchedFrom = matchedFrom;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
+        c.matchedFrom = matchedFrom;
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
       }

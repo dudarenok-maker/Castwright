@@ -282,7 +282,8 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
         bookTitle: targetLocated.state.title,
         confidence: 1,
       },
-      voiceId: canonicalVoiceId,
+      /* The voice the row KEEPS: a locked/tuned source keeps its own. */
+      voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
       /* Echo the merged profile so the frontend updates the open drawer +
          redux without a reload. Only present when something changed. */
       profile: profileChanged

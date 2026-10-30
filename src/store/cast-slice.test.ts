@@ -605,34 +605,40 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     expect(next.characters.find((c) => c.id === 'wren')!.voiceState).toBe('generated');
   });
 
-  it('preserves a locked or tuned voice — only matchedFrom is updated', () => {
-    /* User already invested in tuning Hartwell's voice; manually linking
-       to the prior should record the continuity link without overwriting
-       the tuned voiceId or downgrading voiceState. */
-    const start = baseState([
-      makeChar('hartwell-brennan-vale', {
-        voiceState: 'tuned',
-        voiceId: 'v_hartwell_tuned',
-      }),
-    ]);
-    const next = castSlice.reducer(
-      start,
-      castActions.applyManualMatch({
-        characterId: 'hartwell-brennan-vale',
-        matchedFrom: {
-          bookId: 'the Hollow Tide_1',
-          characterId: 'hart',
-          bookTitle: 'The Hollow Tide #1',
-          confidence: 1,
-        },
-        voiceId: 'v_hart_from_prior',
-      }),
-    );
-    const hart = next.characters[0];
-    expect(hart.voiceId).toBe('v_hartwell_tuned');
-    expect(hart.voiceState).toBe('tuned');
-    expect(hart.matchedFrom?.characterId).toBe('hart');
-  });
+  it.each(['tuned', 'locked'] as const)(
+    'records NO link on a %s row — voice kept, profile merge still applied (#3842)',
+    (voiceState) => {
+      /* A matchedFrom on a locked/tuned row makes every hydrate site (and PUT
+         /state's denormalise) copy the other book's voice onto it, so the link
+         is not recorded at all. The profile merge still lands. */
+      const start = baseState([
+        makeChar('hartwell-brennan-vale', {
+          voiceState,
+          voiceId: 'v_hartwell_tuned',
+        }),
+      ]);
+      const next = castSlice.reducer(
+        start,
+        castActions.applyManualMatch({
+          characterId: 'hartwell-brennan-vale',
+          matchedFrom: {
+            bookId: 'the Hollow Tide_1',
+            characterId: 'hart',
+            bookTitle: 'The Hollow Tide #1',
+            confidence: 1,
+          },
+          voiceId: 'v_hart_from_prior',
+          profile: { description: 'A quirky, earnest boy genius.' },
+        }),
+      );
+      const hart = next.characters[0];
+      expect(hart.voiceId).toBe('v_hartwell_tuned');
+      expect(hart.voiceState).toBe(voiceState);
+      expect(hart.matchedFrom).toBeUndefined();
+      expect(hart.matchFactors).toBeUndefined();
+      expect(hart.description).toBe('A quirky, earnest boy genius.');
+    },
+  );
 
   it('is a no-op for an unknown characterId', () => {
     const start = baseState([makeChar('halloran')]);
