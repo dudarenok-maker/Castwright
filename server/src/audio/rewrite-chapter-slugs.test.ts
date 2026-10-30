@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
-import { applyExclude, applyMerge, applySplit } from '../workspace/restructure.js';
+import { applyExclude, applyMerge, applyReorder, applySplit, staleTakeClearSlugs } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 let workRoot: string;
@@ -638,6 +638,37 @@ describe('rewriteChapterSlugs — .previous.* artifacts', () => {
 
     expect(result.errors).toEqual([]);
     expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+  });
+});
+
+describe('rewriteChapterSlugs x applyReorder — an op-less chapter never inherits a stale previous take (#3704)', () => {
+  function appTitledState(rendered: number[]): BookStateJson {
+    return {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: [1, 2, 3].map((n) => ({
+        id: n, title: `Chapter ${n}`, slug: `0${n}-chapter-${n}`, titleSynthesized: true,
+        ...(rendered.includes(n) ? { audioRenderedAt: '2026-01-01T00:00:00.000Z' } : {}),
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+  }
+  const hints = [1, 2, 3].map((n) => ({ id: n, title: `Chapter ${n}`, body: `body ${n}` }));
+  const sentences = [1, 2, 3].map((n) => ({ id: 1, chapterId: n, characterId: 'narrator', text: `s${n}` }));
+
+  it('clears an orphan .previous.* under a slug an UNRENDERED chapter newly occupies, and keeps the staying chapter\'s own take', async () => {
+    seed('01-chapter-1');
+    seedPrevious('01-chapter-1'); // ch1 rendered, stays put: its own take
+    seedPrevious('02-chapter-2'); // orphan; ch2/ch3 are unrendered
+    const result = applyReorder(appTitledState([1]), hints, sentences, { order: [1, 3, 2] });
+    expect(result.audioOps).toEqual([]);
+
+    const summary = await rewriteChapterSlugs(audioRoot, result.audioOps, staleTakeClearSlugs(result.state.chapters, result.audioOps));
+
+    expect(summary.errors).toEqual([]);
+    expect(existsSync(join(audioRoot, '02-chapter-2.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '02-chapter-2.previous.segments.json'))).toBe(false);
+    expect(readFileSync(join(audioRoot, '01-chapter-1.previous.mp3'), 'utf8')).toBe('previous-bytes:01-chapter-1');
   });
 });
 

@@ -175,6 +175,24 @@ export function pendingMovesAfterRestructure(
   return moves;
 }
 
+/** #3704 — the slugs whose `.previous.*` take must be cleared before a restructure's renames
+    land: every slug a chapter newly occupies without its own take arriving. A rendered chapter
+    with no rename op keeps its slug and its own take, so it is skipped; a rename target is
+    cleared (its own take is staged at a temp slug by then); an UNRENDERED chapter has no op and
+    no take of its own, so any `.previous.*` at its slug is a stale orphan it would otherwise
+    inherit (and a boot fsck would promote). Sorted, unique. */
+export function staleTakeClearSlugs(
+  newChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+): string[] {
+  const renameTargets = new Set(audioOps.filter((op) => op.kind === 'rename').map((op) => (op as { to: string }).to));
+  const slugs = new Set(renameTargets);
+  for (const c of newChapters) {
+    if (!c.audioRenderedAt) slugs.add(c.slug);
+  }
+  return [...slugs].sort();
+}
+
 /** Map each surviving old chapter id to its new id (one-to-one or
     many-to-one for merge). Chapters that vanished entirely (merged
     INTO another id) still appear in the map but pointed at the

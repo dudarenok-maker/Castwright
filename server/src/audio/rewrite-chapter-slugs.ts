@@ -101,6 +101,9 @@ function suffixPath(audioRoot: string, slug: string, suffix: CompanionSuffix): s
 export async function rewriteChapterSlugs(
   audioRoot: string,
   ops: ChapterAudioOp[],
+  /** Extra slugs whose `.previous.*` is stale and must be cleared (#3704): chapters that newly
+      occupy a slug without a rename op (unrendered ones). Rename targets are always cleared. */
+  clearPreviousAt: readonly string[] = [],
 ): Promise<AudioSlugRewriteSummary> {
   const summary: AudioSlugRewriteSummary = {
     renamed: [],
@@ -195,19 +198,22 @@ export async function rewriteChapterSlugs(
     }
   }
 
-  // Phase 1c: clear any stale `.previous.*` at each rename target (#3704). Every
+  // Phase 1c: clear any stale `.previous.*` at each slug a chapter newly occupies (#3704): every
+  // rename target, plus the caller's `clearPreviousAt` (unrendered chapters have no op). Every
   // rename source now sits at its temp slug, every delete has run, and no rename
   // has landed yet; slugs are unique in the new state, so nothing at
-  // `<to>.previous.*` belongs to a chapter. It is an orphan (or a source whose
+  // `<slug>.previous.*` belongs to a chapter. It is an orphan (or a source whose
   // Phase 1 stage failed, already in `errors`) and must not be inherited as the
   // incoming chapter's A take.
-  for (const { op } of staged) {
+  const clearTargets = new Set([...staged.map(({ op }) => op.to), ...clearPreviousAt]);
+  for (const slug of clearTargets) {
+    const op: ChapterAudioOp = staged.find((s) => s.op.to === slug)?.op ?? { kind: 'delete', from: slug };
     for (const suffix of PREVIOUS_SUFFIXES) {
-      const path = suffixPath(audioRoot, op.to, suffix);
+      const path = suffixPath(audioRoot, slug, suffix);
       if (!existsSync(path)) continue;
       try {
         await rm(path, { force: true });
-        summary.deleted.push({ slug: op.to, suffix });
+        summary.deleted.push({ slug, suffix });
       } catch (e) {
         const code = (e as { code?: string }).code;
         if (code === 'ENOENT') continue;

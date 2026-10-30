@@ -42,6 +42,7 @@ import {
   applyRename,
   touchedChapterIds,
   pendingMovesAfterRestructure,
+  staleTakeClearSlugs,
   carryMergedAwayKeys,
   type MergeOp,
   type SplitOp,
@@ -505,7 +506,11 @@ async function applyRestructureClaimed(
   );
 
   // Apply audio ops (best-effort — errors are surfaced in the response).
-  const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
+  const audioSummary = await rewriteChapterSlugs(
+    audioDir(bookDir),
+    result.audioOps,
+    staleTakeClearSlugs(result.state.chapters, result.audioOps),
+  );
 
   /* Plan 286 / #3704 — a renamed or renumbered chapter's pending entry moves to its new id with its
      `.previous.mp3`; every other touched chapter's entry no longer pairs with the live take and is
