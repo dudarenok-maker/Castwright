@@ -156,6 +156,25 @@ export function touchedChapterIds(
   return [...touched].sort((a, b) => a - b);
 }
 
+/** #3704 — old chapter id → new chapter id for every chapter whose `.previous.mp3`
+    a restructure's rename actually moved (`previousMovedFrom` = the old slugs
+    rewriteChapterSlugs reported moving it from). Its pending A/B entry moves
+    with it; every other touched chapter's entry is dropped. */
+export function pendingMovesAfterRestructure(
+  oldChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+  previousMovedFrom: ReadonlySet<string>,
+): Map<number, number> {
+  const moves = new Map<number, number>();
+  const oldBySlug = new Map(oldChapters.map((c) => [c.slug, c]));
+  for (const op of audioOps) {
+    if (op.kind !== 'rename' || !previousMovedFrom.has(op.from)) continue;
+    const old = oldBySlug.get(op.from);
+    if (old) moves.set(old.id, op.newChapterId);
+  }
+  return moves;
+}
+
 /** Map each surviving old chapter id to its new id (one-to-one or
     many-to-one for merge). Chapters that vanished entirely (merged
     INTO another id) still appear in the map but pointed at the

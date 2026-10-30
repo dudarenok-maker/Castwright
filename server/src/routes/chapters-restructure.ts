@@ -41,6 +41,7 @@ import {
   applyRefreshTitles,
   applyRename,
   touchedChapterIds,
+  pendingMovesAfterRestructure,
   carryMergedAwayKeys,
   type MergeOp,
   type SplitOp,
@@ -62,7 +63,7 @@ import {
 import { busySentence } from './book-state.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
-import { dropPendingForChapters } from '../workspace/revisions-store.js';
+import { reconcilePendingAfterRestructure } from '../workspace/revisions-store.js';
 import {
   manuscriptFingerprint,
   sameFingerprint,
@@ -506,8 +507,9 @@ async function applyRestructureClaimed(
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
 
-  /* Plan 286 — entries for chapters this op touched no longer pair with the
-     live take. Best-effort: logged, never in a response (the six handlers
+  /* Plan 286 / #3704 — a renamed or renumbered chapter's pending entry moves to its new id with its
+     `.previous.mp3`; every other touched chapter's entry no longer pairs with the live take and is
+     dropped. Best-effort: logged, never in a response (the six handlers
      return raw messages, so a lock-key path must not reach them). A deliberate
      swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
      that survives a failed drop is NOT left to act on whichever chapter now
@@ -517,9 +519,13 @@ async function applyRestructureClaimed(
      client-written entry has no stamps and is not covered. */
   try {
     const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
-    if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);
+    const previousMovedFrom = new Set(
+      audioSummary.renamed.filter((r) => r.suffix === 'previous.mp3').map((r) => r.from),
+    );
+    const moves = pendingMovesAfterRestructure(oldChapters, result.audioOps, previousMovedFrom);
+    if (touched.length > 0) await reconcilePendingAfterRestructure(bookDir, result.state.chapters, touched, moves);
   } catch (e) {
-    console.error('[chapters-restructure] could not drop stale A/B review entries', e);
+    console.error('[chapters-restructure] could not reconcile A/B review entries', e);
   }
 
   // Plan 70c — re-derive the analysis cache from the freshly-written

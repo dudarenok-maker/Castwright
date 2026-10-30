@@ -11,7 +11,7 @@ import {
   resetRevisions,
   recordPending,
   dropPendingForChapter,
-  dropPendingForChapters,
+  reconcilePendingAfterRestructure,
   dismissDriftId,
   beginRevisionOp,
   commitRevisionOp,
@@ -285,13 +285,41 @@ describe('recordPending / dropPendingForChapter', () => {
     expect((await readRevisions(bookDir, CHAPTERS)).pending.map((p) => p.id)).toEqual(['r2']);
   });
 
-  it('plan 286 — dropPendingForChapters drops several chapters in one write; no-op when none match', async () => {
+  it('plan 286 / #3704 — reconcilePendingAfterRestructure drops touched chapters and keeps the rest', async () => {
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [serverEntry(3, 'r3'), serverEntry(4, 'r4')], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const chapters: ChapterRef[] = [{ id: 3, slug: '03-c' }, { id: 4, slug: '04-d' }];
+    const out = await reconcilePendingAfterRestructure(bookDir, chapters, [3], new Map());
+    expect(out.pending.map((p) => p.id)).toEqual(['r4']);
+    expect(onDisk().rev).toBe(5);
+    expect((onDisk().pending as StoredRevision[]).map((p) => p.id)).toEqual(['r4']);
+  });
+
+  it('plan 286 / #3704 — reconcilePendingAfterRestructure is a no-op (no write) when nothing matches', async () => {
     seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [serverEntry(1, 'r1'), serverEntry(2, 'r2')], dismissed: [], acceptedSelections: {}, timeline: {} });
-    const out = await dropPendingForChapters(bookDir, CHAPTERS, [1, 2]);
-    expect(out.pending).toEqual([]);
+    await reconcilePendingAfterRestructure(bookDir, CHAPTERS, [7], new Map([[8, 9]]));
+    expect(onDisk().rev).toBe(4);
+  });
+
+  it('#3704 — a stamped entry moves to its chapter\'s new id, keeping id and stamps', async () => {
+    const entry = { ...serverEntry(1, 'r1'), chapterUuid: 'u1', renderedAt: 't' };
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [entry], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const NEW: ChapterRef[] = [
+      { id: 1, slug: '01-b', uuid: 'u2', audioRenderedAt: 't' },
+      { id: 2, slug: '02-a', uuid: 'u1', audioRenderedAt: 't' },
+    ];
+    await reconcilePendingAfterRestructure(bookDir, NEW, [1, 2], new Map([[1, 2]]));
     expect(onDisk().rev).toBe(5);
-    await dropPendingForChapters(bookDir, CHAPTERS, [7]);
-    expect(onDisk().rev).toBe(5);
+    expect(onDisk().pending).toEqual([{ ...entry, chapterId: 2 }]);
+    expect((await readRevisions(bookDir, NEW)).pending).toEqual([{ ...entry, chapterId: 2 }]);
+  });
+
+  it('#3704 — a legacy (origin-less) entry moves too: .previous.mp3 is probed at the NEW slug', async () => {
+    const { origin: _origin, ...legacy } = serverEntry(1, 'r1');
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [legacy], dismissed: [], acceptedSelections: {}, timeline: {} });
+    writeFileSync(join(audioDir(bookDir), '02-a.previous.mp3'), 'PREV');
+    const NEW: ChapterRef[] = [{ id: 1, slug: '01-b' }, { id: 2, slug: '02-a' }];
+    await reconcilePendingAfterRestructure(bookDir, NEW, [1, 2], new Map([[1, 2]]));
+    expect((onDisk().pending as StoredRevision[]).map((p) => [p.id, p.chapterId])).toEqual([['r1', 2]]);
   });
 });
 
