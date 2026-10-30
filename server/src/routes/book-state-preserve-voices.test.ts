@@ -126,7 +126,7 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
     expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
@@ -197,7 +197,7 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
     expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin-v2' } });
@@ -267,7 +267,7 @@ describe('book-state PUT cast — a cloned slot survives a wholesale write (C-B1
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const wren = cloneCast().characters.find((c) => c.id === 'wren')!;
     /* The marker is still on disk — this is the assertion the defect broke.
@@ -322,7 +322,7 @@ describe('book-state PUT cast — a cloned slot survives a wholesale write (C-B1
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const wren = cloneCast().characters.find((c) => c.id === 'wren')!;
     expect(wren.overrideTtsVoices).toEqual({ coqui: clonedSlot });
@@ -501,7 +501,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       // default passthrough behaviour explicitly.
       spy.mockImplementation(actual.readJson);
     }
-    expect(resPut.status).toBe(204);
+    expect(resPut.status).toBe(200);
     expect(resAssign.status).toBe(200);
 
     const nova = raceCast().characters.find((c) => c.id === 'nova')!;
@@ -608,7 +608,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       spy.mockImplementation(actual.readJson);
       await Promise.allSettled([putPromise, secondPromise]);
     }
-    expect(resPut.status).toBe(204);
+    expect(resPut.status).toBe(200);
     expect(second).toBe('applied');
 
     const nova = raceCast().characters.find((c) => c.id === 'nova')!;
@@ -656,7 +656,7 @@ describe('book-state PUT cast — notLinkedTo is server-owned', () => {
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
     expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
@@ -682,7 +682,7 @@ describe('book-state PUT cast — notLinkedTo is server-owned', () => {
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
     expect(mairin.name).toBe('Mairin Renamed');
@@ -723,7 +723,7 @@ describe('book-state PUT cast — notLinkedTo is server-owned', () => {
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
     expect(mairin.notLinkedTo).toEqual([]);
@@ -742,7 +742,7 @@ describe('book-state PUT state — titleSynthesized survives the chapters replac
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-one' }] } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const after = JSON.parse(readFileSync(statePath, 'utf8'));
     expect(after.chapters[0].titleSynthesized).toBe(true);

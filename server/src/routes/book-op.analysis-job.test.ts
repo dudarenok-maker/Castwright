@@ -265,7 +265,7 @@ describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
     const res = await run;
     expect(sseFrames(res.text).some((f) => f.kind === 'result')).toBe(true);
     await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.newDir)).toBe(true);
   });
 
@@ -276,7 +276,7 @@ describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
     expect(sseFrames(res.text).some((f) => f.kind === 'error')).toBe(true);
     expect(bookJobKinds(s.bookId)).toEqual([]);
     expect(analysisModule.isAnalysisJobRunning(s.manuscriptId)).toBe(false);
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
   });
 
   it('a start after the book was deleted answers an SSE book_not_found frame and registers nothing', async () => {
@@ -321,7 +321,7 @@ describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
     while (fileLock.__keyWaitersForTest(`book-op:${s.bookId}`) < 1) await new Promise((r) => setTimeout(r, 5));
     open.open();
     const [renameRes, registered] = await Promise.all([renameP, registeredP]);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     if (registered === BOOK_GONE) throw new Error('book vanished');
     await registered.done;
     expect(leaseDir).toBe(s.newDir);
@@ -386,7 +386,7 @@ describe('the analysis lease is released only when the tracked units settle (#37
     await registered.done;
     expect(leaseReleased).toBe(true);
     expect(bookJobKinds(s.bookId)).toEqual([]);
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.newDir)).toBe(true);
   });
 });
@@ -432,7 +432,7 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
 
     halted.open();
     await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     /* Both files moved with the book; the old folder was not recreated. */
     expect(existsSync(s.bookDir)).toBe(false);
     expect(existsSync(join(s.newDir, '.audiobook', 'analysis-last-outcome.json'))).toBe(true);
@@ -482,7 +482,7 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     await registered.done;
     expect(bookJobKinds(s.bookId)).toEqual([]);
     expect(existsSync(join(s.bookDir, '.audiobook', 'analysis-state.json'))).toBe(true);
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.bookDir)).toBe(false);
   });
 
@@ -543,7 +543,7 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     paused.open();
     await registered.done;
     expect(bookJobKinds(s.bookId)).toEqual([]);
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.bookDir)).toBe(false);
   });
 });
@@ -596,7 +596,7 @@ describe('POST /:id/analysis/pause holds the lease until its own paused snapshot
     expect((await pauseP).status).toBe(200);
     await registered.done;
     expect(bookJobKinds(s.bookId)).toEqual([]);
-    expect((await renameOf(s)).status).toBe(204);
+    expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.bookDir)).toBe(false);
   });
 });
@@ -662,7 +662,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
       expect(existsSync(s.newDir)).toBe(false);
       releaseWork(held!);
       await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
-      expect((await renameOf(s)).status).toBe(204);
+      expect((await renameOf(s)).status).toBe(200);
     } finally {
       spy.mockRestore();
     }
@@ -687,7 +687,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     g.__baj_clone_records = true;
     const q = await queuePostBehindRename(s, `/api/manuscripts/${s.manuscriptId}/analysis`, {});
     q.go();
-    expect((await q.renameP).status).toBe(204);
+    expect((await q.renameP).status).toBe(200);
     await entered.promise;
     expect(seenDir).toBe(s.newDir);
     release.open();
@@ -724,7 +724,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     g.__baj_clone_records = true;
     const q = await queuePostBehindRename(s, `/api/manuscripts/${s.manuscriptId}/analysis/chapters`, { chapterIds: [1] });
     q.go();
-    expect((await q.renameP).status).toBe(204);
+    expect((await q.renameP).status).toBe(200);
     await entered.promise;
     expect(seenDir).toBe(s.newDir);
     release.open();

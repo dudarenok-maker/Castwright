@@ -76,7 +76,7 @@ describe('book-state router — mergedAwayKeys round-trip (fs-58 task-2b)', () =
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'manuscript', patch: { sentences, mergedAwayKeys } });
-    expect(putRes.status).toBe(204);
+    expect(putRes.status).toBe(200);
 
     // GET returns mergedAwayKeys in manuscriptEdits.
     const getRes = await request(app).get(`/api/books/${bookId}/state`);

@@ -129,7 +129,7 @@ describe.each([
     const zed = seedBook('Zed', 'S', 'Book', ZED);
     for (const castConfirmed of [true, false, true]) {
       const res = await request(app).put(`/api/books/${ZED}/state`).send({ slice: 'state', patch: { castConfirmed } });
-      expect(res.status).toBe(204);
+      expect(res.status).toBe(200);
       expect(readState(zed).castConfirmed).toBe(castConfirmed);
     }
     /* The walk could not read every folder: the answer is not indexed. */

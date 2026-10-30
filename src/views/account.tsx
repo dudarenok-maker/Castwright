@@ -14,6 +14,7 @@ import { UpgradeCard } from '../components/upgrade-card';
 import { selectLibraryBooks, libraryActions } from '../store/library-slice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 import {
   settingsActions,
@@ -660,7 +661,15 @@ function BackupRestoreSection() {
     setStatus(null);
     setError(null);
     try {
-      await api.restoreBookBackup(bookId, file);
+      try {
+        await api.restoreBookBackup(bookId, file);
+      } finally {
+        /* Plan 289 (D7) — the restore rewrites state.json behind the slices a
+           kept book still holds, so its next open reads it in full. Marked on a
+           rejection too: a restore that landed but lost its response has an
+           unknown outcome. */
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
+      }
       setStatus(`Restored from ${file}.`);
       /* srv-2 (#424) — a restore overwrites state.json, so the library's
          cached metadata (title, cover, chapter counts) may now be stale.

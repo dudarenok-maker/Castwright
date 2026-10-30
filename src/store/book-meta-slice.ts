@@ -13,7 +13,8 @@
 
    Persistence: `commitDraft` is the only mutation that writes through to
    disk — the persistence-middleware watches that action and PUTs a single
-   `state` slice patch containing all six fields. */
+   `state` slice patch containing the fields typed since the last accepted
+   save (`lastCommitted[bookId].draft`). */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { BookStateJson } from '../lib/types';
@@ -69,6 +70,14 @@ export interface BookMetaState {
       Persisted through the server book-state slice; toggled by the Task-12
       analysis-form toggle. */
   prosodyEnabled: Record<string, boolean | undefined>;
+  /** Plan 289 (D7) — books whose in-memory slices may be older than disk: a
+      save was refused as stale, or a writer the persistence middleware never
+      sees (Library Edit, the language guard) changed the book. Layout reads a
+      marked book in full, even when its slices are loaded, and the full read
+      clears the mark. The value counts marks, so a read clears only the marks
+      made before it was issued. Optional so hand-built test stores need not
+      carry it. */
+  needsFullRead?: Record<string, number>;
 }
 
 const initialState: BookMetaState = {
@@ -76,6 +85,7 @@ const initialState: BookMetaState = {
   saved: {},
   lastCommitted: {},
   prosodyEnabled: {},
+  needsFullRead: {},
 };
 
 interface HydratePayload {
@@ -88,6 +98,12 @@ interface HydratePayload {
     notes?: string | null;
     prosodyEnabled?: boolean;
   };
+  /** #3784 PB — a full read of the book the user is editing: refresh `saved`
+      and keep the draft. Layout sets it on every full read of the open book,
+      the first after opening it included, unless the read is of a different
+      manuscript than the book was last read from (#3784 P11-1: a book
+      re-imported under the same id). */
+  keepDraft?: boolean;
 }
 
 export const bookMetaSlice = createSlice({
@@ -95,9 +111,15 @@ export const bookMetaSlice = createSlice({
   initialState,
   reducers: {
     /* Seed `saved[bookId]` from the BookStateJson the server returned on book
-       open. Wipes any stale draft from a previous book. */
+       open. Wipes any stale draft from a previous book.
+
+       #3784 PB — a full read of the open book (`keepDraft`) keeps the draft: it
+       holds the user's typing, or the edit a failed save restored (#2230,
+       #3754), and the read cannot restore either. `selectEffectiveMeta` still
+       overlays it, so a field the user is editing shows their typing while
+       every other field shows the read. */
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
-      const { bookId, state } = a.payload;
+      const { bookId, state, keepDraft = false } = a.payload;
       s.saved[bookId] = {
         title: state.title,
         author: state.author,
@@ -109,10 +131,17 @@ export const bookMetaSlice = createSlice({
         notes: state.notes ?? null,
       };
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
-      s.draft = null;
+      if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
-         commit snapshot (the server is now the truth, rollback is moot). */
-      if (s.lastCommitted) delete s.lastCommitted[bookId];
+         commit snapshot (the server is now the truth, rollback is moot).
+
+         #3784 P11-2 — except on a re-read of the open book: a commit whose PUT
+         is still queued or in flight keeps its snapshot, rebased onto the read,
+         so a failed save still restores the typing and reverts to the read
+         (keeping the outside write it brought), not to the pre-read baseline. */
+      const pending = s.lastCommitted?.[bookId];
+      if (pending && keepDraft) pending.saved = { ...s.saved[bookId] };
+      else if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
     /* Stage a single-field edit into the draft buffer. Triggered on every
@@ -173,9 +202,13 @@ export const bookMetaSlice = createSlice({
        toast (esp. important for a transient network failure, where the content
        was never actually refused). Snapshot is always cleared.
 
-       #3754 — `restoreDraft: false` (the failing book is no longer the open
-       one) still reverts `saved` but leaves the draft alone: the global draft
-       would otherwise carry that book's text into whichever book is open now. */
+       #3754 / #3784 — the draft is global, so it is restored only while the
+       failing book is the open one (`restoreDraft`, default true): restoring
+       it on another book would carry this book's text there. A 4xx refusal
+       that arrives after the book was left still reverts `saved` (nothing is
+       kept for a refused write) but passes `restoreDraft: false`. A retryable
+       failure after leaving is not rolled back at all; it is kept and re-sent
+       on the book's next flush. */
     rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string; restoreDraft?: boolean }>) => {
       const { bookId, restoreDraft = true } = a.payload;
       const pending = s.lastCommitted?.[bookId];
@@ -194,6 +227,36 @@ export const bookMetaSlice = createSlice({
     commitDraftSucceeded: (s, a: PayloadAction<{ bookId: string }>) => {
       const { bookId } = a.payload;
       if (s.lastCommitted) delete s.lastCommitted[bookId];
+    },
+
+    /* #3784 P12-1 — the book was deleted: forget its commit snapshot, and the
+       draft when it was typed on this book (`ownsDraft`, decided by the
+       persistence middleware, which knows the book the draft belongs to). A
+       re-import under the same id, from the book's own bundle, keeps both of
+       its ids, so nothing later can tell the old book's typing from the new
+       book's. */
+    forgetBook: (s, a: PayloadAction<{ bookId: string; ownsDraft: boolean }>) => {
+      if (s.lastCommitted) delete s.lastCommitted[a.payload.bookId];
+      if (a.payload.ownsDraft) s.draft = null;
+    },
+
+    /* Plan 289 (D7) — mark a book for a full re-read (see `needsFullRead`).
+       #3784 P1 — `refused` names book-meta fields the server refused as
+       stale: they stop being the user's pending edit, so a rollback does not
+       restore them and a later commit does not send them again (the
+       persistence middleware sends only the pending edit's fields). */
+    markNeedsFullRead: (s, a: PayloadAction<{ bookId: string; refused?: string[] }>) => {
+      const marks = (s.needsFullRead ??= {});
+      marks[a.payload.bookId] = (marks[a.payload.bookId] ?? 0) + 1;
+      const pending = s.lastCommitted?.[a.payload.bookId];
+      for (const f of a.payload.refused ?? []) delete pending?.draft[f as EditableBookMetaField];
+    },
+
+    /* Plan 289 (D7) — a full read landed. `upTo` is the mark count when it was
+       issued; a mark made while it was in flight survives it. */
+    clearNeedsFullRead: (s, a: PayloadAction<{ bookId: string; upTo: number }>) => {
+      const { bookId, upTo } = a.payload;
+      if (s.needsFullRead && (s.needsFullRead[bookId] ?? 0) <= upTo) delete s.needsFullRead[bookId];
     },
   },
 });

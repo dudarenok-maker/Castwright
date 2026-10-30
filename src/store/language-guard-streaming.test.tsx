@@ -95,7 +95,7 @@ async function saveLanguage(): Promise<void> {
 
 beforeEach(() => {
   startCalls.length = 0;
-  vi.mocked(api.putBookState).mockReset().mockResolvedValue(undefined);
+  vi.mocked(api.putBookState).mockReset().mockResolvedValue({ revision: {} });
   vi.mocked(api.getLibrary).mockReset().mockResolvedValue({ authors: [] });
   vi.mocked(api.reviewScript).mockReset();
 });

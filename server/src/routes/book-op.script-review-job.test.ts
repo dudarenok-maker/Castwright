@@ -184,7 +184,7 @@ describe('POST /script-review is a registered script-review job (#3711)', () => 
     const res = await run;
     expect(parseSse(res.text).find((e) => e.kind === 'result')).toMatchObject({ done: true });
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
     expect(existsSync(newDir())).toBe(true);
   });
 
@@ -193,7 +193,7 @@ describe('POST /script-review is a registered script-review job (#3711)', () => 
     runReview.mockRejectedValue(new Error('analyzer exploded'));
     await request(app).post(`/api/books/${bookId}/script-review`).send({});
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   describe('early returns release the registration', () => {
@@ -202,7 +202,7 @@ describe('POST /script-review is a registered script-review job (#3711)', () => 
       const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
       expect(res.status).toBe(409);
       expect(bookJobKinds(bookId)).toEqual([]);
-      expect((await renameRequest()).status).toBe(204);
+      expect((await renameRequest()).status).toBe(200);
     });
 
     it('the no_attribution terminal (nothing attributed to review)', async () => {
@@ -210,7 +210,7 @@ describe('POST /script-review is a registered script-review job (#3711)', () => 
       const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
       expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ code: 'no_attribution' });
       expect(bookJobKinds(bookId)).toEqual([]);
-      expect((await renameRequest()).status).toBe(204);
+      expect((await renameRequest()).status).toBe(200);
     });
 
     it('the no_such_chapter terminal (a chapter with no attributed sentences)', async () => {

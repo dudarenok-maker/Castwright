@@ -4186,7 +4186,9 @@ paths:
         is hand-modeled in `src/lib/types.ts:BookStateResponse`; the schema here
         enumerates the top-level keys and references the component schemas that
         exist, keeping `state` (`BookStateJson`) and the loose `Record` maps
-        permissive rather than duplicating those large shapes.
+        permissive rather than duplicating those large shapes. Plan 289:
+        `sliceRevisions` carries the per-field revision tokens a later
+        `PUT` echoes back as `baseRevision`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       responses:
@@ -4231,6 +4233,8 @@ paths:
                 slice:
                   type: string
                   enum: [cast, manuscript, revisions, state, changeLog]
+                baseRevision:
+                  $ref: '#/components/schemas/SliceRevision'
                 patch:
                   description: |
                     The whole slice payload; shape depends on `slice`.
@@ -4271,8 +4275,18 @@ paths:
                     non-empty unsupported value is rejected with
                     `400 unsupported_language` and nothing is written.
       responses:
-        '204':
-          description: Slice written
+        '200':
+          description: |
+            Slice written (or a no-op: the write changed nothing). Plan 289:
+            `revision` is the slice's per-field tokens after the write, equal to
+            the next `GET` value for that slice.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revision]
+                properties:
+                  revision: { $ref: '#/components/schemas/SliceRevision' }
         '400':
           description: |
             Missing/unknown `slice` or `patch`, a malformed manuscript patch,
@@ -4298,6 +4312,11 @@ paths:
             `book_path_taken` (the new Author/Series/Title path already holds a
             book), or `book_folder_in_use` (the folder is open in another
             program; close it and retry). No body ever carries a path.
+
+            Plan 289: `stale_revision` — the request carried a `baseRevision`
+            and a field the write would change has moved on disk since that
+            base. Nothing was written; re-read the book. A request without
+            `baseRevision` is never refused this way.
           content:
             application/json:
               schema:
@@ -4307,7 +4326,14 @@ paths:
                   error: { type: string }
                   code:
                     type: string
-                    enum: [book_busy, book_path_taken, book_folder_in_use]
+                    enum: [book_busy, book_path_taken, book_folder_in_use, stale_revision]
+                  fields:
+                    type: array
+                    items: { type: string }
+                    description: >-
+                      Present only with `code: stale_revision`: the carried fields
+                      whose base revision is stale (names from the slice's fixed
+                      field list). Never a path or lock text.
 
   /api/books/{bookId}:
     delete:
@@ -9568,6 +9594,10 @@ components:
           description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
 
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
+    SliceRevision:
+      type: object
+      description: Plan 289 — field name -> opaque revision token. Clients echo it back unchanged.
+      additionalProperties: { type: string }
     BookStateResponse:
       type: object
       description: |
@@ -9619,6 +9649,18 @@ components:
           type: array
           items: { type: string }
           description: Slugs of chapters that already have an audio file on disk.
+        sliceRevisions:
+          type: object
+          description: |
+            Plan 289 — per-field revision tokens of the four `PUT /state`
+            slices, computed from the raw files before any decoration. Opaque;
+            echo a slice's map back as `baseRevision`.
+          required: [state, cast, manuscript, changeLog]
+          properties:
+            state: { $ref: '#/components/schemas/SliceRevision' }
+            cast: { $ref: '#/components/schemas/SliceRevision' }
+            manuscript: { $ref: '#/components/schemas/SliceRevision' }
+            changeLog: { $ref: '#/components/schemas/SliceRevision' }
         chapterLufs:
           type: object
           additionalProperties: true

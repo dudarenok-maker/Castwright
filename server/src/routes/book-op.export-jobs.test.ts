@@ -148,7 +148,7 @@ describe('POST /exports is a registered export job (#3711)', () => {
     release.open();
     await awaitInFlightJobs();
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
     expect(existsSync(newDir)).toBe(true);
   });
 
@@ -158,7 +158,7 @@ describe('POST /exports is a registered export job (#3711)', () => {
     expect(res.status).toBe(201);
     await awaitInFlightJobs();
     await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('releases the registration on an early return (a chapter has no audio -> 409 export_incomplete)', async () => {
@@ -167,7 +167,7 @@ describe('POST /exports is a registered export job (#3711)', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('export_incomplete');
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('a start for a deleted book answers 404 and registers nothing', async () => {
@@ -205,7 +205,7 @@ describe('GET /export/portable is a registered export job (#3711)', () => {
     const res = await run;
     expect(res.status).toBe(200);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('releases the registration when the build fails', async () => {
@@ -213,7 +213,7 @@ describe('GET /export/portable is a registered export job (#3711)', () => {
     const res = await request(app).get(`/api/books/${bookId}/export/portable`);
     expect(res.status).toBe(500);
     expect(bookJobKinds(bookId)).toEqual([]);
-    expect((await renameRequest()).status).toBe(204);
+    expect((await renameRequest()).status).toBe(200);
   });
 
   it('a request for a deleted book answers 404 and registers nothing', async () => {

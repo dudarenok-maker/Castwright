@@ -163,7 +163,7 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { castConfirmed: false, notes: 'still editable' } });
 
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(existsSync(bookDir)).toBe(true);
   });
 
@@ -175,7 +175,7 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
 
     const res = await renameRequest();
 
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(bookDir)).toBe(false);
   });
@@ -205,7 +205,7 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
     while (keyWaiters(`book-op:${bookId}`) < 1) await sleep(5);
     open();
     const [renameRes, registered] = await Promise.all([renameP, registeredP]);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     if (registered === BOOK_GONE) throw new Error('book vanished');
     await registered.done;
 
@@ -298,7 +298,7 @@ describe('#3625 — PUT /:bookId/state rename waits on the old dir state lock', 
       expect(existsSync(newDir)).toBe(false);
       release();
       const [res] = await Promise.all([p, held]);
-      expect(res.status).toBe(204);
+      expect(res.status).toBe(200);
       expect(existsSync(newDir)).toBe(true);
       expect(existsSync(bookDir)).toBe(false);
     } finally {

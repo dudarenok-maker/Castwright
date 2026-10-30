@@ -16,6 +16,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { useAppDispatch } from '../store';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import { useLanguageGuard, type LanguageGuardResult } from './use-language-guard';
 import { emitLanguageGuard, type LanguageGuardSelector } from '../lib/language-guard-bus';
 import { api } from '../lib/api';
@@ -56,6 +57,7 @@ function makeStore(book: LibraryBook | null) {
     reducer: {
       library: librarySlice.reducer,
       notifications: notificationsSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
     },
   });
   if (book) store.dispatch(librarySlice.actions.addBook(book));
@@ -93,7 +95,7 @@ function ReturnHarness() {
 }
 
 beforeEach(() => {
-  vi.mocked(api.putBookState).mockReset().mockResolvedValue(undefined);
+  vi.mocked(api.putBookState).mockReset().mockResolvedValue({ revision: {} });
   vi.mocked(api.getLibrary)
     .mockReset()
     .mockResolvedValue({ authors: [] });
@@ -264,13 +266,40 @@ describe('useLanguageGuard', () => {
     });
 
     // The user should be able to retry by clicking Save again.
-    vi.mocked(api.putBookState).mockResolvedValue(undefined);
+    vi.mocked(api.putBookState).mockResolvedValue({ revision: {} });
     vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
     expect(mockedApi.putBookState).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  /* Plan 289 (D7), #3784 — a save whose response is lost (rejects) may still
+     have landed, so the book is marked for a full re-read all the same. */
+  it('marks the book for a full re-read whether the save resolves or rejects (plan 289 D7)', async () => {
+    const store = makeStore(unsetBook());
+    const marks = () =>
+      (store.getState() as { bookMeta: { needsFullRead?: Record<string, number> } }).bookMeta
+        .needsFullRead?.b_marlow ?? 0;
+    vi.mocked(api.putBookState).mockRejectedValue(new Error('Network error'));
+
+    render(
+      <Provider store={store}>
+        <Harness onProceed={vi.fn()} />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    fireEvent.change(screen.getByTestId('edit-book-language') as HTMLSelectElement, {
+      target: { value: 'ru' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mockedApi.putBookState).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(marks()).toBe(1));
+
+    vi.mocked(api.putBookState).mockResolvedValue({ revision: {} });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(marks()).toBe(2));
   });
 
   it('accumulates and fires all retries when a multi-chapter batch guards multiple times (F8 regression)', async () => {

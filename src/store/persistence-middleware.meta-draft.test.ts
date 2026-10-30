@@ -4,7 +4,8 @@
    persistence middleware through every route to A: a direct `openBook`, a
    library round trip (`goHome`), and URL hydration (`hydrateFromUrl`).
    Controls (c) and (d) pin the boundaries: a library round trip back to the
-   SAME book keeps the draft, and a view change within a book keeps it. */
+   SAME book keeps the draft, and a view change within a book keeps it. (e)
+   and (f) pin a save that fails after B was left: kept and re-sent (#3784). */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import type { PutStateRequest, Stage } from '../lib/types';
@@ -62,6 +63,13 @@ const readyStage = (bookId: string): Stage => ({
   openProfileId: null,
 });
 
+/* A commit on A with something typed, so a save to A is sent (#3784 review pass 9:
+   a details save carries only the typed fields; an empty commit sends nothing). */
+const commitOnA = (store: Store) => {
+  store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'A note' }));
+  store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+};
+
 const putsTo = (bookId: string) => putBookState.mock.calls.filter((c) => c[0] === bookId);
 
 describe('persistenceMiddleware — meta draft clear on book switch (#3754, #3624)', () => {
@@ -75,7 +83,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     typeDraftOnB(store);
     openBook(store, 'A');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -89,7 +97,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     store.dispatch(uiActions.goHome());
     openBook(store, 'A');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -102,7 +110,7 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     typeDraftOnB(store);
     store.dispatch(uiActions.hydrateFromUrl(readyStage('A')));
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    commitOnA(store);
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
@@ -124,51 +132,104 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     expect(store.getState().bookMeta.saved.B?.title).toBe('B DRAFT');
   });
 
-  it('(e) a save for B that FAILS after A is opened reverts saved[B] but does not put B\'s text back in the draft', async () => {
-    const store = makeStore();
-    let rejectB: (e: Error) => void = () => {};
-    putBookState.mockImplementationOnce(
-      () => new Promise<void>((_res, rej) => { rejectB = rej; }),
-    );
+  /* #3784 (owner decision) — a save for B that finally fails after B was left
+     is not rolled back, whether the user is in another book or on the library:
+     it is kept and re-sent on B's next flush (guarded by the revision check).
+     The draft is never restored, so B's text cannot reach another book. Every
+     try rejects, and fake timers run out the retries (1s / 2s / 4s). */
+  const failEveryTryThenRecover = async (store: Store, leave: () => void) => {
+    vi.useFakeTimers();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    openBook(store, 'B');
-    typeDraftOnB(store);
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
-    /* Switching away sends B's queued PUT at once (S3); it stays pending. */
-    openBook(store, 'A');
-    expect(putsTo('B')).toHaveLength(1);
-    rejectB(new Error('Book state PUT failed (500)'));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    errSpy.mockRestore();
-    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    try {
+      putBookState.mockRejectedValue(new Error('Book state PUT failed (500)'));
+      openBook(store, 'B');
+      typeDraftOnB(store);
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+      /* Leaving sends B's queued PUT at once (S3). */
+      leave();
+      expect(putsTo('B')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(20000);
+      /* The first try plus three retries, all refused. */
+      expect(putsTo('B')).toHaveLength(4);
+    } finally {
+      putBookState.mockReset();
+      putBookState.mockImplementation(async () => {});
+      errSpy.mockRestore();
+    }
+  };
+
+  const expectKeptAndResent = async (store: Store) => {
+    const before = putsTo('B').length;
+    const flushed = store.dispatch(flushBookPersistence('B') as never);
+    await vi.advanceTimersByTimeAsync(20000);
+    await flushed;
+    const resent = putsTo('B').slice(before);
+    expect(resent.some((c) => (c[1] as { patch: { title?: string } }).patch?.title === 'B DRAFT')).toBe(true);
+    vi.useRealTimers();
+  };
+
+  it("(e) a save for B that FAILS after A is opened is kept and re-sent, and B's text never reaches A", async () => {
+    const store = makeStore();
+    await failEveryTryThenRecover(store, () => openBook(store, 'A'));
+    /* Not rolled back: saved[B] keeps the value its kept save will write. */
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B DRAFT');
     expect(store.getState().bookMeta.draft).toBeNull();
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
-    await store.dispatch(flushBookPersistence('A') as never);
+    commitOnA(store);
+    const flushedA = store.dispatch(flushBookPersistence('A') as never);
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushedA;
+    expect(putsTo('A').length).toBeGreaterThan(0);
     for (const c of putsTo('A')) expect(JSON.stringify(c[1])).not.toContain('B DRAFT');
     expect(store.getState().bookMeta.saved.A?.title).toBe('A title');
+    await expectKeptAndResent(store);
   });
 
-  it('(f) control: a save for B that fails while B is still the open book restores the draft', async () => {
+  it('(f) a save for B that FAILS while the user is on the library is kept and re-sent, not rolled back', async () => {
     const store = makeStore();
-    let rejectB: (e: Error) => void = () => {};
-    putBookState.mockImplementationOnce(
-      () => new Promise<void>((_res, rej) => { rejectB = rej; }),
-    );
+    await failEveryTryThenRecover(store, () => store.dispatch(uiActions.goHome()));
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B DRAFT');
+    expect(store.getState().bookMeta.draft).toBeNull();
+    await expectKeptAndResent(store);
+  });
+
+  /* P6-1 — a 4xx is final: nothing is kept, so after the book was left `saved`
+     must stop claiming the refused title (reverted), without the draft being
+     restored into a closed book or another one. */
+  const refusedAfterLeaving = async (leave: (store: Store) => void) => {
+    const store = makeStore();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    openBook(store, 'B');
-    typeDraftOnB(store);
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
-    /* B -> library: B's PUT goes out and stays pending; the library never
-       counts as "a different book". */
-    store.dispatch(uiActions.goHome());
-    expect(putsTo('B')).toHaveLength(1);
-    rejectB(new Error('Book state PUT failed (500)'));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    errSpy.mockRestore();
+    try {
+      putBookState.mockRejectedValue(
+        new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'),
+      );
+      openBook(store, 'B');
+      typeDraftOnB(store);
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+      leave(store);
+      await store.dispatch(flushBookPersistence('B') as never);
+      /* A 4xx is not retried. */
+      expect(putsTo('B')).toHaveLength(1);
+    } finally {
+      putBookState.mockReset();
+      putBookState.mockImplementation(async () => {});
+      errSpy.mockRestore();
+    }
+    return store;
+  };
+
+  it('(g) a 4xx refusal for B that arrives on the library reverts saved, restores no draft', async () => {
+    const store = await refusedAfterLeaving((s) => s.dispatch(uiActions.goHome()));
     expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
-    expect(store.getState().bookMeta.draft).toEqual({ title: 'B DRAFT' });
+    expect(store.getState().bookMeta.lastCommitted?.B).toBeUndefined();
+    expect(store.getState().bookMeta.draft).toBeNull();
+  });
+
+  it("(h) a 4xx refusal for B that arrives inside book A reverts B's saved and leaves A untouched", async () => {
+    const store = await refusedAfterLeaving((s) => openBook(s, 'A'));
+    expect(store.getState().bookMeta.saved.B?.title).toBe('B title');
+    expect(store.getState().bookMeta.lastCommitted?.B).toBeUndefined();
+    expect(store.getState().bookMeta.draft).toBeNull();
+    expect(store.getState().bookMeta.saved.A?.title).toBe('A title');
   });
 
   it('(d) control: a view change within the same book keeps the draft', () => {

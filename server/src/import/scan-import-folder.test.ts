@@ -284,6 +284,28 @@ describe('importPortableBundle', () => {
     }
   });
 
+  it("overwrites the bundle's own editEpoch with a freshly minted one, in both placements (plan 289)", async () => {
+    const state = fixtureState({ title: 'Epoch Overwrite Test', editEpoch: 'ep_bundle' });
+    const bundle = await makeBundleFixture(state, null);
+    const target = targetDirFor(state);
+    try {
+      /* Fresh placement. */
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const first = JSON.parse(readFileSync(stateJsonPath(target), 'utf8'));
+      expect(first.editEpoch).toMatch(/^ep_/);
+      expect(first.editEpoch).not.toBe('ep_bundle');
+      expect(first.manuscriptId).toBe(state.manuscriptId);
+      /* Overwrite placement: the same bundle again mints another. */
+      await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      const second = JSON.parse(readFileSync(stateJsonPath(target), 'utf8'));
+      expect(second.editEpoch).toMatch(/^ep_/);
+      expect(second.editEpoch).not.toBe('ep_bundle');
+      expect(second.editEpoch).not.toBe(first.editEpoch);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a bundle missing MANIFEST.json', async () => {
     const zip = new ZipFile();
     const chunks: Buffer[] = [];
@@ -510,7 +532,8 @@ describe('importPortableBundle', () => {
       expect(result.targetPath).toBe(importedTarget);
 
       const importedState = JSON.parse(readFileSync(stateJsonPath(importedTarget), 'utf8'));
-      expect(importedState).toEqual(state);
+      /* Plan 289 — import mints a fresh editEpoch; everything else is unchanged. */
+      expect(importedState).toEqual({ ...state, editEpoch: expect.stringMatching(/^ep_/) });
       expect(Buffer.compare(readFileSync(join(importedTarget, 'manuscript.txt')), manuscript)).toBe(
         0,
       );

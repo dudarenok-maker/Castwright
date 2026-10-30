@@ -53,6 +53,7 @@ import {
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
+import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { removeManuscript } from '../store/manuscripts.js';
 import {
   BOOK_GONE,
@@ -353,7 +354,10 @@ export async function importPortableBundle(
       writeFile(
         stateJsonPath(stage),
         JSON.stringify(
-          { ...state, title, bookId, manuscriptId, language: state.language ?? null },
+          /* Plan 289 — the bundle's own editEpoch is overwritten, never kept: an
+             export/delete/re-import of the same book must move every revision
+             token, even when the bundle's manuscriptId is kept. */
+          { ...state, title, bookId, manuscriptId, language: state.language ?? null, editEpoch: mintEditEpoch() },
           null,
           2,
         ),

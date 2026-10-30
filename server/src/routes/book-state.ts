@@ -34,6 +34,20 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import {
+  CAST_REVISION_FIELDS,
+  CHANGELOG_REVISION_FIELDS,
+  MANUSCRIPT_REVISION_FIELDS,
+  STATE_REVISION_FIELDS,
+  StaleRevisionError,
+  isSliceRevision,
+  mintEditEpoch,
+  sliceRevision,
+  staleFields,
+  type RevisionSalt,
+  type SliceName,
+  type SliceRevision,
+} from '../workspace/slice-revision.js';
+import {
   withKeyLock,
   withStateJsonLock,
   requestFailureMessage,
@@ -472,6 +486,24 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     }
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
+    /* Plan 289 (#3784) — per-field revision tokens, computed HERE from the raw
+       reads: below, `cast` is decorated in place (`lines`,
+       `clonedElsewhereInSeries`), `edits` is reassigned by the cache
+       reconciliation, and `state` is wrapped in `stateView`. A token made from
+       any of those would never match what a PUT sees on disk. */
+    /* `state` itself is re-read from disk for the same reason: the lazy
+       migrations above write state.json (e.g. `language: null`) but the
+       in-memory object they leave behind does not carry every normalisation,
+       and PUT compares against what `readBookStateOrThrow` returns. */
+    const rawState = (await readBookStateOrThrow(bookDir).catch(() => null)) ?? state;
+    const revisionSalt = { manuscriptId: rawState.manuscriptId, editEpoch: rawState.editEpoch };
+    const sliceRevisions = {
+      state: sliceRevision('state', rawState as unknown as Record<string, unknown>, revisionSalt),
+      cast: sliceRevision('cast', cast, revisionSalt),
+      manuscript: sliceRevision('manuscript', edits, revisionSalt),
+      changeLog: sliceRevision('changeLog', changeLog, revisionSalt),
+    };
+
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
        with its own `.catch`, not inline in an argument list.
        An expression sitting in argument position is evaluated before the
@@ -883,6 +915,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
 
     res.json({
       state: stateView,
+      sliceRevisions,
       cast,
       manuscript,
       manuscriptEdits: edits,
@@ -1104,12 +1137,61 @@ function bookOpRefusal(
   return null;
 }
 
+/* Plan 289 (#3784) — the conditional-write check. `carried` are the fields the
+   write carries; `nextContent` is the server's post-merge, post-transform value
+   (what would be written), `currentContent` the fresh read the write derives
+   from. A field the write leaves as it is never refuses (a retry after a lost
+   response lands as a no-op). Throws before anything is written. */
+function assertRevisionFresh(
+  slice: SliceName,
+  base: SliceRevision | undefined,
+  carried: readonly string[],
+  currentContent: unknown,
+  nextContent: unknown,
+  salt: RevisionSalt,
+): void {
+  if (!base) return;
+  const current = sliceRevision(slice, currentContent as Record<string, unknown> | null, salt);
+  const all = sliceRevision(slice, nextContent as Record<string, unknown> | null, salt);
+  const next: SliceRevision = {};
+  for (const f of carried) next[f] = all[f];
+  const stale = staleFields(base, current, next);
+  if (stale.length > 0) {
+    console.warn(`[book-state] PUT refused: stale ${slice} field(s) ${stale.join(', ')}`);
+    throw new StaleRevisionError(stale);
+  }
+}
+
+/** The fields of `fields` that `patch` supplies (a literal null counts). */
+const carriedFields = (fields: readonly string[], patch: unknown): string[] =>
+  patch && typeof patch === 'object'
+    ? fields.filter((f) => (patch as Record<string, unknown>)[f] !== undefined)
+    : [];
+
+/** The salt for a non-state slice's check, read fresh inside that slice's span
+ *  (a plain read, not a lock). `fallback` is the resolve-time state. */
+async function readRevisionSalt(bookDir: string, fallback: BookStateJson): Promise<RevisionSalt> {
+  const st = (await readBookStateOrThrow(bookDir)) ?? fallback;
+  return { manuscriptId: st.manuscriptId, editEpoch: st.editEpoch };
+}
+
+const STALE_REVISION_SENTENCE =
+  'This book was changed elsewhere since your edit was made, so the edit was not saved.';
+
 bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   try {
     const body = req.body as {
       slice?: 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
       patch?: unknown;
+      baseRevision?: unknown;
     };
+    /* Plan 289 — absent means unconditional (today's behaviour); present must be
+       a flat map of string tokens. */
+    if (body?.baseRevision !== undefined && !isSliceRevision(body.baseRevision)) {
+      return res.status(400).json({ error: 'baseRevision must be a map of field to token string.' });
+    }
+    const baseRevision = body?.baseRevision as SliceRevision | undefined;
+    let revision: SliceRevision | undefined;
 
     /* #3711 — the whole slice runs under the book's `book-op` lock, resolved
        UNDER it: a folder-renaming PUT queued behind another quick operation on
@@ -1137,9 +1219,26 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            POST /voice-library/:voiceUuid/assign) can invalidate between the
            read and this write, silently erasing whatever it just planted. */
         await withCastLock(bookDir, async () => {
-          const guarded = await preserveDesignedVoices(bookDir, body.patch);
-          const denormalised = await denormaliseCastReusedVoices(guarded);
-          await writeJsonAtomic(castJsonPath(bookDir), stripDerivedCharacterFields(denormalised));
+          /* Plan 289 — the check runs on the `existing` cast.json read inside
+             this same span, against the value that would be written. A consent
+             refusal raised by the transform is judged on the raw patch first:
+             a stale write answers stale_revision, not the consent 409. */
+          const salt = await readRevisionSalt(bookDir, book.state);
+          const existing = await readJson<Record<string, unknown>>(castJsonPath(bookDir));
+          let toWrite: ReturnType<typeof stripDerivedCharacterFields>;
+          try {
+            const guarded = await preserveDesignedVoices(bookDir, body.patch);
+            const denormalised = await denormaliseCastReusedVoices(guarded);
+            toWrite = stripDerivedCharacterFields(denormalised);
+          } catch (err) {
+            if (err instanceof CastVoiceConsentError) {
+              assertRevisionFresh('cast', baseRevision, CAST_REVISION_FIELDS, existing, body.patch, salt);
+            }
+            throw err;
+          }
+          assertRevisionFresh('cast', baseRevision, CAST_REVISION_FIELDS, existing, toWrite, salt);
+          await writeJsonAtomic(castJsonPath(bookDir), toWrite);
+          revision = sliceRevision('cast', toWrite as unknown as Record<string, unknown>, salt);
         });
         break;
       }
@@ -1156,6 +1255,15 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              to the same "no existing content" null the wipe-guard below relies
              on to decide whether it's safe to accept an empty sentence list. */
           const existing = await readJson<{ sentences?: unknown[] }>(editsPath);
+          const salt = await readRevisionSalt(bookDir, book.state);
+          assertRevisionFresh(
+            'manuscript',
+            baseRevision,
+            carriedFields(MANUSCRIPT_REVISION_FIELDS, parsed.data),
+            existing,
+            parsed.data,
+            salt,
+          );
           if (existing?.sentences?.length && parsed.data.sentences.length === 0) {
             return {
               status: 409,
@@ -1163,6 +1271,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
             };
           }
           await writeJsonAtomic(editsPath, parsed.data);
+          revision = sliceRevision('manuscript', parsed.data, salt);
           return null;
         });
         if (refusal) return refusal;
@@ -1176,9 +1285,25 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
             message: 'revisions.json is written by the server; use the revision operations.',
           },
         };
-      case 'changeLog':
-        await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
+      case 'changeLog': {
+        /* Plan 289 — the revision check and the write are one `book`-locked
+           read -> write, shared with the analysis carried-forward append and
+           the reparse append (#3784; order book-op -> book). */
+        await withBookLock(book.bookId, async () => {
+          const salt = await readRevisionSalt(bookDir, book.state);
+          assertRevisionFresh(
+            'changeLog',
+            baseRevision,
+            carriedFields(CHANGELOG_REVISION_FIELDS, body.patch),
+            await readJson<Record<string, unknown>>(changeLogJsonPath(bookDir)),
+            body.patch,
+            salt,
+          );
+          await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
+          revision = sliceRevision('changeLog', body.patch as Record<string, unknown>, salt);
+        });
         break;
+      }
       case 'state': {
         // Whitelist: only allow updating known editorial fields, not bookId /
         // manuscriptId / paths.
@@ -1314,7 +1439,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            read taken INSIDE the state-json lock (the non-moving write below, or
            `moveBookFolder`'s own locked re-read), so a sibling render's stamp
            between this handler's resolve and its write is not reverted. */
-        const buildNext = (state: BookStateJson): BookStateJson => {
+        const mergeState = (state: BookStateJson): BookStateJson => {
         const nextIsStandalone = pickStandalone(patch.isStandalone, state.isStandalone);
         return {
           ...state,
@@ -1367,6 +1492,25 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           updatedAt: new Date().toISOString(),
         };
         };
+        /* Plan 289 -- `check` is for the LOCKED callers only (the state-json-locked
+           write and `moveBookFolder`'s locked re-read, before it renames): the
+           resolve-time `projected` below must not run it. It compares the merge's
+           own output (what would land, language normalised as written) with the
+           fresh read, for the fields the patch carries. */
+        const buildNext = (state: BookStateJson, check = false): BookStateJson => {
+          const next = mergeState(state);
+          if (check) {
+            assertRevisionFresh(
+              'state',
+              baseRevision,
+              carriedFields(STATE_REVISION_FIELDS, patch),
+              state,
+              { ...next, language: next.language ?? null },
+              { manuscriptId: state.manuscriptId, editEpoch: state.editEpoch },
+            );
+          }
+          return next;
+        };
 
         /* On-disk folder layout follows the displayed metadata: Author/Series/
            Title. When any of those changes (or isStandalone flips), the folder
@@ -1388,8 +1532,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              Deliberately inside this branch — a PUT that moves no folder
              (castConfirmed, prosody flags, notes, tags: the autosaves the
              persistence middleware fires constantly, including during an
-             analysis) must keep returning 204. */
-          await moveBookFolder(book, newDir, buildNext);
+             analysis) must keep succeeding (200). */
+          const moved = await moveBookFolder(book, newDir, (fresh) => buildNext(fresh, true));
+          revision = sliceRevision('state', { ...moved, language: moved.language ?? null } as unknown as Record<string, unknown>, {
+            manuscriptId: moved.manuscriptId,
+            editEpoch: moved.editEpoch,
+          });
         } else {
           /* #3700 — the merge is a whole-file read-modify-write of state.json, so
              the read (fresh from disk, NOT the resolve-time snapshot) and every
@@ -1407,8 +1555,13 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
                  to the resolve-time snapshot would write it back and resurrect the
                  book. Refuse and write nothing. */
               if (!fresh) return { status: 404, body: { error: 'Book not found.' } };
-              const next = buildNext(fresh);
-              await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
+              const next = buildNext(fresh, true);
+              const written = { ...next, language: next.language ?? null };
+              await writeStateJsonAtomic(stateJsonPath(bookDir), written);
+              revision = sliceRevision('state', written as unknown as Record<string, unknown>, {
+                manuscriptId: written.manuscriptId,
+                editEpoch: written.editEpoch,
+              });
               return null;
             }),
           );
@@ -1424,10 +1577,18 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     if (outcome) return res.status(outcome.status).json(outcome.body);
 
-    res.status(204).end();
+    res.status(200).json({ revision });
   } catch (e) {
     const refusal = bookOpRefusal(e, 'rename');
     if (refusal) return res.status(refusal.status).json(refusal.body);
+    /* Plan 289 -- a conditional write carrying a stale field. Fixed, path-free
+       sentence; nothing was written. `fields` are names from the slice's fixed
+       field list (they come from `staleFields`), never values, paths or lock text. */
+    if (e instanceof StaleRevisionError) {
+      return res
+        .status(409)
+        .json({ error: STALE_REVISION_SENTENCE, code: 'stale_revision', fields: e.fields });
+    }
     /* GATE 2 (owner-directed) — a deliberate consent refusal from the cast
        guards is a 409, not a 500: a client's retry/telemetry logic must be
        able to tell "we refused you" from "we broke". 409 matches the two
@@ -1597,22 +1758,26 @@ async function applyReparse(
   ]);
 
   if (preservedEditCount > 0) {
-    const logPath = changeLogJsonPath(bookDir);
-    const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
-    const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
-    const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
-    const noun = preservedEditCount === 1 ? 'edit' : 'edits';
-    const newEntry = {
-      id: nextId,
-      at: new Date().toISOString(),
-      ts: 'Just now',
-      date: 'today',
-      type: opts.changeLogType,
-      title: opts.changeLogTitle,
-      note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
-      actor: 'system',
-    };
-    await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+    /* #3784 — the change-log append is a `book`-locked read -> write, shared
+       with the slice PUT and the analysis carried-forward append. */
+    await withBookLock(state.bookId, async () => {
+      const logPath = changeLogJsonPath(bookDir);
+      const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+      const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+      const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+      const noun = preservedEditCount === 1 ? 'edit' : 'edits';
+      const newEntry = {
+        id: nextId,
+        at: new Date().toISOString(),
+        ts: 'Just now',
+        date: 'today',
+        type: opts.changeLogType,
+        title: opts.changeLogTitle,
+        note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
+        actor: 'system',
+      };
+      await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+    });
   }
 
   /* #3400 pass 8 — the `state.json` write is its OWN book-locked step, taken
@@ -1682,6 +1847,9 @@ async function applyReparse(
             chapters: newChapters,
             chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
             castConfirmed: false,
+            /* Plan 289 — a wipe: every revision token of the book moves, so a kept
+               or retrying save built before it is refused. */
+            editEpoch: mintEditEpoch(),
             updatedAt: new Date().toISOString(),
           };
         },

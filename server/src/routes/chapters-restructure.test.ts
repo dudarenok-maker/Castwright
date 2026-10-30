@@ -2224,7 +2224,7 @@ describe('book-state saves take the book lock a restructure holds (#3400)', () =
     })();
     const [m, p] = await Promise.all([post, putP]);
     expect((m as { status: number }).status).toBe(200);
-    expect((p as { status: number }).status).toBe(204);
+    expect((p as { status: number }).status).toBe(200);
   }
 
   async function reset(): Promise<void> {
@@ -2268,7 +2268,7 @@ describe('book-state saves take the book lock a restructure holds (#3400)', () =
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .send({ slice: 'manuscript', patch: { sentences: putBody(0) } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const merge = await request(app)
       .post(`/api/books/${bookId}/chapters/merge`)
       .send({ chapterIds: [2, 3] });
@@ -2543,7 +2543,7 @@ describe('#3628 — titleSynthesized does not outlive the title it describes', (
           chapters: readState().chapters.map((c) => (c.id === 3 ? { ...c, title: 'Chapter 9' } : c)),
         },
       });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     expect(
       (JSON.parse(readFileSync(statePath, 'utf8')).chapters[2] as { titleSynthesized?: boolean })
         .titleSynthesized,
@@ -2908,7 +2908,7 @@ describe('the manuscript slice of the state PUT waits for the book lock (#3400)'
     release();
     await holder;
     const res = await put;
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     expect(readEdits().sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe(
       'Edited while held.',
     );

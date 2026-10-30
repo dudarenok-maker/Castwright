@@ -126,7 +126,7 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
       .put(`/api/books/${targetBookId}/state`)
       .set('Content-Type', 'application/json')
       .send(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = JSON.parse(
       readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),
@@ -169,7 +169,7 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
       .put(`/api/books/${targetBookId}/state`)
       .set('Content-Type', 'application/json')
       .send(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = JSON.parse(
       readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),
@@ -189,7 +189,7 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
       .put(`/api/books/${targetBookId}/state`)
       .set('Content-Type', 'application/json')
       .send(incoming);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = JSON.parse(
       readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),

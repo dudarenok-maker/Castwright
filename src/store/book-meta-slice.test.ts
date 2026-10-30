@@ -267,6 +267,46 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
     expect(next.saved.ns.title).toBe('Authoritative');
     expect(next.lastCommitted?.['ns']).toBeUndefined();
   });
+
+  /* #3784 PB (review pass 10) — a re-read of the book being edited. */
+  /* #3784 P11-2 (review pass 11) — the pending commit's snapshot is kept and
+     rebased onto the read: its typed fields stay, its baseline is the read. */
+  it('a same-book re-read (keepDraft) refreshes saved, keeps the draft, and rebases the pending snapshot', () => {
+    const start: BookMetaState = {
+      draft: { notes: 'half-typed' },
+      saved: { ns: fullMeta({ title: 'Mine' }) },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'Mine' } } },
+      prosodyEnabled: {},
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Theirs', author: 'A', series: 'S' },
+        keepDraft: true,
+      }),
+    );
+    expect(next.saved.ns.title).toBe('Theirs');
+    expect(next.draft).toEqual({ notes: 'half-typed' });
+    expect(next.lastCommitted?.['ns']).toEqual({ saved: next.saved.ns, draft: { title: 'Mine' } });
+
+    /* A refused save then restores the typing over the read, not the old baseline. */
+    const rolledBack = reducer(next, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
+    expect(rolledBack.draft).toEqual({ title: 'Mine' });
+    expect(rolledBack.saved.ns).toEqual(next.saved.ns);
+  });
+
+  it('a hydrate without keepDraft (a re-import under the same id) still wipes the draft', () => {
+    const start: BookMetaState = { draft: { notes: 'half-typed' }, saved: {}, prosodyEnabled: {} };
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Theirs', author: 'A', series: 'S' },
+      }),
+    );
+    expect(next.draft).toBeNull();
+  });
 });
 
 describe('selectors', () => {

@@ -8,7 +8,7 @@
 // library entry.
 
 import { Suspense } from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -23,10 +23,17 @@ import { revisionsSlice } from '../store/revisions-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
-import { bookMetaSlice } from '../store/book-meta-slice';
+import { bookMetaSlice, bookMetaActions } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
-import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  persistenceMiddleware,
+  flushBookPersistence,
+  beginFullRead,
+  learnSliceRevisions,
+} from '../store/persistence-middleware';
+import { createBookStateDisk } from '../test/book-state-disk';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
@@ -226,6 +233,19 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
     </Provider>,
   );
 }
+
+/* A disk-backed PUT, capped (review catalogue 28): past `cap` sends it answers
+   a 200 without touching the disk. A refusal or a 404 is never re-sent, and a
+   503 gives up after four sends, so a correct engine never reaches the cap; a
+   mutant that loops on a refusal then fails its assertions on the disk log
+   rather than running the worker out of heap. */
+const cappedDiskPut = (disk: ReturnType<typeof createBookStateDisk>, cap = 12) => {
+  let sends = 0;
+  return async (id: string, req: never) => {
+    sends += 1;
+    return sends > cap ? undefined : disk.put(id, req);
+  };
+};
 
 beforeEach(() => {
   analyseMock.mockClear();
@@ -946,6 +966,450 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     /* Send b2's queued write now rather than sleeping out the debounce. */
     await store.dispatch(flushBookPersistence('b2') as never);
     expect(putBookStateMock).not.toHaveBeenCalled();
+  });
+
+  /* #3421 / plan 289 — a book's saves across a destructive RPC (re-parse,
+     manuscript replace, delete). The client no longer cancels them before
+     the RPC: a retry and a kept save each carry the revision they were built
+     against, and a re-parse or replace rotates the book's edit epoch, so the
+     server refuses whatever spans the wipe (D8). A delete leaves nothing to
+     write into. A failed RPC changed nothing, so nothing is lost either. */
+  describe('a book’s saves across a wipe RPC (#3421, plan 289)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      getLibraryMock.mockResolvedValue({ authors: [] });
+      getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+      putBookStateMock.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    type Disk = ReturnType<typeof createBookStateDisk>;
+    const cases: Array<{
+      name: string;
+      rpc: () => ReturnType<typeof vi.fn>;
+      trigger: () => void;
+      /* What the RPC does to the book on disk when it succeeds. */
+      wipe: (disk: Disk) => void;
+    }> = [
+      {
+        name: 're-parse',
+        rpc: () => reparseBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+          const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+        wipe: (disk) => disk.reparse('b1'),
+      },
+      {
+        name: 'manuscript replace',
+        rpc: () => replaceManuscriptMock,
+        trigger: () => {
+          fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+            target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+          });
+          const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+        wipe: (disk) => disk.reparse('b1'),
+      },
+      {
+        name: 'delete',
+        rpc: () => deleteBookMock,
+        trigger: () => {
+          fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+          const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+          fireEvent.click(confirm[confirm.length - 1]);
+        },
+        wipe: (disk) => disk.remove('b1'),
+      },
+    ];
+    const wipes = cases.slice(0, 2);
+    const WIPED = { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
+
+    const sentVane = () =>
+      putBookStateMock.mock.calls.filter((c) => JSON.stringify(c[1]).includes('Eliza Vane'));
+
+    /* Rename, then leave the book. */
+    async function renameThenLeave(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Vane' } as Character]));
+      void store.dispatch(flushBookPersistence('b1') as never);
+      await vi.advanceTimersByTimeAsync(0);
+      store.dispatch(uiActions.goHome());
+    }
+
+    async function runWipe(
+      store: ReturnType<typeof makeStore>,
+      rpcMock: ReturnType<typeof vi.fn>,
+      trigger: () => void,
+    ) {
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      trigger();
+      await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    async function reopenAndFlush(store: ReturnType<typeof makeStore>) {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      await store.dispatch(flushBookPersistence('b1') as never);
+    }
+
+    /* A book on the disk model, with the full read Layout made when it was
+       last opened, so the store knows its revisions. */
+    function setupDisk(store: ReturnType<typeof makeStore>) {
+      const disk = createBookStateDisk();
+      disk.seed('b1', {
+        state: { title: 'the Coalfall Commission', castConfirmed: true },
+        cast: { characters: [{ id: 'c1', name: 'Eliza', voiceState: 'generated' }] },
+      });
+      putBookStateMock.mockImplementation(cappedDiskPut(disk));
+      store.dispatch(
+        learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
+      );
+      return disk;
+    }
+
+    describe.each(wipes)('$name succeeds', ({ rpc, trigger, wipe }) => {
+      it('a retry that comes due after the RPC is refused, and the wiped book is untouched', async () => {
+        const store = makePopulatedStore({ persist: true });
+        const disk = setupDisk(store);
+        disk.failNext(1);
+        await renameThenLeave(store);
+        expect(disk.log.map((p) => p.outcome)).toEqual(['503']);
+        const rpcMock = rpc();
+        rpcMock.mockImplementation(async () => {
+          wipe(disk);
+          return WIPED;
+        });
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(disk.log.map((p) => p.outcome)).toEqual(['503', '409']);
+        expect(disk.books.get('b1')!.cast).toBeNull();
+      });
+
+      it('a kept save re-sent on reopen is refused, and the wiped book is untouched', async () => {
+        const store = makePopulatedStore({ persist: true });
+        const disk = setupDisk(store);
+        disk.failNext(4);
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        const rpcMock = rpc();
+        rpcMock.mockImplementation(async () => {
+          wipe(disk);
+          return WIPED;
+        });
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(disk.log.at(-1)).toMatchObject({ slice: 'cast', base: true, outcome: '409' });
+        expect(disk.books.get('b1')!.cast).toBeNull();
+        expect(disk.books.get('b1')!.state.castConfirmed).toBe(false);
+      });
+    });
+
+    describe('delete succeeds', () => {
+      it('a retry that comes due after the RPC finds no book and is not re-created', async () => {
+        const store = makePopulatedStore({ persist: true });
+        const disk = setupDisk(store);
+        disk.failNext(1);
+        await renameThenLeave(store);
+        deleteBookMock.mockImplementation(async () => cases[2].wipe(disk));
+        await runWipe(store, deleteBookMock, cases[2].trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(disk.log.map((p) => p.outcome)).toEqual(['503', '404']);
+        expect(disk.books.has('b1')).toBe(false);
+      });
+
+      it('its kept saves are dropped: nothing is re-sent on reopen (D8b hygiene)', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        deleteBookMock.mockResolvedValue(undefined);
+        await runWipe(store, deleteBookMock, cases[2].trigger);
+        await reopenAndFlush(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+      });
+    });
+
+    describe.each(cases)('$name fails', ({ rpc, trigger }) => {
+      it('S1/P1: a kept save is re-sent on reopen', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(5);
+      });
+
+      it('S1/P2: a retry in flight keeps running through the RPC and lands', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        expect(putBookStateMock).toHaveBeenCalledTimes(1);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        rpcMock.mockRejectedValue(new Error('Service Unavailable'));
+        await runWipe(store, rpcMock, trigger);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(sentVane()).toHaveLength(2);
+        await reopenAndFlush(store);
+        expect(sentVane()).toHaveLength(2);
+      });
+
+      it('S3: a kept save is not re-sent over a newer one that landed while the RPC ran', async () => {
+        const store = makePopulatedStore({ persist: true });
+        await renameThenLeave(store);
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(putBookStateMock).toHaveBeenCalledTimes(4);
+        putBookStateMock.mockResolvedValue(undefined);
+        const rpcMock = rpc();
+        let reject!: (e: unknown) => void;
+        rpcMock.mockReturnValue(new Promise((_r, rj) => (reject = rj)));
+        await runWipe(store, rpcMock, trigger);
+        /* The book is opened while the RPC runs and renamed again; that save lands. */
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+        store.dispatch(castActions.setCharacters([{ id: 'c1', name: 'Eliza Q' } as Character]));
+        await store.dispatch(flushBookPersistence('b1') as never);
+        reject(new Error('Service Unavailable'));
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const lastCast = putBookStateMock.mock.calls
+          .filter((c) => (c[1] as { slice: string }).slice === 'cast')
+          .map((c) => (c[1] as { patch: { characters: { name: string }[] } }).patch.characters[0].name)
+          .pop();
+        expect(lastCast).toBe('Eliza Q');
+      });
+    });
+
+    /* Plan 289, N8 — a delete can answer 500 after the folder is already gone
+       (a failing cache cleanup, a lost response). The client keeps the kept
+       save, and a re-import under the same id must not receive it: the
+       import's new edit epoch moves every token, so the replay is refused. */
+    it('N8: a delete that answered 500 after removing the book, then a re-import under the same id: the kept save is refused', async () => {
+      const disk = createBookStateDisk();
+      const stale = [{ id: 'c1', name: 'Stale1', voiceState: 'generated' } as Character];
+      disk.seed('b1', { state: { title: 'the Coalfall Commission' }, cast: { characters: stale } });
+      putBookStateMock.mockImplementation(cappedDiskPut(disk));
+      const store = makePopulatedStore({ persist: true });
+      /* The full read Layout made when the book was last opened. */
+      store.dispatch(
+        learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
+      );
+      disk.failNext(4);
+      await renameThenLeave(store);
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(disk.log.map((p) => p.outcome)).toEqual(['503', '503', '503', '503']);
+
+      deleteBookMock.mockImplementation(async (id: string) => {
+        disk.remove(id);
+        throw new Error('Book delete failed (500): EBUSY');
+      });
+      await runWipe(store, deleteBookMock, cases[2].trigger);
+      const reimported = [{ id: 'c1', name: 'Fresh', voiceState: 'generated' } as Character];
+      disk.reimport('b1', { state: { title: 'the Coalfall Commission' }, cast: { characters: reimported } });
+
+      await reopenAndFlush(store);
+      expect(disk.log.at(-1)).toMatchObject({ slice: 'cast', base: true, outcome: '409' });
+      expect(disk.books.get('b1')!.cast!.characters).toEqual(reimported);
+    });
+
+    /* Plan 289, N6 / N7 — PR #3775 pass 5's sequences: two overlapping wipes
+       of one book that both fail, with edits made while they run. Nothing in
+       them is stale, so every save the user made must reach disk, and the
+       book-details rollback must keep its baseline. The single-flight outbox
+       (pass 7) holds this by construction: nothing is parked, so there is
+       nothing to restore. These stay as end-state regressions. */
+    describe('overlapping failed wipes keep the latest edit (plan 289 N6 / N7)', () => {
+      const named = (name: string) => [{ id: 'c1', name, voiceState: 'generated' } as Character];
+      function setupDisk() {
+        const disk = createBookStateDisk();
+        disk.seed('b1', { state: { title: 'T0' }, cast: { characters: named('Eliza') } });
+        putBookStateMock.mockImplementation(cappedDiskPut(disk, 40));
+        return disk;
+      }
+      const diskName = (disk: ReturnType<typeof createBookStateDisk>) =>
+        (disk.books.get('b1')!.cast!.characters[0] as Character).name;
+      const open = (store: ReturnType<typeof makeStore>) =>
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      /* Start a wipe whose RPC answers only when the returned `fail` is called. */
+      async function startWipe(rpcMock: ReturnType<typeof vi.fn>, trigger: () => void) {
+        let fail!: (e: unknown) => void;
+        rpcMock.mockReturnValueOnce(new Promise((_r, rj) => (fail = rj)));
+        fireEvent.click(screen.getByLabelText('Book options'));
+        trigger();
+        await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(0);
+        return () => fail(new Error('Service Unavailable'));
+      }
+
+      it('N6 (a): a newer edit whose retry spans the second wipe still lands', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        renderBooks(store);
+        /* A kept "Vane". */
+        disk.failNext(4);
+        open(store);
+        store.dispatch(castActions.setCharacters(named('Vane')));
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(10000);
+        const failWipe1 = await startWipe(reparseBookMock, cases[0].trigger);
+        /* Reopen and rename to "Q", which lands. */
+        open(store);
+        store.dispatch(castActions.setCharacters(named('Q')));
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(diskName(disk)).toBe('Q');
+        /* Rename to "R" and leave: its PUT gets a 503 and its retry is pending. */
+        disk.failNext(1);
+        store.dispatch(castActions.setCharacters(named('R')));
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        /* A second wipe starts, then both fail. */
+        const failWipe2 = await startWipe(replaceManuscriptMock, cases[1].trigger);
+        failWipe2();
+        failWipe1();
+        await vi.advanceTimersByTimeAsync(10000);
+        open(store);
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(diskName(disk)).toBe('R');
+        expect(store.getState().cast.characters[0].name).toBe('R');
+      });
+
+      it("N6 (b): an edit made after an older save landed during the first wipe still lands", async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        renderBooks(store);
+        /* "Vane"'s PUT hangs, so it is still being sent when the first wipe starts. */
+        let landVane!: () => void;
+        putBookStateMock.mockImplementationOnce(
+          (id: string, req: never) => new Promise((r) => (landVane = () => r(disk.put(id, req)))),
+        );
+        open(store);
+        store.dispatch(castActions.setCharacters(named('Vane')));
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        const failWipe1 = await startWipe(reparseBookMock, cases[0].trigger);
+        landVane();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(diskName(disk)).toBe('Vane');
+        /* Reopen, rename to "Q" and leave: a 503, with its retry pending. */
+        disk.failNext(1);
+        open(store);
+        store.dispatch(castActions.setCharacters(named('Q')));
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(0);
+        const failWipe2 = await startWipe(replaceManuscriptMock, cases[1].trigger);
+        failWipe2();
+        failWipe1();
+        await vi.advanceTimersByTimeAsync(10000);
+        open(store);
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(diskName(disk)).toBe('Q');
+        expect(store.getState().cast.characters[0].name).toBe('Q');
+      });
+
+      /* The full read Layout makes when the book is opened. */
+      const learnOnOpen = (store: ReturnType<typeof makeStore>, disk: ReturnType<typeof createBookStateDisk>) =>
+        store.dispatch(
+          learnSliceRevisions('b1', disk.revisions('b1'), store.dispatch(beginFullRead('b1')) as unknown as number),
+        );
+      /* N7's sequence: a kept {castConfirmed, T1}, then a T2 rename that
+         carries it gives up with the book open and rolls back. */
+      async function keptConfirmThenRolledBackRename(
+        disk: ReturnType<typeof createBookStateDisk>,
+        store: ReturnType<typeof makeStore>,
+      ) {
+        store.dispatch(
+          bookMetaActions.hydrateFromBookState({
+            bookId: 'b1',
+            state: { title: 'T0', author: 'Della Renwick', series: 'Standalones' } as never,
+          }),
+        );
+        renderBooks(store);
+        const isState = (_id: string, req: { slice: string }) => req.slice === 'state';
+        /* Keep {castConfirmed, T1}: confirmCast is given up on, then the T1
+           rename that carries it is given up on after the user left. */
+        disk.failNext(8, isState);
+        open(store);
+        store.dispatch(uiActions.confirmCast());
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(10000);
+        open(store);
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+        store.dispatch(uiActions.goHome());
+        await vi.advanceTimersByTimeAsync(10000);
+        const failWipe = await startWipe(reparseBookMock, cases[0].trigger);
+        /* A flapping server: a save carrying a title fails, anything else lands. */
+        disk.failNext(100, (_id, req) => req.slice === 'state' && 'title' in (req.patch as object));
+        open(store);
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T2' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+        await vi.advanceTimersByTimeAsync(600);
+        failWipe();
+        await vi.advanceTimersByTimeAsync(0);
+        const flushed = store.dispatch(flushBookPersistence('b1') as never) as unknown as Promise<unknown>;
+        await vi.advanceTimersByTimeAsync(10000);
+        await flushed;
+      }
+
+      it('N7: a kept save landing during a newer rename does not prune that rename’s rollback baseline', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        await keptConfirmThenRolledBackRename(disk, store);
+        /* T2 gave up with its book open: the rollback restores the title on
+           disk and gives the user their typed T2 back. */
+        const meta = store.getState().bookMeta;
+        expect(disk.books.get('b1')!.state.title).toBe('T0');
+        expect(meta.saved.b1.title).toBe('T0');
+        expect(meta.draft?.title).toBe('T2');
+      });
+
+      /* #3784 (owner decision) — the rollback undoes only the rename's own
+         edit. The castConfirmed it carried goes back into the kept slot, with
+         its base, and the next flush re-sends it. */
+      it('N7 (b): the castConfirmed a rolled-back rename carried is re-sent on the next flush and lands', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        learnOnOpen(store, disk);
+        await keptConfirmThenRolledBackRename(disk, store);
+        expect(disk.books.get('b1')!.state.castConfirmed).toBeUndefined();
+
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(disk.log.at(-1)).toMatchObject({ slice: 'state', base: true, outcome: 'ok' });
+        expect(disk.log.at(-1)!.patch).toEqual({ castConfirmed: true });
+        expect(disk.books.get('b1')!.state).toMatchObject({ title: 'T0', castConfirmed: true });
+        expect(store.getState().bookMeta.draft?.title).toBe('T2');
+      });
+
+      it('N7 (c): with the book changed meanwhile, the re-sent castConfirmed is refused and the book re-read', async () => {
+        const disk = setupDisk();
+        const store = makePopulatedStore({ persist: true });
+        learnOnOpen(store, disk);
+        await keptConfirmThenRolledBackRename(disk, store);
+        /* Another writer un-confirms the cast. */
+        disk.write('b1', 'state', { ...disk.books.get('b1')!.state, castConfirmed: false });
+        const marksBefore = store.getState().bookMeta.needsFullRead?.b1 ?? 0;
+        const toast = vi.spyOn(notificationsActions, 'pushToast');
+
+        await store.dispatch(flushBookPersistence('b1') as never);
+        expect(disk.log.at(-1)).toMatchObject({ slice: 'state', base: true, outcome: '409' });
+        expect(disk.books.get('b1')!.state.castConfirmed).toBe(false);
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'book-persist-stale:b1' }));
+        toast.mockRestore();
+        expect(store.getState().bookMeta.needsFullRead?.b1 ?? 0).toBeGreaterThan(marksBefore);
+      });
+    });
   });
 
   /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must

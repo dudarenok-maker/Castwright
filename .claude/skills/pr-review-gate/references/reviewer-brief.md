@@ -530,6 +530,202 @@ recite:
     what the new reader does with the leftover; then test by seeding the
     leftover (a restored copy of the deleted file) and asserting the reader's
     outcome, alongside the genuinely stale case that must still be refused.
+45. **Client-side retention of a full-slice snapshot replayed after writes the
+    client never sees — each bookkeeping fix opens the next gap** — PR #3775
+    pass 5 (#3421 / #3784, plan 289): a failed save was kept and re-sent as a
+    whole-slice snapshot at an arbitrary later time, with a growing set of
+    per-field "seen / landed / superseded / parked" records to decide whether
+    the replay was still safe. Other writers (Library Edit, voice override,
+    another tab), a re-parse or re-import, and a request whose outcome the
+    client never learned (a lost response) all move the book without the
+    client seeing, so every record that closed one gap named a new one (N5 to
+    N8). The remedy was a server-side precondition (per-field revision tokens
+    checked inside the write's own lock span), not more client state.
+    Checkable: for any client structure that holds a write for later, list
+    every writer of the same data that does not pass through it, and ask what
+    the replay does after each; if the answer depends on the client having
+    observed the write, the check belongs on the server. Test by landing that
+    writer between the failure and the replay and asserting the replay is
+    refused and the newer value stands.
+46. **Two outcomes gated on independent conditions that leave a third case with
+    neither** — PR #3775 pass 6, P6-1 (#3784, `persistence-middleware.ts`):
+    a failed book-details save was rolled back only if the book was still
+    open, and kept only if the failure was retryable (not a 4xx). A 4xx that
+    arrived after the user left the book met neither condition, so `saved`
+    kept claiming the refused title while the toast said the save failed.
+    Checkable: for each failure path, write the table of the conditions the
+    outcomes are gated on (here open/left x retryable/refused) and confirm
+    every cell lands in exactly one outcome, not zero; then test each cell,
+    especially the one reached only by an unusual ordering (refused after
+    leaving).
+47. **A restore or import path that carries back the salt or epoch the design
+    relies on rotating** — PR #3775 pass 6, P6-2b (#3784,
+    `auto-backup.ts` `restoreBackup`): a token scheme salted with a per-book
+    `editEpoch` that every wiping writer rotates. A backup restore wrote the
+    snapshot's whole `state.json` (`{ ...parsed, ... }`), bringing the old
+    epoch back, so tokens from before an intervening re-parse matched again
+    and a kept `castConfirmed: true` replayed onto a book with no cast.
+    Checkable: for every server-owned salt, epoch, nonce or version, list
+    each writer that replaces the file holding it wholesale (restore, import,
+    bundle overwrite, sync) and confirm each mints a fresh one rather than
+    spreading the incoming copy; test by restoring a snapshot taken before a
+    rotation and asserting the epoch differs from the snapshot's.
+48. **A per-field fact (a revision token) applied per request: an older
+    request's success hands its whole revision to a newer partial send** — PR
+    #3775 pass 7, R1 (#3784, plan 289 C3, `persistence-middleware.ts`): on any
+    200, every newer retrying sequence of the key took `res.revision` as its
+    base. That revision holds the token of every state field as of the landed
+    write, so a `{castConfirmed}` write's revision also carried the title
+    token, including an outside title write the newer `{title}` retry had never
+    read. The retry was accepted and reverted the outside write and its folder
+    rename, with no toast. Checkable: wherever a token, version or other
+    per-field fact is copied from one request's response onto another request,
+    list the fields the source request actually carried and the fields the
+    target reads, and confirm only the intersection is copied. Test by
+    landing an outside write to a field the source did not carry between the
+    two requests and asserting the target is refused.
+49. **The user's own landed-but-unacknowledged save refuses their next edit** —
+    PR #3775 pass 7, R3 (#3784, plan 289 C3): a fresh edit was made conditional
+    on its first attempt, on a base learned before an earlier same-key send of
+    the user's own had landed (its 200 still in transit). The server answered
+    409 `stale_revision` against the user's own write, the toast blamed
+    "elsewhere", and the edit was discarded. `main` and the previous head both
+    sent that attempt unconditionally. Checkable: for every request that
+    carries a precondition, ask whether an earlier request of the same writer
+    could have landed without the client having seen its answer (a lost or slow
+    response, a retry in flight), and whether that write moved the token the
+    precondition names. A base is only valid if no such request is outstanding.
+    Test by holding the earlier request's response, landing the next edit, and
+    asserting it is neither refused nor sent against the stale base.
+50. **A hold-and-rebuild release that re-commits only part of what it held, or
+    keys its release on a snapshot every hydrate wipes** — PR #3775 pass 9,
+    P9-1 and P9-2 (#3784, plan 289 C7, `persistence-middleware.ts`): sends of a
+    book marked for a full re-read were held and released at the read's
+    hydrate. The release re-committed only the unbased entries, on the read's
+    values, so a based entry landed later was never shown (the screen kept the
+    read's value) and the user's next commit sent that stale value back; when
+    the release did re-commit, the eight-field build replaced a based entry
+    with the read's value, so it never landed. The release also read the typed
+    draft from `lastCommitted`, which every hydrate deletes, so a second mark
+    while the read was in flight made the next release find nothing and drop
+    the held commits with no toast. Checkable: for any code that holds a client
+    write and later releases it, list every entry in the held set and confirm
+    the release handles each kind (based and unbased) the same way, and
+    identify what state it reads at release time and whether a hydrate, a
+    second mark or a book switch can reset that state before the release runs.
+    Test by holding two entries of different kinds, forcing a second mark
+    during the read, and asserting every held value reaches disk or is
+    reported, and that the screen shows what is on disk.
+51. **An unbounded hold on a client write, released after the user left and
+    came back, replays it unbased past writes the client never saw** — PR #3775
+    pass 9, P9-3 (#3784, plan 289 C7): the hold had no bound, and the full read
+    that releases it runs only for the open book, so a live edit made in the
+    marked window waited until the book was reopened and was then sent with no
+    base. A Library Edit made in between was reverted, and a held
+    `confirmCast` landed on a re-parsed book the edit epoch could not guard,
+    since the replay carried no base. A tab closed first lost the edit
+    silently. This specialises 45. Checkable: for every hold, find its release
+    condition and ask what happens if the user leaves before it fires; a held
+    live edit that is released later must either carry the base it was made
+    against or never be held. Test by holding an edit, leaving the book, making
+    an outside write to the same field, reopening, and asserting the outside
+    write survives.
+52. **A refused optimistic value stays in the client store and is re-sent
+    unbased by the next whole-snapshot build** — PR #3775 review pass 8
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
+    P1 (#3784, plan 289): a save refused for an outside write left the user's
+    optimistic value in the store, so the next send, which rebuilt the whole
+    snapshot, carried it with no base and reverted the very outside write the
+    refusal protected. A hold until re-read was tried first and failed (see 50
+    and 51). The remedy that shipped sends only the fields the user typed
+    (ae6bb325). Checkable: for every refusal path, ask what the client store
+    holds afterwards and whether any later build re-sends it; a rebuild from
+    the whole slice must not carry a value the server refused. Test by
+    refusing a save, making an outside write to the same field, triggering
+    the next send from another edit, and asserting the outside write survives.
+53. **A combined send gives up with the book open, and a later cleanup discards
+    a unit that rode in the same send** — PR #3775 review pass 8
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6411646110),
+    P2 (#3784, plan 289): when a send combining several handlers' units gave
+    up, the toast named one handler's fields, and the cleanup that followed
+    (the full-read drop) silently discarded another handler's unit that had
+    gone in the same send. Checkable: for every give-up of a combined send,
+    list each handler whose unit rode in it and confirm the toast, the
+    rollback and every later cleanup cover all of them, not the first. Test by
+    combining two handlers' edits in one send, forcing the give-up with the
+    book open, and asserting both are reported and neither is dropped
+    unannounced.
+54. **A resync read wipes client-only state it cannot restore, which makes a
+    protection upstream of it unobservable** — PR #3775 review pass 10
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6453919855),
+    PB (#3784, plan 289 C7): the full re-read a stale refusal asks for
+    hydrated the open book's details with `draft = null`, so the user's
+    uncommitted typing, and a draft a failed save had just restored, were
+    gone with no toast. Disk never held either, so the read could not put
+    them back. It also hid this round's precision: a mutant that pruned every
+    typed field on any stale refusal survived the whole suite, because the
+    restored draft that would show the difference was wiped. Checkable: for
+    every resync read, list the client state it resets and ask whether disk
+    can restore each piece; a reset of unsaved input or of a just-restored
+    value is a loss, and any guarantee about that state is untestable while
+    the reset stands. The list includes state that is not on screen: review
+    pass 11
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461),
+    P11-2, found the fixed read still deleting the pending commit snapshot
+    (`lastCommitted`), the record a failed save's rollback restores the
+    typing from, so a save queued or in flight across the read lost its
+    typing when it then failed. Test by leaving unsaved input (or a
+    rolled-back draft, or a save still in flight) in place, triggering the
+    resync, and asserting the input survives, and is restored if that save
+    fails, while the read still refreshes every field the user is not
+    editing.
+55. **An identity check keyed on an id the system reuses after a delete and
+    re-create** — PR #3775 review pass 11
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6464372461),
+    P11-1 (#3784, plan 289 C7): the re-read rule of 54's fix kept the details
+    draft when the read was of "the same book", decided by `bookId`. A book id
+    is its author/series/title slug, so deleting a book and importing one
+    with the same slug reuses the id, and the deleted book's unsaved typing
+    showed on, and was saved into, the new book. The delete handler's own
+    comment named the reuse. Checkable: for every "is this still the same X"
+    check, ask whether the key can be reissued to a different X (a slug, a
+    name, a path, a recycled counter) and, if so, key it on something only
+    the original holds. Widened by review pass 12
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6481083193,
+    P12-1): pass 11's fix keyed it on the manuscript id, on the claim that
+    every import mints one, but the portable-bundle import keeps the bundle's
+    `manuscriptId` (and its `bookId`) when they are free, as they are after a
+    delete, so a book re-imported from its own bundle was again "the same
+    book". A key that one create path copies from an export (a bundle, a
+    backup, a template) is not something only the original holds: enumerate
+    every create path and check which keys each one mints and which it
+    copies. Where none is minted on every path, act at the delete instead
+    (here the delete clears the draft in its own tab), and record what that
+    leaves open (another tab's delete). Test by deleting X, re-creating one
+    under the same key on every create path (here a file import and a bundle
+    import), and asserting nothing of the old X carries over, with a control
+    that an operation which keeps the identity (a re-parse) still counts as
+    the same X.
+56. **A once-guard re-armed on a broad signal, without checking whether the
+    guarded action already applied** — PR #3775 review pass 13
+    (https://github.com/dudarenok-maker/Castwright/pull/3775#issuecomment-6492345913),
+    P13-1 (#3784): Confirm's automatic voice match runs once per visit,
+    behind a `voiceMatchFiredFor` ref. A fix made it wait while the book was
+    marked for a full read and, to recover a match whose result a mark had
+    cancelled, reset the ref on any mark. Nothing checked whether the match
+    had already landed, so a later mark (the language guard's Save, a stale
+    refusal of one of the book's saves) ran it again, and its result replaced
+    the voices the user had picked since, locked ones included, and saved
+    them. The comment, the plan and the PR body all described the narrow
+    case ("a mark that cancels a match already out"), and the code did the
+    broad one. Checkable: for every reset of a once-guard (a fired-for ref,
+    a done flag, a dedup set), list every source of the signal that resets
+    it, and ask what happens when it fires after the guarded action has
+    applied and the user has acted on its result. A re-arm should key on
+    "the result never applied", not on "something happened". Test by letting
+    the action apply, making a user edit over its result, firing the signal,
+    and asserting the action does not run again and the edit stays on screen
+    and on disk.
 
 45. **An exact comparison against a value re-derived from a producer that has
     changed since the stored copy was made** — PR #3835 passes 1-4 (#3829,

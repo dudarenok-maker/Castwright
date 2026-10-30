@@ -116,7 +116,7 @@ describe('book-state router — changeLog slice', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'changeLog', patch: { events } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = join(bookDir, '.audiobook', 'change-log.json');
     expect(existsSync(onDisk)).toBe(true);
@@ -143,6 +143,46 @@ describe('book-state router — changeLog slice', () => {
       .send({ slice: 'changeLog' });
     expect(res.status).toBe(400);
   });
+
+  it('PUT slice=changeLog waits for the book lock (#3784) — an analysis append in flight is not overwritten', async () => {
+    /* The analysis carried-forward append takes `withBookLock` around its
+       read -> write; the PUT must queue behind it. Hold the lock here as the
+       appender would, fire the PUT, and prove it has not touched the file
+       while the lock is held. */
+    const { withBookLock } = await import('../workspace/book-lock.js');
+    const logPath = join(bookDir, '.audiobook', 'change-log.json');
+    writeFileSync(logPath, JSON.stringify({ events: [{ id: 1, title: 'analysis append' }] }));
+    const before = readFileSync(logPath, 'utf8');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = withBookLock(bookId, async () => {
+      held();
+      await gate;
+    });
+    await holding;
+
+    let settled = false;
+    const put = request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'changeLog', patch: { events: [{ id: 99, title: 'queued PUT' }] } })
+      .then((r) => {
+        settled = true;
+        return r;
+      });
+    // Let the request run to its lock wait (several macrotask turns).
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(settled).toBe(false);
+    expect(readFileSync(logPath, 'utf8')).toBe(before);
+
+    release();
+    await holder;
+    const res = await put;
+    expect(res.status).toBeLessThan(300);
+    expect(JSON.parse(readFileSync(logPath, 'utf8')).events[0].title).toBe('queued PUT');
+  });
 });
 
 describe('book-state router — manuscript slice validation (#1356 mock-fixture-leak fix)', () => {
@@ -167,7 +207,7 @@ describe('book-state router — manuscript slice validation (#1356 mock-fixture-
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'manuscript', patch: { sentences: [validSentence] } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
     expect(existsSync(onDisk)).toBe(true);
@@ -200,7 +240,7 @@ describe('book-state router — manuscript slice validation (#1356 mock-fixture-
         slice: 'manuscript',
         patch: { sentences: [{ ...validSentence, startMs: 1000, endMs: 2500 }] },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
     const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
@@ -590,7 +630,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
 
     /* Title/author/series changes move the on-disk folder. The seed book
        in beforeAll set isStandalone: true, so the on-disk series folder
@@ -618,7 +658,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Yet Another' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.title).toBe('Renamed Title');
     expect(onDisk.narratorCredit).toBe('Yet Another');
@@ -629,7 +669,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { genre: null, publicationDate: null } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.genre).toBeNull();
     expect(onDisk.publicationDate).toBeNull();
@@ -640,7 +680,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { bookId: 'hacked', manuscriptId: 'hacked' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.bookId).toBe(bookId);
     expect(onDisk.manuscriptId).toBe('m_test');
@@ -656,7 +696,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { notes: notesText } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.notes).toBe(notesText);
   });
@@ -666,7 +706,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { genre: 'Mystery' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     /* Carried forward from the previous test in the file. */
     expect(onDisk.notes).toContain('Source: public-domain edition.');
@@ -677,7 +717,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { notes: null } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.notes).toBeNull();
   });
@@ -687,7 +727,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { notes: '   \n   ' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.notes).toBeNull();
   });
@@ -701,7 +741,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { tags: ['favourite', 'priority'] } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.tags).toEqual(['favourite', 'priority']);
   });
@@ -711,7 +751,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Some Narrator' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     /* Carried forward from the previous test. */
     expect(onDisk.tags).toEqual(['favourite', 'priority']);
@@ -725,7 +765,7 @@ describe('book-state router — state slice editable metadata', () => {
         slice: 'state',
         patch: { tags: ['  draft  ', 'draft', '', '   ', 'wip', 123, null] },
       });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.tags).toEqual(['draft', 'wip']);
   });
@@ -735,7 +775,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { tags: [] } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.tags).toEqual([]);
   });
@@ -750,7 +790,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Schema Witness' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.schema).toBe(1);
   });
@@ -764,7 +804,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { language: ' ru ' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     /* normaliseBookLanguage lowercases the primary subtag, so the stored
        value lines up with the registry keys isSupportedLanguage uses. */
@@ -789,7 +829,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Omit-Language Witness' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.narratorCredit).toBe('Omit-Language Witness');
     expect(onDisk.language).toBe('ru');
@@ -800,7 +840,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { language: null } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     /* Literal null is "stated absence" and must survive as null, NOT be
        defaulted back to 'en'. */
@@ -814,7 +854,7 @@ describe('book-state router — state slice editable metadata', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { genre: 'Omitting-Null Witness' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     /* A literal null stays null, key present — never collapsed to 'en'. */
     expect(onDisk.language).toBeNull();
@@ -1597,7 +1637,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .put(`/api/books/${renameBookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { seriesPosition: 4 } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     const onDisk = JSON.parse(
       readFileSync(join(renameBookDir, '.audiobook', 'state.json'), 'utf8'),
     );
@@ -1611,7 +1651,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .put(`/api/books/${renameBookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { isStandalone: true } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
     const newDir = join(workspaceRoot, 'books', RENAME_AUTHOR, 'Standalones', RENAME_INITIAL_TITLE);
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(renameBookDir)).toBe(false);
@@ -1628,7 +1668,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .put(`/api/books/${renameBookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { title: 'Renamed Properly' } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const newDir = join(
       workspaceRoot,
@@ -1654,7 +1694,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .put(`/api/books/${renameBookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { author: 'Different Author', series: 'Different Series' } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const newDir = join(
       workspaceRoot,
@@ -1716,7 +1756,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
       .put(`/api/books/${renameBookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { title: 'Refreshed Record Title' } });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const newDir = join(
       workspaceRoot,
@@ -2297,7 +2337,7 @@ describe('book-state router — srv-35 stable chapter uuid (plan 190)', () => {
           ],
         },
       });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
 
     const disk = readStateDisk();
     expect(disk.chapters[0].uuid).toBe('uuid-aaa'); // preserved by id
@@ -2606,7 +2646,7 @@ describe('book-state router — prosodyAnnotated watermark (fs-65)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { prosodyAnnotated: true } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyAnnotated).toBe(true);
   });
@@ -2616,7 +2656,7 @@ describe('book-state router — prosodyAnnotated watermark (fs-65)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { prosodyAnnotated: false } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyAnnotated).toBe(false);
   });
@@ -2631,7 +2671,7 @@ describe('book-state router — prosodyAnnotated watermark (fs-65)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Annotator' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyAnnotated).toBe(true);
   });
@@ -2651,7 +2691,7 @@ describe('book-state router — prosodyEnabled flag (fs-65 Phase-3)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { prosodyEnabled: true } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyEnabled).toBe(true);
   });
@@ -2661,7 +2701,7 @@ describe('book-state router — prosodyEnabled flag (fs-65 Phase-3)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { prosodyEnabled: false } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyEnabled).toBe(false);
   });
@@ -2676,7 +2716,7 @@ describe('book-state router — prosodyEnabled flag (fs-65 Phase-3)', () => {
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Witness' } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.prosodyEnabled).toBe(true);
   });
@@ -2795,7 +2835,7 @@ describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
           ],
         },
       });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
 
     const onDisk = JSON.parse(readFileSync(join(stripBookDir, '.audiobook', 'cast.json'), 'utf8')) as {
       characters: Array<Record<string, unknown>>;

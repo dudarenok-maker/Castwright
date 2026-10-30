@@ -117,6 +117,29 @@ describe('POST /api/books — binary preservation', () => {
   });
 });
 
+describe('POST /api/books — mints a state.json editEpoch (plan 289)', () => {
+  it('stamps a fresh, distinct editEpoch on every imported book', async () => {
+    const epochs: string[] = [];
+    for (const title of ['Epoch Book One', 'Epoch Book Two']) {
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: `# ${title}\n\n## Chapter One\n\nText.\n`, fileName: 'epoch.md' });
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: 'Epoch Author',
+        title,
+        seriesPosition: null,
+        isStandalone: true,
+      });
+      expect(confirmRes.status).toBe(201);
+      const state = JSON.parse(readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'));
+      expect(state.editEpoch).toMatch(/^ep_/);
+      epochs.push(state.editEpoch);
+    }
+    expect(epochs[0]).not.toBe(epochs[1]);
+  });
+});
+
 describe('POST /api/books — the cached record carries the sha of the on-disk bytes (#3703)', () => {
   it('sourceSha256 is sha256 of the verbatim manuscript file, not of the decoded text', async () => {
     const md = Buffer.concat([

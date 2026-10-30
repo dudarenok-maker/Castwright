@@ -110,7 +110,7 @@ describe('a duplicated bookId resolves to the first match everywhere it is resol
     const put = await request(app)
       .put(`/api/books/${BOOK_ID}/state`)
       .send({ slice: 'state', patch: { castConfirmed: true } });
-    expect(put.status).toBe(204);
+    expect(put.status).toBe(200);
 
     expect(readState(twin1).castConfirmed).toBe(true);
     expect(readState(twin2).castConfirmed).toBe(false);

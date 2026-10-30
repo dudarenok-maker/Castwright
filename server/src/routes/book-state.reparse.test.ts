@@ -167,6 +167,15 @@ async function awaitSiblingArms() {
 }
 
 describe('reparse handler — preserves manuscript-edits.json', () => {
+  /* #3784 P11-1 — the client keys "the same book" on bookId|manuscriptId, so
+     a re-parse must keep the manuscript id (only an import mints a new one). */
+  it('keeps the manuscript id', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+    const after = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(after.manuscriptId).toBe(MANUSCRIPT_ID);
+  });
+
   it('keeps the edits file on disk after reparse', async () => {
     const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
     const originalEdits = {

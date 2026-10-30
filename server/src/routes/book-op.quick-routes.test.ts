@@ -237,7 +237,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Exclude Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readJsonFile<{ chapters: Array<{ excluded?: boolean }> }>(paths.stateJsonPath(newDir)).chapters[0].excluded).toBe(true);
   });
@@ -251,7 +251,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Held Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readJsonFile<{ chapters: Array<{ held?: boolean }> }>(paths.stateJsonPath(newDir)).chapters[1].held).toBe(true);
   });
@@ -268,7 +268,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Replace Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readFileSync(join(newDir, 'manuscript.md'), 'utf8')).toContain('Fresh One');
   });
@@ -282,7 +282,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Progress Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readJsonFile<{ currentSec: number }>(paths.listenProgressJsonPath(newDir)).currentSec).toBe(12);
   });
@@ -296,7 +296,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Shelf Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readJsonFile<{ finished?: boolean }>(paths.listenProgressJsonPath(newDir)).finished).toBe(true);
   });
@@ -313,7 +313,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Stats Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(existsSync(paths.listenStatsJsonPath(newDir))).toBe(true);
   });
@@ -327,7 +327,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Reorder Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     const state = readJsonFile<{ chapters: Array<{ title: string }> }>(paths.stateJsonPath(newDir));
     expect(state.chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2', 'Epilogue']);
@@ -345,7 +345,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
       'Quick Restore Renamed',
     );
     expect(routeRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     expect(readJsonFile<{ title: string }>(paths.stateJsonPath(newDir)).title).toBe('Quick Restore Renamed');
   });
@@ -361,7 +361,7 @@ describe('#3711 task 3 -- a rename queued behind a quick route lands everything 
     await waitUntil(() => waiters(`book-op:${book.bookId}`) >= 1, 'the backup to queue on book-op');
     gate.release();
     const [renameRes, backupRes] = await Promise.all([renameP, backupP]);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(backupRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
   });

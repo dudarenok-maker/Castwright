@@ -37,7 +37,7 @@ import { tourSlice } from '../store/tour-slice';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
-import { persistenceMiddleware } from '../store/persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence, dropRetainedSaves } from '../store/persistence-middleware';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -49,6 +49,8 @@ const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
 const pollRevisionsBulkMock = vi.fn();
 const putBookStateMock = vi.fn();
+const restoreBookBackupMock = vi.fn();
+const deleteBookMock = vi.fn();
 /* Task 22 — the A/B player's per-op routes. */
 const acceptRevisionMock = vi.fn();
 const rejectRevisionMock = vi.fn();
@@ -80,6 +82,13 @@ vi.mock('../lib/api', async (importOriginal) => {
          `undefined` if the middleware is ever wired into a test that doesn't
          configure it. */
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
+      /* Account -> Restore from backup (the #3784 D7 restore case). */
+      listBookBackups: async () => [
+        { file: '20260101-000000.json', sizeBytes: 1024, createdAt: '2026-01-01T00:00:00.000Z' },
+      ],
+      restoreBookBackup: (...args: unknown[]) => restoreBookBackupMock(...args),
+      /* Library -> Delete (the #3784 pass-12 delete cases). */
+      deleteBook: (...args: unknown[]) => deleteBookMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
       getAnalysisState: (...args: unknown[]) => getAnalysisStateMock(...args),
@@ -193,6 +202,40 @@ vi.mock('../routes/prefetch', () => ({
   importUploadView: vi.fn(() => Promise.resolve({})),
 }));
 
+/* Plan 289 — the N5 / Library-Edit cases drive BooksRoute's real `onEditBook`
+   inside Layout. The library view itself is not under test: a stub exposes
+   one button that calls `onEditBook` with the book and patch the test sets. */
+const libraryEdit = vi.hoisted(() => ({
+  current: null as null | { book: { bookId: string; title: string }; patch: Record<string, unknown> },
+}));
+vi.mock('../views/book-library', () => ({
+  BookLibraryView: (p: {
+    onEditBook: (b: unknown, patch: unknown) => Promise<void>;
+    onDeleteBook: (b: unknown) => Promise<void>;
+  }) => (
+    <>
+      <button
+        type="button"
+        data-testid="library-edit"
+        onClick={() => void p.onEditBook(libraryEdit.current!.book, libraryEdit.current!.patch)}
+      >
+        Edit
+      </button>
+      {/* #3784 pass 12 — the delete cases drive the real `onDeleteBook`. */}
+      <button
+        type="button"
+        data-testid="library-delete"
+        onClick={() => void p.onDeleteBook(libraryEdit.current!.book)}
+      >
+        Delete
+      </button>
+    </>
+  ),
+}));
+
+/* The Account view is mounted for the restore case; its update card is not under test. */
+vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
+
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
@@ -205,7 +248,7 @@ import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { RevisionOpFailure } from '../lib/revision-op-failure';
-import { bookMetaActions } from '../store/book-meta-slice';
+import { bookMetaActions, selectEffectiveMeta } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
@@ -217,6 +260,9 @@ import {
 import type { RootState } from '../store';
 import { modelLabel } from '../lib/model-label';
 import type { AnalyzerCatalog } from '../lib/types';
+import { BooksRoute } from '../routes/index';
+import { AccountView } from '../views/account';
+import { createBookStateDisk } from '../test/book-state-disk';
 
 function makeStore(extraMiddleware: Middleware[] = []) {
   return configureStore({
@@ -325,6 +371,9 @@ beforeEach(() => {
   pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
   putBookStateMock.mockReset();
   putBookStateMock.mockResolvedValue(undefined);
+  restoreBookBackupMock.mockReset();
+  deleteBookMock.mockReset();
+  deleteBookMock.mockResolvedValue(undefined);
   acceptRevisionMock.mockReset();
   rejectRevisionMock.mockReset();
   restorePreviousUnrecordedMock.mockReset();
@@ -2769,6 +2818,1296 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
     seedBookBInSlices(store);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     await assertMatchWaitsForBookA(store);
+  });
+});
+
+describe('Layout — a failed save on leaving a book is re-sent before the re-read (#3421)', () => {
+  const elizaOf = (name: string) => ({ id: 'eliza', name, role: '', color: 'narrator' }) as Character;
+
+  /* A disk model behind the mocked api: `disk` is what getBookState reads and
+     what a successful cast PUT overwrites; `calls` is the ordered log the
+     assertions read. The failure is armed by the test AFTER the edit, so a cast
+     PUT Layout sends on its own (the confirm-stage voice match) is never the one
+     that fails. */
+  function diskModel(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    const disk: Record<string, Character[]> = { A: [elizaOf('Eliza')], B: [{ id: 'b-hero', name: 'Hero', role: '', color: 'peach' } as Character] };
+    const calls: string[] = [];
+    const model = { disk, calls, failNextCastPutsForA: 0 };
+    getBookStateMock.mockImplementation(async (id: string) => {
+      calls.push(`get:${id}`);
+      return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk[id] } });
+    });
+    putBookStateMock.mockImplementation(async (id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+      if (id === 'A' && req.slice === 'cast' && model.failNextCastPutsForA > 0) {
+        model.failNextCastPutsForA -= 1;
+        calls.push('put:A:cast:fail');
+        throw new Error('Book state PUT failed (503): down');
+      }
+      if (req.slice === 'cast') disk[id] = req.patch.characters!;
+      calls.push(`put:${id}:${req.slice}:ok`);
+    });
+    let toasted = false;
+    const unsubscribe = store.subscribe(() => {
+      if (!toasted && store.getState().notifications.toasts.some((t) => t.dedupeKey === 'book-persist-failed:A')) {
+        toasted = true;
+        calls.push('toast');
+      }
+    });
+    return { ...model, model, unsubscribe };
+  }
+
+  const castPutsForA = () =>
+    putBookStateMock.mock.calls.filter(([id, req]) => id === 'A' && (req as { slice: string }).slice === 'cast').length;
+  const hasFailToast = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().notifications.toasts.some((t) => t.kind === 'error' && t.dedupeKey === 'book-persist-failed:A');
+
+  /* Open A, wait for it to land, and flush whatever Layout queued on its own. */
+  async function openAAndSettle(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    openAt(store as never, 'A');
+    renderLayoutAt(store as never, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+  }
+  const renameEliza = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+  const elizaName = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().cast.characters.find((c) => c.id === 'eliza')?.name;
+
+  it('repro: the save sent on leaving fails once, the retry lands, and the edit survives the return', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = 1;
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await waitFor(() => expect(m.calls).toContain('put:A:cast:fail'));
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'), { timeout: 4000 });
+
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(elizaName(store)).toBe('Eliza Vane');
+      const lastGetA = m.calls.lastIndexOf('get:A');
+      expect(lastGetA).toBeGreaterThan(m.calls.lastIndexOf('put:A:cast:ok'));
+      expect(m.calls.lastIndexOf('put:A:cast:ok')).toBeGreaterThan(m.calls.indexOf('put:A:cast:fail'));
+      expect(hasFailToast(store)).toBe(false);
+    } finally {
+      m.unsubscribe();
+    }
+  });
+
+  it('exhausted: every retry fails, a toast is shown, and only then is the book re-read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = Infinity;
+      const putsBefore = castPutsForA();
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      expect(castPutsForA() - putsBefore).toBe(4);
+      expect(hasFailToast(store)).toBe(true);
+
+      openAt(store as never, 'A');
+      /* #3421 retention: the given-up save is kept, so the return re-sends it
+         first (4 more failing PUTs, ~7 s of backoff) before the re-read. */
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
+      expect(m.calls.indexOf('toast')).toBeGreaterThanOrEqual(0);
+      expect(m.calls.indexOf('toast')).toBeLessThan(m.calls.lastIndexOf('get:A'));
+      expect(m.disk.A[0].name).toBe('Eliza');
+    } finally {
+      m.unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('exhausted, then the server recovers: the reverted edit is not silently re-sent on the next leave', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    /* The confirm-stage voice match PUTs the cast it re-reads, and that newer
+       edit would itself replace the kept save. Hold it back so the kept save
+       is the only thing that could reach disk. */
+    matchVoicesMock.mockReturnValue(new Promise(() => {}));
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = Infinity;
+      renameEliza(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(elizaName(store)).toBe('Eliza'));
+
+      m.model.failNextCastPutsForA = 0;
+      const putsAtRecovery = putBookStateMock.mock.calls.length;
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+
+      /* Layout may still PUT the (old-named) cast it re-read; the reverted
+         rename must not be among the PUTs. */
+      const stale = putBookStateMock.mock.calls
+        .slice(putsAtRecovery)
+        .filter(
+          ([id, req]) =>
+            id === 'A' &&
+            (req as { slice: string; patch: { characters?: Character[] } }).slice === 'cast' &&
+            (req as { patch: { characters?: Character[] } }).patch.characters?.some((c) => c.name === 'Eliza Vane'),
+        );
+      expect(stale).toHaveLength(0);
+      expect(m.disk.A[0].name).toBe('Eliza');
+    } finally {
+      m.unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: staying on the book, the retry heals a failed save with no toast', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const m = diskModel(store);
+    try {
+      await openAAndSettle(store);
+      m.model.failNextCastPutsForA = 1;
+      renameEliza(store);
+      await waitFor(() => expect(m.calls).toContain('put:A:cast:fail'));
+      await waitFor(() => expect(m.disk.A[0].name).toBe('Eliza Vane'), { timeout: 4000 });
+      expect(hasFailToast(store)).toBe(false);
+    } finally {
+      m.unsubscribe();
+    }
+  });
+});
+
+describe('Layout — a save made stale elsewhere is refused, and the book re-read (plan 289)', () => {
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as Character;
+  const isTitlePut = (id: string, req: { slice: string; patch: unknown }) =>
+    id === 'A' && req.slice === 'state' && 'title' in (req.patch as object);
+
+  /* The disk model behind both api calls: a GET returns its tokens, a PUT goes
+     through its precondition. */
+  function wireDisk() {
+    const disk = createBookStateDisk();
+    disk.seed('A', {
+      state: { ...bookStateFor('A', null).state, title: 'T0', notes: null },
+      cast: { characters: [eliza] },
+    });
+    getBookStateMock.mockImplementation(async (id: string) => {
+      const b = disk.books.get(id);
+      if (!b) return null;
+      return bookStateFor(id, revState(id, null, 0, []), {
+        state: b.state,
+        cast: b.cast,
+        manuscriptEdits: b.manuscript,
+        changeLog: b.changeLog,
+        sliceRevisions: disk.revisions(id),
+      });
+    });
+    /* Through the async serve, so a test's hold takes effect. */
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
+    return disk;
+  }
+
+  function renderWithLibrary(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/A/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<BooksRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  const savedTitle = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) =>
+    store.getState().bookMeta.saved.A?.title;
+  const reads = () => getBookStateMock.mock.calls.filter(([id]) => id === 'A').length;
+  const titlePuts = (disk: ReturnType<typeof createBookStateDisk>) =>
+    disk.log
+      .filter((p) => p.bookId === 'A' && p.slice === 'state' && 'title' in p.patch)
+      .map((p) => `${p.outcome} ${String(p.patch.title)}`);
+
+  async function openA(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBeDefined());
+    await act(async () => {
+      await store.dispatch(flushBookPersistence('A') as never);
+    });
+  }
+  const commit = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>, field: 'title' | 'notes', value: string) =>
+    act(() => {
+      store.dispatch(bookMetaActions.setDraftField({ field, value }));
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+    });
+  async function libraryEditTitle(disk: ReturnType<typeof createBookStateDisk>, title: string) {
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: { title } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await waitFor(() => expect(disk.books.get('A')!.state.title).toBe(title));
+  }
+
+  it('N5: a kept rename is refused after a Library Edit, the book is re-read in full, and the next edit keeps the new title', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+
+      /* Rename to T1 and leave; every attempt answers 503, so the save is kept. */
+      disk.failNext(4, isTitlePut);
+      commit(store, 'title', 'T1');
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+
+      /* Library -> Edit -> T2 lands. */
+      await libraryEditTitle(disk, 'T2');
+
+      /* Reopen: the slices are still loaded, so this would be a revisions-only read. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+
+      expect(titlePuts(disk)).toEqual(['503 T1', '503 T1', '503 T1', '503 T1', 'ok T2', '409 T1']);
+      expect(disk.books.get('A')!.state.title).toBe('T2');
+      const stale = store.getState().notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:A');
+      expect(stale).toHaveLength(1);
+      expect(stale[0].message).toContain('changed elsewhere');
+
+      /* The next book-meta commit sends only the notes the user typed, not T1
+         (#3784 review pass 9: typed fields only), so the title stays T2. */
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(titlePuts(disk)).toHaveLength(6);
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'T2', notes: 'A note' });
+      expect(savedTitle(store)).toBe('T2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a Library Edit with no kept save: the reopen reads in full, so a later notes edit keeps the new title (red on main)', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    renderWithLibrary(store);
+    await openA(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+
+    await libraryEditTitle(disk, 'T2');
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+
+    commit(store, 'notes', 'A note');
+    await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+    expect(disk.books.get('A')!.state.title).toBe('T2');
+    expect(titlePuts(disk).at(-1)).toBe('ok T2');
+  });
+
+  /* #3784 pass 6, P6-5 — the PUT lands on disk but its response is lost. */
+  it('P6-5: a Library Edit whose response is lost still marks the book, so the reopen reads in full', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    renderWithLibrary(store);
+    await openA(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+    putBookStateMock.mockImplementation(async (id: string, req: never) => {
+      disk.put(id, req);
+      throw new Error('Network error after the write landed');
+    });
+
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: { title: 'T2' } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await waitFor(() => expect(disk.books.get('A')!.state.title).toBe('T2'));
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A).toBe(1));
+
+    putBookStateMock.mockImplementation(async (id: string, req: never) => disk.serve(id, req));
+    openAt(store as never, 'A');
+    await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+    commit(store, 'notes', 'A note');
+    await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+    expect(disk.books.get('A')!.state.title).toBe('T2');
+  });
+
+  /* #3784 pass 6, P6-2(a) — Account -> Restore from backup rewrites state.json
+     behind the slices the open book kept in memory. */
+  it('P6-2(a): after Account -> Restore from backup the return to the book reads in full, and a later notes edit keeps the restored title', async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    restoreBookBackupMock.mockImplementation(async (id: string) => {
+      disk.write(id, 'state', { ...disk.books.get(id)!.state, title: 'Restored' });
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'cast_pending', tags: [] }] }] }] };
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+
+      const account = render(
+        <Provider store={store}>
+          <MemoryRouter>
+            <AccountView />
+          </MemoryRouter>
+        </Provider>,
+      );
+      fireEvent.change(await account.findByTestId('account-backup-book-picker'), { target: { value: 'A' } });
+      fireEvent.click(await account.findByRole('button', { name: /^restore$/i }));
+      await waitFor(() => expect(restoreBookBackupMock).toHaveBeenCalledWith('A', '20260101-000000.json'));
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A).toBe(1));
+      account.unmount();
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(savedTitle(store)).toBe('Restored'));
+      commit(store, 'notes', 'A note');
+      await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+      expect(disk.books.get('A')!.state.title).toBe('Restored');
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      confirm.mockRestore();
+    }
+  });
+
+  it('D2: a stale refusal while the book is open re-reads it in full at once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      const readsBefore = reads();
+
+      /* Another tab renames the book; this tab's rename fails once, and its
+         retry carries the base it was built against. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Elsewhere' });
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+      await waitFor(() => expect(savedTitle(store)).toBe('Elsewhere'));
+      expect(reads()).toBe(readsBefore + 1);
+      expect(titlePuts(disk)).toEqual(['503 T1', '409 T1']);
+      expect(store.getState().bookMeta.needsFullRead?.A).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('D6: a revisions-only read does not refresh the base a retry carries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+
+      /* Disk moves while the book is closed; the reopen reads revisions only. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Elsewhere' });
+      const readsBefore = reads();
+      openAt(store as never, 'A');
+      await waitFor(() => expect(reads()).toBe(readsBefore + 1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(savedTitle(store)).toBe('T0');
+
+      /* So the retry still carries the base from the first full read, and is refused. */
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(titlePuts(disk)).toEqual(['503 T1', '409 T1']);
+      expect(disk.books.get('A')!.state.title).toBe('Elsewhere');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P1 (review pass 8) — a title refused as stale stays in `saved` until
+     the re-read hydrates it, so a notes commit made before then must not send
+     it back without a base. The commit does not wait for the read: it sends
+     only the field the user typed, so the notes land while the read is still
+     out and the outside title stays (review pass 9). */
+  it('P1: a commit made before the stale re-read lands sends only its notes, and keeps the outside title', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        await gate;
+        return read(id);
+      });
+
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(titlePuts(disk)).toEqual(['503 Mine', '409 Mine']);
+
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.title).toBe('Theirs');
+
+      releaseRead();
+      await waitFor(() => expect(disk.books.get('A')!.state.notes).toBe('A note'));
+      expect(disk.books.get('A')!.state.title).toBe('Theirs');
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', notes: 'A note' });
+      expect(store.getState().notifications.toasts.filter((t) => t.dedupeKey === 'book-persist-stale:A')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P2 (review pass 8) — a title commit and confirmCast share a send that
+     is given up on inside the re-open's flush. The commit is rolled back; the
+     kept castConfirmed carries a base, so the read keeps it for the server to
+     judge, and the book's next flush lands it. */
+  it('P2: a based castConfirmed kept by a give-up inside the reopen flush survives the full read and lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.write('A', 'state', { ...disk.books.get('A')!.state, castConfirmed: false });
+    disk.seed('B', { state: { ...bookStateFor('B', null).state }, cast: { characters: [eliza] } });
+    const isStatePutA = (id: string, req: { slice: string }) => id === 'A' && req.slice === 'state';
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(4, isStatePutA);
+      commit(store, 'title', 'X');
+      act(() => { store.dispatch({ type: 'ui/confirmCast' }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const statePuts = disk.log.filter((p) => p.bookId === 'A' && p.slice === 'state');
+      expect(statePuts.slice(0, 4).map((p) => p.outcome)).toEqual(['503', '503', '503', '503']);
+      expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('book-meta-persist-failed');
+
+      /* The kept castConfirmed goes with the book's next send, leaving it at the latest. */
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.castConfirmed).toBe(true);
+      expect(disk.books.get('A')!.state.title).toBe('T0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P9-1 (review pass 9) — the author that rode a title refused as stale
+     is not refused itself. It lands before the re-read, so the read shows it,
+     and a later notes commit sends only the notes, leaving it on disk. */
+  it('P9-1: a field that rode a stale-refused save is shown after the re-read, and a later commit keeps it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      act(() => {
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Mine' }));
+        store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(store.getState().bookMeta.saved.A?.author).toBe(disk.books.get('A')!.state.author);
+
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'Theirs', author: 'New Author', notes: 'A note' });
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', author: 'New Author' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P9-2 (review pass 9) — a second mark while the re-read is in flight
+     (Account's restore, the language guard, a cast save refused as stale) must
+     not lose a details commit made after the stale refusal. */
+  it('P9-2: a second mark while the re-read is in flight loses no notes commit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        await gate;
+        return read(id);
+      });
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      commit(store, 'notes', 'A note');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      releaseRead();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'Theirs', notes: 'A note' });
+      expect(store.getState().bookMeta.saved.A?.notes).toBe('A note');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 PB (review pass 10) — the re-read a stale refusal asks for is a
+     re-read of the book the user is editing: it refreshes `saved` and keeps
+     the draft (#2230, #3754). */
+  it('PB-1: uncommitted typing survives the re-read a stale refusal triggers, and the outside write shows in saved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+
+      /* The user is typing notes; nothing is committed yet. */
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      expect(titlePuts(disk)).toEqual(['503 Mine', '409 Mine']);
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+      expect(selectEffectiveMeta(store.getState() as never, 'A')).toMatchObject({ title: 'Theirs', notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-2: a draft restored by a refused follow-up survives the stale re-read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      act(() => {
+        store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Mine' }));
+        store.dispatch(bookMetaActions.setDraftField({ field: 'author', value: 'New Author' }));
+        store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      disk.refuseNext(
+        'book_busy',
+        (id, req) =>
+          id === 'A' && req.slice === 'state' && 'author' in (req.patch as object) && !('title' in (req.patch as object)),
+      );
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      const keys = store.getState().notifications.toasts.map((t) => t.dedupeKey);
+      expect(keys).toContain('book-meta-persist-failed');
+      /* The refused title is not restored; the author the user still wants is. */
+      expect(store.getState().bookMeta.draft).toEqual({ author: 'New Author' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-3: a field both in the draft and changed outside shows the typing, over the outside value in saved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(1, isTitlePut);
+      commit(store, 'title', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typing' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      expect(store.getState().bookMeta.draft).toEqual({ title: 'Typing' });
+      expect(selectEffectiveMeta(store.getState() as never, 'A')?.title).toBe('Typing');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-5: typing kept across a trip to the library survives the full read a Library Edit asks for (#3754)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await libraryEditTitle(disk, 'T2');
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(savedTitle(store)).toBe('T2'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PB-4 (control): opening a different book still clears the draft', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'for A' })); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 (review pass 11, owner decision) — typing on a book reopened from
+     another book, before that book's first full read lands, is typing on the
+     open book: the read keeps it, as every read of the open book does. */
+  it('P11-3: typing between reopening a book and its first full read survives that read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      /* Another tab wrote A's notes while the user was on B. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, notes: 'on disk' });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      /* saved.A is still the first visit's, so the editor is up. */
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'typed before read' })); });
+      releaseRead();
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('on disk'));
+
+      expect(store.getState().bookMeta.draft).toEqual({ title: 'typed before read' });
+      expect(selectEffectiveMeta(store.getState() as never, 'A')).toMatchObject({
+        title: 'typed before read',
+        notes: 'on disk',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* The same for a book's first full read of the session: the library entry
+     seeds `saved` until it lands, so the editor is already up. */
+  it("P11-3: typing before a book's first full read of the session survives that read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'From disk' });
+    /* The entry carries the manuscript id, as the server's does (#3784 P12-2). */
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', manuscriptId: 'mns_A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'complete', tags: [] }] }] }] };
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((r) => (releaseRead = r));
+    const read = getBookStateMock.getMockImplementation()!;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (id === 'A') await gate;
+      return read(id);
+    });
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'typed before read' })); });
+      releaseRead();
+      await waitFor(() => expect(savedTitle(store)).toBe('From disk'));
+
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'typed before read' });
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-2 (review pass 11) — a details commit whose PUT is still out
+     when a re-read of the same book lands. The read rebases the commit's
+     snapshot instead of dropping it, so a failed save still restores the
+     typing (#2230), and the rollback reverts to the read, keeping the outside
+     write it brought. */
+  it('P11-2: a commit in flight across a same-book re-read keeps its typing when the save then fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      const releasePut = disk.hold((id, req) => id === 'A' && req.slice === 'state');
+      disk.refuseNext('book_busy', (id, req) => id === 'A' && req.slice === 'state');
+      commit(store, 'notes', 'Mine');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+
+      /* Another tab renames the book; the re-read brings it. */
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Theirs' });
+      releaseRead();
+      await waitFor(() => expect(savedTitle(store)).toBe('Theirs'));
+
+      releasePut();
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      const keys = store.getState().notifications.toasts.map((t) => t.dedupeKey);
+      expect(keys).toContain('book-meta-persist-failed');
+      expect(disk.log.filter((p) => p.bookId === 'A' && p.slice === 'state').map((p) => p.patch)).toEqual([
+        { notes: 'Mine' },
+      ]);
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'Mine' });
+      expect(store.getState().bookMeta.saved.A).toMatchObject({ title: 'Theirs', notes: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-1 (review pass 11) — a book id is its author/series/title slug,
+     so deleting a book and importing one with the same slug reuses its id.
+     The new book is a different manuscript: the old book's unsaved typing
+     must not show on it, or be saved into it. */
+  it('P11-1: a draft typed on a deleted book does not carry into a book re-imported under its id', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      /* BooksRoute's onDeleteBook, after api.deleteBook resolved. */
+      disk.remove('A');
+      act(() => {
+        store.dispatch(revisionsActions.forgetBook('A'));
+        store.dispatch(dropRetainedSaves('A'));
+        store.dispatch(uiActions.clearPreviewForBook('A'));
+      });
+      /* An import whose slug is A's: a new manuscript, under the same id. */
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      /* Save writes nothing of the old book. */
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('fresh import notes');
+      expect(disk.log.filter((p) => p.bookId === 'A' && 'notes' in p.patch)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-1 — the same, when the re-import happens in another tab while
+     a visit's read has not landed, so the last read Layout saw is of another
+     book. The book's own last-read manuscript still decides. */
+  it('P11-1: a re-import in another tab during a visit whose read failed does not inherit the draft', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') throw new Error('Network error');
+        return read(id);
+      });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      /* saved.A is still the first visit's, so the editor is up. */
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+
+      /* Another tab deletes A and imports a book with A's slug. */
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      getBookStateMock.mockImplementation(read);
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P11-1 (control) — a re-parse or a manuscript replace keeps the
+     book's manuscript id (the server pins that in book-state.reparse and
+     book-state.replace-manuscript), so it is still the same book: the typing
+     survives the re-read that follows it. */
+  it('P11-1 (control): typing survives the re-read of a re-parsed book', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'half-typed' })); });
+      disk.reparse('A');
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Reparsed' });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Reparsed'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'half-typed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* Library -> Delete of A, through BooksRoute's real `onDeleteBook`. */
+  async function libraryDeleteA(disk: ReturnType<typeof createBookStateDisk>) {
+    deleteBookMock.mockImplementation(async (id: string) => {
+      disk.remove(id);
+    });
+    libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+    fireEvent.click(await screen.findByTestId('library-delete'));
+    await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+  }
+
+  /* #3784 P12-1 (review pass 12) — A's own portable bundle, re-imported after
+     A was deleted, keeps both of A's ids (`placeFresh` keeps a free bookId
+     and manuscriptId), so the manuscript check cannot tell it is a new book.
+     Deleting the book clears the draft typed on it instead. */
+  it('P12-1: a draft typed on a deleted book does not carry into its re-import from a bundle', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      /* The bundle import: same bookId, same manuscriptId. */
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+        cast: { characters: [eliza] },
+      });
+      /* Something marks A for a full read (a Library Edit, say). */
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      /* Save writes nothing of the old book. */
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('bundle notes');
+      expect(disk.log.filter((p) => p.bookId === 'A' && 'notes' in p.patch)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-1 (control) — deleting a different book leaves the draft typed
+     on A alone: A -> Library -> A keeps the typing (#3754). */
+  it('P12-1 (control): deleting another book keeps the draft typed on the open one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'mine' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      deleteBookMock.mockImplementation(async (id: string) => {
+        disk.remove(id);
+      });
+      libraryEdit.current = { book: { bookId: 'B', title: 'Book B' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'mine' });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-1 — the same for a commit's rollback snapshot. A details save
+     given up on after the user left is kept, with its snapshot; the delete
+     drops the save, and must drop the snapshot too, or the re-import's next
+     commit folds the old book's notes into its own PUT. */
+  it("P12-1: a kept details save's snapshot of a deleted book does not ride into its re-import's next save", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      disk.failNext(4, (id, req) => id === 'A' && req.slice === 'state');
+      commit(store, 'notes', 'old book note');
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+      expect(store.getState().bookMeta.lastCommitted?.A).toBeDefined();
+
+      await libraryDeleteA(disk);
+      expect(store.getState().bookMeta.lastCommitted?.A).toBeUndefined();
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+
+      commit(store, 'title', 'New title');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state).toMatchObject({ title: 'New title', notes: 'bundle notes' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-2 (review pass 12) — a book whose first full read has not
+     landed shows the library entry's details, so the user can type on it
+     before any read records its manuscript. */
+  const libWithA = {
+    authors: [
+      {
+        name: 'Della Renwick',
+        series: [
+          {
+            name: 'Standalones',
+            books: [
+              {
+                bookId: 'A',
+                manuscriptId: 'mns_A',
+                title: 'T0',
+                author: 'Della Renwick',
+                series: 'Standalones',
+                isStandalone: true,
+                status: 'complete',
+                tags: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  /* Same tab: the user leaves before the read lands, deletes A, and imports a
+     book under its slug. The delete clears the draft (P12-1). */
+  it('P12-2: typing on library-seeded details is not inherited by a re-import made in this tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    vi.mocked(api.getLibrary).mockResolvedValue(libWithA as never);
+    const read = getBookStateMock.getMockImplementation()!;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (id === 'A') return new Promise(() => {});
+      return read(id);
+    });
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+      getBookStateMock.mockImplementation(read);
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+
+      act(() => { store.dispatch(bookMetaActions.commitDraft({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.notes).toBe('fresh import notes');
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  /* Another tab: it deletes A and imports a book under its slug while A's
+     first read of the session is out. The library entry's manuscript id is
+     what the read is checked against. */
+  it('P12-2: typing on library-seeded details is not inherited by a re-import made in another tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    vi.mocked(api.getLibrary).mockResolvedValue(libWithA as never);
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((r) => (releaseRead = r));
+    const read = getBookStateMock.getMockImplementation()!;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (id === 'A') await gate;
+      return read(id);
+    });
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'old book note' })); });
+
+      disk.remove('A');
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh import notes' },
+        cast: { characters: [eliza] },
+      });
+      releaseRead();
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh import notes'));
+      expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 P12-3 (review pass 12; pre-existing on main) — a bundle import
+     touches no slice, so after a delete they still hold the deleted book
+     under its id, and the reopen read only revisions: the screen kept showing
+     the deleted book. The delete marks the book for a full read, so the
+     reopen reads it in full and shows the bundle's cast once that read lands.
+     This pins only the mark. Until the read lands the slices still hold the
+     deleted book, and a cast write in that window (an edit, or Confirm's
+     automatic voice match) can put its roster back on disk; that, and the
+     paths that use the mark up first, are #3841. */
+  it("P12-3: a book re-imported from its bundle after a delete is read in full on reopen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    const castOnDisk = () =>
+      (disk.books.get('A')!.cast?.characters as Array<{ name: string }> | undefined)?.map((c) => c.name);
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBeGreaterThan(0);
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+        cast: { characters: [{ ...eliza, name: 'Bundle Eliza' }] },
+      });
+
+      const before = reads();
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      expect(reads()).toBe(before + 1);
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk()).toEqual(['Bundle Eliza']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 pass 12, C1 — after a re-import under the same id the book's record
+     moves to the new manuscript, so typing on the new book survives its next
+     full read. */
+  it('P12 C1: typing on a re-imported book survives its next full read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      disk.reimport('A', {
+        state: { ...bookStateFor('A', null).state, manuscriptId: 'mns_A2', title: 'T0', notes: 'fresh' },
+        cast: { characters: [eliza] },
+      });
+      act(() => {
+        store.dispatch(
+          manuscriptSlice.actions.uploadComplete({
+            manuscriptId: 'mns_A2',
+            title: 'T0',
+            format: 'plaintext',
+            wordCount: 0,
+            sourceText: '',
+          } as never),
+        );
+      });
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('fresh'));
+
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'typing on new' })); });
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, notes: 'outside' });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('outside'));
+      expect(store.getState().bookMeta.draft).toEqual({ title: 'typing on new' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 pass 12, C1 — the first full read of a book opened after another
+     book was read keeps the typing too, not only the session's first read.
+     The library entry here has no manuscript id (the field is optional), so
+     the book has no record when its read lands. */
+  it('P12 C1: typing before the first full read of a book opened after another book survives it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'From disk' });
+    const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books: [{ bookId: 'A', title: 'T0', author: 'Della Renwick', series: 'Standalones', isStandalone: true, status: 'complete', tags: [] }] }] }] };
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    try {
+      renderWithLibrary(store);
+      await waitFor(() => expect(store.getState().library.books.length).toBe(1));
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().bookMeta.saved.B?.title).toBe('Book B'));
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      act(() => { store.dispatch(uiActions.openBook({ id: 'A', status: 'complete' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('T0'));
+      act(() => { store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'typed before read' })); });
+      releaseRead();
+      await waitFor(() => expect(savedTitle(store)).toBe('From disk'));
+      expect(store.getState().bookMeta.draft).toEqual({ notes: 'typed before read' });
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3784 review pass 13, R1 — Confirm's voice match runs once per visit. A
+     later full-read mark (the language guard's Save, a stale refusal) must not
+     run it again over the voice the user picked after it applied. Whether the
+     match may replace a locked voice at all is #3842. */
+  it('P13 R1: a mark after Confirm\'s voice match applied does not run it again over the user\'s voice', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    matchVoicesMock.mockResolvedValue({
+      matches: [{ characterId: 'eliza', candidates: [{ voiceId: 'auto-voice', fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }] }],
+    } as never);
+    const voiceOnDisk = () => disk.books.get('A')!.cast!.characters[0] as { voiceId?: string; voiceState?: string };
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      await waitFor(() => expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      const c = store.getState().cast.characters[0];
+      act(() => { store.dispatch(castActions.updateCharacter({ ...c, voiceId: 'user-voice', voiceState: 'locked' } as never)); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(voiceOnDisk()).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
+
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(store.getState().ui.stage.kind).toBe('confirm');
+      expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+      expect(store.getState().cast.characters[0]).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
+      expect(voiceOnDisk()).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

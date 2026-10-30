@@ -42,13 +42,90 @@ describe('api.putBookState — refusal messages', () => {
     expect((err as Error).message).toContain('500');
   });
 
-  it('resolves on 204 without reading a body', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  it('returns the 200 { revision } body without sending a base when none is given', async () => {
+    const revision = { title: 'abc123' };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ revision }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
       api.putBookState('book-1', { slice: 'state', patch: { title: 'New' } }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ revision });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect('baseRevision' in sent).toBe(false);
+  });
+
+  it('sends baseRevision when given', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ revision: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.putBookState('book-1', {
+      slice: 'state',
+      patch: { title: 'New' },
+      baseRevision: { title: 'tok' },
+    });
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.baseRevision).toEqual({ title: 'tok' });
+  });
+
+  it('carries the 409 code on the thrown error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: 'changed elsewhere', code: 'stale_revision' }), {
+          status: 409,
+        }),
+      ),
+    );
+    const err = (await api
+      .putBookState('book-1', { slice: 'state', patch: { title: 'New' } })
+      .catch((e: Error) => e)) as Error & { code?: string };
+    expect(err.code).toBe('stale_revision');
+    expect(err.message).toContain('changed elsewhere');
+  });
+
+  it('carries the stale field names from a 409 stale_revision body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: 'changed elsewhere', code: 'stale_revision', fields: ['notes', 'title'] }),
+          { status: 409 },
+        ),
+      ),
+    );
+    const err = (await api
+      .putBookState('book-1', { slice: 'state', patch: { title: 'New' } })
+      .catch((e: Error) => e)) as Error & { fields?: string[] };
+    expect(err.fields).toEqual(['notes', 'title']);
+  });
+
+  it('leaves fields undefined when the body has none or a malformed list', async () => {
+    for (const fields of [undefined, 'title', ['title', 3]]) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ error: 'changed elsewhere', code: 'stale_revision', fields }), {
+            status: 409,
+          }),
+        ),
+      );
+      const err = (await api
+        .putBookState('book-1', { slice: 'state', patch: { title: 'New' } })
+        .catch((e: Error) => e)) as Error & { fields?: string[] };
+      expect(err.fields).toBeUndefined();
+    }
+  });
+
+  it('leaves code undefined for a non-JSON failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })));
+    const err = (await api
+      .putBookState('book-1', { slice: 'state', patch: { title: 'New' } })
+      .catch((e: Error) => e)) as Error & { code?: string };
+    expect(err.code).toBeUndefined();
   });
 });

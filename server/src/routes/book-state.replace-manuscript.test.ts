@@ -140,6 +140,17 @@ describe('replace-manuscript handler', () => {
     expect(state.chapters).toHaveLength(2);
   });
 
+  /* #3784 P11-1 — the client keys "the same book" on bookId|manuscriptId, so
+     a replace must keep the manuscript id (only an import mints a new one). */
+  it('keeps the manuscript id', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    expect(res.status).toBe(200);
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.manuscriptId).toBe(MANUSCRIPT_ID);
+  });
+
   it('snapshots the designed-voice carryover before clearing cast.json', async () => {
     await request(app)
       .post(`/api/books/${bookId}/replace-manuscript`)

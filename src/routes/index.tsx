@@ -26,6 +26,7 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
+import { dropRetainedSaves } from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -154,9 +155,19 @@ export function BooksRoute() {
         }
         /* The book is gone: forget its revisions cache so a later re-import
            under the same id reads as a different book (OD31: and drop its
-           preview — the new take stays live, nothing is restored). */
+           preview — the new take stays live, nothing is restored). Its kept
+           saves go too, for hygiene: a re-import's new edit epoch already
+           makes the server refuse them (plan 289, D8b). Dropping them also
+           forgets the book's details draft and commit snapshot (#3784 P12-1):
+           a re-import from the book's own bundle keeps both of its ids. */
         dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(dropRetainedSaves(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
+        /* #3784 P12-3 — the other slices may still hold the deleted book under
+           its id, and a bundle import touches none of them, so a re-import's
+           next open would read only its revisions and show (and write back)
+           the deleted book. Mark it so that open reads it in full. */
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -167,6 +178,13 @@ export function BooksRoute() {
         } catch (err) {
           showError(`Couldn't update "${b.title}"`, (err as Error).message, 'Edit');
           return;
+        } finally {
+          /* Plan 289 (D7) — a write the persistence middleware never sees: the
+             book's slices may still be in memory, so its next open (or now, if it
+             is open) reads it in full rather than keeping the old details. Marked
+             on a rejection too: a PUT that landed but lost its response has an
+             unknown outcome, and an extra full read is cheap. */
+          dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
         }
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));

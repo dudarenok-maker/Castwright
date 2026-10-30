@@ -215,7 +215,7 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
     const [reparseRes, renameRes] = await Promise.all([reparseP, renameP]);
 
     expect(reparseRes.status).toBe(200);
-    expect(renameRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false); // the old folder was NOT recreated
     expect(readdirSync(join(workspaceRoot, 'books', AUTHOR, paths.STANDALONES_SERIES))).toEqual([newTitle]);
     expect(existsSync(paths.changeLogJsonPath(newDir))).toBe(true); // change-log is in the new folder
@@ -243,8 +243,8 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
     gate.release();
     const [castRes, renameRes] = await Promise.all([castP, renameP]);
 
-    expect(castRes.status).toBe(204);
-    expect(renameRes.status).toBe(204);
+    expect(castRes.status).toBe(200);
+    expect(renameRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false); // the old folder was NOT recreated
     const cast = JSON.parse(readFileSync(paths.castJsonPath(newDir), 'utf8')) as { characters: Array<{ id: string }> };
     expect(cast.characters.map((c) => c.id)).toEqual(['autosaved']); // the autosave landed in the new folder
@@ -278,8 +278,8 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
     release();
     const [renameRes, castRes] = await Promise.all([renameP, castP]);
 
-    expect(renameRes.status).toBe(204);
-    expect(castRes.status).toBe(204);
+    expect(renameRes.status).toBe(200);
+    expect(castRes.status).toBe(200);
     expect(existsSync(book.bookDir)).toBe(false);
     const cast = JSON.parse(readFileSync(paths.castJsonPath(newDir), 'utf8')) as { characters: Array<{ id: string }> };
     expect(cast.characters.map((c) => c.id)).toEqual(['later']);
@@ -407,8 +407,8 @@ describe('#3711 -- a folder rename queued behind another per-book operation', ()
     releaseMkdir();
     const [intoRes, outRes] = await Promise.all([intoP, outP]);
 
-    expect(intoRes.status).toBe(204);
-    expect(outRes.status).toBe(204);
+    expect(intoRes.status).toBe(200);
+    expect(outRes.status).toBe(200);
     expect(existsSync(join(intoDir, '.audiobook', 'state.json'))).toBe(true);
     expect(existsSync(join(outDir, '.audiobook', 'state.json'))).toBe(true);
     expect(existsSync(out.bookDir)).toBe(false);

@@ -85,3 +85,29 @@ describe('rollManuscriptEdits ordering (#3427)', () => {
     expect(landed).toEqual([['1'], ['2'], ['3']]);
   });
 });
+
+describe('rollManuscriptEdits book lock (#3784)', () => {
+  it('waits for the held book lock, so a slice PUT cannot land between its check and its write', async () => {
+    const { withBookLock } = await import('./book-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = withBookLock('book-3784', async () => {
+      held();
+      await gate;
+    });
+    await holding;
+
+    const roll = rollManuscriptEdits(opts, () => ['A'], 'book-3784');
+    try {
+      for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(landed).toEqual([]);
+    } finally {
+      release();
+      await holder;
+      await roll;
+    }
+    expect(landed).toEqual([['A']]);
+  });
+});
