@@ -104,6 +104,14 @@ describe('validateExtraParams', () => {
     expect(r.ok ? '' : r.errors.join(' ')).toContain('Thinking');
     expect(validateExtraParams('openai', { Thinking: {} }, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
   });
+  it('drops a stored Thinking case variant at merge time only under a gated style (#3904)', () => {
+    const gated = filterStoredPayload('openai', { Thinking: {}, top_k: 40 }, { reasoningStyle: 'reasoning_effort' });
+    expect(gated.dropped).toEqual(['Thinking']);
+    expect(gated.value).toEqual({ top_k: 40 });
+    const free = filterStoredPayload('openai', { Thinking: {}, top_k: 40 }, { reasoningStyle: 'not_controllable' });
+    expect(free.dropped).toEqual([]);
+    expect(free.value).toEqual({ Thinking: {}, top_k: 40 });
+  });
   it('drops a stored thinking under a gated style with a names-only warning (#3904)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const secret = 'sk-secret-value-123456';
