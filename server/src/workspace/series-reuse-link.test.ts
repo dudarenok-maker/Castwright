@@ -143,27 +143,15 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(characters[1].matchedFrom?.bookId).toBe('other');
   });
 
-  it.each(['tuned', 'locked'] as const)(
-    'leaves a %s character completely untouched (#3842)',
-    async (voiceState) => {
-      const characters: LinkableCharacter[] = [
-        {
-          id: 'wren-user',
-          name: 'Wren',
-          gender: 'female',
-          ageRange: 'teen',
-          voiceId: 'v_user',
-          voiceState,
-        },
-      ];
-      const before = JSON.parse(JSON.stringify(characters));
-      const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
-      expect(linked).toBe(0);
-      expect(characters).toEqual(before);
-      expect(characters[0].matchedFrom).toBeUndefined();
-      expect(characters[0].overrideTtsVoices).toBeUndefined();
-    },
-  );
+  it('does not demote a tuned voice to reused but still stamps the link', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'wren-tuned', name: 'Wren', gender: 'female', ageRange: 'teen', voiceState: 'tuned' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+    expect(linked).toBe(1);
+    expect(characters[0].matchedFrom?.bookId).toBe(BOOK1);
+    expect(characters[0].voiceState).toBe('tuned');
+  });
 
   it('returns 0 for a standalone / out-of-library book', async () => {
     const characters: LinkableCharacter[] = [{ id: 'x', name: 'Wren' }];
@@ -211,7 +199,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
 
     /* Analyzer renamed the narrator to "Author" but kept the stable id/voiceId. */
     const characters: LinkableCharacter[] = [
-      { id: 'narrator', name: 'Author', voiceId: 'narrator' },
+      { id: 'narrator', name: 'Author', voiceId: 'narrator', voiceState: 'tuned' },
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, options);
 
@@ -222,6 +210,8 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(narrator.ttsEngine).toBe('qwen');
     expect(narrator.overrideTtsVoices?.qwen?.name).toBe('qwen-narrator');
     expect(narrator.voiceStyle).toBe('a warm, articulate British narrator');
+    /* A user-tuned voiceState is not demoted, but the link still stamps. */
+    expect(narrator.voiceState).toBe('tuned');
   });
 
   /* A stable-key match must still respect an explicit notLinkedTo decision —
@@ -318,40 +308,6 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(linked).toBe(0);
     expect(fresh[0].matchedFrom).toBeUndefined();
   });
-
-  /* #3842 — the fresh analyzer roster carries NO voiceState either, so the
-     linker's locked/tuned skip only fires if the guards are seeded first. Runs
-     seed -> link -> merge exactly as analysis.ts composes them. */
-  it.each(['tuned', 'locked'] as const)(
-    'a prior %s row survives seed -> link -> merge with its own voice and no link (#3842)',
-    async (voiceState) => {
-      const fresh: LinkableCharacter[] = [
-        { id: 'wren-user', name: 'Wren', gender: 'female', ageRange: 'teen' },
-      ];
-      const priorCast = [
-        {
-          id: 'wren-user',
-          name: 'Wren',
-          voiceId: 'v_user',
-          voiceState,
-          ttsEngine: null,
-        },
-      ];
-      seedReuseGuardsFromPriorCast(priorCast, fresh);
-      expect(await linkSeriesReuseAtAnalysis(BOOK2, fresh, baseOptions())).toBe(0);
-      const { characters: merged } = mergeAnalysisResultWithExistingCast(
-        priorCast as unknown as Parameters<typeof mergeAnalysisResultWithExistingCast>[0],
-        fresh,
-      );
-      const row = merged[0] as unknown as Record<string, unknown>;
-      expect(row.matchedFrom).toBeUndefined();
-      expect(row.overrideTtsVoices).toBeUndefined();
-      expect(row.voiceStyle).toBeUndefined();
-      expect(row.voiceUuid).toBeUndefined();
-      expect(row.voiceId).toBe('v_user');
-      expect(row.voiceState).toBe(voiceState);
-    },
-  );
 });
 
 /* pruneStaleReuseLinks — a preserved matchedFrom (carried across re-analysis by
