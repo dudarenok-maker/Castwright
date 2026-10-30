@@ -476,4 +476,23 @@ describe('endpoint form — custom payload (#3084 wave 5b)', () => {
     fireEvent.change(field, { target: { value: '{"top_k": 20}' } });
     expect(screen.queryByTestId('endpoint-extra-params-error')).toBeNull();
   });
+
+  it('a payload that sets the cap makes Max output tokens read-only with a note, and its saved value is still sent (5b-D5)', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    renderSection({ endpoints: [{ ...LAB, maxOutputTokens: 8192 }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    const maxOutput = screen.getByTestId('endpoint-max-output-tokens');
+    const payload = screen.getByTestId('endpoint-extra-params');
+    fireEvent.change(payload, { target: { value: '{"top_k": 40}' } });
+    expect(maxOutput).not.toHaveAttribute('readonly');
+    expect(screen.queryByTestId('endpoint-max-output-controlled')).toBeNull();
+    fireEvent.change(payload, { target: { value: '{"max_completion_tokens": 4096}' } });
+    expect(maxOutput).toHaveAttribute('readonly');
+    expect(maxOutput).toHaveValue(8192);
+    expect(maxOutput).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+    expect(screen.getByTestId('endpoint-max-output-controlled')).toHaveTextContent('Ignored while custom parameters set the output cap.');
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1]).toMatchObject({ maxOutputTokens: 8192, extraParams: { max_completion_tokens: 4096 } });
+  });
 });

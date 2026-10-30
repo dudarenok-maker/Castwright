@@ -15,7 +15,7 @@ import {
 } from '../../store/account-slice';
 import { api, detectAnalyzerEndpointContext, AnalyzerEndpointError } from '../../lib/api';
 import { defaultGpuForBaseUrl } from '../../lib/analyzer-endpoints';
-import { parseExtraParamsText } from '../../lib/extra-params';
+import { parseExtraParamsText, payloadSetsOutputCap } from '../../lib/extra-params';
 import { endpointModelId, engineForModelId } from '../../lib/model-id';
 import { modelLabel } from '../../lib/model-label';
 import type { AnalyzerEndpoint, AnalyzerEndpointInput, AnalyzerEndpointModelsPreview, GpuDevice } from '../../lib/types';
@@ -215,6 +215,7 @@ export function AnalyzerEndpointsSection() {
     [editing, draft.baseUrl, keyStatus],
   );
   const payloadParse = parseExtraParamsText(draft.extraParamsText);
+  const payloadCapsOutput = payloadParse.ok && payloadSetsOutputCap('openai', payloadParse.value);
 
   const open = (endpoint: AnalyzerEndpoint | null) => {
     setEditing(endpoint);
@@ -497,8 +498,13 @@ export function AnalyzerEndpointsSection() {
               {errors.reasoning && <p className="mt-1 text-xs text-rose-700">{errors.reasoning}</p>}
             </FieldRow>
             <FieldRow label="Max output tokens" sublabel="0 = Auto (the model's limit, or context minus input).">
-              <input data-testid="endpoint-max-output-tokens" type="number" min={0} value={draft.maxOutputTokens} onChange={(e) => set('maxOutputTokens', e.target.value)} className={INPUT} />
+              <input data-testid="endpoint-max-output-tokens" type="number" min={0} value={draft.maxOutputTokens} onChange={(e) => set('maxOutputTokens', e.target.value)} readOnly={payloadCapsOutput} className={INPUT} />
               {errors.maxOutputTokens && <p className="mt-1 text-xs text-rose-700">{errors.maxOutputTokens}</p>}
+              {payloadCapsOutput && (
+                <p data-testid="endpoint-max-output-controlled" className="mt-1 text-xs text-amber-800">
+                  Ignored while custom parameters set the output cap.
+                </p>
+              )}
             </FieldRow>
             <FieldRow label="Max input tokens per request" sublabel="Optional cap. When set, it (or this endpoint's TPM limit, whichever is smaller) lowers the chunk size below the Context size bound.">
               <input data-testid="endpoint-max-input-tokens" type="number" min={256} value={draft.maxInputTokensPerRequest} onChange={(e) => set('maxInputTokensPerRequest', e.target.value)} className={INPUT} />
