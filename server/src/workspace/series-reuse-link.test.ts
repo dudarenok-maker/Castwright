@@ -318,6 +318,40 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(linked).toBe(0);
     expect(fresh[0].matchedFrom).toBeUndefined();
   });
+
+  /* #3842 — the fresh analyzer roster carries NO voiceState either, so the
+     linker's locked/tuned skip only fires if the guards are seeded first. Runs
+     seed -> link -> merge exactly as analysis.ts composes them. */
+  it.each(['tuned', 'locked'] as const)(
+    'a prior %s row survives seed -> link -> merge with its own voice and no link (#3842)',
+    async (voiceState) => {
+      const fresh: LinkableCharacter[] = [
+        { id: 'wren-user', name: 'Wren', gender: 'female', ageRange: 'teen' },
+      ];
+      const priorCast = [
+        {
+          id: 'wren-user',
+          name: 'Wren',
+          voiceId: 'v_user',
+          voiceState,
+          ttsEngine: null,
+        },
+      ];
+      seedReuseGuardsFromPriorCast(priorCast, fresh);
+      expect(await linkSeriesReuseAtAnalysis(BOOK2, fresh, baseOptions())).toBe(0);
+      const { characters: merged } = mergeAnalysisResultWithExistingCast(
+        priorCast as unknown as Parameters<typeof mergeAnalysisResultWithExistingCast>[0],
+        fresh,
+      );
+      const row = merged[0] as Record<string, unknown>;
+      expect(row.matchedFrom).toBeUndefined();
+      expect(row.overrideTtsVoices).toBeUndefined();
+      expect(row.voiceStyle).toBeUndefined();
+      expect(row.voiceUuid).toBeUndefined();
+      expect(row.voiceId).toBe('v_user');
+      expect(row.voiceState).toBe(voiceState);
+    },
+  );
 });
 
 /* pruneStaleReuseLinks — a preserved matchedFrom (carried across re-analysis by

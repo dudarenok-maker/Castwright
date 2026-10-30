@@ -24,7 +24,8 @@
      - only link against EARLIER books (lower seriesPosition) and skip the run
        entirely for the earliest book in the series (nothing prior);
      - never overwrite an existing `matchedFrom`, nor touch a tuned/locked
-       character at all (#3842).
+       character at all (#3842; the route seeds a prior locked/tuned
+       voiceState first, since the analyzer roster never carries it).
 
    Additive: the client `applyVoiceMatches` path stays as a fallback. */
 

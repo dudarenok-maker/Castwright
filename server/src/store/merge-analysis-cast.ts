@@ -555,14 +555,15 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
   };
 }
 
-/** Seed the Facet-A guard fields (`notLinkedTo`, `matchedFrom`) from the prior
+/** Seed the Facet-A guard fields (`notLinkedTo`, `matchedFrom`, a locked/tuned
+    `voiceState`) from the prior
     cast onto the fresh roster IN PLACE, by id, before linkSeriesReuseAtAnalysis
     runs. Without this the link pass scores against an empty `notLinkedTo` and
     can re-link a pair the user explicitly separated; pre-seeding `matchedFrom`
     also makes the pass's `if (c.matchedFrom) continue` skip already-linked rows.
-    Only fills fields the fresh row lacks (the analyzer never emits either). */
+    Only fills fields the fresh row lacks (the analyzer never emits any of them). */
 export function seedReuseGuardsFromPriorCast<
-  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
+  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown; voiceState?: unknown },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
   if (!existing.length) return;
   const byId = new Map(existing.map((c) => [c.id, c]));
@@ -602,6 +603,10 @@ export function seedReuseGuardsFromPriorCast<
       f.notLinkedTo = old.notLinkedTo as T['notLinkedTo'];
     if (f.matchedFrom === undefined && old.matchedFrom !== undefined)
       f.matchedFrom = old.matchedFrom as T['matchedFrom'];
+    /* The analyzer never emits voiceState either; seed a locked/tuned one so
+       linkSeriesReuseAtAnalysis's skip of those rows can fire (#3842). */
+    if (f.voiceState === undefined && (old.voiceState === 'locked' || old.voiceState === 'tuned'))
+      f.voiceState = old.voiceState as T['voiceState'];
   }
 }
 
