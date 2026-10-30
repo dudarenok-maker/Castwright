@@ -164,7 +164,8 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === a.payload);
       if (c) {
         c.matchedFrom = undefined;
-        c.voiceState = 'generated';
+        /* Declining a link never drops a lock/tune the user set (#3842). */
+        if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
       }
     },
     /* Pin a character's voice so subsequent regenerates preserve it. The

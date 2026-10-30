@@ -147,6 +147,21 @@ describe('castSlice — declineMatch', () => {
     expect(halloran.voiceState).toBe('generated');
   });
 
+  it.each(['locked', 'tuned'] as const)(
+    'clears the link but keeps a %s voiceState (#3842)',
+    (voiceState) => {
+      const start = baseState([
+        makeChar('halloran', {
+          voiceState,
+          matchedFrom: { bookTitle: 'Solway Bay', confidence: 0.91 },
+        }),
+      ]);
+      const next = castSlice.reducer(start, castActions.declineMatch('halloran'));
+      expect(next.characters[0].matchedFrom).toBeUndefined();
+      expect(next.characters[0].voiceState).toBe(voiceState);
+    },
+  );
+
   it('is a no-op for an unknown characterId', () => {
     const start = baseState([makeChar('halloran')]);
     const next = castSlice.reducer(start, castActions.declineMatch('not-a-character'));
