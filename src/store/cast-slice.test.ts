@@ -67,7 +67,7 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(halloran.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.9 }]);
   });
 
-  it('keeps a locked or tuned voice but still records the match link (#3842)', () => {
+  it('leaves a locked or tuned character completely untouched (#3842)', () => {
     const candidate = (voiceId: string, fromCharacterId: string) => ({
       voiceId,
       fromBookId: 'solway_bay_book',
@@ -98,20 +98,12 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(locked.voiceState).toBe('locked');
     expect(tuned.voiceId).toBe('v_tuned');
     expect(tuned.voiceState).toBe('tuned');
-    expect(locked.matchedFrom).toEqual({
-      bookId: 'solway_bay_book',
-      characterId: 'lib_a',
-      bookTitle: 'Solway Bay',
-      confidence: 0.88,
-    });
-    expect(tuned.matchedFrom).toEqual({
-      bookId: 'solway_bay_book',
-      characterId: 'lib_b',
-      bookTitle: 'Solway Bay',
-      confidence: 0.88,
-    });
-    expect(locked.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.8 }]);
-    expect(tuned.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.8 }]);
+    /* Untouched entirely: a link would make the server hydrate the other book's
+       voice onto the row, so no matchedFrom / matchFactors either. */
+    expect(locked.matchedFrom).toBeUndefined();
+    expect(tuned.matchedFrom).toBeUndefined();
+    expect(locked.matchFactors).toBeUndefined();
+    expect(tuned.matchFactors).toBeUndefined();
     /* Control: an unlocked character in the same response still takes the match. */
     expect(gen.voiceId).toBe('v_cand_c');
     expect(gen.voiceState).toBe('reused');

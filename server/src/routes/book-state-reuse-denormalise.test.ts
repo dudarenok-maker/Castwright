@@ -198,4 +198,38 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
     expect(c.overrideTtsVoices).toBeUndefined();
     expect(c.ttsEngine).toBeUndefined();
   });
+
+  it('leaves a tuned row with no matchedFrom untouched on disk (#3842)', async () => {
+    /* What the client sends for a tuned character now that applyVoiceMatches
+       skips it: no matchedFrom, so nothing is hydrated from the other book. */
+    const res = await request(app)
+      .put(`/api/books/${targetBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'wren_tuned',
+              name: 'Wren',
+              role: 'protagonist',
+              color: '#def',
+              voiceId: 'v_tuned',
+              voiceState: 'tuned',
+              ttsEngine: null,
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(200);
+    const onDisk = JSON.parse(
+      readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    );
+    const row = onDisk.characters.find((c: { id: string }) => c.id === 'wren_tuned');
+    expect(row.voiceId).toBe('v_tuned');
+    expect(row.ttsEngine).toBeNull();
+    expect(row.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(row.voiceStyle).toBeUndefined();
+    expect(row.matchedFrom).toBeUndefined();
+  });
 });
