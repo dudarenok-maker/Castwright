@@ -275,14 +275,17 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
         keepDraft: true,
       }),
     );
-    expect(next.saved.ns.title).toBe('Theirs');
+    /* The committed title stays on screen while its PUT is out (#3827 N1); the
+       rollback baseline is the read. */
+    expect(next.saved.ns.title).toBe('Mine');
     expect(next.draft).toEqual({ notes: 'half-typed' });
-    expect(next.lastCommitted?.['ns']).toEqual({ saved: next.saved.ns, draft: { title: 'Mine' } });
+    expect(next.lastCommitted?.['ns']?.saved).toMatchObject({ title: 'Theirs', author: 'A', series: 'S' });
+    expect(next.lastCommitted?.['ns']?.draft).toEqual({ title: 'Mine' });
 
     /* A refused save then restores the typing over the read, not the old baseline. */
     const rolledBack = reducer(next, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
     expect(rolledBack.draft).toEqual({ title: 'Mine' });
-    expect(rolledBack.saved.ns).toEqual(next.saved.ns);
+    expect(rolledBack.saved.ns.title).toBe('Theirs');
   });
 
   it('a hydrate without keepDraft (a re-import under the same id) still wipes the draft', () => {
@@ -319,6 +322,35 @@ describe('bookMetaSlice — commitFieldsLanded (#3827)', () => {
     expect(next.lastCommitted?.['ns']?.saved).toEqual(fullMeta({ title: 'T1' }));
     expect(next.lastCommitted?.['ns']?.draft).toEqual({ notes: 'N2' });
     expect(next.saved.ns).toEqual(start.saved.ns);
+  });
+
+  it('writes the landed value of a settled field into the shown `saved` (#3827 N1)', () => {
+    const start: BookMetaState = {
+      ...pendingTitleAndNotes(),
+      /* A full read processed before the 200 left the pre-landing title. */
+      saved: { ns: fullMeta({ title: 'T0', notes: 'N2' }) },
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.commitFieldsLanded({ bookId: 'ns', landed: { title: 'T1' }, settled: ['title'] }),
+    );
+    expect(next.saved.ns?.title).toBe('T1');
+    expect(next.saved.ns?.notes).toBe('N2');
+  });
+
+  it('a keepDraft hydrate keeps a committed field that is still typed in the snapshot (#3827 N1)', () => {
+    const next = reducer(
+      pendingTitleAndNotes(),
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Read', author: 'A', series: '' },
+        keepDraft: true,
+      }),
+    );
+    expect(next.saved.ns?.title).toBe('T1');
+    expect(next.saved.ns?.notes).toBe('N2');
+    /* The rollback baseline still rebases onto the read (P11-2). */
+    expect(next.lastCommitted?.['ns']?.saved.title).toBe('Read');
   });
 
   it('a landed field with a newer value queued is folded but not settled', () => {

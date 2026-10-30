@@ -1112,6 +1112,8 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
         landedFields,
       }),
     );
+    /* The hydrate itself holds the landed title on screen. */
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
     await vi.advanceTimersByTimeAsync(500);
     expect(deferred).toHaveLength(2);
     deferred[1].reject(new Error('Book state PUT failed (409): Analysis is running for this book.'));
@@ -1121,6 +1123,59 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect(after.bookMeta.saved.b1.title).toBe('T1');
     expect(after.bookMeta.draft).toEqual({ notes: 'N2' });
     err.mockRestore();
+  });
+
+  it('a commit still in its debounce when a full read lands keeps its value on screen after the 200 (#3827 N1, C0)', async () => {
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+
+    /* The read is processed inside the 500 ms debounce: no PUT has been sent. */
+    expect(deferred).toHaveLength(0);
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+  });
+
+  it('a full read processed before the PUT landed shows the landed value once the 200 arrives (#3827 N1)', async () => {
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    expect(landedFields).toEqual([]);
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
   });
 
   it('a give-up while the book is open also rolls back to the newest landed value and keeps nothing (#3827, #3758)', async () => {

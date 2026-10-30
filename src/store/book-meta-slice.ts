@@ -62,7 +62,9 @@ export interface BookMetaState {
       - `draft` accumulates the diff staged across those commits; a field
         leaves it once it lands with no newer value queued.
       A `keepDraft` hydrate rebases `saved` onto the read, except for fields a
-      PUT landed on after the read was issued (`landedFields`, #3827).
+      PUT landed on before the read was processed (`landedFields`) and fields
+      still typed in this snapshot; a field landing after the hydrate is
+      written into `saved` as it lands (#3827).
       Cleared on `hydrateFromBookState` without `keepDraft`, on a delete, on
       every rollback, on a commit with no baseline, and once every typed field
       has landed. */
@@ -144,8 +146,19 @@ export const bookMetaSlice = createSlice({
         description: state.description ?? null,
         notes: state.notes ?? null,
       };
+      const fromRead = { ...s.saved[bookId] };
       const hold = (landedFields ?? []).filter((f) => f in kept) as EditableBookMetaField[];
       for (const f of hold) (s.saved[bookId] as Record<string, unknown>)[f] = kept[f];
+      /* #3827 N1 — a field of a commit still queued or in flight keeps the
+         committed value on screen: the read cannot know it, and its PUT's 200
+         (`commitFieldsLanded`) may arrive after this hydrate. Only `saved` keeps
+         it; the rollback baseline below still rebases onto the read. */
+      const inFlight = keepDraft
+        ? (Object.keys(s.lastCommitted?.[bookId]?.draft ?? {}) as EditableBookMetaField[]).filter(
+            (f) => f in kept,
+          )
+        : [];
+      for (const f of inFlight) (s.saved[bookId] as Record<string, unknown>)[f] = kept[f];
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
       if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
@@ -158,7 +171,7 @@ export const bookMetaSlice = createSlice({
       const pending = s.lastCommitted?.[bookId];
       if (pending && keepDraft) {
         const prior = pending.saved;
-        pending.saved = { ...s.saved[bookId] };
+        pending.saved = fromRead;
         for (const f of hold) (pending.saved as Record<string, unknown>)[f] = prior[f];
       }
       else if (s.lastCommitted) delete s.lastCommitted[bookId];
@@ -262,6 +275,11 @@ export const bookMetaSlice = createSlice({
       const pending = s.lastCommitted?.[bookId];
       if (!pending) return;
       Object.assign(pending.saved, landed);
+      /* A settled field's landed value is also what the screen shows: a full
+         read processed before this 200 hydrated `saved` from before the landing
+         (plan 289 C4). A field with a newer value queued keeps that on screen. */
+      const shown = s.saved[bookId];
+      if (shown) for (const f of settled) (shown as Record<string, unknown>)[f] = landed[f];
       for (const f of settled) delete pending.draft[f];
       if (Object.keys(pending.draft).length === 0) delete s.lastCommitted![bookId];
     },
