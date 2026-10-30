@@ -949,8 +949,8 @@ export function Layout() {
        next stage change does), and nothing else on this book was waiting on it.
        A read that has not settled in 15 s is treated as a failed read (#3426). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    /* The attempt's request, aborted on expiry and on cleanup so at most one
-       read of this book is ever open (#3426). */
+    /* The attempt's request, aborted on expiry and on cleanup so the hydrate
+       never leaves two of its own reads of this book open (#3426). */
     let readCtrl: AbortController | null = null;
     const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
@@ -1210,10 +1210,9 @@ export function Layout() {
               console.warn('[listen-progress] hydrate skipped:', (err as Error).message);
             });
         }, (err) => {
-          /* Our own abort (superseded): the expiry already counted as the failure. */
-          if (err?.name === 'AbortError') return;
-          console.warn('[book-state] hydrate failed, retrying:', err?.message);
+          /* Leaving the book aborts the read: that rejection is not a failure. */
           if (cancelled) return;
+          console.warn('[book-state] hydrate failed, retrying:', err?.message);
           fullReadInFlight.current = null;
           if (revisionsOnly) {
             console.warn('[book-state] revisions re-read failed; the 30 s poll repairs it on the ready stage, elsewhere the next stage change:', err?.message);

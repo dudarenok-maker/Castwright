@@ -3298,7 +3298,9 @@ describe('Layout — a stalled save before the re-read is bounded (#3426)', () =
       await advance(40000);
       await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
       /* the kept save went out again (put:A:cast:ok) from step(1)'s re-dispatch */
-      expect(m.calls.slice(reopenAt)).toContain('put:A:cast:ok');
+      const after = m.calls.slice(reopenAt);
+      expect(after.indexOf('put:A:cast:ok')).toBeGreaterThanOrEqual(0);
+      expect(after.indexOf('put:A:cast:ok')).toBeLessThan(after.indexOf('get:A'));
       expect(m.landedAt).toBeGreaterThanOrEqual(0);
       expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
       expect(m.disk.A[0].name).toBe('Eliza Vane');
