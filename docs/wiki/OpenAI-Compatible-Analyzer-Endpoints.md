@@ -226,8 +226,8 @@ How the merge works:
 `response_format`, `grammar`, `json_schema`, `reasoning_effort`, `reasoning`, `reasoning_format`,
 `reasoning_budget_tokens`, `thinking_budget_tokens` and `include_reasoning`. vLLM's structured-output
 fields are refused too, whichever server the endpoint is: `structured_outputs`, `guided_json`,
-`guided_regex`, `guided_choice`, `guided_grammar`, `guided_decoding_backend` and
-`guided_whitespace_pattern`. `chat_template_kwargs.enable_thinking` is protected unless the endpoint's
+`guided_regex`, `guided_choice`, `guided_grammar`, `guided_decoding_backend`,
+`guided_whitespace_pattern` and `structural_tag`, as is its reasoning budget, `thinking_token_budget`. `chat_template_kwargs.enable_thinking` is protected unless the endpoint's
 Reasoning control is Not controllable, because under the other two controls Castwright sends its own
 reasoning setting. Keys named
 `__proto__`, `constructor` or `prototype` are refused at any depth.

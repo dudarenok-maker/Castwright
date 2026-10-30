@@ -30,10 +30,10 @@ export const OWNED_CONTAINERS: Record<TransportKind, readonly string[]> = {
 export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
   openai: [
     'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
-    'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'include_reasoning',
+    'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
     /* #3904 — vLLM's spellings of the structured-output controls Castwright owns through `response_format`. An endpoint does
        not record which server it is, so the union of every known spelling is refused; a server that ignores one loses nothing. */
-    'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern',
+    'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
   /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */
