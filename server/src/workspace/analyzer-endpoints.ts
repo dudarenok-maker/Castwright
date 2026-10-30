@@ -258,8 +258,8 @@ export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): A
     });
   }
   /* #3084 PR 5b — P23's payload refusal, lifted: a payload must pass validateExtraParams under this
-     endpoint's reasoning style (chat_template_kwargs.enable_thinking is protected only under
-     enable_thinking). A7: on an update, only when this save changes the payload or that style; an
+     endpoint's reasoning style (chat_template_kwargs.enable_thinking is refused unless the
+     reasoning style is not_controllable, #3904). A7: on an update, only when this save changes the payload or that style; an
      unchanged stale payload must not block every later edit, and mergeExtraParams still filters it.
      The payload comparison ignores key order (5b-D10): the same payload re-sent with its keys
      reordered is unchanged. */

@@ -92,7 +92,7 @@ describe('validateExtraParams', () => {
     /* fail closed: no style is not "not controllable" */
     expect(validateExtraParams('openai', p, {})).toEqual(refusal);
   });
-  it.each(NEW_OPENAI_KEYS)('refuses the vLLM structured-output key %s (#3904)', (key) => {
+  it.each(NEW_OPENAI_KEYS)('refuses the vLLM key %s (#3904)', (key) => {
     expect(validateExtraParams('openai', { [key]: {}, top_k: 40 }, {})).toEqual({
       ok: false, errors: [`These keys are controlled by Castwright and cannot be set here: ${key}.`],
     });
