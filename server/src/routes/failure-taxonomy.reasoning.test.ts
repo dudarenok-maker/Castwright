@@ -84,6 +84,14 @@ describe('a pre-run refusal names the reasoning setting', () => {
     const f = classifyAnalysisFailure(new AnalyzerCapabilityRejectedError('qwen3.5:4b', 'reasoning', 'on', '2026-09-11T10:00:00.000Z'), 'Ollama (qwen3.5:4b)');
     expect(f.remediation).toContain('the Ollama reasoning setting (Advanced settings → Analyzer request controls)');
   });
+  it.each([
+    ['qwen3.5:4b', 'Ollama (qwen3.5:4b)', 'the Ollama custom parameters (Advanced settings → Analyzer request controls)'],
+    ['gemini-3.6-flash', 'Gemini 3.6 Flash', 'the Gemini custom parameters (Advanced settings → Analyzer request controls)'],
+    ['openai:lab::m', 'Lab · m', "the endpoint's Custom parameters field"],
+  ])('a refusal remediation for %s names its custom parameters (REQUEST_SHAPING_SETTINGS, 5b-D4)', (modelId, label, expected) => {
+    const f = classifyAnalysisFailure(new AnalyzerCapabilityRejectedError(modelId, 'reasoning', 'on', '2026-09-11T10:00:00.000Z'), label);
+    expect(f.remediation).toContain(expected);
+  });
 });
 
 describe('a level that reached a call mid-run is coded too (N10)', () => {

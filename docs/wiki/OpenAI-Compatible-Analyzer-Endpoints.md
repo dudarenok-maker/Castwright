@@ -33,6 +33,7 @@ analysis-model picker as `<endpoint name> · <model>`.
 | Reasoning | Only the levels the selected control can take: `none`, `minimal`, `low`, `medium`, `high` for `reasoning_effort`; `off` and `on` for `enable_thinking`. Model default sends nothing. A server may accept a level and quietly ignore it, and Castwright cannot see that. |
 | Max output tokens | `0` is Auto: the server's listed output limit, or context minus input. |
 | Max input tokens per request | Optional. When set, chunks are sized to fit it (see "Chunk size" below). |
+| Custom parameters | Optional JSON that Castwright merges last into every request to this endpoint. The field sits full width below the others. While it sets the output cap, **Max output tokens** turns read-only (its saved value is kept) with the note "Ignored while custom parameters set the output cap." See "Custom payload" below. |
 
 ## Servers
 
@@ -200,6 +201,72 @@ Settings → Analyzer chunking (`analyzer.stage1.localInputFraction`,
 `analyzer.stage2.localInputFraction`, `analyzer.stage1.chunkCharBudget`,
 `analyzer.stage2.chunkCharBudget`). All of them can be changed at any time.
 
+## Custom payload
+
+An endpoint's **Custom parameters** field takes a JSON object that Castwright merges **last** into
+the request body it sends to that endpoint. Use it for the sampler and server options Castwright has
+no field for, such as `top_k`, `min_p` or a presence penalty. This section covers the endpoint
+payload only. Ollama and Gemini have their own payloads, described under **Custom payload** on the
+[Advanced Settings](Advanced-Settings) page.
+
+How the merge works:
+
+- A top-level key replaces the same key in the request.
+- `chat_template_kwargs` is merged key by key, so you can add to it without losing the keys
+  Castwright sends.
+- `null` removes a key. It never removes `chat_template_kwargs` itself, and a `null` there is refused.
+- A temperature here sets the first attempt only. The retry after a failed validation uses
+  Castwright's own retry temperature.
+- Every request to the endpoint carries the payload, including **Test**. The run label shows
+  "+ custom params" whenever one is in play. A voice-description (persona) request carries it too, minus the
+  output-cap keys, so a cap meant for chapter work never shortens a voice description.
+
+**Keys Castwright controls** are refused when you save, and the message names them:
+`model`, `messages`, `stream`, `stream_options`, `n`, `stop`, `tools`, `tool_choice`,
+`response_format`, `grammar`, `json_schema`, `reasoning_effort`, `reasoning`, `reasoning_format`,
+`reasoning_budget_tokens`, `thinking_budget_tokens` and `include_reasoning`. While the endpoint's
+Reasoning control is `chat_template_kwargs.enable_thinking`, that key is protected too. Keys named
+`__proto__`, `constructor` or `prototype` are refused at any depth.
+
+**The output cap.** A payload that sets `max_tokens`, `max_completion_tokens` or llama.cpp's
+`n_predict` takes over the output cap. Castwright then stops sending its own `max_tokens`, sizes
+the **Test** action against your number, and the run label reads "max output set by
+custom params". The endpoint's **Max output tokens** keeps its saved value but is ignored, so it
+shows read-only. If both `max_tokens` and `n_predict` are set, the smaller one is used.
+
+**Not a place for credentials.** The payload is never logged and never written to analyzer files,
+but it is stored in your settings. Put the endpoint's key in its **API key** field, which is bound to the
+server's origin. If a provider's error repeats one of your string values back, Castwright hides it
+from that request's own errors, and only if the value is 8 characters or longer. A short value is never hidden.
+
+### Examples per server
+
+Each example is a request-body fragment to paste into **Custom parameters**. The key names come
+from each server's own request options and were **not** re-checked against the tool versions listed on this
+page: verify them against your version's documentation before relying on one (verify at
+implementation). Castwright accepts any key that is not on the list above, and the server decides
+whether it understands it.
+
+- **llama.cpp (llama-server)** accepts its own sampler fields in the request body.
+  `{"top_k": 20, "min_p": 0.05, "n_predict": 4096}` sets two samplers and caps the answer
+  with llama.cpp's native `n_predict`. <!-- UNVERIFIED: sampler field names not re-read against the llama.cpp README on this date (planning facts §B covers reasoning and context fields only). -->
+- **llama-swap** passes the body to the model's own server, so use that server's keys. For a
+  llama.cpp model behind it, the llama.cpp example above applies. <!-- UNVERIFIED for llama-swap v265. -->
+- **LM Studio:** `{"top_k": 40, "min_p": 0.05}`. <!-- UNVERIFIED: LM Studio's accepted request fields were not checked. -->
+- **vLLM:** `{"max_completion_tokens": 2048, "top_k": 20, "min_p": 0.05}`. Use
+  `max_completion_tokens`; it takes over the output cap as described above. vLLM takes
+  non-OpenAI sampler fields such as `top_k` and `min_p` directly in the body. <!-- UNVERIFIED: not re-read against the vLLM v0.31.0 docs on this date. -->
+- **LiteLLM:** the gateway forwards the body to the backend behind it, so the keys are the
+  backend's. Whether an unknown key passes through depends on the gateway's configuration: check
+  its documentation. <!-- UNVERIFIED. -->
+- **OpenRouter:** `{"presence_penalty": 0.5, "top_k": 40}`. Hosted models differ in which
+  parameters they honour, and OpenRouter documents which ones each model supports. A reasoning
+  model needs `max_completion_tokens` rather than `max_tokens`. <!-- UNVERIFIED: not re-checked against OpenRouter's parameter reference on this date. -->
+
+If a key is wrong for the server, the server's answer comes back as a failure, normally
+`analyzer-request-rejected`, with the key's string values hidden. Fix or remove the key and run
+**Test** again.
+
 ## When a model thinks past its output limit
 
 **What you see:** the run stops with `analyzer-reasoning-overflow`. The model spent its whole output
@@ -209,7 +276,10 @@ finish and are kept.
 **Fix:** the failure's "How to fix" links open these settings:
 
 1. Raise the endpoint's **Max output tokens**, or set it to `0` (Auto). It cannot exceed what the
-   server allows.
+   server allows. If the endpoint's custom parameters set the output cap, this fix is replaced by
+   one that names that parameter: **Raise the custom parameter "max_tokens"** (or whichever key
+   you set), or **Set a value for the custom parameter "max_tokens"** when the payload removes the
+   cap with `null` or `-1`. A **Read: Custom payload** entry points to the "Custom payload" section above.
 2. Check **Context size** matches what the server serves: more context leaves more room for output.
 3. Lower the stage input fractions (Advanced Settings → Analyzer chunking), so each chunk leaves
    more room.

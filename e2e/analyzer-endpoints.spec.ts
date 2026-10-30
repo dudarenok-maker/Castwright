@@ -44,6 +44,7 @@ test('add an endpoint (context required), pick its model, and the label shows "s
   await page.getByTestId('endpoint-save').click();
   await expect(page.getByTestId('endpoint-context-error')).toBeVisible();
   await page.getByTestId('endpoint-context-tokens').fill('32768');
+  await page.getByTestId('endpoint-extra-params').fill('{"top_k": 40, "min_p": 0.05}');
   await page.getByTestId('endpoint-save').click();
   await expect(page.getByTestId('endpoint-row-lab-server')).toBeVisible();
 
@@ -53,7 +54,7 @@ test('add an endpoint (context required), pick its model, and the label shows "s
   const label = page.getByTestId('analyzer-default-model-label');
   await expect(label).toContainText('Lab server · qwen3-30b');
   await expect(label).toContainText('schema (not enforced)');
-  // Wave 5 appends "+ custom params" through runLabelSuffixes; asserted there, not here.
+  await expect(label).toContainText('+ custom params');
 });
 
 test('the GPU guard prompts for an endpoint on the TTS card and not for one on another card', async ({ page }) => {

@@ -66,6 +66,40 @@ Nothing changes until you pick a level: Ollama keeps thinking off and Gemini kee
 A failure's "How to fix" list can link straight to a model's row here, scrolled into view and
 highlighted. This card adds no setting to the groups below, so their knob count is unchanged.
 
+### Custom payload
+
+Below the reasoning levels, the same card has two editors: **Ollama custom parameters** and
+**Gemini custom parameters**. Both are always shown, Gemini's too before a key is set. Each takes a
+JSON object that Castwright merges **last** into every request to that engine. Invalid JSON shows an
+error under the field and blocks the save. (An OpenAI-compatible endpoint has its own **Custom
+parameters** field on the endpoint; see
+[OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).)
+
+- **Ollama:** `{"options": {"min_p": 0.05}}`. Top-level keys replace the request's; `options` merges
+  key by key, and `null` removes a key (never `options` itself).
+- **Gemini:** `{"config": {"topK": 40}}`. Only a `config` object is accepted, merged key by key,
+  and only these keys inside it: `temperature`, `topP`, `topK`, `maxOutputTokens`,
+  `presencePenalty`, `frequencyPenalty`, `seed` and `safetySettings` (an array of
+  `{ "category", "threshold" }` strings). `httpOptions` and `stopSequences` are refused.
+- **Protected keys** are refused on save, and the message names them. Ollama: `model`, `messages`,
+  `stream`, `format`, `think`, `keep_alive`, `tools`, `options.num_ctx`, `options.num_gpu`,
+  `options.main_gpu` and `options.stop`. Gemini: `model` and `contents` at the top level. Keys
+  named `__proto__`, `constructor` or `prototype` are refused at any depth.
+- A temperature in the payload sets the first attempt only; the retry after a failed validation
+  uses Castwright's own.
+- **The output cap.** `options.num_predict` (Ollama) or `config.maxOutputTokens` (Gemini) in the
+  payload takes over the output cap. A note under the editor says so, the matching setting
+  (**Ollama num_predict** or **Gemini max output tokens**) is not used for that engine, and the run
+  label reads "max output set by custom params". Any payload adds "+ custom params" to the label.
+- **In an overflow failure,** a payload that sets the cap is the setting to change: the failure
+  says **Raise the custom parameter "<key>"**, or **Set a value for the custom parameter "<key>"**
+  when the key's value is `null` or `-1`, and a **Read: Custom payload** entry opens this section.
+- **Not a place for credentials.** Payloads are never logged and are not written to analyzer files, but they
+  are stored in your settings. Keys belong in their own fields. A string value of 8 or more characters is hidden
+  if an error from the request that carried it repeats it back.
+
+This adds no setting to the numbered groups, so their knob count is unchanged.
+
 ## 1. LLM sampling parameters
 
 <picture>

@@ -450,6 +450,8 @@ describe('user-settings router', () => {
       analyzerRateLimitsByModel: { 'gemma-4-31b-it': { rpm: 12 } },
       /* #3084 wave 5 — both levels pass the write rules with no Test record. */
       analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } },
+      /* #3084 wave 5b — a valid custom payload per engine (passes the write rules). */
+      analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } },
     };
 
     /* Guard: every writable schema field has a sample value here. A field
@@ -581,6 +583,42 @@ describe('user-settings router', () => {
     expect(put.status).toBe(200);
     resetCache();
     expect((await request(app).get('/api/user/settings')).body.analyzerReasoningByEngine).toEqual({ gemini: { 'gemini-3.6-flash': 'low' } });
+  });
+
+  it('PUT refuses a protected payload key and names it', async () => {
+    const res = await request(app).put('/api/user/settings').send({ analyzerExtraParamsByEngine: { ollama: { keep_alive: -1 } } });
+    expect(res.status).toBe(400);
+    expect(res.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Ollama custom parameters: These keys are controlled by Castwright and cannot be set here: keep_alive.',
+    ]);
+  });
+  it('PUT refuses a Gemini payload that sets config.httpOptions, naming it (P16)', async () => {
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerExtraParamsByEngine: { gemini: { config: { httpOptions: { baseUrl: 'http://evil' } } } } });
+    expect(res.status).toBe(400);
+    expect(res.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.',
+    ]);
+    expect(existsSync(userSettingsPath)).toBe(false);
+  });
+  it('PUT persists a valid payload and GET returns it', async () => {
+    const payload = { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } };
+    expect((await request(app).put('/api/user/settings').send({ analyzerExtraParamsByEngine: payload })).status).toBe(200);
+    resetCache();
+    expect((await request(app).get('/api/user/settings')).body.analyzerExtraParamsByEngine).toEqual(payload);
+  });
+  it('PUT: an unchanged stored payload a newer rule refuses does not block saving a reasoning level (N6)', async () => {
+    _setUserSettingsCacheForTest({
+      analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'HARM_CATEGORY_HARASSMENT' } } } },
+    });
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({
+        analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'low' } },
+        analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'HARM_CATEGORY_HARASSMENT' } } } },
+      });
+    expect(res.status).toBe(200);
   });
 
   /* Plan 49 — dedicated Gemini-key PUT endpoint. The general PUT still

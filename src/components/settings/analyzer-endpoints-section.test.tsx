@@ -396,7 +396,7 @@ describe('endpoint form — reasoning fields', () => {
 });
 
 describe('endpoint form — touch targets', () => {
-  it.each(['endpoint-name', 'endpoint-context-tokens', 'endpoint-reasoning-style', 'endpoint-reasoning'])(
+  it.each(['endpoint-name', 'endpoint-context-tokens', 'endpoint-reasoning-style', 'endpoint-reasoning', 'endpoint-extra-params'])(
     '%s meets the 44px touch target on touch devices (CLAUDE.md mobile protocol)',
     (testId) => {
       renderSection();
@@ -404,4 +404,95 @@ describe('endpoint form — touch targets', () => {
       expect(screen.getByTestId(testId)).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
     },
   );
+});
+
+describe('endpoint form — custom payload (#3084 wave 5b)', () => {
+  it('shows a JSON error under the field and refuses the save while it is invalid; says it is not a place for credentials', async () => {
+    renderSection({ endpoints: [LAB] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    fireEvent.change(screen.getByTestId('endpoint-extra-params'), { target: { value: '{bad' } });
+    expect(screen.getByTestId('endpoint-extra-params-error')).toHaveTextContent('Not valid JSON.');
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    expect(api.updateAnalyzerEndpoint).not.toHaveBeenCalled();
+    expect(screen.getByText(/Not a place for credentials: put this endpoint key in the API key field/)).toBeInTheDocument(); // P29
+  });
+
+  it('sends the parsed payload, never the draft text; an untouched edit re-sends the saved payload', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    renderSection({ endpoints: [{ ...LAB, extraParams: { top_k: 20 } }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    expect(screen.getByTestId('endpoint-extra-params')).toHaveValue(JSON.stringify({ top_k: 20 }, null, 2));
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+    const sent = vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1];
+    expect(sent).toMatchObject({ extraParams: { top_k: 20 } });
+    expect(sent).not.toHaveProperty('extraParamsText');
+  });
+
+  it('a blank field sends no payload, so the saved one is cleared', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    renderSection({ endpoints: [{ ...LAB, extraParams: { top_k: 20 } }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    fireEvent.change(screen.getByTestId('endpoint-extra-params'), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1]).not.toHaveProperty('extraParams');
+  });
+
+  it('sits full width, outside the two-column grid (5b-D6)', async () => {
+    renderSection({ endpoints: [LAB] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    expect(screen.getByTestId('endpoint-extra-params').closest('.grid')).toBeNull();
+    expect(screen.getByTestId('endpoint-max-output-tokens').closest('.grid')).not.toBeNull();
+  });
+
+  it("a payload-fix deep link focuses the endpoint's Custom parameters field", async () => {
+    const store = renderSection({ endpoints: [LAB] });
+    store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'extraParams' }));
+    expect(await screen.findByTestId('endpoint-editor')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('endpoint-extra-params')).toHaveFocus());
+  });
+
+  it('a refusal at path extraParams shows under the Custom parameters field, not the general error', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockRejectedValue(
+      new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', [
+        { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: response_format.' },
+      ]),
+    );
+    renderSection({ endpoints: [LAB] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    expect(await screen.findByTestId('endpoint-extra-params-error')).toHaveTextContent('cannot be set here: response_format');
+    expect(screen.queryByTestId('endpoint-save-error')?.textContent ?? '').not.toContain('cannot be set here');
+  });
+
+  it("a refused save's JSON error clears once the field is edited to valid JSON", async () => {
+    renderSection({ endpoints: [LAB] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    const field = screen.getByTestId('endpoint-extra-params');
+    fireEvent.change(field, { target: { value: '{bad' } });
+    fireEvent.click(screen.getByTestId('endpoint-save')); // save() sets errors.extraParams from validateEndpointDraft
+    expect(screen.getByTestId('endpoint-extra-params-error')).toHaveTextContent('Not valid JSON.');
+    fireEvent.change(field, { target: { value: '{"top_k": 20}' } });
+    expect(screen.queryByTestId('endpoint-extra-params-error')).toBeNull();
+  });
+
+  it('a payload that sets the cap makes Max output tokens read-only with a note, and its saved value is still sent (5b-D5)', async () => {
+    vi.mocked(api.updateAnalyzerEndpoint).mockResolvedValue(settingsWith([LAB]));
+    renderSection({ endpoints: [{ ...LAB, maxOutputTokens: 8192 }] });
+    fireEvent.click(await screen.findByTestId('endpoint-edit-lab'));
+    const maxOutput = screen.getByTestId('endpoint-max-output-tokens');
+    const payload = screen.getByTestId('endpoint-extra-params');
+    fireEvent.change(payload, { target: { value: '{"top_k": 40}' } });
+    expect(maxOutput).not.toHaveAttribute('readonly');
+    expect(screen.queryByTestId('endpoint-max-output-controlled')).toBeNull();
+    fireEvent.change(payload, { target: { value: '{"max_completion_tokens": 4096}' } });
+    expect(maxOutput).toHaveAttribute('readonly');
+    expect(maxOutput).toHaveValue(8192);
+    expect(maxOutput).toHaveClass('min-h-[44px]', 'fine-pointer:min-h-0');
+    expect(screen.getByTestId('endpoint-max-output-controlled')).toHaveTextContent('Ignored while custom parameters set the output cap.');
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.updateAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateAnalyzerEndpoint).mock.calls[0][1]).toMatchObject({ maxOutputTokens: 8192, extraParams: { max_completion_tokens: 4096 } });
+  });
 });

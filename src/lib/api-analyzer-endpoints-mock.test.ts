@@ -98,11 +98,9 @@ describe('mock analyzer endpoint API', () => {
     _setMockUserSettingsForTest({ analyzerPhase0Model: null, analyzerPhase1Model: null } as Parameters<typeof _setMockUserSettingsForTest>[0]);
   });
 
-  it('until PR 5b, refuses a non-empty payload, as the server does', async () => {
-    const p = await refusal(api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } }));
-    expect(p.issues).toEqual([
-      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
-    ]);
+  it('accepts a custom payload and returns it; protected keys are refused by the server only', async () => {
+    const s = await api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } });
+    expect(s.analyzerEndpoints?.find((e) => e.id === 'm-payload')?.extraParams).toEqual({ top_k: 20 });
   });
 
   it('accepts a reasoning level its control style offers and refuses one it does not, as the server does', async () => {

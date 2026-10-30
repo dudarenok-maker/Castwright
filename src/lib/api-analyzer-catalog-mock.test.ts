@@ -58,6 +58,19 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     expect(catalog.groups.find((g) => g.kind === 'endpoint')?.models[0].structuredOutput.outcome).toBe('accepted');
   });
 
+  it('carries the payload label parts: + custom params, and a payload output cap (#3084 wave 5b)', async () => {
+    (globalThis as Record<string, unknown>).__SEED_ENDPOINT_MODELS__ = { lab: ['qwen3-30b'] };
+    const source = {
+      analyzerEndpoints: [{ ...endpoint, id: 'lab', extraParams: { min_p: 0.05 } }],
+      analyzerCapabilitiesByModel: {},
+      apiKeyStatus: 'unset' as const,
+      analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 2048 } } },
+    };
+    const catalog = await mockGetAnalyzerModels(false, source);
+    expect(catalog.groups.find((g) => g.kind === 'ollama')?.models[0].requestControlLabelParts).toEqual(['+ custom params', 'max output set by custom params']);
+    expect(catalog.groups.find((g) => g.kind === 'endpoint')?.models[0].requestControlLabelParts).toEqual(['+ custom params']);
+  });
+
   it('mockTestAnalyzerModel returns a record for the configured mode, filed under the level the engine sends', async () => {
     const local = await mockTestAnalyzerModel({ modelId: 'qwen3.5:4b', scope: 'configured' });
     expect(local.control).toEqual({ ok: true });
