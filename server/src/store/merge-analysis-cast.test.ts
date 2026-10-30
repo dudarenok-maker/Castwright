@@ -815,6 +815,74 @@ describe('seedReuseGuardsFromPriorCast', () => {
     seedReuseGuardsFromPriorCast(existing, fresh);
     expect((fresh[0].matchedFrom as { bookId: string }).bookId).toBe('right');
   });
+
+  describe('A2 — name fallback matches mergeCore (#3920)', () => {
+    it('a prior row already claimed by id is not a name-fallback candidate for a different fresh row (cousin name)', () => {
+      const existing: C[] = [
+        {
+          id: 'mara',
+          name: 'Mara',
+          matchedFrom: { bookId: 'b1', characterId: 'mara', bookTitle: 'One', confidence: 0.9 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [
+        { id: 'mara', name: 'Mara Vale' },
+        { id: 'mara-2', name: 'Mara' },
+      ];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      // the id match keeps the guards
+      expect(fresh[0].matchedFrom).toEqual({
+        bookId: 'b1',
+        characterId: 'mara',
+        bookTitle: 'One',
+        confidence: 0.9,
+      });
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
+      // the cousin-named fresh row does not inherit them
+      expect(fresh[1].matchedFrom).toBeUndefined();
+      expect(fresh[1].notLinkedTo).toBeUndefined();
+    });
+
+    it('a prior narrator row is never a name-fallback candidate (user-renamed narrator)', () => {
+      const existing: C[] = [
+        {
+          id: 'narrator',
+          name: 'Old Tom',
+          matchedFrom: { bookId: 'b1', characterId: 'narrator', confidence: 0.8 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'old-tom', name: 'Old Tom' }]; // no narrator row this run
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+    });
+
+    it('a fresh narrator row never takes a name-fallback candidate', () => {
+      const existing: C[] = [
+        {
+          id: 'tom',
+          name: 'Narrator',
+          matchedFrom: { bookId: 'b1', characterId: 'tom', confidence: 0.8 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+    });
+
+    it('control — legitimate id drift is still bridged by the name fallback', () => {
+      const existing: C[] = [
+        {
+          id: 'coalfall',
+          name: 'Coalfall',
+          matchedFrom: { bookId: 'b1', characterId: 'coalfall', confidence: 0.9 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toEqual({ bookId: 'b1', characterId: 'coalfall', confidence: 0.9 });
+    });
+  });
 });
 
 describe('voicedSurvivorsDropped', () => {

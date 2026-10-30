@@ -570,7 +570,10 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     runs. Without this the link pass scores against an empty `notLinkedTo` and
     can re-link a pair the user explicitly separated; pre-seeding `matchedFrom`
     also makes the pass's `if (c.matchedFrom) continue` skip already-linked rows.
-    Only fills fields the fresh row lacks (the analyzer never emits either). */
+    Only fills fields the fresh row lacks (the analyzer never emits either).
+    #3920 (A2): the name fallback uses the same candidate set as mergeCore's
+    exact-name fallback — dropped (no fresh row claims the prior by id),
+    non-narrator rows only — and a fresh narrator row never takes a candidate. */
 export function seedReuseGuardsFromPriorCast<
   T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
@@ -582,7 +585,11 @@ export function seedReuseGuardsFromPriorCast<
      guard row no longer matches the survivor by id. Bridge a SINGLE same-name
      prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
      fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
-     normalised name shared by >1 prior OR >1 fresh row falls back to id-only. */
+     normalised name shared by >1 prior OR >1 fresh row falls back to id-only.
+     #3920 (A2): the candidate set now mirrors mergeCore's exact-name fallback —
+     dropped, non-narrator prior rows only, and a fresh narrator row never takes
+     a candidate — so the seed never hands a prior row's guards to a fresh row
+     the merge would not join it to. */
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
     typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
   const freshNameCounts = new Map<string, number>();
@@ -590,9 +597,15 @@ export function seedReuseGuardsFromPriorCast<
     const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
     if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
   }
+  // #3920 (A2): a prior row some fresh row already claims by id is not a
+  // name-fallback candidate for a DIFFERENT fresh row, and a prior narrator row
+  // (either id shape) never is — the same dropped, non-narrator candidate set
+  // mergeCore's exact-name fallback uses.
+  const freshIds = new Set(fresh.map((f) => f.id));
   const existingByName = new Map<string, CastRecord>();
   const ambiguousExistingNames = new Set<string>();
   for (const old of existing) {
+    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
     const key = nameOf(old);
     if (!key) continue;
     if (existingByName.has(key)) ambiguousExistingNames.add(key);
@@ -601,7 +614,9 @@ export function seedReuseGuardsFromPriorCast<
 
   for (const f of fresh) {
     let old = byId.get(f.id);
-    if (!old) {
+    // #3920 (A2): a fresh narrator row never takes a name-fallback candidate,
+    // mirroring mergeCore's fresh-side narrator exclusion.
+    if (!old && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
       const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
       if (key && !ambiguousExistingNames.has(key) && freshNameCounts.get(key) === 1) {
         old = existingByName.get(key);
