@@ -67,6 +67,56 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(halloran.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.9 }]);
   });
 
+  it('keeps a locked or tuned voice but still records the match link (#3842)', () => {
+    const candidate = (voiceId: string, fromCharacterId: string) => ({
+      voiceId,
+      fromBookId: 'solway_bay_book',
+      fromBookTitle: 'Solway Bay',
+      fromCharacterId,
+      score: 0.88,
+      factors: [{ id: 'register', label: 'Register', score: 0.8 }],
+    });
+    const start = baseState([
+      makeChar('locked_char', { voiceState: 'locked', voiceId: 'v_locked' }),
+      makeChar('tuned_char', { voiceState: 'tuned', voiceId: 'v_tuned' }),
+      makeChar('gen_char', { voiceState: 'generated', voiceId: 'v_old' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyVoiceMatches(
+        matchResponse([
+          { characterId: 'locked_char', candidates: [candidate('v_cand_a', 'lib_a')] },
+          { characterId: 'tuned_char', candidates: [candidate('v_cand_b', 'lib_b')] },
+          { characterId: 'gen_char', candidates: [candidate('v_cand_c', 'lib_c')] },
+        ]),
+      ),
+    );
+    const locked = next.characters.find((c) => c.id === 'locked_char')!;
+    const tuned = next.characters.find((c) => c.id === 'tuned_char')!;
+    const gen = next.characters.find((c) => c.id === 'gen_char')!;
+    expect(locked.voiceId).toBe('v_locked');
+    expect(locked.voiceState).toBe('locked');
+    expect(tuned.voiceId).toBe('v_tuned');
+    expect(tuned.voiceState).toBe('tuned');
+    expect(locked.matchedFrom).toEqual({
+      bookId: 'solway_bay_book',
+      characterId: 'lib_a',
+      bookTitle: 'Solway Bay',
+      confidence: 0.88,
+    });
+    expect(tuned.matchedFrom).toEqual({
+      bookId: 'solway_bay_book',
+      characterId: 'lib_b',
+      bookTitle: 'Solway Bay',
+      confidence: 0.88,
+    });
+    expect(locked.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.8 }]);
+    expect(tuned.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.8 }]);
+    /* Control: an unlocked character in the same response still takes the match. */
+    expect(gen.voiceId).toBe('v_cand_c');
+    expect(gen.voiceState).toBe('reused');
+  });
+
   it('leaves characters with no candidates untouched', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),

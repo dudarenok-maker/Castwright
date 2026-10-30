@@ -786,7 +786,9 @@ export const castSlice = createSlice({
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
-       stable handle on the library record (POST /api/library-cast/override). */
+       stable handle on the library record (POST /api/library-cast/override).
+       A locked or tuned voice is kept, as in applyManualMatch, while the
+       match link is still recorded (#3842). */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;
       const byId = Object.fromEntries((matches || []).map((m) => [m.characterId, m]));
@@ -794,9 +796,10 @@ export const castSlice = createSlice({
         const m = byId[c.id];
         if (!m || !m.candidates?.length) return c;
         const top = m.candidates[0];
+        const keepVoice = c.voiceState === 'locked' || c.voiceState === 'tuned';
         return {
           ...c,
-          voiceId: top.voiceId,
+          ...(keepVoice ? {} : { voiceId: top.voiceId, voiceState: 'reused' as const }),
           matchedFrom: {
             bookId: top.fromBookId,
             characterId: top.fromCharacterId,
@@ -804,7 +807,6 @@ export const castSlice = createSlice({
             confidence: top.score,
           },
           matchFactors: top.factors,
-          voiceState: 'reused',
         };
       });
     },

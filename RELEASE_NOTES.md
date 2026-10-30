@@ -329,6 +329,7 @@
 
 - **A cover can no longer break your m4b export.** An uploaded JPEG with extra data tucked on the end, or a GIF or WebP cover from a cover provider, could make the export fail. Castwright now saves every cover as a fresh JPEG, whether you upload it, it's downloaded for you, or it arrives inside an imported book bundle. The trade-off: an uploaded JPEG is re-compressed once, at quality 85, and loses its embedded metadata, though its rotation is applied first so it still sits the right way up.
 - **Some server log lines now show the values they were meant to.** A handful of messages about voice deletion, voice style, queue and export problems printed a raw `%s` placeholder where the book or voice belonged, with the actual name tacked on at the end of the line. They now name the book, voice or file in place. Behind the scenes, an IP-address library used by the server is updated to its latest security release.
+- **Revisiting Confirm no longer swaps out a voice you locked or tuned.** When Castwright matched a character to one from an earlier book, it could replace the voice you had already chosen. It now keeps your locked or tuned voice and still shows the link to the earlier character.
 
 # Castwright 1.14.0
 
