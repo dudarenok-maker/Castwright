@@ -87,10 +87,19 @@ export interface AudioSlugRewriteSummary {
   renamed: Array<{ from: string; to: string; suffix: CompanionSuffix }>;
   /** Companion files deleted. */
   deleted: Array<{ slug: string; suffix: CompanionSuffix }>;
-  /** Errors caught during the batch — string `message` plus context for
+  /** Errors caught during the batch — a path-free string `message` plus context for
       diagnosis. The op is otherwise reported as not-done; downstream
       regen still works because the audio file is either gone or stale. */
   errors: Array<{ op: ChapterAudioOp; message: string; suffix?: CompanionSuffix }>;
+}
+
+/** A fixed, path-free `errors[].message`: the raw error (whose message embeds the absolute
+    workspace path) goes to the log, the response body (served over LAN HTTPS) gets the label plus
+    the fs `code`. */
+function failureMessage(label: string, e: unknown): string {
+  console.error(`[rewrite-chapter-slugs] ${label}`, e);
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? `${label} (${code})` : label;
 }
 
 function suffixPath(audioRoot: string, slug: string, suffix: CompanionSuffix): string {
@@ -135,7 +144,7 @@ export async function rewriteChapterSlugs(
         if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `delete failed: ${(e as Error).message}`,
+          message: failureMessage('delete failed', e),
           suffix,
         });
       }
@@ -166,7 +175,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `phase 1 rename to temp failed: ${(e as Error).message}`,
+          message: failureMessage('phase 1 rename to temp failed', e),
           suffix,
         });
       }
@@ -191,7 +200,7 @@ export async function rewriteChapterSlugs(
         if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `delete failed: ${(e as Error).message}`,
+          message: failureMessage('delete failed', e),
           suffix,
         });
       }
@@ -219,7 +228,7 @@ export async function rewriteChapterSlugs(
         if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `stale previous delete failed: ${(e as Error).message}`,
+          message: failureMessage('stale previous delete failed', e),
           suffix,
         });
       }
@@ -237,7 +246,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `phase 2 rename to dest failed: ${(e as Error).message}`,
+          message: failureMessage('phase 2 rename to dest failed', e),
           suffix,
         });
       }
@@ -266,7 +275,7 @@ export async function rewriteChapterSlugs(
       } catch (e) {
         summary.errors.push({
           op,
-          message: `${suffix} metadata rewrite failed: ${(e as Error).message}`,
+          message: failureMessage(`${suffix} metadata rewrite failed`, e),
           suffix,
         });
       }
@@ -289,7 +298,7 @@ export async function rewriteChapterSlugs(
     } catch (e) {
       summary.errors.push({
         op,
-        message: `render-integrity.json chapterId rewrite failed: ${(e as Error).message}`,
+        message: failureMessage('render-integrity.json chapterId rewrite failed', e),
         suffix: 'render-integrity.json',
       });
     }

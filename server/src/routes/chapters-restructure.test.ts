@@ -761,6 +761,25 @@ describe('POST /:bookId/chapters/reorder', () => {
       .send({});
     expect(res.status).toBe(400);
   });
+
+  it('a failing stale-previous delete answers 200 with a path-free audioSummary error (#3704)', async () => {
+    // A directory where chapter One's rename target keeps its `.previous.mp3`: the stale-take clear throws EISDIR,
+    // whose message embeds the absolute path of the entry.
+    mkdirSync(join(audioRoot, '02-chapter-one.previous.mp3'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    const errorCalls = err.mock.calls.length; // before mockRestore, which clears mock.calls in vitest 5
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.audioSummary.errors.length).toBeGreaterThan(0);
+    expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
+    expect(res.text).not.toContain('02-chapter-one.previous.mp3');
+    expect(errorCalls).toBeGreaterThan(0); // the raw error reaches the log
+  });
 });
 
 /* -- cross-cutting -------------------------------------------------- */
