@@ -164,7 +164,8 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === a.payload);
       if (c) {
         c.matchedFrom = undefined;
-        c.voiceState = 'generated';
+        /* Declining a link never drops a lock/tune the user set (#3842). */
+        if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
       }
     },
     /* Pin a character's voice so subsequent regenerates preserve it. The
@@ -543,8 +544,10 @@ export const castSlice = createSlice({
        (no candidates list, no factors): write matchedFrom + voiceId +
        voiceState='reused' so the confirm card's "Continuity preserved"
        footer + "Sync profile" checkbox light up exactly like the
-       auto-match path. Tuned voice (voiceState='locked' / 'tuned') is
-       preserved — the user already invested effort in it. */
+       auto-match path. A locked/tuned row records NO matchedFrom: it keeps
+       its own voice, and a link would make every hydrate site (and PUT
+       /state) copy the other book's voice onto it. The profile merge still
+       applies (#3842). */
     applyManualMatch: (
       s,
       a: PayloadAction<{
@@ -570,8 +573,8 @@ export const castSlice = createSlice({
       const { characterId, matchedFrom, voiceId, profile } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      c.matchedFrom = matchedFrom;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
+        c.matchedFrom = matchedFrom;
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
       }
@@ -786,7 +789,9 @@ export const castSlice = createSlice({
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
-       stable handle on the library record (POST /api/library-cast/override). */
+       stable handle on the library record (POST /api/library-cast/override).
+       A locked or tuned character is returned untouched (#3842): a recorded
+       matchedFrom would make the server hydrate the other book's voice onto it. */
     applyVoiceMatches: (s, a: PayloadAction<VoiceMatchResponse>) => {
       const { matches } = a.payload;
       const byId = Object.fromEntries((matches || []).map((m) => [m.characterId, m]));
@@ -794,9 +799,11 @@ export const castSlice = createSlice({
         const m = byId[c.id];
         if (!m || !m.candidates?.length) return c;
         const top = m.candidates[0];
+        if (c.voiceState === 'locked' || c.voiceState === 'tuned') return c;
         return {
           ...c,
           voiceId: top.voiceId,
+          voiceState: 'reused' as const,
           matchedFrom: {
             bookId: top.fromBookId,
             characterId: top.fromCharacterId,
@@ -804,7 +811,6 @@ export const castSlice = createSlice({
             confidence: top.score,
           },
           matchFactors: top.factors,
-          voiceState: 'reused',
         };
       });
     },

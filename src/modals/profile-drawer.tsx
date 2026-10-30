@@ -741,7 +741,8 @@ export function ProfileDrawer({
      prior-book character (option value carries the PRIOR_PREFIX
      discriminator). Hits the link-prior callback instead of the in-book
      merge; on success the drawer closes and the parent's
-     applyManualMatch lights up the "Continuity preserved" footer. */
+     applyManualMatch lights up the "Continuity preserved" footer (not on
+     a locked or tuned row, which records no matchedFrom). */
   async function runLinkPriorTo(targetBookId: string, targetCharacterId: string) {
     if (!onLinkPrior) return;
     setMergeBusy(true);

@@ -21,7 +21,9 @@
    confidence: 1 }, voiceId }. The frontend dispatches a single-row
    castActions.applyManualMatch with this payload so the "Continuity
    preserved" footer + "Sync profile" checkbox light up on the source
-   book's confirm card, identical to the auto-match flow.
+   book's confirm card, identical to the auto-match flow. (Except on a
+   locked or tuned source: the reducer records no matchedFrom there, so no
+   footer, and voiceId is the source's own, #3842.)
 
    Guard: targetBookId must share (author, series) with the source book
    and neither side may be a standalone. Cross-series linking is out of
@@ -164,7 +166,11 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
        with the target's canonical key so a manual continuity link truly unifies
        them. Idempotent: skip the write when it already matches. */
     const canonicalVoiceId = target.voiceId ?? target.id;
-    const voiceIdChanged = source.voiceId !== canonicalVoiceId;
+    /* A locked or tuned source keeps its own voice, exactly as the client's
+       `applyManualMatch` does (#3842): no voiceId unification, no voice
+       denormalisation below. The profile merge still applies. */
+    const keepSourceVoice = source.voiceState === 'locked' || source.voiceState === 'tuned';
+    const voiceIdChanged = !keepSourceVoice && source.voiceId !== canonicalVoiceId;
 
     /* Denormalise the bespoke (qwen) voice onto the source at link time. A
        reused character whose own `overrideTtsVoices.qwen` is empty would
@@ -207,7 +213,8 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     const targetIsCloned = characterHasClonedSlot(target);
     const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
     const targetQwen = target.overrideTtsVoices?.qwen?.name;
-    const shouldDenormaliseVoice = !sourceIsCloned && !targetIsCloned && !sourceHasQwen && !!targetQwen;
+    const shouldDenormaliseVoice =
+      !keepSourceVoice && !sourceIsCloned && !targetIsCloned && !sourceHasQwen && !!targetQwen;
 
     /* Carry the prior character's PROFILE content onto the source at link time.
        A manual continuity link declares "these are the same person", so the
@@ -239,7 +246,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     if (voiceIdChanged || shouldDenormaliseVoice || profileChanged) {
       const mergedSource: PersistedCharacter = {
         ...source,
-        voiceId: canonicalVoiceId,
+        voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
         evidence: mergedEvidence,
         attributes: mergedAttributes,
         description: mergedDescription,
@@ -277,7 +284,8 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
         bookTitle: targetLocated.state.title,
         confidence: 1,
       },
-      voiceId: canonicalVoiceId,
+      /* The voice the row KEEPS: a locked/tuned source keeps its own. */
+      voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
       /* Echo the merged profile so the frontend updates the open drawer +
          redux without a reload. Only present when something changed. */
       profile: profileChanged

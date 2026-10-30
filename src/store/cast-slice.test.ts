@@ -67,6 +67,48 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(halloran.matchFactors).toEqual([{ id: 'register', label: 'Register', score: 0.9 }]);
   });
 
+  it('leaves a locked or tuned character completely untouched (#3842)', () => {
+    const candidate = (voiceId: string, fromCharacterId: string) => ({
+      voiceId,
+      fromBookId: 'solway_bay_book',
+      fromBookTitle: 'Solway Bay',
+      fromCharacterId,
+      score: 0.88,
+      factors: [{ id: 'register', label: 'Register', score: 0.8 }],
+    });
+    const start = baseState([
+      makeChar('locked_char', { voiceState: 'locked', voiceId: 'v_locked' }),
+      makeChar('tuned_char', { voiceState: 'tuned', voiceId: 'v_tuned' }),
+      makeChar('gen_char', { voiceState: 'generated', voiceId: 'v_old' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyVoiceMatches(
+        matchResponse([
+          { characterId: 'locked_char', candidates: [candidate('v_cand_a', 'lib_a')] },
+          { characterId: 'tuned_char', candidates: [candidate('v_cand_b', 'lib_b')] },
+          { characterId: 'gen_char', candidates: [candidate('v_cand_c', 'lib_c')] },
+        ]),
+      ),
+    );
+    const locked = next.characters.find((c) => c.id === 'locked_char')!;
+    const tuned = next.characters.find((c) => c.id === 'tuned_char')!;
+    const gen = next.characters.find((c) => c.id === 'gen_char')!;
+    expect(locked.voiceId).toBe('v_locked');
+    expect(locked.voiceState).toBe('locked');
+    expect(tuned.voiceId).toBe('v_tuned');
+    expect(tuned.voiceState).toBe('tuned');
+    /* Untouched entirely: a link would make the server hydrate the other book's
+       voice onto the row, so no matchedFrom / matchFactors either. */
+    expect(locked.matchedFrom).toBeUndefined();
+    expect(tuned.matchedFrom).toBeUndefined();
+    expect(locked.matchFactors).toBeUndefined();
+    expect(tuned.matchFactors).toBeUndefined();
+    /* Control: an unlocked character in the same response still takes the match. */
+    expect(gen.voiceId).toBe('v_cand_c');
+    expect(gen.voiceState).toBe('reused');
+  });
+
   it('leaves characters with no candidates untouched', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),
@@ -104,6 +146,21 @@ describe('castSlice — declineMatch', () => {
     expect(halloran.matchedFrom).toBeUndefined();
     expect(halloran.voiceState).toBe('generated');
   });
+
+  it.each(['locked', 'tuned'] as const)(
+    'clears the link but keeps a %s voiceState (#3842)',
+    (voiceState) => {
+      const start = baseState([
+        makeChar('halloran', {
+          voiceState,
+          matchedFrom: { bookTitle: 'Solway Bay', confidence: 0.91 },
+        }),
+      ]);
+      const next = castSlice.reducer(start, castActions.declineMatch('halloran'));
+      expect(next.characters[0].matchedFrom).toBeUndefined();
+      expect(next.characters[0].voiceState).toBe(voiceState);
+    },
+  );
 
   it('is a no-op for an unknown characterId', () => {
     const start = baseState([makeChar('halloran')]);
@@ -563,34 +620,40 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     expect(next.characters.find((c) => c.id === 'wren')!.voiceState).toBe('generated');
   });
 
-  it('preserves a locked or tuned voice — only matchedFrom is updated', () => {
-    /* User already invested in tuning Hartwell's voice; manually linking
-       to the prior should record the continuity link without overwriting
-       the tuned voiceId or downgrading voiceState. */
-    const start = baseState([
-      makeChar('hartwell-brennan-vale', {
-        voiceState: 'tuned',
-        voiceId: 'v_hartwell_tuned',
-      }),
-    ]);
-    const next = castSlice.reducer(
-      start,
-      castActions.applyManualMatch({
-        characterId: 'hartwell-brennan-vale',
-        matchedFrom: {
-          bookId: 'the Hollow Tide_1',
-          characterId: 'hart',
-          bookTitle: 'The Hollow Tide #1',
-          confidence: 1,
-        },
-        voiceId: 'v_hart_from_prior',
-      }),
-    );
-    const hart = next.characters[0];
-    expect(hart.voiceId).toBe('v_hartwell_tuned');
-    expect(hart.voiceState).toBe('tuned');
-    expect(hart.matchedFrom?.characterId).toBe('hart');
-  });
+  it.each(['tuned', 'locked'] as const)(
+    'records NO link on a %s row — voice kept, profile merge still applied (#3842)',
+    (voiceState) => {
+      /* A matchedFrom on a locked/tuned row makes every hydrate site (and PUT
+         /state's denormalise) copy the other book's voice onto it, so the link
+         is not recorded at all. The profile merge still lands. */
+      const start = baseState([
+        makeChar('hartwell-brennan-vale', {
+          voiceState,
+          voiceId: 'v_hartwell_tuned',
+        }),
+      ]);
+      const next = castSlice.reducer(
+        start,
+        castActions.applyManualMatch({
+          characterId: 'hartwell-brennan-vale',
+          matchedFrom: {
+            bookId: 'the Hollow Tide_1',
+            characterId: 'hart',
+            bookTitle: 'The Hollow Tide #1',
+            confidence: 1,
+          },
+          voiceId: 'v_hart_from_prior',
+          profile: { description: 'A quirky, earnest boy genius.' },
+        }),
+      );
+      const hart = next.characters[0];
+      expect(hart.voiceId).toBe('v_hartwell_tuned');
+      expect(hart.voiceState).toBe(voiceState);
+      expect(hart.matchedFrom).toBeUndefined();
+      expect(hart.matchFactors).toBeUndefined();
+      expect(hart.description).toBe('A quirky, earnest boy genius.');
+    },
+  );
 
   it('is a no-op for an unknown characterId', () => {
     const start = baseState([makeChar('halloran')]);

@@ -183,7 +183,8 @@ const REPLACE_EXT_BY_FORMAT: Record<string, string> = {
 
 /* Denormalise the bespoke (qwen) voice onto any REUSED character before the
    cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
-   `voiceId` + `voiceState:'reused'` on the frontend, then persists through this
+   `voiceId` + `voiceState:'reused'` on the frontend (a locked or tuned
+   character is skipped, #3842), then persists through this
    generic PUT — but it never copies the source character's designed voice
    (`ttsEngine` + `overrideTtsVoices.qwen`). Without it, the on-disk cast.json
    resolves to '' at generation and falls back to Kokoro until read-time

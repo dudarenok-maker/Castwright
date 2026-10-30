@@ -769,6 +769,29 @@ recite:
     the skip should apply there too. Then test a skipped item next to a moved
     one, in both orders.
 
+57. **A guard that protects the fields a decision names, while still writing a
+    sibling field that other readers treat as the same decision** — PR #3905
+    passes 1-2 (#3842, `applyManualMatch` / `applyVoiceMatches`): the owner's
+    rule was "never replace a voice the user locked or tuned". The reducers
+    guarded `voiceId` and `voiceState` but still wrote `matchedFrom`, and
+    `matchedFrom` is what the hydrators, the Confirm Reuse tile, `declineMatch`
+    and PUT `/state`'s denormalise key on, so the voice was replaced anyway one
+    hop later. This is the write-side twin of the entry titled "A skip honoured where a value is tested as the subject, but not where the same value is read as evidence about another item". Checkable: for the field a
+    guard protects, list every reader that decides the same thing from a
+    DIFFERENT field, and confirm the guarded path writes none of those. Then
+    test the guarded input through the full write chain (reducer, persist, PUT,
+    disk), not at the reducer's own fields.
+58. **A guard on a field the stage feeding it never carries, where the unit
+    test hands that field in directly** — PR #3905 pass 2 (#3842,
+    `linkSeriesReuseAtAnalysis` skipping a `voiceState: 'locked' | 'tuned'`
+    row): the analysis route feeds the linker the analyzer's fresh roster,
+    which has no `voiceState`, so the guard never fired in production while its
+    unit test (which set the field on the input) was green. The srv-13
+    `notLinkedTo` bug had the same shape. Checkable: for every field a guard
+    reads, find the producer of the guard's real input and confirm it emits that
+    field (or that a seed copies it from the prior record); then drive the test
+    through the production composition (seed, link, merge), not the guard alone.
+
 59. **A precedence rule between two async events enforced only when they
     arrive in the tested order** — PR #3913 passes 1-3 (#3827, book-meta
     landed-baseline): the rule "a landed save beats an older full read" held

@@ -24,7 +24,7 @@
 
    The frontend voice-state flip (→ 'reused') happens in
    src/store/cast-slice.ts `applyVoiceMatches` and only fires when at least
-   one candidate is returned for a character. */
+   one candidate is returned for a character that is not locked or tuned (#3842). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';

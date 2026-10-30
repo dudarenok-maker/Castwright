@@ -2782,7 +2782,8 @@ export function Layout() {
                       );
                       /* Close so the user lands back on the confirm card and can see
                the "Continuity preserved" footer + "Sync profile" checkbox
-               that the new matchedFrom triggers. Mirrors onMerge's close. */
+               that the new matchedFrom triggers (none on a locked or tuned
+               row, which records no matchedFrom). Mirrors onMerge's close. */
                       dispatch(uiActions.setOpenProfileId(null));
                     }
                   : undefined

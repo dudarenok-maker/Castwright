@@ -13,6 +13,7 @@ import {
   mockAnalyseManuscript,
   mockReparseBook,
   mockReplaceManuscript,
+  mockLinkPriorCharacter,
   _resetMockBookStates,
 } from './api';
 import type { Character } from './types';
@@ -207,5 +208,33 @@ describe('mock book-state revision tokens (plan 289)', () => {
       baseRevision: base,
     }).catch((e: Error & { code?: string }) => e);
     expect((err as Error & { code?: string }).code).toBe('stale_revision');
+  });
+});
+
+describe('mockLinkPriorCharacter voiceId echo (#3842)', () => {
+  const link = (sourceCharacterId: string) =>
+    mockLinkPriorCharacter({
+      bookId: 'book-x',
+      sourceCharacterId,
+      targetBookId: 'sb',
+      targetCharacterId: 'old-halloran',
+    });
+
+  it("echoes a locked or tuned source's own voiceId, like the real route", async () => {
+    const characters = [
+      { id: 'a', voiceId: 'v_own_a', voiceState: 'locked' },
+      { id: 'b', voiceId: 'v_own_b', voiceState: 'tuned' },
+    ] as unknown as Character[];
+    await mockPutBookState('book-x', { slice: 'cast', patch: { characters } });
+    expect((await link('a')).voiceId).toBe('v_own_a');
+    expect((await link('b')).voiceId).toBe('v_own_b');
+  });
+
+  it("echoes the target's voiceId for an unlocked source", async () => {
+    const characters = [
+      { id: 'c', voiceId: 'v_own_c', voiceState: 'generated' },
+    ] as unknown as Character[];
+    await mockPutBookState('book-x', { slice: 'cast', patch: { characters } });
+    expect((await link('c')).voiceId).toBe('v_halloran_solway');
   });
 });
