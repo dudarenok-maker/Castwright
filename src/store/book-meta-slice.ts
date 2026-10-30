@@ -228,7 +228,8 @@ export const bookMetaSlice = createSlice({
        value (T1), never the window baseline (T0). Every landed field is
        folded; only `settled` fields (no newer value queued) leave the typed
        set, so a landed field is not re-sent by a later commit in the window.
-       An empty typed set deletes the snapshot, as `commitDraftSucceeded` did.
+       An empty typed set deletes the snapshot, so the next commit (a new
+       window) snaps a fresh, now-accepted baseline.
        Retention is unchanged (#3758): a rolled-back details save is still not
        kept. */
     commitFieldsLanded: (
@@ -245,16 +246,6 @@ export const bookMetaSlice = createSlice({
       Object.assign(pending.saved, landed);
       for (const f of settled) delete pending.draft[f];
       if (Object.keys(pending.draft).length === 0) delete s.lastCommitted![bookId];
-    },
-
-    /* #2230 — a successful PUT confirms the optimistically-written `saved`
-       value, so the pending snapshot is moot. Pruning it means the NEXT commit
-       (a new window) snaps a fresh, now-accepted baseline instead of a stale
-       one — which is what makes the first-write baseline logic in commitDraft
-       correct across consecutive save sessions. */
-    commitDraftSucceeded: (s, a: PayloadAction<{ bookId: string }>) => {
-      const { bookId } = a.payload;
-      if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
     /* #3784 P12-1 — the book was deleted: forget its commit snapshot, and the

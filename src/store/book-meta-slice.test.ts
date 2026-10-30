@@ -195,17 +195,6 @@ describe('bookMetaSlice — commitDraft', () => {
     expect(next.lastCommitted?.['ns']).toBeUndefined();
   });
 
-  it('commitDraftSucceeded prunes the snapshot so the next window snaps a fresh baseline', () => {
-    const start: BookMetaState = {
-      draft: null,
-      saved: { ns: fullMeta({ title: 'Renamed' }) },
-      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'Renamed' } } },
-      prosodyEnabled: {},
-    };
-    const next = reducer(start, bookMetaActions.commitDraftSucceeded({ bookId: 'ns' }));
-    expect(next.saved.ns.title).toBe('Renamed'); // unaffected
-    expect(next.lastCommitted?.['ns']).toBeUndefined();
-  });
 });
 
 describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
