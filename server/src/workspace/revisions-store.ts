@@ -24,7 +24,7 @@
    `revisions` slice, so nothing writes the file outside this module.)
 
    WRITERS. The server records `pending` entries (finalize via recordPending /
-   dropPendingForChapter(s)) and the per-op routes (routes/revision-ops.ts)
+   dropPendingForChapter / reconcilePendingAfterRestructure) and the per-op routes (routes/revision-ops.ts)
    write through beginRevisionOp / commitRevisionOp / dismissDriftId. The
    client writes nothing. */
 
@@ -273,9 +273,16 @@ async function loadWithStored(
   bookDir: string,
   chapters: readonly ChapterRef[],
 ): Promise<{ file: RevisionsFile; stored: RevisionsFile }> {
+  return fromRaw(bookDir, await loadRaw(bookDir), chapters);
+}
+
+async function fromRaw(
+  bookDir: string,
+  raw: Record<string, unknown> | null,
+  chapters: readonly ChapterRef[],
+): Promise<{ file: RevisionsFile; stored: RevisionsFile }> {
   const slugById = new Map(chapters.map((c) => [c.id, c.slug] as const));
   const root = audioDir(bookDir);
-  const raw = await loadRaw(bookDir);
   const normalised = normaliseRevisions(raw, (chapterId) => {
     const slug = slugById.get(chapterId);
     return slug !== undefined && previousAudioExists(root, slug);
@@ -372,19 +379,50 @@ export async function dropPendingForChapter(
   });
 }
 
-/** Plan 286 — drop pending entries for several chapters a restructure
-    touched, in one write under the revisions lock. No-op (no write) when
-    none of the ids match. */
-export async function dropPendingForChapters(
+/** #3704 — reconcile pending entries after a restructure, in one write under the revisions lock
+    (a leaf, like the rest of the module). `moves` re-keys an entry to its chapter's new id (the
+    chapter was renamed or renumbered and its `.previous.mp3` moved with it); `drop` removes the
+    entries of every other touched chapter. The move is applied to the RAW entries, before
+    normalisation: rewriteChapterSlugs has already moved `.previous.mp3` to the new slug, so
+    normalising first would probe the old slug and lose a legacy entry. No write when nothing
+    matches. */
+export async function reconcilePendingAfterRestructure(
   bookDir: string,
-  chapters: readonly ChapterRef[],
-  chapterIds: readonly number[],
+  newChapters: readonly ChapterRef[],
+  drop: readonly number[],
+  moves: ReadonlyMap<number, number>,
 ): Promise<RevisionsFile> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
-    const file = await load(bookDir, chapters);
-    const ids = new Set(chapterIds);
-    if (!file.pending.some((p) => ids.has(p.chapterId))) return file;
-    return save(bookDir, { ...file, pending: file.pending.filter((p) => !ids.has(p.chapterId)) });
+    const raw = await loadRaw(bookDir);
+    const dropIds = new Set(drop);
+    // A move's destination id is vacated by the restructure; an entry still sitting there that is
+    // not itself being moved is a stale orphan (e.g. left by a failed earlier reconcile) and would
+    // win normaliseRevisions' last-per-chapter collapse over the moved entry.
+    const destinations = new Set(moves.values());
+    let changed = false;
+    let transformed = raw;
+    if (raw !== null && Array.isArray(raw.pending)) {
+      const pending: unknown[] = [];
+      for (const e of raw.pending) {
+        const c = isObj(e) ? e.chapterId : undefined;
+        if (isObj(e) && typeof c === 'number' && Number.isInteger(c)) {
+          const to = moves.get(c);
+          if (to !== undefined) {
+            pending.push({ ...e, chapterId: to });
+            changed = true;
+            continue;
+          }
+          if (dropIds.has(c) || destinations.has(c)) {
+            changed = true;
+            continue;
+          }
+        }
+        pending.push(e);
+      }
+      transformed = { ...raw, pending };
+    }
+    const { file } = await fromRaw(bookDir, transformed, newChapters);
+    return changed ? save(bookDir, file) : file;
   });
 }
 

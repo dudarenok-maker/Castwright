@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
-import { applyExclude, applyMerge, applySplit } from '../workspace/restructure.js';
+import { applyExclude, applyMerge, applyReorder, applySplit, staleTakeClearSlugs } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 let workRoot: string;
@@ -568,6 +568,118 @@ describe('rewriteChapterSlugs — .previous.* artifacts', () => {
     expect(existsSync(join(audioRoot, '04-d.mp3'))).toBe(false);
     expect(existsSync(join(audioRoot, '04-d.previous.mp3'))).toBe(false);
     expect(result.deleted.map((d) => d.slug)).toEqual(Array(5).fill('03-c'));
+  });
+
+  /* #3704 — the Listen route's A take also reads `.previous.peaks.json` and
+     `.previous.lufs.json`; they follow the chapter like the mp3 + segments. */
+  function seedPreviousPeaksLufs(slug: string): void {
+    writeFileSync(join(audioRoot, `${slug}.previous.peaks.json`), JSON.stringify({ peaks: [`prev-peaks:${slug}`] }));
+    writeFileSync(join(audioRoot, `${slug}.previous.lufs.json`), JSON.stringify({ lufs: `prev-lufs:${slug}` }));
+  }
+
+  it('moves previous peaks/lufs with the chapter on a swap (#3704)', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a');
+    seedPreviousPeaksLufs('01-a');
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '01-a', newChapterId: 1, newChapterTitle: 'b' },
+    ]);
+
+    expect(JSON.parse(readFileSync(join(audioRoot, '02-b.previous.peaks.json'), 'utf8'))).toEqual({
+      peaks: ['prev-peaks:01-a'],
+    });
+    expect(JSON.parse(readFileSync(join(audioRoot, '02-b.previous.lufs.json'), 'utf8'))).toEqual({
+      lufs: 'prev-lufs:01-a',
+    });
+    expect(existsSync(join(audioRoot, '01-a.previous.peaks.json'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.lufs.json'))).toBe(false);
+  });
+
+  it('deletes previous peaks/lufs with a deleted chapter (#3704)', async () => {
+    seed('01-a');
+    seedPrevious('01-a');
+    seedPreviousPeaksLufs('01-a');
+
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '01-a' }]);
+
+    expect(existsSync(join(audioRoot, '01-a.previous.peaks.json'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.lufs.json'))).toBe(false);
+  });
+
+  it('clears a stale previous take at a rename target left by an op-less old occupant (#3704)', async () => {
+    seed('01-a');
+    // Old occupant of 02-b: no live audio, no op, only orphan previous files.
+    writeFileSync(join(audioRoot, '02-b.previous.mp3'), 'STALE');
+    writeFileSync(join(audioRoot, '02-b.previous.segments.json'), JSON.stringify({ segments: [] }));
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-b.mp3'), 'utf8')).toBe('audio-bytes:01-a');
+    expect(existsSync(join(audioRoot, '02-b.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '02-b.previous.segments.json'))).toBe(false);
+    expect(result.deleted).toContainEqual({ slug: '02-b', suffix: 'previous.mp3' });
+  });
+
+  it('an incoming previous take replaces a stale one at the rename target (#3704)', async () => {
+    seed('01-a');
+    seedPrevious('01-a');
+    writeFileSync(join(audioRoot, '02-b.previous.mp3'), 'STALE');
+    writeFileSync(join(audioRoot, '02-b.previous.segments.json'), JSON.stringify({ segments: [] }));
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+  });
+});
+
+describe('rewriteChapterSlugs x applyReorder — an op-less chapter never inherits a stale previous take (#3704)', () => {
+  function appTitledState(rendered: number[]): BookStateJson {
+    return {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: [1, 2, 3].map((n) => ({
+        id: n, uuid: `u${n}`, title: `Chapter ${n}`, slug: `0${n}-chapter-${n}`, titleSynthesized: true,
+        ...(rendered.includes(n) ? { audioRenderedAt: '2026-01-01T00:00:00.000Z' } : {}),
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+  }
+  const hints = [1, 2, 3].map((n) => ({ id: n, title: `Chapter ${n}`, body: `body ${n}` }));
+  const sentences = [1, 2, 3].map((n) => ({ id: 1, chapterId: n, characterId: 'narrator', text: `s${n}` }));
+
+  it('clears an orphan .previous.* under a slug an UNRENDERED chapter newly occupies, and keeps the staying chapter\'s own take', async () => {
+    seed('01-chapter-1');
+    seedPrevious('01-chapter-1'); // ch1 rendered, stays put: its own take
+    seedPrevious('02-chapter-2'); // orphan; ch2/ch3 are unrendered
+    const oldState = appTitledState([1]);
+    const result = applyReorder(oldState, hints, sentences, { order: [1, 3, 2] });
+    expect(result.audioOps).toEqual([]);
+
+    const summary = await rewriteChapterSlugs(audioRoot, result.audioOps, staleTakeClearSlugs(result.state.chapters, result.audioOps, oldState.chapters));
+
+    expect(summary.errors).toEqual([]);
+    expect(existsSync(join(audioRoot, '02-chapter-2.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '02-chapter-2.previous.segments.json'))).toBe(false);
+    expect(readFileSync(join(audioRoot, '01-chapter-1.previous.mp3'), 'utf8')).toBe('previous-bytes:01-chapter-1');
+  });
+
+  it('clears only slugs a chapter newly occupies, never one the same uuid already held', () => {
+    const oldState = appTitledState([1]);
+    const result = applyReorder(oldState, hints, sentences, { order: [1, 3, 2] });
+    // old ch2 (u2) was at 02-chapter-2 and is now id 3 at 03-chapter-3; old ch3 (u3) moved onto 02-chapter-2.
+    expect(staleTakeClearSlugs(result.state.chapters, result.audioOps, oldState.chapters)).toEqual(['02-chapter-2', '03-chapter-3']);
+    // A no-op reorder moves nobody, so no slug is newly occupied.
+    const same = applyReorder(oldState, hints, sentences, { order: [1, 2, 3] });
+    expect(staleTakeClearSlugs(same.state.chapters, same.audioOps, oldState.chapters)).toEqual([]);
   });
 });
 

@@ -156,6 +156,49 @@ export function touchedChapterIds(
   return [...touched].sort((a, b) => a - b);
 }
 
+/** #3704 — old chapter id → new chapter id for every chapter whose `.previous.mp3`
+    a restructure's rename actually moved (`previousMovedFrom` = the old slugs
+    rewriteChapterSlugs reported moving it from). Its pending A/B entry moves
+    with it; every other touched chapter's entry is dropped. */
+export function pendingMovesAfterRestructure(
+  oldChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+  previousMovedFrom: ReadonlySet<string>,
+): Map<number, number> {
+  const moves = new Map<number, number>();
+  const oldBySlug = new Map(oldChapters.map((c) => [c.slug, c]));
+  for (const op of audioOps) {
+    if (op.kind !== 'rename' || !previousMovedFrom.has(op.from)) continue;
+    const old = oldBySlug.get(op.from);
+    if (old) moves.set(old.id, op.newChapterId);
+  }
+  return moves;
+}
+
+/** #3704 — the slugs whose `.previous.*` take must be cleared before a restructure's renames
+    land: every slug a chapter newly occupies without its own take arriving. A rendered chapter
+    with no rename op keeps its slug and its own take, so it is skipped; a rename target is
+    cleared (its own take is staged at a temp slug by then); an UNRENDERED chapter has no op and
+    no take of its own, so any `.previous.*` at its slug is a stale orphan it would otherwise
+    inherit (and a boot fsck would promote) — unless the same chapter (by uuid) already held that
+    slug, in which case whatever is there is its own take (a stamp-less chapter, e.g. an excluded
+    one a backup restore stripped, still owns it). Sorted, unique. */
+export function staleTakeClearSlugs(
+  newChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+  oldChapters: BookStateJson['chapters'],
+): string[] {
+  const renameTargets = new Set(audioOps.filter((op) => op.kind === 'rename').map((op) => (op as { to: string }).to));
+  const slugs = new Set(renameTargets);
+  const heldBefore = new Set(oldChapters.filter((c) => c.uuid).map((c) => `${c.uuid}|${c.slug}`));
+  for (const c of newChapters) {
+    if (c.audioRenderedAt) continue;
+    if (c.uuid && heldBefore.has(`${c.uuid}|${c.slug}`)) continue;
+    slugs.add(c.slug);
+  }
+  return [...slugs].sort();
+}
+
 /** Map each surviving old chapter id to its new id (one-to-one or
     many-to-one for merge). Chapters that vanished entirely (merged
     INTO another id) still appear in the map but pointed at the
