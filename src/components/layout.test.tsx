@@ -2821,6 +2821,169 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
   });
 });
 
+describe("Layout — Confirm's voice match re-runs when the cast changes mid-match (#3840)", () => {
+  /* The voice-match effect spends its once-per-book guard before the match
+     answers. A cast change mid-match runs the effect cleanup, which throws
+     the response away; the re-run must then match the current roster, while a
+     match that already answered stays spent. Characters carry no voiceState. */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const bookOf = (bookId: string) => ({
+    state: { bookId, manuscriptId: 'm1', title: 'Book A', castConfirmed: false, chapters: [] },
+    cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+    manuscript: null,
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: {},
+    changeLog: null,
+  });
+
+  const matchFor = (voiceId: string) => ({
+    matches: [
+      {
+        characterId: 'a-villain',
+        candidates: [
+          { voiceId, fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] },
+        ],
+      },
+    ],
+  });
+
+  const sidekick = { id: 'a-sidekick', name: 'Sidekick', role: 'Supporting', color: 'peach' } as never;
+
+  function renderConfirm(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    getBookStateMock.mockImplementation(async (bookId: string) => bookOf(bookId));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  const voiceIdOf = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>, id: string) =>
+    store.getState().cast.characters.find((c) => c.id === id)?.voiceId;
+
+  it('T1: a character added while the match is in flight re-arms it, and the cancelled answer is dropped', async () => {
+    let resolveFirst!: (value: ReturnType<typeof matchFor>) => void;
+    matchVoicesMock.mockReset();
+    matchVoicesMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(matchFor('second-voice'));
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() =>
+      expect(matchVoicesMock).toHaveBeenCalledWith({
+        bookId: 'b1',
+        characters: [expect.objectContaining({ id: 'a-villain' })],
+      }),
+    );
+
+    act(() => {
+      store.dispatch(castSlice.actions.addCharacter(sidekick));
+    });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
+    expect(matchVoicesMock.mock.calls[1][0]).toMatchObject({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-villain' }), expect.objectContaining({ id: 'a-sidekick' })],
+    });
+
+    resolveFirst(matchFor('stale-voice'));
+    await act(async () => {});
+    await waitFor(() => expect(voiceIdOf(store, 'a-villain')).toBe('second-voice'));
+    expect(voiceIdOf(store, 'a-villain')).not.toBe('stale-voice');
+  });
+
+  it('T2: a character added after the match answered does not run it again', async () => {
+    matchVoicesMock.mockReset();
+    matchVoicesMock.mockResolvedValue(matchFor('first-voice'));
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() => expect(voiceIdOf(store, 'a-villain')).toBe('first-voice'));
+
+    act(() => {
+      store.dispatch(castSlice.actions.addCharacter(sidekick));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('S1: the roster swapping to different ids at the same count re-arms the match', async () => {
+    let resolveFirst!: (value: ReturnType<typeof matchFor>) => void;
+    matchVoicesMock.mockReset();
+    matchVoicesMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ matches: [] });
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      store.dispatch(castSlice.actions.hydrateCharacters([sidekick]));
+    });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
+    expect(matchVoicesMock.mock.calls[1][0]).toMatchObject({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-sidekick' })],
+    });
+
+    resolveFirst(matchFor('stale-voice'));
+    await act(async () => {});
+  });
+
+  it('M1: a rejected match stays spent, so a later roster change does not run it again', async () => {
+    /* The rejection branch rethrows (behaves as before); absorb it so the
+       runner does not fail on the unhandled rejection. */
+    const saved = process.listeners('unhandledRejection');
+    process.removeAllListeners('unhandledRejection');
+    process.on('unhandledRejection', () => {});
+    try {
+      matchVoicesMock.mockReset();
+      matchVoicesMock.mockRejectedValue(new Error('match failed'));
+
+      const store = makeStoreWithScopeAndPersistence();
+      renderConfirm(store);
+      await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      act(() => {
+        store.dispatch(castSlice.actions.addCharacter(sidekick));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+    } finally {
+      process.removeAllListeners('unhandledRejection');
+      for (const l of saved) process.on('unhandledRejection', l as never);
+    }
+  });
+});
+
 describe('Layout — a failed save on leaving a book is re-sent before the re-read (#3421)', () => {
   const elizaOf = (name: string) => ({ id: 'eliza', name, role: '', color: 'narrator' }) as Character;
 

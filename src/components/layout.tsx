@@ -1271,7 +1271,9 @@ export function Layout() {
      the new `bookId` / `characterId` fields the override flow depends
      on. The ref guard then stops re-firing on every subsequent cast
      mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
-     edits). The `manuscript.bookId` check closes the same race one level
+     edits). A match cancelled by its own cleanup before it answered (a
+     character added or removed mid-match) re-arms the guard, so the re-run
+     matches the current roster. The `manuscript.bookId` check closes the same race one level
      up: until the per-book read lands, the slices can still hold ANOTHER
      book's cast (a skipped analysis result, a library open after viewing
      book B), and applyVoiceMatches is a persisted action — it would PUT
@@ -1279,6 +1281,10 @@ export function Layout() {
      leaves the once-guard unspent, so the real match runs once the slices
      hold this book. */
   const voiceMatchFiredFor = useRef<string | null>(null);
+  /* The effect's roster dependency: the sorted ids, so a swap to different ids
+     at the same count re-runs it too (a bare length misses that), while an
+     identity-only change does not. */
+  const rosterKey = useMemo(() => characters.map((c) => c.id).sort().join('\n'), [characters]);
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1295,14 +1301,26 @@ export function Layout() {
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
-    api.matchVoices({ bookId, characters }).then((res) => {
-      if (!cancelled) dispatch(castActions.applyVoiceMatches(res));
-    });
+    let settled = false;
+    api.matchVoices({ bookId, characters }).then(
+      (res) => {
+        settled = true;
+        if (!cancelled) dispatch(castActions.applyVoiceMatches(res));
+      },
+      (err) => {
+        settled = true;
+        throw err;
+      },
+    );
     return () => {
       cancelled = true;
+      /* #3840 — a match this cleanup cancels never applied, so give the visit
+         its match back: re-arm the once-guard and the re-run matches the
+         current roster. A match that already answered stays spent. */
+      if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length, manuscript.bookId]);
+  }, [stageKind, bookId, rosterKey, manuscript.bookId]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
