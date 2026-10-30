@@ -2710,7 +2710,7 @@ the handle stayed open (one process, so the lock genuinely overlapped the
 delete attempt), closed the handle only after the response returned — landed
 on the **first** attempt, no retries needed. Response: HTTP 200,
 `consent.revokedAt` set, and **`artifactPurgeIncomplete: true` +
-`artifactPurgeFailedPaths: ["…\\qwen-e5a120c0-….pt"]`** naming exactly the
+`artifactPurgeFailedPaths: ["voices/qwen/qwen-e5a120c0-….pt"]`** naming exactly the
 held path — not a silent clean-success response. Confirmed on disk: the
 `.pt` (the locked file) **survived**; its sibling `.json` manifest was
 erased in the same pass (per-file best-effort, not all-or-nothing, as
