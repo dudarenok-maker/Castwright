@@ -59,7 +59,7 @@ let cachePath: string;
 
 vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
-  return { ...real, dropPendingForChapters: vi.fn(real.dropPendingForChapters) };
+  return { ...real, reconcilePendingAfterRestructure: vi.fn(real.reconcilePendingAfterRestructure) };
 });
 
 /* Three short chapters; chapter 1 + 2 have rendered audio, chapter 3
@@ -760,6 +760,25 @@ describe('POST /:bookId/chapters/reorder', () => {
       .post(`/api/books/${bookId}/chapters/reorder`)
       .send({});
     expect(res.status).toBe(400);
+  });
+
+  it('a failing stale-previous delete answers 200 with a path-free audioSummary error (#3704)', async () => {
+    // A directory where chapter One's rename target keeps its `.previous.mp3`: the stale-take clear throws EISDIR,
+    // whose message embeds the absolute path of the entry.
+    mkdirSync(join(audioRoot, '02-chapter-one.previous.mp3'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    const errorCalls = err.mock.calls.length; // before mockRestore, which clears mock.calls in vitest 5
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.audioSummary.errors.length).toBeGreaterThan(0);
+    expect(res.text).not.toContain(workspaceRoot);
+    /* JSON doubles each backslash, so on Windows the raw root never matches the serialised body. */
+    expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
+    expect(res.text).not.toContain('02-chapter-one.previous.mp3');
+    expect(errorCalls).toBeGreaterThan(0); // the raw error reaches the log
   });
 });
 
@@ -2026,7 +2045,7 @@ describe('plan 286 — restructure drops stale A/B entries', () => {
     /* A rejection whose message embeds the path: an EISDIR fixture's message carries
        none, so asserting its absence would prove nothing (Invariant 8). */
     const store = await import('../workspace/revisions-store.js');
-    vi.mocked(store.dropPendingForChapters).mockRejectedValueOnce(Object.assign(
+    vi.mocked(store.reconcilePendingAfterRestructure).mockRejectedValueOnce(Object.assign(
       new Error(`EPERM: operation not permitted, rename '${revPath()}.tmp'`), { code: 'EPERM' }));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
@@ -2052,7 +2071,7 @@ describe('#3400 — a failed restructure drop leaves an entry that is refused, n
   };
   const failDropOnce = async () => {
     const store = await import('../workspace/revisions-store.js');
-    vi.mocked(store.dropPendingForChapters).mockRejectedValueOnce(Object.assign(
+    vi.mocked(store.reconcilePendingAfterRestructure).mockRejectedValueOnce(Object.assign(
       new Error(`EPERM: operation not permitted, rename '${revPath()}.tmp'`), { code: 'EPERM' }));
     return vi.spyOn(console, 'error').mockImplementation(() => {});
   };
@@ -2070,7 +2089,7 @@ describe('#3400 — a failed restructure drop leaves an entry that is refused, n
       const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 3, 1] });
       err.mockRestore();
       expect(re.status).toBe(200);
-      // Id 1 now names the old chapter 2 (renumbered); it holds a leftover .previous (rewrite-chapter-slugs does not move them).
+      // Id 1 now names the old chapter 2 (renumbered). No take existed before the reorder, so the test writes a .previous.mp3 itself to stand in for another chapter's take.
       const slug = readState().chapters[0].slug;
       expect(readState().chapters[0].uuid).toBe(UUIDS[1]);
       writeFileSync(join(audioRoot, `${slug}.previous.mp3`), 'OTHER-CHAPTERS-OLD-TAKE');
@@ -2104,6 +2123,83 @@ describe('#3400 — a failed restructure drop leaves an entry that is refused, n
     const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh1.id}/reject`).send({});
     expect(res.status).toBe(200);
     expect(readFileSync(join(audioRoot, '01-chapter-one.mp3'), 'utf8')).toBe('ORIGINAL');
+  });
+});
+
+/* -- #3704: a renumbered chapter keeps its pending A/B take -------------- */
+
+describe('#3704 — a renumbered chapter keeps its pending A/B take', () => {
+  const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const UUIDS = ['uuid-ch-1', 'uuid-ch-2', 'uuid-ch-3'];
+  const entryForCh1 = {
+    id: 'revision:1:1', chapterId: 1, characterId: 'narr', playable: true, hasPreviousAudio: true,
+    segments: [], origin: 'server', chapterUuid: UUIDS[0], renderedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const pending = () => JSON.parse(readFileSync(revPath(), 'utf8')).pending as Array<Record<string, unknown>>;
+  beforeEach(() => {
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    state.chapters.forEach((c: { uuid?: string }, i: number) => { c.uuid = UUIDS[i]; });
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(state));
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [entryForCh1], dismissed: [], acceptedSelections: {}, timeline: {} }));
+  });
+  afterEach(() => rmSync(revPath(), { recursive: true, force: true }));
+
+  it('R1: reorder re-keys the entry to the chapter\'s new id and the take is still rejectable', async () => {
+    writeFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'ORIGINAL');
+    const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 3, 1] });
+    expect(re.status).toBe(200);
+    expect(pending()).toEqual([{ ...entryForCh1, chapterId: 3 }]);
+    const moved = readState().chapters[2];
+    expect(moved.uuid).toBe(UUIDS[0]);
+    expect(readFileSync(join(audioRoot, `${moved.slug}.previous.mp3`), 'utf8')).toBe('ORIGINAL');
+    const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh1.id}/reject`).send({});
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(audioRoot, `${moved.slug}.mp3`), 'utf8')).toBe('ORIGINAL');
+  });
+
+  it('R2 (control): the same reorder without a .previous.mp3 still drops the entry', async () => {
+    const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 3, 1] });
+    expect(re.status).toBe(200);
+    expect(pending()).toEqual([]);
+  });
+
+  it('R3: a merge deletes the take and drops the entry', async () => {
+    writeFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'ORIGINAL');
+    const re = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [1, 2] });
+    expect(re.status).toBe(200);
+    expect(pending()).toEqual([]);
+    expect(readdirSync(audioRoot).filter((f) => f.includes('.previous.mp3'))).toEqual([]);
+  });
+
+  it('R4: a chapter that did not move keeps its own .previous.* when its render stamp is missing', async () => {
+    // An excluded chapter whose stamp restoreBackup stripped: the scan heal skips excluded chapters.
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    state.chapters[1].excluded = true;
+    delete state.chapters[1].audioRenderedAt;
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(state));
+    writeFileSync(join(audioRoot, '02-chapter-two.previous.mp3'), 'ORIGINAL-2');
+    const entryForCh2 = { ...entryForCh1, id: 'revision:2:1', chapterId: 2, chapterUuid: UUIDS[1] };
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [entryForCh2], dismissed: [], acceptedSelections: {}, timeline: {} }));
+
+    const inc = await request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: false });
+    expect(inc.status).toBe(200);
+    expect(inc.body.audioSummary.deleted).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-chapter-two.previous.mp3'), 'utf8')).toBe('ORIGINAL-2');
+
+    // GET heals the stamp back from the segments file, so the entry pairs again.
+    expect((await request(app).get(`/api/books/${bookId}/state`)).status).toBe(200);
+    const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh2.id}/reject`).send({});
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(audioRoot, '02-chapter-two.mp3'), 'utf8')).toBe('ORIGINAL-2');
+  });
+
+  it('R5: the route passes the stale-take clear list — an orphan at an unrendered chapter new slug is removed', async () => {
+    // Reorder [1,3,2]: unrendered chapter three lands on id 2 / slug 02-chapter-three, where an orphan take sits.
+    writeFileSync(join(audioRoot, '02-chapter-three.previous.mp3'), 'ORPHAN');
+    const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [1, 3, 2] });
+    expect(re.status).toBe(200);
+    expect(readState().chapters[1].slug).toBe('02-chapter-three');
+    expect(existsSync(join(audioRoot, '02-chapter-three.previous.mp3'))).toBe(false);
   });
 });
 

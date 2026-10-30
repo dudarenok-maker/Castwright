@@ -6,6 +6,7 @@ import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { resetBookSlices } from '../store/reset-book-slices';
 import { fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
 import { configSlice, fetchConfig } from '../store/config-slice';
 import { reportedTtsDevicesFrom } from '../lib/analyzer-endpoints';
@@ -181,11 +182,40 @@ export interface LayoutContext {
 }
 
 /* #3395 pass 4, S2 — the per-book hydrate retries a failed getBookState with
-   doubling backoff (1 s, 2 s, 4 s, … capped at 15 s) until it lands, showing
-   one deduped notice meanwhile. */
+   doubling backoff (2 s, 4 s, 8 s, … capped at 30 s) until it lands, showing
+   one deduped notice meanwhile. Each read is bounded at 15 s
+   (BOOK_READ_TIMEOUT_MS), and an expired read is handled as a rejection
+   (#3426). */
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
-const REVISIONS_HYDRATE_RETRY_BASE_MS = 1000;
-const REVISIONS_HYDRATE_RETRY_MAX_MS = 15000;
+const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
+const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
+const BOOK_READ_TIMEOUT_MS = 15000;
+const retryDelayMs = (attempt: number) =>
+  Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
+
+/* #3426 — settle `p`, or reject after `ms` if it hasn't. `onExpire` (after the
+   rejection) lets the caller abort the request; otherwise `p` is not cancelled
+   and its late answer is discarded. `timers` collects the bound's timer so the
+   caller's cleanup can clear it. */
+function within<T>(
+  p: Promise<T>,
+  ms: number,
+  timers: Set<ReturnType<typeof setTimeout>>,
+  onExpire?: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      reject(new Error(`timed out after ${ms} ms`));
+      onExpire?.();
+    }, ms);
+    timers.add(timer);
+    p.then(
+      (v) => { clearTimeout(timer); timers.delete(timer); resolve(v); },
+      (e) => { clearTimeout(timer); timers.delete(timer); reject(e); },
+    );
+  });
+}
 
 /* Plan 286, OD2 — the unreadable-revisions.json toast fires at most once per
    book per session. Module-level so it survives across every book-open
@@ -915,8 +945,14 @@ export function Layout() {
     /* #3395 pass 4, S2 (OD3) — a failed FULL load is retried with bounded
        backoff until it lands, with a notice shown while it can't. A failed
        revisions-only re-read is dropped silently instead (Task 18): the next
-       30 s poll repairs it, and nothing else on this book was waiting on it. */
+       30 s poll repairs it (on the ready stage; on Confirm and Analysing the
+       next stage change does), and nothing else on this book was waiting on it.
+       A read that has not settled in 15 s is treated as a failed read (#3426). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    /* The attempt's request, aborted on expiry and on cleanup so the hydrate
+       never leaves two of its own reads of this book open (#3426). */
+    let readCtrl: AbortController | null = null;
+    const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
        never carries over onto the next book (#3395 pass 5, minor c). */
     let failureNoticeShown = false;
@@ -928,8 +964,9 @@ export function Layout() {
       /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
          so a save that lands while it is in flight wins over what it read. */
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
-      api
-        .getBookState(bookId)
+      const ctrl = new AbortController();
+      readCtrl = ctrl;
+      within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, boundTimers, () => ctrl.abort())
         .then((res) => {
           if (cancelled) return;
           if (!revisionsOnly) {
@@ -937,7 +974,13 @@ export function Layout() {
             /* The full read clears the marks made before it was issued; one
                made since means disk moved again, so read again. */
             dispatch(bookMetaActions.clearNeedsFullRead({ bookId, upTo: marks }));
-            if (marksFor(bookId) > 0) setFullReadTick((t) => t + 1);
+            if (marksFor(bookId) > 0) {
+              setFullReadTick((t) => t + 1);
+              /* #3841 — a mark made since this read went out (a delete that
+                 overtook it, a refused save) means what it read may already be
+                 gone from disk: don't hydrate it, the re-read this triggers supersedes it. */
+              return;
+            }
           }
           if (attempt > 0) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
           /* null = no persisted state for this book (mock fresh boot, or
@@ -960,21 +1003,7 @@ export function Layout() {
                  actions only: the reset itself must never PUT (#3376). */
               const held = store.getState().manuscript.bookId;
               if (held !== null && held !== bookId) {
-                dispatch(manuscriptActions.resetForBook(bookId));
-                dispatch(castActions.hydrateCharacters([]));
-                dispatch(castActions.setRenderedFallback({}));
-                dispatch(castActions.setOrphanedCharacterFallbacks({}));
-                dispatch(changeLogActions.hydrateFromBookState(null));
-                /* The chapters slice too: Generate and Listen read it with no
-                   book check, so left alone they'd list B's chapters under A. */
-                dispatch(
-                  chaptersActions.hydrateFromBookState({
-                    bookId,
-                    chapters: [],
-                    completedSlugs: [],
-                    characters: [],
-                  }),
-                );
+                resetBookSlices(dispatch, bookId);
               }
             }
             return;
@@ -1181,11 +1210,12 @@ export function Layout() {
               console.warn('[listen-progress] hydrate skipped:', (err as Error).message);
             });
         }, (err) => {
-          console.warn('[book-state] hydrate failed, retrying:', err?.message);
+          /* Leaving the book aborts the read: that rejection is not a failure. */
           if (cancelled) return;
+          console.warn('[book-state] hydrate failed, retrying:', err?.message);
           fullReadInFlight.current = null;
           if (revisionsOnly) {
-            console.warn('[book-state] revisions re-read failed; the next poll repairs it:', err?.message);
+            console.warn('[book-state] revisions re-read failed; the 30 s poll repairs it on the ready stage, elsewhere the next stage change:', err?.message);
             return;
           }
           dispatch(
@@ -1196,10 +1226,7 @@ export function Layout() {
             }),
           );
           failureNoticeShown = true;
-          retryTimer = setTimeout(
-            () => load(attempt + 1),
-            Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS),
-          );
+          retryTimer = setTimeout(() => step(attempt + 1), retryDelayMs(attempt));
         })
         .catch((err) => {
           console.warn('[book-state] hydrate skipped:', err.message);
@@ -1210,19 +1237,44 @@ export function Layout() {
        snapshot from before it, then write that stale memory back over it.
        Sends anything queued now and waits for in-flight PUTs; `null` (or the
        bare action, in a store without the persistence middleware) means
-       there is nothing to wait for. */
-    const writes = dispatch(flushBookPersistence(bookId)) as unknown;
-    if (writes instanceof Promise) {
-      void writes.then(() => {
-        if (!cancelled) load(0);
-      });
-    } else {
-      load(0);
-    }
+       there is nothing to wait for. The wait is bounded at 15 s (#3426): on
+       expiry the read is NOT issued (it would read disk from before the
+       stalled save) and the whole step is retried. The late PUT is neither
+       cancelled nor re-sent: the re-dispatch returns its running flight. */
+    const step = (attempt: number): void => {
+      const writes = dispatch(flushBookPersistence(bookId)) as unknown;
+      if (!(writes instanceof Promise)) return load(attempt);
+      within(writes, BOOK_READ_TIMEOUT_MS, boundTimers).then(
+        () => {
+          if (!cancelled) load(attempt);
+        },
+        () => {
+          if (cancelled) return;
+          if (manuscriptReady && marksFor(bookId) === 0) {
+            console.warn('[book-state] save before the revisions re-read still in flight after 15 s; the 30 s poll repairs it on the ready stage, elsewhere the next stage change');
+            return;
+          }
+          console.warn('[book-state] save before the re-read still in flight after 15 s, retrying');
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: "Couldn't load this book. Retrying — it will appear once it loads.",
+              dedupeKey: REVISIONS_HYDRATE_FAILED_KEY,
+            }),
+          );
+          failureNoticeShown = true;
+          retryTimer = setTimeout(() => step(attempt + 1), retryDelayMs(attempt));
+        },
+      );
+    };
+    step(0);
     return () => {
       cancelled = true;
       fullReadInFlight.current = null;
+      readCtrl?.abort();
       if (retryTimer) clearTimeout(retryTimer);
+      for (const t of boundTimers) clearTimeout(t);
+      boundTimers.clear();
       if (failureNoticeShown) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1278,7 +1330,9 @@ export function Layout() {
      the new `bookId` / `characterId` fields the override flow depends
      on. The ref guard then stops re-firing on every subsequent cast
      mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
-     edits). The `manuscript.bookId` check closes the same race one level
+     edits). A match cancelled by its own cleanup before it answered (a
+     character added or removed mid-match) re-arms the guard, so the re-run
+     matches the current roster. The `manuscript.bookId` check closes the same race one level
      up: until the per-book read lands, the slices can still hold ANOTHER
      book's cast (a skipped analysis result, a library open after viewing
      book B), and applyVoiceMatches is a persisted action — it would PUT
@@ -1286,6 +1340,10 @@ export function Layout() {
      leaves the once-guard unspent, so the real match runs once the slices
      hold this book. */
   const voiceMatchFiredFor = useRef<string | null>(null);
+  /* The effect's roster dependency: the sorted ids, so a swap to different ids
+     at the same count re-runs it too (a bare length misses that), while an
+     identity-only change does not. */
+  const rosterKey = useMemo(() => characters.map((c) => c.id).sort().join('\n'), [characters]);
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1302,14 +1360,26 @@ export function Layout() {
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
-    api.matchVoices({ bookId, characters }).then((res) => {
-      if (!cancelled) dispatch(castActions.applyVoiceMatches(res));
-    });
+    let settled = false;
+    api.matchVoices({ bookId, characters }).then(
+      (res) => {
+        settled = true;
+        if (!cancelled) dispatch(castActions.applyVoiceMatches(res));
+      },
+      (err) => {
+        settled = true;
+        throw err;
+      },
+    );
     return () => {
       cancelled = true;
+      /* #3840 — a match this cleanup cancels never applied, so give the visit
+         its match back: re-arm the once-guard and the re-run matches the
+         current roster. A match that already answered stays spent. */
+      if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length, manuscript.bookId]);
+  }, [stageKind, bookId, rosterKey, manuscript.bookId]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past

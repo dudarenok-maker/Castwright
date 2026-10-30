@@ -470,7 +470,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
     );
 
     await waitFor(() => {
-      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+      expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
     });
 
     /* Disk roster landed in the cast slice — the user would now see
@@ -579,7 +579,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       </Provider>,
     );
 
-    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     await waitFor(() => {
       const s = store.getState();
       expect([s.manuscript.bookId, s.manuscript.manuscriptId, s.manuscript.title]).toEqual(['b1', 'm1', 'Book A']);
@@ -631,7 +631,7 @@ describe("Layout — an upload never leaves the old book's id on its manuscript 
       </Provider>,
     );
 
-    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     await waitFor(() => {
       const s = store.getState();
       expect([s.manuscript.bookId, s.manuscript.manuscriptId]).toEqual(['b1', 'm1']);
@@ -723,12 +723,12 @@ describe('Layout — revisions hydrate (plan 286)', () => {
     await waitFor(() => expect(store.getState().manuscript.bookId).toBe('bA')); // bA's read landed
     getBookStateMock.mockImplementationOnce(() => new Promise(() => {})); // bB's read never lands
     openAt(store, 'bB');
-    await waitFor(() => expect(getBookStateMock).toHaveBeenLastCalledWith('bB'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenLastCalledWith('bB', expect.any(AbortSignal)));
     const callsBefore = getBookStateMock.mock.calls.length;
     getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, revState(id, F1, 1, ['back'])));
     openAt(store, 'bA'); // cancels bB's read; bA is still manuscript-ready, so this is the revisions-only path
     await waitFor(() => expect(getBookStateMock.mock.calls.length).toBe(callsBefore + 1));
-    expect(getBookStateMock).toHaveBeenLastCalledWith('bA');
+    expect(getBookStateMock).toHaveBeenLastCalledWith('bA', expect.any(AbortSignal));
     await waitFor(() => expect(store.getState().revisions.pending.map((p) => p.id)).toEqual(['back']));
   });
 
@@ -1020,7 +1020,7 @@ describe('Layout — per-book hydration: orphaned-characterId fallback banner (#
     );
 
     await waitFor(() => {
-      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+      expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
     });
 
     /* The field this whole feature exists to surface — asserted against the
@@ -2377,7 +2377,10 @@ describe('Layout — revisions polls (plan 286)', () => {
 
   it('a stale active poll (lower rev) does not clobber pending', async () => {
     getBookStateMock.mockResolvedValue(bookStateFor('b1', revState('b1', F1, 5, ['keep'])));
-    pollRevisionsMock.mockResolvedValue({ ...revState('b1', F1, 4, []), drift: [] });
+    // #3426 — the bounded read settles a couple of microtasks later than before; answer the poll on a timer so it still lands second.
+    pollRevisionsMock.mockImplementation(
+      () => new Promise((r) => setTimeout(() => r({ ...revState('b1', F1, 4, []), drift: [] }), 0)),
+    );
     pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
     const store = makeStore();
     act(() => {
@@ -2782,7 +2785,7 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
         </MemoryRouter>
       </Provider>,
     );
-    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' });
     // Past the 500 ms persistence debounce: a wrongly-fired match would have PUT by now.
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -2818,6 +2821,169 @@ describe("Layout — Confirm's voice-match waits for its own book's cast (#3435,
     seedBookBInSlices(store);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     await assertMatchWaitsForBookA(store);
+  });
+});
+
+describe("Layout — Confirm's voice match re-runs when the cast changes mid-match (#3840)", () => {
+  /* The voice-match effect spends its once-per-book guard before the match
+     answers. A cast change mid-match runs the effect cleanup, which throws
+     the response away; the re-run must then match the current roster, while a
+     match that already answered stays spent. Characters carry no voiceState. */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const bookOf = (bookId: string) => ({
+    state: { bookId, manuscriptId: 'm1', title: 'Book A', castConfirmed: false, chapters: [] },
+    cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+    manuscript: null,
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: {},
+    changeLog: null,
+  });
+
+  const matchFor = (voiceId: string) => ({
+    matches: [
+      {
+        characterId: 'a-villain',
+        candidates: [
+          { voiceId, fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] },
+        ],
+      },
+    ],
+  });
+
+  const sidekick = { id: 'a-sidekick', name: 'Sidekick', role: 'Supporting', color: 'peach' } as never;
+
+  function renderConfirm(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    getBookStateMock.mockImplementation(async (bookId: string) => bookOf(bookId));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  const voiceIdOf = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>, id: string) =>
+    store.getState().cast.characters.find((c) => c.id === id)?.voiceId;
+
+  it('T1: a character added while the match is in flight re-arms it, and the cancelled answer is dropped', async () => {
+    let resolveFirst!: (value: ReturnType<typeof matchFor>) => void;
+    matchVoicesMock.mockReset();
+    matchVoicesMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(matchFor('second-voice'));
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() =>
+      expect(matchVoicesMock).toHaveBeenCalledWith({
+        bookId: 'b1',
+        characters: [expect.objectContaining({ id: 'a-villain' })],
+      }),
+    );
+
+    act(() => {
+      store.dispatch(castSlice.actions.addCharacter(sidekick));
+    });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
+    expect(matchVoicesMock.mock.calls[1][0]).toMatchObject({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-villain' }), expect.objectContaining({ id: 'a-sidekick' })],
+    });
+
+    resolveFirst(matchFor('stale-voice'));
+    await act(async () => {});
+    await waitFor(() => expect(voiceIdOf(store, 'a-villain')).toBe('second-voice'));
+    expect(voiceIdOf(store, 'a-villain')).not.toBe('stale-voice');
+  });
+
+  it('T2: a character added after the match answered does not run it again', async () => {
+    matchVoicesMock.mockReset();
+    matchVoicesMock.mockResolvedValue(matchFor('first-voice'));
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() => expect(voiceIdOf(store, 'a-villain')).toBe('first-voice'));
+
+    act(() => {
+      store.dispatch(castSlice.actions.addCharacter(sidekick));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('S1: the roster swapping to different ids at the same count re-arms the match', async () => {
+    let resolveFirst!: (value: ReturnType<typeof matchFor>) => void;
+    matchVoicesMock.mockReset();
+    matchVoicesMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ matches: [] });
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      store.dispatch(castSlice.actions.hydrateCharacters([sidekick]));
+    });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
+    expect(matchVoicesMock.mock.calls[1][0]).toMatchObject({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-sidekick' })],
+    });
+
+    resolveFirst(matchFor('stale-voice'));
+    await act(async () => {});
+  });
+
+  it('M1: a rejected match stays spent, so a later roster change does not run it again', async () => {
+    /* The rejection branch rethrows (behaves as before); absorb it so the
+       runner does not fail on the unhandled rejection. */
+    const saved = process.listeners('unhandledRejection');
+    process.removeAllListeners('unhandledRejection');
+    process.on('unhandledRejection', () => {});
+    try {
+      matchVoicesMock.mockReset();
+      matchVoicesMock.mockRejectedValue(new Error('match failed'));
+
+      const store = makeStoreWithScopeAndPersistence();
+      renderConfirm(store);
+      await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      act(() => {
+        store.dispatch(castSlice.actions.addCharacter(sidekick));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+    } finally {
+      process.removeAllListeners('unhandledRejection');
+      for (const l of saved) process.on('unhandledRejection', l as never);
+    }
   });
 });
 
@@ -2985,6 +3151,222 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
       expect(hasFailToast(store)).toBe(false);
     } finally {
       m.unsubscribe();
+    }
+  });
+});
+
+describe('Layout — a stalled save before the re-read is bounded (#3426)', () => {
+  const elizaOf = (name: string) => ({ id: 'eliza', name, role: '', color: 'narrator' }) as Character;
+  type Store = ReturnType<typeof makeStoreWithScopeAndPersistence>;
+
+  /* As the #3421 block's disk model, but the cast PUT for A is controllable:
+     when `armed`, it returns a deferred the test settles by hand. */
+  function stallModel() {
+    const disk: Record<string, Character[]> = { A: [elizaOf('Eliza')], B: [{ id: 'b-hero', name: 'Hero', role: '', color: 'peach' } as Character] };
+    const calls: string[] = [];
+    const model = {
+      disk,
+      calls,
+      armed: false,
+      /* when set, every cast PUT for A is refused with a transport failure */
+      failPuts: false,
+      /* index in `calls` at which the edit first reached disk (-1: not yet) */
+      landedAt: -1,
+      stalled: null as null | { resolve: () => void; reject: (e: Error) => void },
+    };
+    const landed = (chars: Character[]) => {
+      if (model.landedAt < 0 && chars.some((c) => c.name === 'Eliza Vane')) model.landedAt = calls.length;
+    };
+    getBookStateMock.mockImplementation(async (id: string) => {
+      calls.push(`get:${id}`);
+      return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk[id] } });
+    });
+    putBookStateMock.mockImplementation((id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+      if (id === 'A' && req.slice === 'cast' && model.failPuts) {
+        calls.push('put:A:cast:503');
+        return Promise.reject(new Error('Book state PUT failed (503): down'));
+      }
+      if (id === 'A' && req.slice === 'cast' && model.armed) {
+        return new Promise<void>((resolve, reject) => {
+          model.stalled = {
+            resolve: () => {
+              landed(req.patch.characters!);
+              disk[id] = req.patch.characters!;
+              calls.push('put:A:cast:ok');
+              resolve();
+            },
+            reject,
+          };
+        });
+      }
+      if (req.slice === 'cast') {
+        if (id === 'A') landed(req.patch.characters!);
+        disk[id] = req.patch.characters!;
+      }
+      calls.push(`put:${id}:${req.slice}:ok`);
+      return Promise.resolve();
+    });
+    return model;
+  }
+
+  const castPutsForA = () =>
+    putBookStateMock.mock.calls.filter(([id, req]) => id === 'A' && (req as { slice: string }).slice === 'cast').length;
+  const hasNotice = (store: Store) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const getsA = (calls: string[]) => calls.filter((c) => c === 'get:A').length;
+  /* the first read of A issued at or after index `from` of the call log */
+  const firstGetAFrom = (calls: string[], from: number) => calls.findIndex((c, i) => i >= from && c === 'get:A');
+  async function openAAndSettle(store: Store) {
+    openAt(store as never, 'A');
+    renderLayoutAt(store as never, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+  }
+  const renameEliza = (store: Store) =>
+    act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+  const elizaName = (store: Store) => store.getState().cast.characters.find((c) => c.id === 'eliza')?.name;
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  async function stallAndLeave(store: Store, m: ReturnType<typeof stallModel>, viaB: boolean) {
+    await openAAndSettle(store);
+    m.armed = true;
+    renameEliza(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+    if (viaB) {
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+    }
+    await waitFor(() => expect(m.stalled).not.toBeNull());
+  }
+
+  it('T1: a stalled save shows the notice at 15 s, issues no read and no re-send, and reads once it lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const putsAtStall = castPutsForA();
+      const getsBefore = getsA(m.calls);
+      const reopenAt = m.calls.length;
+      openAt(store as never, 'A');
+      await advance(14000);
+      expect(hasNotice(store)).toBe(false);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      await advance(1500);
+      expect(hasNotice(store)).toBe(true);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(castPutsForA()).toBe(putsAtStall);
+      await advance(60000);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(castPutsForA()).toBe(putsAtStall);
+
+      m.armed = false;
+      act(() => { m.stalled!.resolve(); });
+      await advance(31000);
+      expect(m.landedAt).toBeGreaterThanOrEqual(0);
+      expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      expect(elizaName(store)).toBe('Eliza Vane');
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(hasNotice(store)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T2: a save the flight gives up on during the backoff is re-sent by the next step', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await stallAndLeave(store, m, true);
+      const reopenAt = m.calls.length;
+      openAt(store as never, 'A');
+      await advance(9000);
+      /* the stalled PUT now fails, and so does each of the flight's retries
+         (+1 s, +2 s, +4 s): the flight gives up at about 16 s, after the 15 s
+         bound expired and before step(1) at 17 s */
+      m.armed = false;
+      m.failPuts = true;
+      act(() => { m.stalled!.reject(new Error('Book state PUT failed (503): down')); });
+      await advance(6500); // 15.5 s
+      expect(hasNotice(store)).toBe(true);
+      await advance(500); // 16 s: given up, kept
+      expect(m.landedAt).toBe(-1);
+      expect(getsA(m.calls)).toBe(1);
+      m.failPuts = false;
+      await advance(40000);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      /* the kept save went out again (put:A:cast:ok) from step(1)'s re-dispatch */
+      const after = m.calls.slice(reopenAt);
+      expect(after.indexOf('put:A:cast:ok')).toBeGreaterThanOrEqual(0);
+      expect(after.indexOf('put:A:cast:ok')).toBeLessThan(after.indexOf('get:A'));
+      expect(m.landedAt).toBeGreaterThanOrEqual(0);
+      expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(elizaName(store)).toBe('Eliza Vane');
+    } finally {
+      err.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T3: a stalled save on a revisions-only reopen stays silent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, false);
+      openAt(store as never, 'A');
+      await advance(20000);
+      expect(hasNotice(store)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4: leaving the book cancels the bounded wait and its retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const getsBefore = getsA(m.calls);
+      openAt(store as never, 'A');
+      /* a toast may auto-dismiss, so watch for it ever appearing */
+      let everNotified = false;
+      const unsubscribe = store.subscribe(() => { if (hasNotice(store)) everNotified = true; });
+      await advance(5000);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      unsubscribe();
+      expect(everNotified).toBe(false);
+      expect(getsA(m.calls)).toBe(getsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4b: leaving during the retry backoff cancels the pending step', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const getsBefore = getsA(m.calls);
+      openAt(store as never, 'A');
+      await advance(16000); // bound expired at 15 s; step(1) is due at 17 s
+      expect(hasNotice(store)).toBe(true);
+      m.armed = false;
+      act(() => { m.stalled!.resolve(); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(hasNotice(store)).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
@@ -3964,10 +4346,9 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
      under its id, and the reopen read only revisions: the screen kept showing
      the deleted book. The delete marks the book for a full read, so the
      reopen reads it in full and shows the bundle's cast once that read lands.
-     This pins only the mark. Until the read lands the slices still hold the
-     deleted book, and a cast write in that window (an edit, or Confirm's
-     automatic voice match) can put its roster back on disk; that, and the
-     paths that use the mark up first, are #3841. */
+     This pins only the mark. The delete also resets the slices when they
+     hold the book (#3841), so a cast write before the read lands cannot put
+     the deleted roster back. */
   it("P12-3: a book re-imported from its bundle after a delete is read in full on reopen", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
@@ -4109,6 +4490,250 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       vi.useRealTimers();
     }
   });
+
+  /* #3841 (review pass 13, P13-2; pass 14 confirmed) — the delete's mark is not
+     enough on its own: a full read of the deleted book (a 404) uses it up, and
+     until a reopen's read lands the slices still hold the deleted book, so a
+     cast write in that window puts its roster over the bundle's. The delete
+     resets the per-book slices when they hold the book. */
+  const bundle = () => ({
+    state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+    cast: { characters: [{ ...eliza, name: 'Bundle Eliza' }] },
+  });
+  const castOnDisk3841 = (disk: ReturnType<typeof createBookStateDisk>) =>
+    (disk.books.get('A')!.cast?.characters as Array<{ name: string }> | undefined)?.map((c) => c.name);
+  /* Cast writes to A after `from` (the log holds the pre-delete session too). */
+  const elizaCastPuts = (disk: ReturnType<typeof createBookStateDisk>, from: number) =>
+    disk.log.slice(from).filter(
+      (p) =>
+        p.bookId === 'A' &&
+        p.slice === 'cast' &&
+        JSON.stringify(p.patch).includes('"name":"Eliza"'),
+    );
+
+  it('#3841 R2a: a 404 read of the deleted book does not leave its roster to come back on the re-import', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      const logFrom = disk.log.length;
+      /* Not re-imported yet: this read answers 404 and uses the mark up. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 R2b: a read of the deleted book that lands before the Library refresh does not leave its roster', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+
+      let resolveDelete!: () => void;
+      deleteBookMock.mockReturnValue(
+        new Promise<void>((r) => (resolveDelete = () => { disk.remove('A'); r(); })),
+      );
+      let releaseLibrary!: () => void;
+      const libraryGate = new Promise<void>((r) => (releaseLibrary = r));
+      vi.mocked(api.getLibrary).mockImplementation(async () => {
+        await libraryGate;
+        return { authors: [] } as never;
+      });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+
+      /* The RPC is out; A is reopened meanwhile. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await act(async () => { resolveDelete(); await vi.advanceTimersByTimeAsync(500); });
+      /* The mark-triggered 404 read lands before getLibrary is released. */
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      releaseLibrary();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      act(() => { store.dispatch(uiActions.goHome()); });
+      const logFrom = disk.log.length;
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 R3: while the re-import’s reopen read is out, the deleted roster is neither shown, matched nor written', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    matchVoicesMock.mockResolvedValue({
+      matches: [{ characterId: 'eliza', candidates: [{ voiceId: 'auto-voice', fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }] }],
+    } as never);
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      /* A stays open through the delete (the route sends it home afterwards), so a
+         persisted reset would still have a book in scope to PUT to. Mark before the
+         delete so that delete-time cast PUT falls inside the window. */
+      const logFrom = disk.log.length;
+      await libraryDeleteA(disk);
+      disk.reimport('A', bundle());
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      matchVoicesMock.mockClear();
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      /* While the read is held. */
+      expect(store.getState().cast.characters.map((c) => c.name)).not.toContain('Eliza');
+      const matchedRosters = matchVoicesMock.mock.calls.map((c) => JSON.stringify(c));
+      expect(matchedRosters.some((s) => s.includes('"name":"Eliza"'))).toBe(false);
+      expect(disk.log.slice(logFrom).filter((p) => p.bookId === 'A' && p.slice === 'cast')).toEqual([]);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+
+      releaseRead();
+      await waitFor(() => expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 (control): deleting another book leaves the open book’s slices alone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      const before = store.getState().manuscript;
+
+      deleteBookMock.mockImplementation(async (id: string) => { disk.remove(id); });
+      libraryEdit.current = { book: { bookId: 'B', title: 'Book B' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+      const after = store.getState().manuscript;
+      expect(after.bookId).toBe('A');
+      expect(after.manuscriptId).toBe(before.manuscriptId);
+      expect(after.title).toBe(before.title);
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Eliza']);
+
+      const readsBefore = reads();
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(reads()).toBe(readsBefore + 1);
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Eliza']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 R7: a full read in flight across the delete does not refill the deleted book’s slices', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [{ ...eliza, id: 'bob', name: 'Bob' }] } });
+    try {
+      renderWithLibrary(store);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      let resolveDelete!: () => void;
+      deleteBookMock.mockReturnValue(
+        new Promise<void>((r) => (resolveDelete = () => { disk.remove('A'); r(); })),
+      );
+      let releaseLibrary!: () => void;
+      const libraryGate = new Promise<void>((r) => (releaseLibrary = r));
+      vi.mocked(api.getLibrary).mockImplementation(async () => {
+        await libraryGate;
+        return { authors: [] } as never;
+      });
+      libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+
+      /* A is opened while the RPC is out; the slices hold B, so this is a full
+         read. The server answers it from disk before the delete removes the
+         folder, and the response arrives after the delete's. */
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      let gateNext = true;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A' && gateNext) {
+          gateNext = false;
+          const snap = await read(id);
+          await readGate;
+          return snap;
+        }
+        return read(id);
+      });
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await act(async () => { resolveDelete(); await vi.advanceTimersByTimeAsync(50); });
+      await act(async () => { releaseRead(); await vi.advanceTimersByTimeAsync(500); });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      releaseLibrary();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      act(() => { store.dispatch(uiActions.goHome()); });
+      const logFrom = disk.log.length;
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('Layout — empty book-state read after another book resets the slices (#3624)', () => {
@@ -4153,7 +4778,7 @@ describe('Layout — empty book-state read after another book resets the slices 
     act(() => {
       store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status } });
     });
-    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
   }
 
   it('(a)+(d) resets the slices to A with its identity stamped, and the reset itself never PUTs', async () => {
@@ -4335,5 +4960,308 @@ describe('Layout - showInfo primary action while the named book restructures (#3
       store.dispatch(uiActions.clearRestructuringBook('b1'));
     });
     expect(screen.getByRole('button', { name: /Analyse now/i })).not.toBeDisabled();
+  });
+});
+
+describe('Layout — a stalled book-state read is bounded and retried (#3426)', () => {
+  const hydrateToast = (store: ReturnType<typeof makeStore>) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const castOf = (name: string) => ({ characters: [{ id: 'eliza', name, role: '', color: 'narrator' }] });
+  const neverSettles = () => new Promise<never>(() => {});
+
+  it('T1: a stalled full read shows the notice at 15 s and retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock
+        .mockImplementationOnce(neverSettles)
+        .mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, [])));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(14000);
+      expect(hydrateToast(store)).toBe(false);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1500); // +15 500
+      expect(hydrateToast(store)).toBe(true);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1000); // +16 500 (retry due at +17 000)
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1000); // +17 500
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      expect(hydrateToast(store)).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("T2: a timed-out read's late answer is discarded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let resolveFirst!: (v: unknown) => void;
+      getBookStateMock
+        .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+        .mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, []), { cast: castOf('Second') }));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(17500);
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(store.getState().cast.characters.map((c) => c.name)).toContain('Second');
+      await act(async () => { resolveFirst(bookStateFor('A', revState('A', null, 0, []), { cast: castOf('First') })); });
+      await advance(500);
+      const names = store.getState().cast.characters.map((c) => c.name);
+      expect(names).toContain('Second');
+      expect(names).not.toContain('First');
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T3: the retry schedule is 2 s, 4 s, 8 s, 16 s, then 30 s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockRejectedValue(new Error('disk error'));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(0);
+      // Calls land at 0, 2 000, 6 000, 14 000, 30 000, 60 000, 90 000 ms.
+      const landings = [0, 2000, 6000, 14000, 30000, 60000, 90000];
+      let now = 0;
+      for (let i = 1; i < landings.length; i++) {
+        await advance(landings[i] - 500 - now);
+        now = landings[i] - 500;
+        expect(getBookStateMock).toHaveBeenCalledTimes(i);
+        await advance(1000);
+        now += 1000;
+        expect(getBookStateMock).toHaveBeenCalledTimes(i + 1);
+      }
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4: a stalled revisions-only read stays silent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, [])));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(100);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      getBookStateMock.mockImplementationOnce(neverSettles);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store, 'A');
+      await advance(20000);
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(hydrateToast(store)).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T5: leaving the book cancels the bound and the retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((id: string) =>
+        id === 'A' ? neverSettles() : Promise.resolve(bookStateFor('B', revState('B', null, 0, []))));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(5000);
+      openAt(store, 'B');
+      await advance(100);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(hydrateToast(store)).toBe(false);
+      expect(getBookStateMock.mock.calls.filter(([id]) => id === 'A')).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Layout — a failed book read re-runs the save wait and aborts what it abandons (#3426 pass 1)', () => {
+  const hydrateToast = (store: ReturnType<typeof makeStore>) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const getsOf = (id: string) => getBookStateMock.mock.calls.filter(([i]) => i === id);
+
+  it('R1: an edit made during the read-retry backoff is sent before the retry reads', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const disk: { cast: Character[] } = { cast: [{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as Character] };
+      const calls: string[] = [];
+      let n = 0;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        const i = n++;
+        if (i === 1) {
+          calls.push('get:reject');
+          throw new Error('disk error');
+        }
+        calls.push(`get:${disk.cast[0].name}`);
+        return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk.cast } });
+      });
+      putBookStateMock.mockImplementation((_id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+        if (req.slice === 'cast') {
+          disk.cast = req.patch.characters!;
+          calls.push(`put:cast:${disk.cast[0].name}`);
+        }
+        return Promise.resolve();
+      });
+      const store = makeStoreWithScopeAndPersistence();
+      openAt(store as never, 'A');
+      renderLayoutAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await advance(1950);
+      expect(calls).toContain('get:reject');
+      act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+      await advance(3000);
+      expect(store.getState().cast.characters.find((c) => c.id === 'eliza')?.name).toBe('Eliza Vane');
+      expect(disk.cast[0].name).toBe('Eliza Vane');
+      expect(calls.indexOf('put:cast:Eliza Vane')).toBeGreaterThanOrEqual(0);
+      expect(calls.indexOf('put:cast:Eliza Vane')).toBeLessThan(calls.lastIndexOf('get:Eliza Vane'));
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('A1: a timed-out attempt is aborted when it expires', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(14000);
+      const first = getBookStateMock.mock.calls[0][1] as AbortSignal;
+      expect(first).toBeInstanceOf(AbortSignal);
+      expect(first.aborted).toBe(false);
+      await advance(1500);
+      expect(first.aborted).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('A2: leaving the book aborts the in-flight attempt', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) =>
+        id === 'A' ? hung(signal) : Promise.resolve(bookStateFor('B', revState('B', null, 0, []))));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(5000);
+      const signal = getsOf('A')[0][1] as AbortSignal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      openAt(store, 'B');
+      await advance(100);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('A3: never more than one getBookState(A) is open across the retry schedule', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let open = 0;
+      let maxOpen = 0;
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => {
+        open++;
+        maxOpen = Math.max(maxOpen, open);
+        signal?.addEventListener('abort', () => { open--; });
+        return hung(signal);
+      });
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      for (let t = 0; t < 140; t++) await advance(1000); // attempts at 0, 17, 36, 59, 90, 135
+      expect(getsOf('A').length).toBeGreaterThanOrEqual(6);
+      expect(maxOpen).toBe(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('A4: an abort adds no second notice and no extra retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      const store = makeStore();
+      let toastPushes = 0;
+      let seen = 0;
+      store.subscribe(() => {
+        const n = store.getState().notifications.toasts.filter((t) => t.dedupeKey === 'revisions-hydrate-failed').length;
+        if (n > seen) toastPushes++;
+        seen = n;
+      });
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(17500); // expiry at 15 s, retry at 17 s
+      expect(getsOf('A')).toHaveLength(2);
+      expect(toastPushes).toBe(1);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('hydrate failed'))).toHaveLength(1);
+      await advance(17000); // second expiry at 32 s; its retry is due at 36 s
+      expect(getsOf('A')).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('C1: leaving during the retry backoff cancels the retry timer (no further read of A)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) =>
+        id === 'A' ? hung(signal) : Promise.resolve(bookStateFor('B', revState('B', null, 0, []))));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(16000); // expired at 15 s; retry due at 17 s
+      expect(hydrateToast(store)).toBe(true);
+      expect(getsOf('A')).toHaveLength(1);
+      openAt(store, 'B');
+      await advance(100);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(getsOf('A')).toHaveLength(1);
+      expect(hydrateToast(store)).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
