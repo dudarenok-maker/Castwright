@@ -154,4 +154,4 @@ Status is `active`, not `stable`: all five waves have shipped, but on-box accept
 | 3d (endpoints selectable) | #3710 | `b015aae9` |
 | 4 (persona generation) | #3777 | `daff0e8c` |
 | 5a (reasoning controls) | #3834 | `c28705db` |
-| 5b (custom request payload) | #<PR-5b> | filled when the PR merges; it is reached through the PR |
+| 5b (custom request payload) | #3878 | filled when the PR merges; it is reached through the PR |
