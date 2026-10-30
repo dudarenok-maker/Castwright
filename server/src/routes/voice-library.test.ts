@@ -1487,7 +1487,11 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(res.status).toBe(200);
     expect(res.body.deleted).toBe(false); // never claims more than happened
     expect(res.body.artifactPurgeIncomplete).toBe(true);
-    expect(res.body.artifactPurgeFailedPaths).toContain(ptPath);
+    // #3720 — client-facing entries are workspace-relative; the absolute path
+    // stays in the server log only.
+    expect(res.body.artifactPurgeFailedPaths).toContain(`voices/qwen/qwen-${voiceUuid}.pt`);
+    expect(JSON.stringify(res.body)).not.toContain(dir);
+    expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(dir).slice(1, -1));
     expect(existsSync(ptPath)).toBe(true); // the artifact really did survive
 
     // The uuid and the failed count are interpolated into the message (the
@@ -5201,6 +5205,50 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.consent.revokedAt).toBeTruthy();
+  });
+
+  /* #3720 — revoke's `artifactPurgeFailedPaths` is workspace-relative; the
+     absolute list stays in the server log. Failed unlink as in the DELETE
+     GATE 1 C3 test: a directory where the `.pt` should be. */
+  it('#3720: revoke reports a surviving artifact as a workspace-relative path and logs the absolute one', async () => {
+    const voiceUuid = 'r-relative-1';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        provenance: 'cloned',
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    const ptPath = qwenVoice.qwenVoicePtPath(`qwen-${voiceUuid}`);
+    mkdirSync(ptPath, { recursive: true });
+    writeFileSync(join(ptPath, 'holds-it-open'), 'x');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.artifactPurgeIncomplete).toBe(true);
+      expect(res.body.artifactPurgeFailedPaths).toContain(`voices/qwen/qwen-${voiceUuid}.pt`);
+      expect(JSON.stringify(res.body)).not.toContain(dir);
+      expect(JSON.stringify(res.body)).not.toContain(JSON.stringify(dir).slice(1, -1));
+      // The operator's evidence is unchanged: the log carries the absolute list.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`"${voiceUuid}" left`),
+        expect.arrayContaining([ptPath]),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it('404s an unknown entry', async () => {

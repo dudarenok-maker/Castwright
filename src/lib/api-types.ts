@@ -10822,6 +10822,14 @@ export interface operations {
                     "application/json": {
                         deleted: boolean;
                         artifactPurgeIncomplete?: boolean;
+                        /**
+                         * @description Artifacts a purge could not erase. File entries are paths relative
+                         *     to the workspace root using `/` (e.g. `voices/xtts/xtts-abc.pt`),
+                         *     never absolute — the absolute paths are logged server-side only.
+                         *     A failed sidecar cache evict is the synthetic
+                         *     `sidecar:<qwen|xtts>:<voiceId>` marker; an unscannable voices
+                         *     directory is `sweep:<relative dir>`.
+                         */
                         artifactPurgeFailedPaths?: string[];
                     };
                 };
@@ -13425,8 +13433,11 @@ export interface operations {
              *     all on-disk file paths (fs-38 Wave 3c, Task 14a): a failed
              *     sidecar in-process cache-evict is recorded as a synthetic
              *     `sidecar:<qwen|xtts>:<voiceId>` marker alongside any real file
-             *     path that could not be removed (e.g. a file held open by the
-             *     sidecar).
+             *     that could not be removed (e.g. a file held open by the
+             *     sidecar). File entries are paths relative to the workspace root
+             *     using `/` (e.g. `voices/xtts/xtts-abc.pt`), never absolute (#3720;
+             *     the absolute paths are logged server-side only); an unscannable
+             *     voices directory is `sweep:<relative dir>`.
              */
             200: {
                 headers: {

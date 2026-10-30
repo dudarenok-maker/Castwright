@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 const { purgeVoiceSamples, purgeVoiceSamplesActual } = vi.hoisted(() => ({
   purgeVoiceSamples: vi.fn(),
@@ -746,4 +746,38 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
     warnSpy.mockRestore();
   });
 
+});
+
+describe('toClientPurgePaths (#3720)', () => {
+  it('converts an absolute path under the workspace to a forward-slash relative path', () => {
+    const abs = join(paths.qwenVoicesDir(), 'qwen-u1.pt');
+    expect(purge.toClientPurgePaths([abs])).toEqual(['voices/qwen/qwen-u1.pt']);
+  });
+
+  it('leaves sidecar: markers unchanged', () => {
+    const markers = ['sidecar:qwen:qwen-u1', 'sidecar:xtts:xtts-u1'];
+    expect(purge.toClientPurgePaths(markers)).toEqual(markers);
+  });
+
+  it('converts the directory of a sweep: entry', () => {
+    expect(purge.toClientPurgePaths([`sweep:${paths.qwenVoicesDir()}`])).toEqual(['sweep:voices/qwen']);
+  });
+
+  it('falls back to the basename for a path outside the workspace', () => {
+    const outside = join(tmpdir(), 'elsewhere', 'x.pt');
+    expect(purge.toClientPurgePaths([outside])).toEqual(['x.pt']);
+  });
+
+  it('never returns an absolute path or the workspace root', () => {
+    const out = purge.toClientPurgePaths([
+      join(paths.qwenVoicesDir(), 'qwen-u1.pt'),
+      `sweep:${paths.xttsVoicesDir()}`,
+      join(tmpdir(), 'elsewhere', 'x.pt'),
+      'sidecar:xtts:xtts-u1',
+    ]);
+    for (const e of out) {
+      expect(isAbsolute(e.replace(/^sweep:/, ''))).toBe(false);
+      expect(e).not.toContain(paths.WORKSPACE_ROOT);
+    }
+  });
 });
