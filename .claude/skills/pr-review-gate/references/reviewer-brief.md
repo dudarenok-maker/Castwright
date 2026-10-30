@@ -792,6 +792,21 @@ recite:
     field (or that a seed copies it from the prior record); then drive the test
     through the production composition (seed, link, merge), not the guard alone.
 
+59. **A precedence rule between two async events enforced only when they
+    arrive in the tested order** — PR #3913 passes 1-3 (#3827, book-meta
+    landed-baseline): the rule "a landed save beats an older full read" held
+    when the read's response was processed after the PUT's 200 (the read is
+    stamped and the landed field wins), but not when the read was processed
+    first, because the 200's write into the shown `saved` came too late to
+    help and the read had already overwritten it. Each ordering is a separate
+    code path; fixing one leaves the other, and a test written in the order the
+    author had in mind passes either way. Checkable: for every "A beats B"
+    rule between two async events, list both arrival orders and name the
+    line that enforces the rule in each. Then write one test per order, and
+    for the order the fix does not rely on, mutate the enforcing line away and
+    confirm a test goes red; a backstop reached only by a hand-seeded reducer
+    test is not coverage of the real ordering.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

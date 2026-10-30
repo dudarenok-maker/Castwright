@@ -14,6 +14,7 @@ import {
   dropRetainedSaves,
   beginFullRead,
   learnSliceRevisions,
+  landedFieldsSince,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
@@ -970,9 +971,10 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     /* Two saves whose debounced PUTs OVERLAP in flight: the older PUT resolving
        after a newer one is scheduled must NOT prune the shared rollback
        snapshot, and the newer PUT's failure must still recover the newest edit.
-       A landed save prunes the snapshot only when no entry of its handler is
-       still queued; otherwise the older onSuccess would wipe the snapshot the
-       newer save's rollback needs → the newer edit was lost. */
+       A landed save folds its value into the baseline but keeps the field in
+       the typed set while a newer value is queued; otherwise the older landing
+       would wipe the snapshot the newer save's rollback needs → the newer edit
+       was lost. */
     const deferred: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
     putBookState.mockImplementation(
       () =>
@@ -1003,14 +1005,206 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     expect((store.getState() as { bookMeta: { lastCommitted?: Record<string, unknown> } }).bookMeta.lastCommitted?.['b1']).toBeDefined();
 
     /* The NEWER flush (B) now fails — its rollback must still run, restoring the
-       accepted title and preserving the newest edit for retry. */
+       newest landed title and preserving the newest edit for retry. */
     deferred[1].reject(new Error('Book state PUT failed (409): analysis is running'));
     await vi.runAllTimersAsync();
     const after = store.getState() as {
       bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
     };
-    expect(after.bookMeta.saved.b1.title).toBe('The Northern Star');
+    /* Since #3827 the older landing folds `Edit A` into the baseline, so B's
+       refusal rolls back to it; the snapshot itself still survives A's landing
+       and B's draft is still restored. */
+    expect(after.bookMeta.saved.b1.title).toBe('Edit A');
     expect(after.bookMeta.draft?.title).toBe('Edit B');
+  });
+
+  type MetaState = {
+    notifications: { toasts: { dedupeKey?: string }[] };
+    bookMeta: {
+      saved: Record<string, { title: string; notes: string | null }>;
+      draft: Record<string, string | null> | null;
+      lastCommitted?: Record<string, unknown>;
+    };
+  };
+
+  function deferredPuts() {
+    const deferred: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    const defer = () =>
+      new Promise<unknown>((resolve, reject) => {
+        deferred.push({ resolve, reject });
+      });
+    return { deferred, defer };
+  }
+
+  it('a refused later commit rolls back to the newest landed value, not the window baseline (#3827)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'N2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(2);
+    expect(putBookState.mock.calls[1][1].patch).toEqual({ notes: 'N2' });
+
+    deferred[1].reject(new Error('Book state PUT failed (409): Analysis is running for this book.'));
+    await vi.runAllTimersAsync();
+
+    const after = store.getState() as MetaState;
+    expect(after.bookMeta.saved.b1.title).toBe('T1');
+    expect(after.bookMeta.saved.b1.notes).toBeNull();
+    expect(after.bookMeta.draft).toEqual({ notes: 'N2' });
+    expect(after.bookMeta.lastCommitted?.['b1']).toBeUndefined();
+    expect(after.notifications.toasts.some((t) => t.dedupeKey === 'book-meta-persist-failed')).toBe(true);
+    err.mockRestore();
+  });
+
+  it('a field that already landed is not sent again by a later commit in the same window (#3827)', async () => {
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'N2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'series', value: 'S3' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(deferred).toHaveLength(2);
+    expect(putBookState.mock.calls[1][1]).toEqual({ slice: 'state', patch: { notes: 'N2', series: 'S3' } });
+  });
+
+  it('a full read issued before a details PUT landed does not undo the landed value (#3827, C4)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    /* Layout stamps the full read before issuing it. */
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'N2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    /* The slow read's response carries the pre-T1 disk. */
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    /* The hydrate itself holds the landed title on screen. */
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(2);
+    deferred[1].reject(new Error('Book state PUT failed (409): Analysis is running for this book.'));
+    await vi.runAllTimersAsync();
+
+    const after = store.getState() as MetaState;
+    expect(after.bookMeta.saved.b1.title).toBe('T1');
+    expect(after.bookMeta.draft).toEqual({ notes: 'N2' });
+    err.mockRestore();
+  });
+
+  it('a commit still in its debounce when a full read lands keeps its value on screen after the 200 (#3827 N1, C0)', async () => {
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+
+    /* The read is processed inside the 500 ms debounce: no PUT has been sent. */
+    expect(deferred).toHaveLength(0);
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+  });
+
+  it('a full read processed before the PUT landed shows the landed value once the 200 arrives (#3827 N1)', async () => {
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    expect(landedFields).toEqual([]);
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((store.getState() as MetaState).bookMeta.saved.b1.title).toBe('T1');
+  });
+
+  it('a give-up while the book is open also rolls back to the newest landed value and keeps nothing (#3827, #3758)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementationOnce(defer);
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'N2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(8000);
+
+    expect(putBookState).toHaveBeenCalledTimes(5);
+    const after = store.getState() as MetaState;
+    expect(after.bookMeta.saved.b1.title).toBe('T1');
+    expect(after.bookMeta.draft).toEqual({ notes: 'N2' });
+    expect(after.bookMeta.lastCommitted?.['b1']).toBeUndefined();
+
+    /* Control: retention is unchanged — the rolled-back save is not kept. */
+    expect(store.dispatch(flushBookPersistence('b1') as never)).toBeNull();
+    expect(putBookState).toHaveBeenCalledTimes(5);
+    err.mockRestore();
   });
 });
 

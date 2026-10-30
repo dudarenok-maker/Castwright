@@ -23,7 +23,7 @@ import type { BookMetaState } from './book-meta-slice';
 import type { PutStateResponse, SliceRevision, StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 import { notificationsActions } from './notifications-slice';
-import { bookMetaActions, type EditableBookMetaField } from './book-meta-slice';
+import { bookMetaActions, type EditableBookMeta, type EditableBookMetaField } from './book-meta-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -68,10 +68,12 @@ interface PersistFailureHandler {
       book was left, which reverts without touching the draft. Returns the
       action to dispatch. */
   rollback?: (bookId: string, restoreDraft: boolean) => { type: string };
-  /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
-      snapshot now that its optimistically-written value is confirmed on disk,
-      so the next commit snapshots a fresh baseline. Returns the action. */
-  onSuccess?: (bookId: string) => { type: string };
+  /** Optional dispatch fired once per successful PUT for each handler among
+      the sent entries, with every sent field's value (`landed`) and the
+      fields still holding that value (`settled`: no newer build replaced
+      them). The book-meta handler folds each landed value into its rollback
+      baseline and drops each settled field from the typed set (#3827). */
+  onLanded?: (bookId: string, landed: Record<string, unknown>, settled: string[]) => { type: string };
 }
 /* Plan 289 — the server refused a re-sent save because the book changed since
    it was made (409 `stale_revision`). */
@@ -106,7 +108,12 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
     },
     dedupeKey: 'book-meta-persist-failed',
     rollback: (bookId, restoreDraft) => bookMetaActions.rollbackCommitDraft({ bookId, restoreDraft }),
-    onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
+    onLanded: (bookId, landed, settled) =>
+      bookMetaActions.commitFieldsLanded({
+        bookId,
+        landed: landed as Partial<EditableBookMeta>,
+        settled: settled as EditableBookMetaField[],
+      }),
   },
 };
 
@@ -271,7 +278,9 @@ const PERSIST_RULES: Record<
      the user did not type is not sent, so a value the server refused as stale
      and still on screen until the re-read cannot ride a later commit back
      (#3784 P1, review pass 9). The slice's commitDraft folds the draft into
-     saved[bookId] before we run, so this read sees the post-commit values. */
+     saved[bookId] before we run, so this read sees the post-commit values. A
+     field leaves that set as soon as it lands (#3827), so a later commit does
+     not send it again. */
   'bookMeta/commitDraft': {
     slice: 'state',
     build: (s) => {
@@ -408,6 +417,14 @@ export const learnSliceRevisions = (
   revisions: Partial<Record<StateSlice, SliceRevision>> | undefined,
   readSeq: number,
 ) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
+/* #3827 — the `state` fields a PUT landed on since a full read was stamped. The
+   book-meta hydrate of that read keeps them: the read may predate the landing,
+   the same rule C4 applies to the tokens. Not a reducer action. */
+const LANDED_SINCE = 'persistence/landedFieldsSince';
+export const landedFieldsSince = (bookId: string, readSeq: number) => ({
+  type: LANDED_SINCE,
+  payload: { bookId, readSeq },
+});
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -523,28 +540,34 @@ export const persistenceMiddleware: Middleware = (store) => {
            covers fields it did not write, which may hold an outside write the
            screen never showed (R1). A 200 with no revision (an older server)
            leaves them unknown. The units still holding the sent value are
-           saved; a book-meta commit's rollback baseline is pruned once no
-           entry of that handler is left (#2230, N7). */
+           saved; each landed book-meta field is folded into the commit's
+           rollback baseline, and leaves its typed set unless a newer build
+           replaced it; a snapshot whose typed set empties is deleted, so a
+           queued newer commit keeps its snapshot, now based on the newest
+           landed value (#2230 N7, #3827). */
         const tick = ++clock;
         const kn = { ...known.get(key) };
         const la = landedAt.get(key) ?? {};
-        const saved = new Set<PersistFailureHandler>();
+        const landed = new Map<PersistFailureHandler, { values: Record<string, unknown>; settled: string[] }>();
         for (const [u, s] of sent) {
           for (const f of fieldsOf(u, s.value)) {
             la[f] = tick;
             if (res?.revision?.[f] !== undefined) kn[f] = res.revision[f];
             else delete kn[f];
           }
+          const h = s.handler;
+          if (h?.onLanded && s.value !== undefined) {
+            let l = landed.get(h);
+            if (!l) landed.set(h, (l = { values: {}, settled: [] }));
+            l.values[u] = s.value;
+            if (holds(u)) l.settled.push(u);
+          }
           if (!holds(u)) continue;
-          const h = box.get(u)!.handler;
-          if (h?.onSuccess) saved.add(h);
           box.delete(u);
         }
         known.set(key, kn);
         landedAt.set(key, la);
-        for (const h of saved) {
-          if (!Array.from(box.values()).some((e) => e.handler === h)) store.dispatch(h.onSuccess!(bookId));
-        }
+        for (const [h, l] of landed) store.dispatch(h.onLanded!(bookId, l.values, l.settled));
       } catch (err) {
         console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
         if (isStaleRefusal(err)) {
@@ -672,6 +695,12 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === BEGIN_FULL_READ) return ++clock;
+
+    if (type === LANDED_SINCE) {
+      const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
+      const la = landedAt.get(flushKey(readBook, 'state')) ?? {};
+      return Object.keys(la).filter((f) => la[f] > readSeq);
+    }
 
     if (type === LEARN_REVISIONS) {
       const { bookId: readBook, revisions, readSeq } = a.payload as {

@@ -55,11 +55,19 @@ export interface BookMetaState {
       value the server accepted AND (b) keep the user's typed `draft` in the
       editor for retry — a failed save must not silently erase their edits.
       - `saved` is pinned on the FIRST commit in a debounce window (the true
-        server-accepted baseline); later commits in the same window merge their
-        drafts so a refused PUT always reverts to that baseline, never to an
-        unpersisted intermediate.
-      - `draft` accumulates the diff staged across those commits.
-      Cleared on `hydrateFromBookState` and on a successful PUT. */
+        server-accepted baseline), then moves forward per field as each field
+        lands (`commitFieldsLanded`, #3827), so a refused PUT reverts to the
+        newest landed value, never to an unpersisted intermediate. Later
+        commits in the same window merge their drafts.
+      - `draft` accumulates the diff staged across those commits; a field
+        leaves it once it lands with no newer value queued.
+      A `keepDraft` hydrate rebases `saved` onto the read, except for fields a
+      PUT landed on before the read was processed (`landedFields`) and fields
+      still typed in this snapshot; a field landing after the hydrate is
+      written into `saved` as it lands (#3827).
+      Cleared on `hydrateFromBookState` without `keepDraft`, on a delete, on
+      every rollback, on a commit with no baseline, and once every typed field
+      has landed. */
   lastCommitted?: Record<
     string,
     { saved: EditableBookMeta; draft: Partial<EditableBookMeta> }
@@ -104,6 +112,10 @@ interface HydratePayload {
       manuscript than the book was last read from (#3784 P11-1: a book
       re-imported under the same id). */
   keepDraft?: boolean;
+  /** #3827 — fields a details PUT landed on after this read was issued: the
+      read predates them, so a `keepDraft` hydrate keeps their landed value
+      (in `saved` and in the rollback baseline) instead of the read's. */
+  landedFields?: string[];
 }
 
 export const bookMetaSlice = createSlice({
@@ -119,7 +131,11 @@ export const bookMetaSlice = createSlice({
        overlays it, so a field the user is editing shows their typing while
        every other field shows the read. */
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
-      const { bookId, state, keepDraft = false } = a.payload;
+      const { bookId, state, keepDraft = false, landedFields } = a.payload;
+      /* #3827 — a field a PUT landed on after this read was issued keeps its
+         landed value: the read predates it (plan 289 C4). Taken before `saved`
+         is overwritten. */
+      const kept: Partial<EditableBookMeta> = keepDraft ? { ...s.saved[bookId] } : {};
       s.saved[bookId] = {
         title: state.title,
         author: state.author,
@@ -130,6 +146,19 @@ export const bookMetaSlice = createSlice({
         description: state.description ?? null,
         notes: state.notes ?? null,
       };
+      const fromRead = { ...s.saved[bookId] };
+      const hold = (landedFields ?? []).filter((f) => f in kept) as EditableBookMetaField[];
+      for (const f of hold) (s.saved[bookId] as Record<string, unknown>)[f] = kept[f];
+      /* #3827 N1 — a field of a commit still queued or in flight keeps the
+         committed value on screen: the read cannot know it, and its PUT's 200
+         (`commitFieldsLanded`) may arrive after this hydrate. Only `saved` keeps
+         it; the rollback baseline below still rebases onto the read. */
+      const inFlight = keepDraft
+        ? (Object.keys(s.lastCommitted?.[bookId]?.draft ?? {}) as EditableBookMetaField[]).filter(
+            (f) => f in kept,
+          )
+        : [];
+      for (const f of inFlight) (s.saved[bookId] as Record<string, unknown>)[f] = kept[f];
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
       if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
@@ -140,7 +169,11 @@ export const bookMetaSlice = createSlice({
          so a failed save still restores the typing and reverts to the read
          (keeping the outside write it brought), not to the pre-read baseline. */
       const pending = s.lastCommitted?.[bookId];
-      if (pending && keepDraft) pending.saved = { ...s.saved[bookId] };
+      if (pending && keepDraft) {
+        const prior = pending.saved;
+        pending.saved = fromRead;
+        for (const f of hold) (pending.saved as Record<string, unknown>)[f] = prior[f];
+      }
       else if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
@@ -183,9 +216,10 @@ export const bookMetaSlice = createSlice({
       }
       if (s.draft) {
         /* #2230 — pin the server-accepted `saved` baseline on the FIRST commit
-           in a debounce window, and merge drafts across any subsequent commits
-           so a refused PUT can revert to that baseline without losing any typed
-           text. (s.lastCommitted ??= {}) guards the recent-field optionality. */
+           in a debounce window (it then advances per landed field, #3827), and
+           merge drafts across any subsequent commits so a refused PUT can
+           revert to that baseline without losing any typed text.
+           (s.lastCommitted ??= {}) guards the recent-field optionality. */
         const snapshot = (s.lastCommitted ??= {});
         const pending = (snapshot[bookId] ??= { saved: base, draft: {} });
         pending.draft = { ...pending.draft, ...s.draft };
@@ -219,14 +253,37 @@ export const bookMetaSlice = createSlice({
       if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
-    /* #2230 — a successful PUT confirms the optimistically-written `saved`
-       value, so the pending snapshot is moot. Pruning it means the NEXT commit
-       (a new window) snaps a fresh, now-accepted baseline instead of a stale
-       one — which is what makes the first-write baseline logic in commitDraft
-       correct across consecutive save sessions. */
-    commitDraftSucceeded: (s, a: PayloadAction<{ bookId: string }>) => {
-      const { bookId } = a.payload;
-      if (s.lastCommitted) delete s.lastCommitted[bookId];
+    /* #3827 — some fields of a pending commit landed on disk. Per the owner's
+       decision on #3827, each field is folded into the rollback baseline as
+       soon as it lands, so a refused later commit reverts to the newest landed
+       value (T1), never the window baseline (T0). Every landed field is
+       folded; only `settled` fields (no newer value queued) leave the typed
+       set, so a landed field is not re-sent by a later commit in the window.
+       An empty typed set deletes the snapshot, so the next commit (a new
+       window) snaps a fresh, now-accepted baseline.
+       Retention is unchanged (#3758): a rolled-back details save is still not
+       kept. */
+    commitFieldsLanded: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        landed: Partial<EditableBookMeta>;
+        settled: EditableBookMetaField[];
+      }>,
+    ) => {
+      const { bookId, landed, settled } = a.payload;
+      const pending = s.lastCommitted?.[bookId];
+      if (!pending) return;
+      Object.assign(pending.saved, landed);
+      /* Backstop (#3827 N1): the read-first ordering is already fixed by the
+         `keepDraft` hydrate's in-flight `saved` hold, which keeps a field of a
+         commit still in flight on screen. This write only matters if a read
+         hydrated `saved` from before the landing without that hold (plan 289
+         C4). A field with a newer value queued keeps that on screen. */
+      const shown = s.saved[bookId];
+      if (shown) for (const f of settled) (shown as Record<string, unknown>)[f] = landed[f];
+      for (const f of settled) delete pending.draft[f];
+      if (Object.keys(pending.draft).length === 0) delete s.lastCommitted![bookId];
     },
 
     /* #3784 P12-1 — the book was deleted: forget its commit snapshot, and the

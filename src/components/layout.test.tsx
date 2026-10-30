@@ -3999,6 +3999,99 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
+  /* #3827 N1 (review pass 2) — a full read processed BEFORE a details PUT's 200
+     hydrated `saved` from before the landing. The title the user just saved
+     must not revert on screen when the 200 arrives (plan 289 C4). */
+  it('#3827 N1: a full read processed before the title PUT landed does not revert the saved title', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      const releasePut = disk.hold((id, req) => id === 'A' && req.slice === 'state');
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+
+      /* The read is processed first: disk still holds T0 (the PUT is held). */
+      releaseRead();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(savedTitle(store)).toBe('T1');
+
+      releasePut();
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(disk.books.get('A')!.state.title).toBe('T1');
+      expect(savedTitle(store)).toBe('T1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3827 T1(a) — the read snapshots disk when it is issued, then is released
+     after the title's 200: the landing wins over a read stamped before it, via
+     the `landedFields` Layout passes to the hydrate. */
+  it('#3827 T1: a read issued before the title PUT landed and processed after it keeps the landed title', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id !== 'A') return read(id);
+        const snapshot = await read(id);
+        await gate;
+        return snapshot;
+      });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.title).toBe('T1');
+
+      releaseRead();
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(savedTitle(store)).toBe('T1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3827 T1(c) — the guard holds only against reads stamped BEFORE the landing:
+     a later read that carries an outside rename shows it. */
+  it('#3827 T1: a read stamped after the title landed shows an outside rename', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      commit(store, 'title', 'T1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(disk.books.get('A')!.state.title).toBe('T1');
+
+      disk.write('A', 'state', { ...disk.books.get('A')!.state, title: 'Outside' });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await waitFor(() => expect(savedTitle(store)).toBe('Outside'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /* #3784 P11-1 (review pass 11) — a book id is its author/series/title slug,
      so deleting a book and importing one with the same slug reuses its id.
      The new book is a different manuscript: the old book's unsaved typing
