@@ -330,6 +330,30 @@ describe('recordPending / dropPendingForChapter', () => {
     await reconcilePendingAfterRestructure(bookDir, NEW, [1], new Map([[1, 4]]));
     expect(onDisk().pending).toEqual([{ ...moved, chapterId: 4 }]);
   });
+
+  it('#3704 — a swap {1->2, 2->1} with both sources pending re-keys both entries (moves win over destinations)', async () => {
+    const e1 = { ...serverEntry(1, 'r1'), chapterUuid: 'u1', renderedAt: 't' };
+    const e2 = { ...serverEntry(2, 'r2'), chapterUuid: 'u2', renderedAt: 't' };
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [e1, e2], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const NEW: ChapterRef[] = [
+      { id: 1, slug: '01-b', uuid: 'u2', audioRenderedAt: 't' },
+      { id: 2, slug: '02-a', uuid: 'u1', audioRenderedAt: 't' },
+    ];
+    await reconcilePendingAfterRestructure(bookDir, NEW, [1, 2], new Map([[1, 2], [2, 1]]));
+    expect((onDisk().pending as StoredRevision[]).map((p) => [p.id, p.chapterId]).sort()).toEqual([['r1', 2], ['r2', 1]]);
+  });
+
+  it('#3704 — a chain {1->2, 2->3} with every source pending re-keys every entry', async () => {
+    const e1 = { ...serverEntry(1, 'r1'), chapterUuid: 'u1', renderedAt: 't' };
+    const e2 = { ...serverEntry(2, 'r2'), chapterUuid: 'u2', renderedAt: 't' };
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [e1, e2], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const NEW: ChapterRef[] = [
+      { id: 2, slug: '02-a', uuid: 'u1', audioRenderedAt: 't' },
+      { id: 3, slug: '03-b', uuid: 'u2', audioRenderedAt: 't' },
+    ];
+    await reconcilePendingAfterRestructure(bookDir, NEW, [1, 2, 3], new Map([[1, 2], [2, 3]]));
+    expect((onDisk().pending as StoredRevision[]).map((p) => [p.id, p.chapterId]).sort()).toEqual([['r1', 2], ['r2', 3]]);
+  });
 });
 
 describe('lock key', () => {

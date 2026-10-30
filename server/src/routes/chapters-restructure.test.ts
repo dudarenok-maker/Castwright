@@ -2170,6 +2170,37 @@ describe('#3704 — a renumbered chapter keeps its pending A/B take', () => {
     expect(pending()).toEqual([]);
     expect(readdirSync(audioRoot).filter((f) => f.includes('.previous.mp3'))).toEqual([]);
   });
+
+  it('R4: a chapter that did not move keeps its own .previous.* when its render stamp is missing', async () => {
+    // An excluded chapter whose stamp restoreBackup stripped: the scan heal skips excluded chapters.
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    state.chapters[1].excluded = true;
+    delete state.chapters[1].audioRenderedAt;
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(state));
+    writeFileSync(join(audioRoot, '02-chapter-two.previous.mp3'), 'ORIGINAL-2');
+    const entryForCh2 = { ...entryForCh1, id: 'revision:2:1', chapterId: 2, chapterUuid: UUIDS[1] };
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [entryForCh2], dismissed: [], acceptedSelections: {}, timeline: {} }));
+
+    const inc = await request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: false });
+    expect(inc.status).toBe(200);
+    expect(inc.body.audioSummary.deleted).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-chapter-two.previous.mp3'), 'utf8')).toBe('ORIGINAL-2');
+
+    // GET heals the stamp back from the segments file, so the entry pairs again.
+    expect((await request(app).get(`/api/books/${bookId}/state`)).status).toBe(200);
+    const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh2.id}/reject`).send({});
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(audioRoot, '02-chapter-two.mp3'), 'utf8')).toBe('ORIGINAL-2');
+  });
+
+  it('R5: the route passes the stale-take clear list — an orphan at an unrendered chapter new slug is removed', async () => {
+    // Reorder [1,3,2]: unrendered chapter three lands on id 2 / slug 02-chapter-three, where an orphan take sits.
+    writeFileSync(join(audioRoot, '02-chapter-three.previous.mp3'), 'ORPHAN');
+    const re = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [1, 3, 2] });
+    expect(re.status).toBe(200);
+    expect(readState().chapters[1].slug).toBe('02-chapter-three');
+    expect(existsSync(join(audioRoot, '02-chapter-three.previous.mp3'))).toBe(false);
+  });
 });
 
 /* -- merged-away tombstones (#3400) --------------------------------- */

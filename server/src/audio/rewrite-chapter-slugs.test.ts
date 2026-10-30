@@ -647,7 +647,7 @@ describe('rewriteChapterSlugs x applyReorder — an op-less chapter never inheri
       bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
       isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
       chapters: [1, 2, 3].map((n) => ({
-        id: n, title: `Chapter ${n}`, slug: `0${n}-chapter-${n}`, titleSynthesized: true,
+        id: n, uuid: `u${n}`, title: `Chapter ${n}`, slug: `0${n}-chapter-${n}`, titleSynthesized: true,
         ...(rendered.includes(n) ? { audioRenderedAt: '2026-01-01T00:00:00.000Z' } : {}),
       })),
       coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
@@ -660,15 +660,26 @@ describe('rewriteChapterSlugs x applyReorder — an op-less chapter never inheri
     seed('01-chapter-1');
     seedPrevious('01-chapter-1'); // ch1 rendered, stays put: its own take
     seedPrevious('02-chapter-2'); // orphan; ch2/ch3 are unrendered
-    const result = applyReorder(appTitledState([1]), hints, sentences, { order: [1, 3, 2] });
+    const oldState = appTitledState([1]);
+    const result = applyReorder(oldState, hints, sentences, { order: [1, 3, 2] });
     expect(result.audioOps).toEqual([]);
 
-    const summary = await rewriteChapterSlugs(audioRoot, result.audioOps, staleTakeClearSlugs(result.state.chapters, result.audioOps));
+    const summary = await rewriteChapterSlugs(audioRoot, result.audioOps, staleTakeClearSlugs(result.state.chapters, result.audioOps, oldState.chapters));
 
     expect(summary.errors).toEqual([]);
     expect(existsSync(join(audioRoot, '02-chapter-2.previous.mp3'))).toBe(false);
     expect(existsSync(join(audioRoot, '02-chapter-2.previous.segments.json'))).toBe(false);
     expect(readFileSync(join(audioRoot, '01-chapter-1.previous.mp3'), 'utf8')).toBe('previous-bytes:01-chapter-1');
+  });
+
+  it('clears only slugs a chapter newly occupies, never one the same uuid already held', () => {
+    const oldState = appTitledState([1]);
+    const result = applyReorder(oldState, hints, sentences, { order: [1, 3, 2] });
+    // old ch2 (u2) was at 02-chapter-2 and is now id 3 at 03-chapter-3; old ch3 (u3) moved onto 02-chapter-2.
+    expect(staleTakeClearSlugs(result.state.chapters, result.audioOps, oldState.chapters)).toEqual(['02-chapter-2', '03-chapter-3']);
+    // A no-op reorder moves nobody, so no slug is newly occupied.
+    const same = applyReorder(oldState, hints, sentences, { order: [1, 2, 3] });
+    expect(staleTakeClearSlugs(same.state.chapters, same.audioOps, oldState.chapters)).toEqual([]);
   });
 });
 

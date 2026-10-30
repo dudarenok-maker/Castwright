@@ -12,8 +12,8 @@
                            (audio/previous-audio.ts) — follows the live
                            audio, else a chapter that inherits the slug
                            inherits another chapter's previous take (#3400).
-                           A rename target's stale `.previous.*` is removed
-                           before the move (#3704).
+                           A stale `.previous.*` at any slug a chapter newly
+                           occupies is removed before the move (#3704).
      <slug>.lufs.json / .embeddings.json / .render-integrity.json /
      <slug>.render-integrity-attempted.json
                            per-chapter loudness + QA sidecars; describe THIS

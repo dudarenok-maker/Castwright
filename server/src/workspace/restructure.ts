@@ -180,15 +180,21 @@ export function pendingMovesAfterRestructure(
     with no rename op keeps its slug and its own take, so it is skipped; a rename target is
     cleared (its own take is staged at a temp slug by then); an UNRENDERED chapter has no op and
     no take of its own, so any `.previous.*` at its slug is a stale orphan it would otherwise
-    inherit (and a boot fsck would promote). Sorted, unique. */
+    inherit (and a boot fsck would promote) — unless the same chapter (by uuid) already held that
+    slug, in which case whatever is there is its own take (a stamp-less chapter, e.g. an excluded
+    one a backup restore stripped, still owns it). Sorted, unique. */
 export function staleTakeClearSlugs(
   newChapters: BookStateJson['chapters'],
   audioOps: readonly AudioOp[],
+  oldChapters: BookStateJson['chapters'],
 ): string[] {
   const renameTargets = new Set(audioOps.filter((op) => op.kind === 'rename').map((op) => (op as { to: string }).to));
   const slugs = new Set(renameTargets);
+  const heldBefore = new Set(oldChapters.filter((c) => c.uuid).map((c) => `${c.uuid}|${c.slug}`));
   for (const c of newChapters) {
-    if (!c.audioRenderedAt) slugs.add(c.slug);
+    if (c.audioRenderedAt) continue;
+    if (c.uuid && heldBefore.has(`${c.uuid}|${c.slug}`)) continue;
+    slugs.add(c.slug);
   }
   return [...slugs].sort();
 }

@@ -509,7 +509,7 @@ async function applyRestructureClaimed(
   const audioSummary = await rewriteChapterSlugs(
     audioDir(bookDir),
     result.audioOps,
-    staleTakeClearSlugs(result.state.chapters, result.audioOps),
+    staleTakeClearSlugs(result.state.chapters, result.audioOps, oldChapters),
   );
 
   /* Plan 286 / #3704 — a renamed or renumbered chapter's pending entry moves to its new id with its
