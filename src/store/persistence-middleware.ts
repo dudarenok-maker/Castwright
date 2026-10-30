@@ -417,6 +417,14 @@ export const learnSliceRevisions = (
   revisions: Partial<Record<StateSlice, SliceRevision>> | undefined,
   readSeq: number,
 ) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
+/* #3827 — the `state` fields a PUT landed on since a full read was stamped. The
+   book-meta hydrate of that read keeps them: the read may predate the landing,
+   the same rule C4 applies to the tokens. Not a reducer action. */
+const LANDED_SINCE = 'persistence/landedFieldsSince';
+export const landedFieldsSince = (bookId: string, readSeq: number) => ({
+  type: LANDED_SINCE,
+  payload: { bookId, readSeq },
+});
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -687,6 +695,12 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === BEGIN_FULL_READ) return ++clock;
+
+    if (type === LANDED_SINCE) {
+      const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
+      const la = landedAt.get(flushKey(readBook, 'state')) ?? {};
+      return Object.keys(la).filter((f) => la[f] > readSeq);
+    }
 
     if (type === LEARN_REVISIONS) {
       const { bookId: readBook, revisions, readSeq } = a.payload as {

@@ -61,8 +61,11 @@ export interface BookMetaState {
         commits in the same window merge their drafts.
       - `draft` accumulates the diff staged across those commits; a field
         leaves it once it lands with no newer value queued.
-      Cleared on `hydrateFromBookState` without `keepDraft`, on a delete, and
-      once every typed field has landed. */
+      A `keepDraft` hydrate rebases `saved` onto the read, except for fields a
+      PUT landed on after the read was issued (`landedFields`, #3827).
+      Cleared on `hydrateFromBookState` without `keepDraft`, on a delete, on
+      every rollback, on a commit with no baseline, and once every typed field
+      has landed. */
   lastCommitted?: Record<
     string,
     { saved: EditableBookMeta; draft: Partial<EditableBookMeta> }
@@ -107,6 +110,10 @@ interface HydratePayload {
       manuscript than the book was last read from (#3784 P11-1: a book
       re-imported under the same id). */
   keepDraft?: boolean;
+  /** #3827 — fields a details PUT landed on after this read was issued: the
+      read predates them, so a `keepDraft` hydrate keeps their landed value
+      (in `saved` and in the rollback baseline) instead of the read's. */
+  landedFields?: string[];
 }
 
 export const bookMetaSlice = createSlice({
@@ -122,7 +129,11 @@ export const bookMetaSlice = createSlice({
        overlays it, so a field the user is editing shows their typing while
        every other field shows the read. */
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
-      const { bookId, state, keepDraft = false } = a.payload;
+      const { bookId, state, keepDraft = false, landedFields } = a.payload;
+      /* #3827 — a field a PUT landed on after this read was issued keeps its
+         landed value: the read predates it (plan 289 C4). Taken before `saved`
+         is overwritten. */
+      const kept: Partial<EditableBookMeta> = keepDraft ? { ...s.saved[bookId] } : {};
       s.saved[bookId] = {
         title: state.title,
         author: state.author,
@@ -133,6 +144,8 @@ export const bookMetaSlice = createSlice({
         description: state.description ?? null,
         notes: state.notes ?? null,
       };
+      const hold = (landedFields ?? []).filter((f) => f in kept) as EditableBookMetaField[];
+      for (const f of hold) (s.saved[bookId] as Record<string, unknown>)[f] = kept[f];
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
       if (!keepDraft) s.draft = null;
       /* #2230 — a fresh authoritative state from disk supersedes any pending
@@ -143,7 +156,11 @@ export const bookMetaSlice = createSlice({
          so a failed save still restores the typing and reverts to the read
          (keeping the outside write it brought), not to the pre-read baseline. */
       const pending = s.lastCommitted?.[bookId];
-      if (pending && keepDraft) pending.saved = { ...s.saved[bookId] };
+      if (pending && keepDraft) {
+        const prior = pending.saved;
+        pending.saved = { ...s.saved[bookId] };
+        for (const f of hold) (pending.saved as Record<string, unknown>)[f] = prior[f];
+      }
       else if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
@@ -186,9 +203,10 @@ export const bookMetaSlice = createSlice({
       }
       if (s.draft) {
         /* #2230 — pin the server-accepted `saved` baseline on the FIRST commit
-           in a debounce window, and merge drafts across any subsequent commits
-           so a refused PUT can revert to that baseline without losing any typed
-           text. (s.lastCommitted ??= {}) guards the recent-field optionality. */
+           in a debounce window (it then advances per landed field, #3827), and
+           merge drafts across any subsequent commits so a refused PUT can
+           revert to that baseline without losing any typed text.
+           (s.lastCommitted ??= {}) guards the recent-field optionality. */
         const snapshot = (s.lastCommitted ??= {});
         const pending = (snapshot[bookId] ??= { saved: base, draft: {} });
         pending.draft = { ...pending.draft, ...s.draft };

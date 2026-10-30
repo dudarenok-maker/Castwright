@@ -36,6 +36,7 @@ import {
   dropRetainedSaves,
   flushBookPersistence,
   learnSliceRevisions,
+  landedFieldsSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
@@ -1093,6 +1094,12 @@ export function Layout() {
               keepDraft:
                 !metaReadFor.current.has(bookId) ||
                 metaReadFor.current.get(bookId) === res.state.manuscriptId,
+              /* #3827 — a details field a save landed on since this read was
+                 stamped keeps its landed value (plan 289 C4). */
+              landedFields:
+                typeof readSeq === 'number'
+                  ? (dispatch(landedFieldsSince(bookId, readSeq)) as unknown as string[])
+                  : undefined,
             }),
           );
           metaReadFor.current.set(bookId, res.state.manuscriptId);

@@ -14,6 +14,7 @@ import {
   dropRetainedSaves,
   beginFullRead,
   learnSliceRevisions,
+  landedFieldsSince,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
@@ -1084,6 +1085,42 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
 
     expect(deferred).toHaveLength(2);
     expect(putBookState.mock.calls[1][1]).toEqual({ slice: 'state', patch: { notes: 'N2', series: 'S3' } });
+  });
+
+  it('a full read issued before a details PUT landed does not undo the landed value (#3827, C4)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { deferred, defer } = deferredPuts();
+    putBookState.mockImplementation(defer);
+    const store = makeBookMetaStore();
+    /* Layout stamps the full read before issuing it. */
+    const readSeq = store.dispatch(beginFullRead('b1')) as unknown as number;
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'N2' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    deferred[0].resolve(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    /* The slow read's response carries the pre-T1 disk. */
+    const landedFields = store.dispatch(landedFieldsSince('b1', readSeq)) as unknown as string[];
+    store.dispatch(
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'b1',
+        state: { title: 'The Northern Star', author: 'Marin Vale', series: '' },
+        keepDraft: true,
+        landedFields,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(2);
+    deferred[1].reject(new Error('Book state PUT failed (409): Analysis is running for this book.'));
+    await vi.runAllTimersAsync();
+
+    const after = store.getState() as MetaState;
+    expect(after.bookMeta.saved.b1.title).toBe('T1');
+    expect(after.bookMeta.draft).toEqual({ notes: 'N2' });
+    err.mockRestore();
   });
 
   it('a give-up while the book is open also rolls back to the newest landed value and keeps nothing (#3827, #3758)', async () => {
