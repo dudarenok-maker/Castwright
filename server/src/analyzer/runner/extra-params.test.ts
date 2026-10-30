@@ -395,4 +395,43 @@ describe('case-variant keys (Go encoding/json matches keys case-insensitively, l
     expect(JSON.stringify(mergeExtraParams('ollama', { options: {} }, payload))).not.toMatch(/num_predict/i);
     expect(payloadControlsOutputCap('ollama', value)).toBe(false);
   });
+
+  describe('Unicode simple case folding (U+017F long s folds to s, U+212A Kelvin sign folds to k)', () => {
+    const folded = [
+      ['ollama', { 'optionſ': { num_ctx: 131072, num_predict: 128 } }],
+      ['ollama', { 'ſtream': false }],
+      ['ollama', { 'meſſages': [] }],
+      ['openai', { 'max_tokenſ': 5 }],
+    ] as const;
+
+    it('validateExtraParams refuses long-s variants of owned keys', () => {
+      for (const [kind, params] of folded) {
+        const r = validateExtraParams(kind, params, {});
+        expect(r.ok, Object.keys(params)[0]).toBe(false);
+      }
+    });
+    it('filterStoredPayload drops them and mergeExtraParams never lets them reach the wire', () => {
+      for (const [kind, params] of folded) {
+        const { value, dropped } = filterStoredPayload(kind, { ...params, top_k: 40 });
+        expect(value, Object.keys(params)[0]).toEqual({ top_k: 40 });
+        expect(dropped).toContain(Object.keys(params)[0]);
+        const native = { model: 'm', options: { num_ctx: 4096 }, stream: true };
+        expect(mergeExtraParams(kind, native, params)).toEqual(native);
+      }
+    });
+    it('{"option\\u017f":{"num_predict":128}} never yields an undetected cap', () => {
+      const payload = { 'optionſ': { num_predict: 128 } };
+      expect(validateExtraParams('ollama', payload, {}).ok).toBe(false);
+      const { value } = filterStoredPayload('ollama', payload);
+      expect(JSON.stringify(mergeExtraParams('ollama', { options: {} }, payload))).not.toMatch(/num_predict/i);
+      expect(payloadControlsOutputCap('ollama', value)).toBe(false);
+    });
+    it('pins the Kelvin sign', () => {
+      expect(validateExtraParams('ollama', { 'Keep_alive': '5m' }, {}).ok).toBe(false);
+      expect(validateExtraParams('ollama', { 'thinK': true }, {}).ok).toBe(false);
+    });
+    it('still accepts exact options.num_predict, top_k and min_p', () => {
+      expect(validateExtraParams('ollama', { options: { num_predict: 100, min_p: 0.05 }, top_k: 40 }, {}).ok).toBe(true);
+    });
+  });
 });

@@ -86,10 +86,13 @@ function canonicalKeys(kind: TransportKind, container: string | null, protectedS
   return out;
 }
 
+/* Go's simple case folding also folds U+017F (long s) to s; toLowerCase leaves it alone. U+212A (Kelvin) already lowercases to k. */
+const foldKey = (key: string): string => key.toLowerCase().replace(/ſ/g, 's');
+
 function isCaseVariant(kind: TransportKind, key: string, canonical: string[]): boolean {
   if (kind === 'gemini' || canonical.includes(key)) return false;
-  const lower = key.toLowerCase();
-  return canonical.some((c) => c.toLowerCase() === lower);
+  const folded = foldKey(key);
+  return canonical.some((c) => foldKey(c) === folded);
 }
 
 function isPlainObject(v: unknown): v is Json {
