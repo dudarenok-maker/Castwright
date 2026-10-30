@@ -3005,6 +3005,8 @@ describe('Layout — a stalled save before the re-read is bounded (#3426)', () =
       disk,
       calls,
       armed: false,
+      /* when set, every cast PUT for A is refused with a transport failure */
+      failPuts: false,
       /* index in `calls` at which the edit first reached disk (-1: not yet) */
       landedAt: -1,
       stalled: null as null | { resolve: () => void; reject: (e: Error) => void },
@@ -3017,6 +3019,10 @@ describe('Layout — a stalled save before the re-read is bounded (#3426)', () =
       return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk[id] } });
     });
     putBookStateMock.mockImplementation((id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+      if (id === 'A' && req.slice === 'cast' && model.failPuts) {
+        calls.push('put:A:cast:503');
+        return Promise.reject(new Error('Book state PUT failed (503): down'));
+      }
       if (id === 'A' && req.slice === 'cast' && model.armed) {
         return new Promise<void>((resolve, reject) => {
           model.stalled = {
@@ -3104,26 +3110,38 @@ describe('Layout — a stalled save before the re-read is bounded (#3426)', () =
     }
   });
 
-  it('T2: a stalled save that later fails is kept and re-sent by the next step', async () => {
+  it('T2: a save the flight gives up on during the backoff is re-sent by the next step', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
     const m = stallModel();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await stallAndLeave(store, m, true);
       const reopenAt = m.calls.length;
       openAt(store as never, 'A');
-      await advance(15500);
-      expect(hasNotice(store)).toBe(true);
+      await advance(9000);
+      /* the stalled PUT now fails, and so does each of the flight's retries
+         (+1 s, +2 s, +4 s): the flight gives up at about 16 s, after the 15 s
+         bound expired and before step(1) at 17 s */
       m.armed = false;
+      m.failPuts = true;
       act(() => { m.stalled!.reject(new Error('Book state PUT failed (503): down')); });
+      await advance(6500); // 15.5 s
+      expect(hasNotice(store)).toBe(true);
+      await advance(500); // 16 s: given up, kept
+      expect(m.landedAt).toBe(-1);
+      expect(getsA(m.calls)).toBe(1);
+      m.failPuts = false;
       await advance(40000);
-      console.info('[T2] calls order:', m.calls.join(' > '));
       await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      /* the kept save went out again (put:A:cast:ok) from step(1)'s re-dispatch */
+      expect(m.calls.slice(reopenAt)).toContain('put:A:cast:ok');
       expect(m.landedAt).toBeGreaterThanOrEqual(0);
       expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
       expect(m.disk.A[0].name).toBe('Eliza Vane');
       expect(elizaName(store)).toBe('Eliza Vane');
     } finally {
+      err.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -3160,6 +3178,28 @@ describe('Layout — a stalled save before the re-read is bounded (#3426)', () =
       unsubscribe();
       expect(everNotified).toBe(false);
       expect(getsA(m.calls)).toBe(getsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4b: leaving during the retry backoff cancels the pending step', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const getsBefore = getsA(m.calls);
+      openAt(store as never, 'A');
+      await advance(16000); // bound expired at 15 s; step(1) is due at 17 s
+      expect(hasNotice(store)).toBe(true);
+      m.armed = false;
+      act(() => { m.stalled!.resolve(); });
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(hasNotice(store)).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -4639,6 +4679,85 @@ describe('Layout — a stalled book-state read is bounded and retried (#3426)', 
       await advance(60000);
       expect(hydrateToast(store)).toBe(false);
       expect(getBookStateMock.mock.calls.filter(([id]) => id === 'A')).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Layout — a failed book read re-runs the save wait and aborts what it abandons (#3426 pass 1)', () => {
+  const hydrateToast = (store: ReturnType<typeof makeStore>) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const getsOf = (id: string) => getBookStateMock.mock.calls.filter(([i]) => i === id);
+
+  it('R1: an edit made during the read-retry backoff is sent before the retry reads', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const disk: { cast: Character[] } = { cast: [{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as Character] };
+      const calls: string[] = [];
+      let n = 0;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        const i = n++;
+        if (i === 1) {
+          calls.push('get:reject');
+          throw new Error('disk error');
+        }
+        calls.push(`get:${disk.cast[0].name}`);
+        return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk.cast } });
+      });
+      putBookStateMock.mockImplementation((_id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+        if (req.slice === 'cast') {
+          disk.cast = req.patch.characters!;
+          calls.push(`put:cast:${disk.cast[0].name}`);
+        }
+        return Promise.resolve();
+      });
+      const store = makeStoreWithScopeAndPersistence();
+      openAt(store as never, 'A');
+      renderLayoutAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+      act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+      await advance(1950);
+      expect(calls).toContain('get:reject');
+      act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+      await advance(3000);
+      expect(store.getState().cast.characters.find((c) => c.id === 'eliza')?.name).toBe('Eliza Vane');
+      expect(disk.cast[0].name).toBe('Eliza Vane');
+      expect(calls.indexOf('put:cast:Eliza Vane')).toBeGreaterThanOrEqual(0);
+      expect(calls.indexOf('put:cast:Eliza Vane')).toBeLessThan(calls.lastIndexOf('get:Eliza Vane'));
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('C1: leaving during the retry backoff cancels the retry timer (no further read of A)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) =>
+        id === 'A' ? hung(signal) : Promise.resolve(bookStateFor('B', revState('B', null, 0, []))));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(16000); // expired at 15 s; retry due at 17 s
+      expect(hydrateToast(store)).toBe(true);
+      expect(getsOf('A')).toHaveLength(1);
+      openAt(store, 'B');
+      await advance(100);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(getsOf('A')).toHaveLength(1);
+      expect(hydrateToast(store)).toBe(false);
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

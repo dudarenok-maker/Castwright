@@ -1219,7 +1219,7 @@ export function Layout() {
             }),
           );
           failureNoticeShown = true;
-          retryTimer = setTimeout(() => load(attempt + 1), retryDelayMs(attempt));
+          retryTimer = setTimeout(() => step(attempt + 1), retryDelayMs(attempt));
         })
         .catch((err) => {
           console.warn('[book-state] hydrate skipped:', err.message);
