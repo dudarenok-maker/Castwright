@@ -232,6 +232,46 @@ describe('persistenceMiddleware — meta draft clear on book switch (#3754, #362
     expect(store.getState().bookMeta.saved.A?.title).toBe('A title');
   });
 
+  it('(i) a 4xx refusal after leaving reverts B to its newest landed title, restores no draft (#3827)', async () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const store = makeStore();
+      let resolveFirst: (v?: unknown) => void = () => {};
+      putBookState.mockReset();
+      putBookState.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirst = resolve as (v?: unknown) => void;
+          }),
+      );
+      putBookState.mockRejectedValue(
+        new Error('Book state PUT failed (409): A book already exists at that Author/Series/Title path.'),
+      );
+      openBook(store, 'B');
+      store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'B T1' }));
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+      await vi.advanceTimersByTimeAsync(500);
+      store.dispatch(bookMetaActions.setDraftField({ field: 'notes', value: 'B N2' }));
+      store.dispatch(bookMetaActions.commitDraft({ bookId: 'B' }));
+      resolveFirst();
+      await vi.advanceTimersByTimeAsync(0);
+      store.dispatch(uiActions.goHome());
+      await store.dispatch(flushBookPersistence('B') as never);
+
+      expect(putsTo('B')).toHaveLength(2);
+      expect(store.getState().bookMeta.saved.B?.title).toBe('B T1');
+      expect(store.getState().bookMeta.saved.B?.notes).toBeNull();
+      expect(store.getState().bookMeta.lastCommitted?.B).toBeUndefined();
+      expect(store.getState().bookMeta.draft).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      putBookState.mockReset();
+      putBookState.mockImplementation(async () => {});
+      errSpy.mockRestore();
+    }
+  });
+
   it('(d) control: a view change within the same book keeps the draft', () => {
     const store = makeStore();
     openBook(store, 'B');
