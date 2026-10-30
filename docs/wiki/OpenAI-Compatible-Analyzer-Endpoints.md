@@ -228,8 +228,8 @@ How the merge works:
 fields are refused too, whichever server the endpoint is: `structured_outputs`, `guided_json`,
 `guided_regex`, `guided_choice`, `guided_grammar`, `guided_decoding_backend`,
 `guided_whitespace_pattern` and `structural_tag`, as is its reasoning budget, `thinking_token_budget`. `chat_template_kwargs.enable_thinking` is protected unless the endpoint's
-Reasoning control is Not controllable, because under the other two controls Castwright sends its own
-reasoning setting. Keys named
+Reasoning control is Not controllable, because under either of the other two controls the server
+lets an explicit `enable_thinking` override the reasoning control Castwright owns. Keys named
 `__proto__`, `constructor` or `prototype` are refused at any depth.
 
 **The output cap.** A payload that sets `max_tokens`, `max_completion_tokens` or llama.cpp's
