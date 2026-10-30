@@ -309,6 +309,100 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
   });
 });
 
+describe('bookMetaSlice — commitFieldsLanded (#3827)', () => {
+  const pendingTitleAndNotes = (): BookMetaState => ({
+    draft: null,
+    saved: { ns: fullMeta({ title: 'T1', notes: 'N2' }) },
+    lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'T1', notes: 'N2' } } },
+    prosodyEnabled: {},
+  });
+
+  it('folds a landed field into the baseline and settles it out of the typed set', () => {
+    const start = pendingTitleAndNotes();
+    const next = reducer(
+      start,
+      bookMetaActions.commitFieldsLanded({
+        bookId: 'ns',
+        landed: { title: 'T1' },
+        settled: ['title'],
+      }),
+    );
+    expect(next.lastCommitted?.['ns']?.saved).toEqual(fullMeta({ title: 'T1' }));
+    expect(next.lastCommitted?.['ns']?.draft).toEqual({ notes: 'N2' });
+    expect(next.saved.ns).toEqual(start.saved.ns);
+  });
+
+  it('a landed field with a newer value queued is folded but not settled', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'T2' }) },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'T2' } } },
+      prosodyEnabled: {},
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.commitFieldsLanded({ bookId: 'ns', landed: { title: 'T1' }, settled: [] }),
+    );
+    expect(next.lastCommitted?.['ns']?.saved.title).toBe('T1');
+    expect(next.lastCommitted?.['ns']?.draft).toEqual({ title: 'T2' });
+    expect(next.saved.ns.title).toBe('T2');
+  });
+
+  it('the last field landing deletes the snapshot, and the next commit pins a fresh baseline', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'T1' }) },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'T1' } } },
+      prosodyEnabled: {},
+    };
+    let next = reducer(
+      start,
+      bookMetaActions.commitFieldsLanded({
+        bookId: 'ns',
+        landed: { title: 'T1' },
+        settled: ['title'],
+      }),
+    );
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+
+    next = reducer(next, bookMetaActions.setDraftField({ field: 'notes', value: 'N3' }));
+    next = reducer(next, bookMetaActions.commitDraft({ bookId: 'ns' }));
+    expect(next.lastCommitted?.['ns']?.saved).toEqual(fullMeta({ title: 'T1' }));
+  });
+
+  it('is a no-op when there is no snapshot', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'T1' }) },
+      lastCommitted: {},
+      prosodyEnabled: {},
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.commitFieldsLanded({
+        bookId: 'ns',
+        landed: { title: 'T1' },
+        settled: ['title'],
+      }),
+    );
+    expect(next).toEqual(start);
+  });
+
+  it('a rollback after a landing restores the landed value and only the unlanded typing', () => {
+    const landed = reducer(
+      pendingTitleAndNotes(),
+      bookMetaActions.commitFieldsLanded({
+        bookId: 'ns',
+        landed: { title: 'T1' },
+        settled: ['title'],
+      }),
+    );
+    const next = reducer(landed, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
+    expect(next.saved.ns).toEqual(fullMeta({ title: 'T1' }));
+    expect(next.draft).toEqual({ notes: 'N2' });
+  });
+});
+
 describe('selectors', () => {
   const baseState = (sliceState: BookMetaState): RootState =>
     ({ bookMeta: sliceState }) as unknown as RootState;

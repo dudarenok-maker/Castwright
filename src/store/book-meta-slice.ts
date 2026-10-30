@@ -55,11 +55,14 @@ export interface BookMetaState {
       value the server accepted AND (b) keep the user's typed `draft` in the
       editor for retry — a failed save must not silently erase their edits.
       - `saved` is pinned on the FIRST commit in a debounce window (the true
-        server-accepted baseline); later commits in the same window merge their
-        drafts so a refused PUT always reverts to that baseline, never to an
-        unpersisted intermediate.
-      - `draft` accumulates the diff staged across those commits.
-      Cleared on `hydrateFromBookState` and on a successful PUT. */
+        server-accepted baseline), then moves forward per field as each field
+        lands (`commitFieldsLanded`, #3827), so a refused PUT reverts to the
+        newest landed value, never to an unpersisted intermediate. Later
+        commits in the same window merge their drafts.
+      - `draft` accumulates the diff staged across those commits; a field
+        leaves it once it lands with no newer value queued.
+      Cleared on `hydrateFromBookState` without `keepDraft`, on a delete, and
+      once every typed field has landed. */
   lastCommitted?: Record<
     string,
     { saved: EditableBookMeta; draft: Partial<EditableBookMeta> }
@@ -217,6 +220,31 @@ export const bookMetaSlice = createSlice({
         if (restoreDraft) s.draft = { ...pending.draft };
       }
       if (s.lastCommitted) delete s.lastCommitted[bookId];
+    },
+
+    /* #3827 — some fields of a pending commit landed on disk. Per the owner's
+       decision on #3827, each field is folded into the rollback baseline as
+       soon as it lands, so a refused later commit reverts to the newest landed
+       value (T1), never the window baseline (T0). Every landed field is
+       folded; only `settled` fields (no newer value queued) leave the typed
+       set, so a landed field is not re-sent by a later commit in the window.
+       An empty typed set deletes the snapshot, as `commitDraftSucceeded` did.
+       Retention is unchanged (#3758): a rolled-back details save is still not
+       kept. */
+    commitFieldsLanded: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        landed: Partial<EditableBookMeta>;
+        settled: EditableBookMetaField[];
+      }>,
+    ) => {
+      const { bookId, landed, settled } = a.payload;
+      const pending = s.lastCommitted?.[bookId];
+      if (!pending) return;
+      Object.assign(pending.saved, landed);
+      for (const f of settled) delete pending.draft[f];
+      if (Object.keys(pending.draft).length === 0) delete s.lastCommitted![bookId];
     },
 
     /* #2230 — a successful PUT confirms the optimistically-written `saved`
