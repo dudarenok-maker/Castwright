@@ -156,6 +156,23 @@ function putQueuedDuringArms(patch: Record<string, unknown>): () => Promise<requ
   };
 }
 
+/* Same shape as putQueuedDuringArms, for DELETE /:bookId. */
+function deleteQueuedDuringArms(): () => Promise<request.Response> {
+  let pending: Promise<request.Response> | undefined;
+  hooks.hold = async () => {
+    const queuedBefore = await bookOpWaiters();
+    const p = request(app).delete(`/api/books/${bookId}`);
+    pending = new Promise<request.Response>((resolve, reject) => p.then(resolve, reject));
+    await vi.waitFor(async () => expect(await bookOpWaiters()).toBeGreaterThan(queuedBefore), {
+      timeout: 5_000,
+    });
+  };
+  return () => {
+    if (!pending) throw new Error('the DELETE was never fired (the arms were not reached)');
+    return pending;
+  };
+}
+
 /* Move the folder out-of-band (not through the route) from inside the hold, to
    exercise the locked step's backstop. */
 function moveFolderOnDiskDuringArms(): void {
@@ -221,6 +238,23 @@ describe('a rename queued behind a reparse / replace-manuscript waits, then land
     expect(existsSync(newDir)).toBe(true);
     expect(existsSync(oldDir)).toBe(false);
   });
+});
+
+describe('a DELETE queued behind a reparse / replace-manuscript waits, then removes the book (#3715)', () => {
+  it.each(['reparse', 'replace-manuscript'] as const)(
+    '%s: a DELETE queued behind the run waits, then removes the whole book; revisions.json is not resurrected (#3715)',
+    async (route) => {
+      const del = deleteQueuedDuringArms();
+      const req = request(app).post(`/api/books/${bookId}/${route}`);
+      const res =
+        route === 'reparse' ? await req.send({}) : await req.attach('file', UPLOAD, 'revised.md');
+      expect(res.status).toBe(200);
+      expect((await del()).status).toBe(204);
+      expect(existsSync(oldDir)).toBe(false);
+      expect(files(oldDir)).toEqual([]);
+      expect(files(join(ws, 'books')).filter((f) => f.endsWith('revisions.json'))).toEqual([]);
+    },
+  );
 });
 
 describe.each([
