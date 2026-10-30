@@ -285,6 +285,21 @@ describe('buildAnalyzerCatalog', () => {
     const same = deps({ settings: withRec, listOllamaTags: vi.fn(async () => [{ name: 'qwen3.5:4b', digest: 'sha256:old' }]) });
     expect((await buildAnalyzerCatalog({ refresh: false }, same)).groups[0].models[0].capability).toEqual(rec);
   });
+
+  it('entries carry the payload label parts: + custom params, and a payload output cap (#3084 wave 5)', async () => {
+    const partsFor = async (over: Partial<UserSettings>) =>
+      (await buildAnalyzerCatalog({ refresh: true }, deps({ settings: () => settings(over) }))).groups.map(
+        (g) => g.models[0]?.requestControlLabelParts,
+      );
+    // groups: [ollama, gemini (fallback, no models), lab endpoint]
+    expect(await partsFor({ analyzerExtraParamsByEngine: { ollama: { top_k: 40 } } })).toEqual([['+ custom params'], undefined, []]);
+    expect(await partsFor({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 2048 } } } })).toEqual([
+      ['+ custom params', 'max output set by custom params'],
+      undefined,
+      [],
+    ]);
+    expect(await partsFor({ analyzerEndpoints: [{ ...lab, extraParams: { min_p: 0.05 } }] })).toEqual([[], undefined, ['+ custom params']]);
+  });
 });
 
 describe('previewEndpointModels', () => {

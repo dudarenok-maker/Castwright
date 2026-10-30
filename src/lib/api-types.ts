@@ -4165,6 +4165,8 @@ export interface components {
                 /** @description ISO date of the Test that recorded `outcome` (A2: a merged record holds verdicts from more than one Test). Absent when `outcome` is absent. */
                 outcomeTestedAt?: string;
             };
+            /** @description Run-label parts from the custom payload, e.g. "+ custom params", "max output set by custom params" (#3084 wave 5) */
+            requestControlLabelParts?: string[];
             testPlan: {
                 configured: number;
                 all: number;
