@@ -31,6 +31,8 @@ const hooks = vi.hoisted(() => ({
   hold: undefined as undefined | (() => Promise<void>),
   /* runs once, right after parseManuscript returns (before the commit) */
   afterParse: undefined as undefined | (() => void),
+  /* the hold-plus-write of the resetRevisions call that consumed `hold` */
+  resetSettled: undefined as undefined | Promise<void>,
 }));
 
 vi.mock('../parsers/index.js', async () => {
@@ -55,11 +57,13 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
     ...real,
     resetRevisions: async (dir: string) => {
       const h = hooks.hold;
-      if (h) {
-        hooks.hold = undefined;
+      if (!h) return real.resetRevisions(dir);
+      hooks.hold = undefined;
+      hooks.resetSettled = (async () => {
         await h();
-      }
-      return real.resetRevisions(dir);
+        await real.resetRevisions(dir);
+      })();
+      return hooks.resetSettled;
     },
   };
 });
@@ -127,6 +131,7 @@ beforeEach(async () => {
 afterEach(() => {
   hooks.hold = undefined;
   hooks.afterParse = undefined;
+  hooks.resetSettled = undefined;
   rmSync(ws, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
 });
@@ -136,41 +141,46 @@ async function bookOpWaiters(): Promise<number> {
   return __keyWaitersForTest(`book-op:${bookId}`);
 }
 
-/* From inside the held arms, fire a PUT /state and return once it has QUEUED on
-   the book's book-op lock (the run holds it). The PUT cannot finish inside the
-   hold -- awaiting it there would deadlock -- so the test awaits its response
-   after the run returns. */
-function putQueuedDuringArms(patch: Record<string, unknown>): () => Promise<request.Response> {
+/* From inside the held arms, fire a request and return once it has QUEUED on
+   the book's book-op lock (the run holds it). It cannot finish inside the hold
+   -- awaiting it there would deadlock -- so the test awaits its response after
+   the run returns. After the queue proof the hold waits 250 ms: with book-op
+   held across resetRevisions the request cannot answer in that window, so a
+   run that lets the reset write escape the span lets it answer first. The
+   returned getter awaits the reset write (unswallowed) and asserts the queue
+   proof happened, so a failed proof cannot hide in the hold's own rejection. */
+function queuedDuringArms(
+  what: string,
+  fire: () => request.Test,
+): () => Promise<request.Response> {
   let pending: Promise<request.Response> | undefined;
+  let queued = false;
   hooks.hold = async () => {
     const queuedBefore = await bookOpWaiters();
-    const p = request(app).put(`/api/books/${bookId}/state`).send({ slice: 'state', patch });
+    const p = fire();
     pending = new Promise<request.Response>((resolve, reject) => p.then(resolve, reject));
     await vi.waitFor(async () => expect(await bookOpWaiters()).toBeGreaterThan(queuedBefore), {
       timeout: 5_000,
     });
+    queued = true;
+    await Promise.race([pending, new Promise((r) => setTimeout(r, 250))]);
   };
-  return () => {
-    if (!pending) throw new Error('the PUT was never fired (the arms were not reached)');
+  return async () => {
+    if (!pending) throw new Error(`the ${what} was never fired (the arms were not reached)`);
+    await hooks.resetSettled;
+    expect(queued).toBe(true);
     return pending;
   };
 }
 
-/* Same shape as putQueuedDuringArms, for DELETE /:bookId. */
+function putQueuedDuringArms(patch: Record<string, unknown>): () => Promise<request.Response> {
+  return queuedDuringArms('PUT', () =>
+    request(app).put(`/api/books/${bookId}/state`).send({ slice: 'state', patch }),
+  );
+}
+
 function deleteQueuedDuringArms(): () => Promise<request.Response> {
-  let pending: Promise<request.Response> | undefined;
-  hooks.hold = async () => {
-    const queuedBefore = await bookOpWaiters();
-    const p = request(app).delete(`/api/books/${bookId}`);
-    pending = new Promise<request.Response>((resolve, reject) => p.then(resolve, reject));
-    await vi.waitFor(async () => expect(await bookOpWaiters()).toBeGreaterThan(queuedBefore), {
-      timeout: 5_000,
-    });
-  };
-  return () => {
-    if (!pending) throw new Error('the DELETE was never fired (the arms were not reached)');
-    return pending;
-  };
+  return queuedDuringArms('DELETE', () => request(app).delete(`/api/books/${bookId}`));
 }
 
 /* Move the folder out-of-band (not through the route) from inside the hold, to
@@ -251,8 +261,7 @@ describe('a DELETE queued behind a reparse / replace-manuscript waits, then remo
       expect(res.status).toBe(200);
       expect((await del()).status).toBe(204);
       expect(existsSync(oldDir)).toBe(false);
-      expect(files(oldDir)).toEqual([]);
-      expect(files(join(ws, 'books')).filter((f) => f.endsWith('revisions.json'))).toEqual([]);
+      expect(files(join(ws, 'books'))).toEqual([]);
     },
   );
 });
