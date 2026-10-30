@@ -403,7 +403,8 @@ export interface OverrideLibraryCastResponse {
    source.name to the prior book's character.aliases on disk, then
    returns the matchedFrom payload the frontend dispatches via
    castActions.applyManualMatch so the "Continuity preserved" footer +
-   "Sync profile" checkbox light up exactly like an auto-match. */
+   "Sync profile" checkbox light up exactly like an auto-match (except on
+   a locked or tuned row, which records no matchedFrom and shows no footer). */
 export interface LinkPriorCharacterArgs {
   bookId: string;
   sourceCharacterId: string;
@@ -5323,16 +5324,21 @@ export async function mockCreateCharacter(
   };
 }
 
-async function mockLinkPriorCharacter(
+export async function mockLinkPriorCharacter(
   args: LinkPriorCharacterArgs,
 ): Promise<LinkPriorCharacterResponse> {
   /* Echo the canonical prior-roster entry so the drawer can dispatch a
      valid applyManualMatch and the "Continuity preserved" footer surfaces
-     in the design environment. */
+     in the design environment. Like the real route, a locked or tuned
+     source echoes its OWN voiceId (it keeps its voice and gets no footer). */
   await wait(120);
   const prior = MOCK_SERIES_ROSTER.find(
     (e) => e.bookId === args.targetBookId && e.id === args.targetCharacterId,
   );
+  const source = MOCK_BOOK_STATES.get(args.bookId)?.cast?.characters.find(
+    (c) => c.id === args.sourceCharacterId,
+  );
+  const keepSourceVoice = source?.voiceState === 'locked' || source?.voiceState === 'tuned';
   return {
     matchedFrom: {
       bookId: args.targetBookId,
@@ -5340,7 +5346,7 @@ async function mockLinkPriorCharacter(
       bookTitle: prior?.bookTitle ?? 'Solway Bay',
       confidence: 1,
     },
-    voiceId: prior?.voiceId,
+    voiceId: keepSourceVoice ? source?.voiceId : prior?.voiceId,
   };
 }
 

@@ -21,7 +21,9 @@
    confidence: 1 }, voiceId }. The frontend dispatches a single-row
    castActions.applyManualMatch with this payload so the "Continuity
    preserved" footer + "Sync profile" checkbox light up on the source
-   book's confirm card, identical to the auto-match flow.
+   book's confirm card, identical to the auto-match flow. (Except on a
+   locked or tuned source: the reducer records no matchedFrom there, so no
+   footer, and voiceId is the source's own, #3842.)
 
    Guard: targetBookId must share (author, series) with the source book
    and neither side may be a standalone. Cross-series linking is out of

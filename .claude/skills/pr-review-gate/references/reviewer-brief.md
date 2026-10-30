@@ -776,7 +776,7 @@ recite:
     guarded `voiceId` and `voiceState` but still wrote `matchedFrom`, and
     `matchedFrom` is what the hydrators, the Confirm Reuse tile, `declineMatch`
     and PUT `/state`'s denormalise key on, so the voice was replaced anyway one
-    hop later. This is the write-side twin of 47. Checkable: for the field a
+    hop later. This is the write-side twin of the entry titled "A skip honoured where a value is tested as the subject, but not where the same value is read as evidence about another item". Checkable: for the field a
     guard protects, list every reader that decides the same thing from a
     DIFFERENT field, and confirm the guarded path writes none of those. Then
     test the guarded input through the full write chain (reducer, persist, PUT,
