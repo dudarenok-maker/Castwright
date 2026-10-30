@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import { accountSlice } from '../../store/account-slice';
+import { accountSlice, fetchAccountSettings } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import type { Stage } from '../../lib/types';
 import { AnalyzerRequestControls } from './analyzer-request-controls';
@@ -176,6 +176,31 @@ describe('AnalyzerRequestControls — custom payload', () => {
     expect(screen.getByTestId('analyzer-extra-params-ollama-cap-note')).toHaveTextContent('Ollama num_predict is not used for Ollama');
     /* P29 — both payload editors say a payload is not a place for credentials. */
     expect(screen.getAllByText(/Not a place for credentials/)).toHaveLength(2);
+  });
+  it('keeps unsaved payload text when another setting saves with an equal-valued payload map', async () => {
+    const store = renderControls({ analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } });
+    const editor = await screen.findByTestId('analyzer-extra-params-gemini');
+    fireEvent.change(editor, { target: { value: '{"config":{"topK":' } });
+    /* Any other settings save replaces the map by reference; the payload values are unchanged. */
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } },
+      });
+    });
+    expect((screen.getByTestId('analyzer-extra-params-gemini') as HTMLTextAreaElement).value).toBe('{"config":{"topK":');
+  });
+  it("resyncs the editor when that engine's saved payload really changes", async () => {
+    const store = renderControls({ analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } } } });
+    const editor = (await screen.findByTestId('analyzer-extra-params-ollama')) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '{"options":{"min_p":0.9}}' } });
+    act(() => {
+      store.dispatch({
+        type: fetchAccountSettings.fulfilled.type,
+        payload: { analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.1 } } } },
+      });
+    });
+    expect(JSON.parse(editor.value)).toEqual({ options: { min_p: 0.1 } });
   });
   it('renders both payload editors with the touch target, the Gemini one with no Gemini model listed (5b-D7)', async () => {
     /* The file's CATALOG lists three Gemini models; this case must render with none, or it cannot fail. */

@@ -45,16 +45,16 @@ export function AnalyzerRequestControls() {
   useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllama]);
   useEffect(() => setGemini(savedGemini ?? {}), [savedGemini]);
   const savedPayloads = useAppSelector((s) => s.account.analyzerExtraParamsByEngine);
+  /* Keyed on each engine's saved text, not the map: every settings save replaces the map by reference, which
+     would wipe unsaved editor text for a payload that did not change. */
+  const savedOllamaText = savedPayloads?.ollama ? JSON.stringify(savedPayloads.ollama, null, 2) : '';
+  const savedGeminiText = savedPayloads?.gemini ? JSON.stringify(savedPayloads.gemini, null, 2) : '';
   const [payloadText, setPayloadText] = useState<Record<'ollama' | 'gemini', string>>({
-    ollama: savedPayloads?.ollama ? JSON.stringify(savedPayloads.ollama, null, 2) : '',
-    gemini: savedPayloads?.gemini ? JSON.stringify(savedPayloads.gemini, null, 2) : '',
+    ollama: savedOllamaText,
+    gemini: savedGeminiText,
   });
-  useEffect(() => {
-    setPayloadText({
-      ollama: savedPayloads?.ollama ? JSON.stringify(savedPayloads.ollama, null, 2) : '',
-      gemini: savedPayloads?.gemini ? JSON.stringify(savedPayloads.gemini, null, 2) : '',
-    });
-  }, [savedPayloads]);
+  useEffect(() => setPayloadText((t) => ({ ...t, ollama: savedOllamaText })), [savedOllamaText]);
+  useEffect(() => setPayloadText((t) => ({ ...t, gemini: savedGeminiText })), [savedGeminiText]);
   const parsedPayloads = {
     ollama: parseExtraParamsText(payloadText.ollama),
     gemini: parseExtraParamsText(payloadText.gemini),
