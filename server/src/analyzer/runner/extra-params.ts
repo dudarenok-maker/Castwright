@@ -69,6 +69,29 @@ const TEMPERATURE: Record<TransportKind, { container: string | null }> = {
   gemini: { container: 'config' },
 };
 
+/* Ollama (Go encoding/json) matches request keys case-insensitively and lets the last duplicate win, and an
+   OpenAI-compatible endpoint may be Ollama's /v1. So for those two transports a key that differs only in
+   case from a key Castwright owns, protects or reads (output cap, temperature) would override it on the wire
+   while every exact-spelling check misses it. Such a key is refused at save and dropped at merge; Gemini's
+   allowlist already holds against case. Canonical spellings keep their existing behaviour. */
+function canonicalKeys(kind: TransportKind, container: string | null, protectedSet: Set<string>): string[] {
+  const out: string[] = [];
+  for (const p of protectedSet) {
+    if (container === null ? !p.includes('.') : p.startsWith(`${container}.`)) out.push(container === null ? p : p.slice(container.length + 1));
+  }
+  const cap = OUTPUT_CAP[kind];
+  if (cap.container === container) out.push(...cap.keys);
+  if (TEMPERATURE[kind].container === container) out.push('temperature');
+  if (container === null) out.push(...OWNED_CONTAINERS[kind]);
+  return out;
+}
+
+function isCaseVariant(kind: TransportKind, key: string, canonical: string[]): boolean {
+  if (kind === 'gemini' || canonical.includes(key)) return false;
+  const lower = key.toLowerCase();
+  return canonical.some((c) => c.toLowerCase() === lower);
+}
+
 function isPlainObject(v: unknown): v is Json {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -127,11 +150,17 @@ export function validateExtraParams(
   const protectedSet = protectedKeySet(kind, ctx);
   const hits: string[] = [];
   const notAllowed: string[] = [];
+  const variants: string[] = [];
+  const topCanonical = canonicalKeys(kind, null, protectedSet);
   const errors: string[] = [];
   /* N12 — refused at save by path, at any depth; mergeExtraParams drops the same keys from a stored payload. */
   const prototypePaths: string[] = [];
   withoutPrototypeKeys(params, '', prototypePaths);
   for (const [key, value] of Object.entries(params)) {
+    if (isCaseVariant(kind, key, topCanonical)) {
+      variants.push(key);
+      continue;
+    }
     if (protectedSet.has(key)) {
       hits.push(key);
       continue;
@@ -145,9 +174,12 @@ export function validateExtraParams(
         errors.push(`"${key}" must be a JSON object.`);
         continue;
       }
+      const innerCanonical = canonicalKeys(kind, key, protectedSet);
       for (const inner of Object.keys(value)) {
         const path = `${key}.${inner}`;
-        if (kind === 'gemini') {
+        if (isCaseVariant(kind, inner, innerCanonical)) {
+          variants.push(path);
+        } else if (kind === 'gemini') {
           if (!geminiConfigAllows(inner)) notAllowed.push(path);
           else if (inner === 'safetySettings' && value[inner] !== null && !isSafetySettings(value[inner])) {
             errors.push(SAFETY_SETTINGS_REFUSAL); // N11
@@ -167,6 +199,9 @@ export function validateExtraParams(
   }
   if (notAllowed.length > 0) {
     errors.unshift(`Gemini "config" accepts only ${GEMINI_CONFIG_ALLOWLIST.join(', ')}. Refused: ${notAllowed.join(', ')}.`);
+  }
+  if (variants.length > 0) {
+    errors.unshift(`These keys differ only in capitalisation from a key Castwright controls or reads, and cannot be set here: ${variants.join(', ')}.`);
   }
   if (hits.length > 0) errors.unshift(`These keys are controlled by Castwright and cannot be set here: ${hits.join(', ')}.`);
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: params };
@@ -188,7 +223,12 @@ export function filterStoredPayload(
   const clean = withoutPrototypeKeys(params, '', dropped) as Json;
   const protectedSet = protectedKeySet(kind, ctx);
   const value: Json = {};
+  const topCanonical = canonicalKeys(kind, null, protectedSet);
   for (const [key, entry] of Object.entries(clean)) {
+    if (isCaseVariant(kind, key, topCanonical)) {
+      dropped.push(key);
+      continue;
+    }
     if (protectedSet.has(key)) {
       dropped.push(key);
       continue;
@@ -199,10 +239,13 @@ export function filterStoredPayload(
         continue;
       }
       const inner: Json = {};
+      const innerCanonical = canonicalKeys(kind, key, protectedSet);
       for (const [innerKey, innerValue] of Object.entries(entry)) {
         const path = `${key}.${innerKey}`;
         const allowed =
-          kind === 'gemini'
+          isCaseVariant(kind, innerKey, innerCanonical)
+            ? false
+            : kind === 'gemini'
             ? geminiConfigAllows(innerKey) &&
               (innerKey !== 'safetySettings' || innerValue === null || isSafetySettings(innerValue))
             : !protectedSet.has(path);
