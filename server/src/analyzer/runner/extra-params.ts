@@ -32,8 +32,9 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
     'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'stop_token_ids', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
     'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
     /* #3904 — vLLM's spellings of the structured-output controls Castwright owns through `response_format`. An endpoint does
-       not record which server it is, so the union of the spellings of llama.cpp, vLLM and LiteLLM is refused; a server that ignores
-       one loses nothing. Other servers' spellings (OpenRouter, LM Studio, ...) have not been checked. */
+       not record which server it is, so the union of llama.cpp's and vLLM's spellings, plus LiteLLM's `thinking`, is refused; a
+       server that ignores one loses nothing. LiteLLM's `thinking` is refused only under a gated style (STYLE_GATED_KEYS), not
+       always. Other servers' spellings (OpenRouter, LM Studio, ...) have not been checked. */
     'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
