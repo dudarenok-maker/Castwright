@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">71</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">73</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->40<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->41<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->8<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->15<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->16<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">40 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">41 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -830,6 +830,18 @@
         <p class="src">the GPU box with llama-swap and a Qwen3.6 model &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;11</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A119</span><span class="iname">Custom payload on real servers</span><span class="risk">llama-swap and Ollama, one GPU</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove the merged request bodies, the redaction and the overflow wording against mocks. Only real servers show that they accept the fields, that a provider error repeating a value back is redacted, and that a thinking model&#39;s overflow names the payload key.</p>
+        <ul>
+        <li><strong>Endpoint payload.</strong> <code>{"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}</code> completes a chapter, llama-swap&#39;s request log shows those fields, and the run label reads &#8220;+ custom params&#8221;. Ollama with <code>{"options": {"min_p": 0.05}}</code> completes a chapter.</li>
+        <li><strong>Redaction.</strong> A value the server rejects (<code>castwright-onbox-probe-value</code>) fails with <code>[redacted]</code> on screen and in <code>logs/server.log</code>, never the value.</li>
+        <li><strong>Output cap.</strong> With a payload cap, the endpoint&#39;s Max output tokens is read-only with its note and keeps its stored value. <code>{"max_tokens": 64}</code> on a thinking model overflows (<code>analyzer-reasoning-overflow</code>); the remediation names <code>max_tokens</code> (&#8220;Raise the custom parameter &#8230;&#8221;) and the fixes include <code>Read: Custom payload</code> and no <code>Lower &lt;name&gt;&#39;s max output tokens</code>. With <code>{"max_tokens": null}</code> the wording is &#8220;Set a value for &#8230;&#8221;.</li>
+        </ul>
+        <p class="src">the GPU box with llama-swap, Ollama and a thinking model &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;14</p>
+      </div>
+    </details>
 
 
 </section>
@@ -1215,7 +1227,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">15 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">16 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1390,6 +1402,19 @@
         <li>G1: on a chapter long enough to exhaust the cap, Gemma <code>on</code> with an empty <code>MAX_TOKENS</code> answer should fail as <code>analyzer-reasoning-overflow</code>; at its default level the chunk splits and recovers (#528).</li>
         </ul>
         <p class="src">a Gemini API key; no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;13</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E115</span><span class="iname">Gemini config payload</span><span class="risk">no GPU; a Gemini API key</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests pin the Gemini <code>config</code> merge, the allowlist and the redaction. Only the live API shows that it accepts a payload <code>topK</code>, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.</p>
+        <ul>
+        <li><strong><code>topK</code>.</strong> <code>{"config": {"topK": 40}}</code> completes a chapter.</li>
+        <li><strong>Output cap.</strong> <code>{"config": {"maxOutputTokens": 2048}}</code> makes the label read &#8220;max output set by custom params&#8221;.</li>
+        <li><strong>Rejected value.</strong> A <code>safetySettings</code> entry with category <code>castwright-onbox-probe-value</code> (a value Gemini rejects) returns <code>analyzer-request-rejected</code>, with the value redacted on screen and in <code>logs/server.log</code>.</li>
+        <li><strong>Protected key.</strong> Saving <code>{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}</code> is refused, naming <code>config.httpOptions</code>.</li>
+        </ul>
+        <p class="src">a Gemini API key; no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;15</p>
       </div>
     </details>
 
