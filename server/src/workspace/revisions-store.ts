@@ -395,6 +395,10 @@ export async function reconcilePendingAfterRestructure(
   return withKeyLock(revisionsLockKey(bookDir), async () => {
     const raw = await loadRaw(bookDir);
     const dropIds = new Set(drop);
+    // A move's destination id is vacated by the restructure; an entry still sitting there that is
+    // not itself being moved is a stale orphan (e.g. left by a failed earlier reconcile) and would
+    // win normaliseRevisions' last-per-chapter collapse over the moved entry.
+    const destinations = new Set(moves.values());
     let changed = false;
     let transformed = raw;
     if (raw !== null && Array.isArray(raw.pending)) {
@@ -408,7 +412,7 @@ export async function reconcilePendingAfterRestructure(
             changed = true;
             continue;
           }
-          if (dropIds.has(c)) {
+          if (dropIds.has(c) || destinations.has(c)) {
             changed = true;
             continue;
           }

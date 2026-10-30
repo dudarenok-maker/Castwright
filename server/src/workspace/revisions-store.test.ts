@@ -321,6 +321,15 @@ describe('recordPending / dropPendingForChapter', () => {
     await reconcilePendingAfterRestructure(bookDir, NEW, [1, 2], new Map([[1, 2]]));
     expect((onDisk().pending as StoredRevision[]).map((p) => [p.id, p.chapterId])).toEqual([['r1', 2]]);
   });
+
+  it('#3704 — a moved entry survives a stale orphan already sitting at its destination id', async () => {
+    const moved = { ...serverEntry(1, 'r1'), chapterUuid: 'u1', renderedAt: 't' };
+    const orphan = { ...serverEntry(4, 'r4'), chapterUuid: 'u-gone', renderedAt: 't' };
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [moved, orphan], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const NEW: ChapterRef[] = [{ id: 4, slug: '04-a', uuid: 'u1', audioRenderedAt: 't' }];
+    await reconcilePendingAfterRestructure(bookDir, NEW, [1], new Map([[1, 4]]));
+    expect(onDisk().pending).toEqual([{ ...moved, chapterId: 4 }]);
+  });
 });
 
 describe('lock key', () => {
