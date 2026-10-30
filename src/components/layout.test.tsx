@@ -3964,10 +3964,9 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
      under its id, and the reopen read only revisions: the screen kept showing
      the deleted book. The delete marks the book for a full read, so the
      reopen reads it in full and shows the bundle's cast once that read lands.
-     This pins only the mark. Until the read lands the slices still hold the
-     deleted book, and a cast write in that window (an edit, or Confirm's
-     automatic voice match) can put its roster back on disk; that, and the
-     paths that use the mark up first, are #3841. */
+     This pins only the mark. The delete also resets the slices when they
+     hold the book (#3841), so a cast write before the read lands cannot put
+     the deleted roster back. */
   it("P12-3: a book re-imported from its bundle after a delete is read in full on reopen", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const store = makeStoreWithScopeAndPersistence();
@@ -4105,6 +4104,183 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       expect(matchVoicesMock).toHaveBeenCalledTimes(1);
       expect(store.getState().cast.characters[0]).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
       expect(voiceOnDisk()).toMatchObject({ voiceId: 'user-voice', voiceState: 'locked' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3841 (review pass 13, P13-2; pass 14 confirmed) — the delete's mark is not
+     enough on its own: a full read of the deleted book (a 404) uses it up, and
+     until a reopen's read lands the slices still hold the deleted book, so a
+     cast write in that window puts its roster over the bundle's. The delete
+     resets the per-book slices when they hold the book. */
+  const bundle = () => ({
+    state: { ...bookStateFor('A', null).state, title: 'T0', notes: 'bundle notes' },
+    cast: { characters: [{ ...eliza, name: 'Bundle Eliza' }] },
+  });
+  const castOnDisk3841 = (disk: ReturnType<typeof createBookStateDisk>) =>
+    (disk.books.get('A')!.cast?.characters as Array<{ name: string }> | undefined)?.map((c) => c.name);
+  /* Cast writes to A after `from` (the log holds the pre-delete session too). */
+  const elizaCastPuts = (disk: ReturnType<typeof createBookStateDisk>, from: number) =>
+    disk.log.slice(from).filter(
+      (p) =>
+        p.bookId === 'A' &&
+        p.slice === 'cast' &&
+        JSON.stringify(p.patch).includes('"name":"Eliza"'),
+    );
+
+  it('#3841 R2a: a 404 read of the deleted book does not leave its roster to come back on the re-import', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      const logFrom = disk.log.length;
+      /* Not re-imported yet: this read answers 404 and uses the mark up. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 R2b: a read of the deleted book that lands before the Library refresh does not leave its roster', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+
+      let resolveDelete!: () => void;
+      deleteBookMock.mockReturnValue(
+        new Promise<void>((r) => (resolveDelete = () => { disk.remove('A'); r(); })),
+      );
+      let releaseLibrary!: () => void;
+      const libraryGate = new Promise<void>((r) => (releaseLibrary = r));
+      vi.mocked(api.getLibrary).mockImplementation(async () => {
+        await libraryGate;
+        return { authors: [] } as never;
+      });
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      libraryEdit.current = { book: { bookId: 'A', title: 'T0' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('A'));
+
+      /* The RPC is out; A is reopened meanwhile. */
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await act(async () => { resolveDelete(); await vi.advanceTimersByTimeAsync(500); });
+      /* The mark-triggered 404 read lands before getLibrary is released. */
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      releaseLibrary();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+      act(() => { store.dispatch(uiActions.goHome()); });
+      const logFrom = disk.log.length;
+      disk.reimport('A', bundle());
+      openAt(store as never, 'A');
+      await waitFor(() => expect(store.getState().bookMeta.saved.A?.notes).toBe('bundle notes'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+      expect(elizaCastPuts(disk, logFrom)).toEqual([]);
+    } finally {
+      vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 R3: while the re-import’s reopen read is out, the deleted roster is neither shown, matched nor written', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    matchVoicesMock.mockResolvedValue({
+      matches: [{ characterId: 'eliza', candidates: [{ voiceId: 'auto-voice', fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }] }],
+    } as never);
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      await libraryDeleteA(disk);
+      disk.reimport('A', bundle());
+      const logFrom = disk.log.length;
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((r) => (releaseRead = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      matchVoicesMock.mockClear();
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+      /* While the read is held. */
+      expect(store.getState().cast.characters.map((c) => c.name)).not.toContain('Eliza');
+      const matchedRosters = matchVoicesMock.mock.calls.map((c) => JSON.stringify(c));
+      expect(matchedRosters.some((s) => s.includes('"name":"Eliza"'))).toBe(false);
+      expect(disk.log.slice(logFrom).filter((p) => p.bookId === 'A' && p.slice === 'cast')).toEqual([]);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+
+      releaseRead();
+      await waitFor(() => expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Bundle Eliza']);
+      expect(castOnDisk3841(disk)).toEqual(['Bundle Eliza']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3841 (control): deleting another book leaves the open book’s slices alone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const disk = wireDisk();
+    disk.seed('B', { state: { ...bookStateFor('B', null).state, notes: null }, cast: { characters: [eliza] } });
+    try {
+      renderWithLibrary(store);
+      await openA(store);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      const before = store.getState().manuscript;
+
+      deleteBookMock.mockImplementation(async (id: string) => { disk.remove(id); });
+      libraryEdit.current = { book: { bookId: 'B', title: 'Book B' }, patch: {} };
+      fireEvent.click(await screen.findByTestId('library-delete'));
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('B'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+
+      const after = store.getState().manuscript;
+      expect(after.bookId).toBe('A');
+      expect(after.manuscriptId).toBe(before.manuscriptId);
+      expect(after.title).toBe(before.title);
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Eliza']);
+
+      const readsBefore = reads();
+      openAt(store as never, 'A');
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(reads()).toBe(readsBefore + 1);
+      expect(store.getState().cast.characters.map((c) => c.name)).toEqual(['Eliza']);
     } finally {
       vi.useRealTimers();
     }

@@ -6,6 +6,7 @@ import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { resetBookSlices } from '../store/reset-book-slices';
 import { fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
 import { configSlice, fetchConfig } from '../store/config-slice';
 import { reportedTtsDevicesFrom } from '../lib/analyzer-endpoints';
@@ -960,21 +961,7 @@ export function Layout() {
                  actions only: the reset itself must never PUT (#3376). */
               const held = store.getState().manuscript.bookId;
               if (held !== null && held !== bookId) {
-                dispatch(manuscriptActions.resetForBook(bookId));
-                dispatch(castActions.hydrateCharacters([]));
-                dispatch(castActions.setRenderedFallback({}));
-                dispatch(castActions.setOrphanedCharacterFallbacks({}));
-                dispatch(changeLogActions.hydrateFromBookState(null));
-                /* The chapters slice too: Generate and Listen read it with no
-                   book check, so left alone they'd list B's chapters under A. */
-                dispatch(
-                  chaptersActions.hydrateFromBookState({
-                    bookId,
-                    chapters: [],
-                    completedSlugs: [],
-                    characters: [],
-                  }),
-                );
+                resetBookSlices(dispatch, bookId);
               }
             }
             return;
