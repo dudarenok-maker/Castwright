@@ -345,6 +345,54 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(after?.voiceStyle).toBe('a quirky, earnest boy genius');
   });
 
+  it.each(['tuned', 'locked'] as const)(
+    'keeps a %s source voice on disk, as applyManualMatch does, while still merging the profile (#3842)',
+    async (voiceState) => {
+      writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+        {
+          id: 'hart',
+          name: 'Hart',
+          role: 'character',
+          color: 'unset',
+          voiceId: 'v_hart',
+          description: 'a quirky, earnest boy genius',
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: 'qwen-hart' } },
+          voiceStyle: 'a quirky, earnest boy genius',
+        },
+      ]);
+      writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+        {
+          id: 'hartwell-brennan-vale',
+          name: 'Hartwell Brennan Vale',
+          role: 'character',
+          color: 'unset',
+          voiceId: 'v_mine',
+          voiceState,
+          ttsEngine: null,
+        },
+      ]);
+      const res = await callLink(newBookId, {
+        sourceCharacterId: 'hartwell-brennan-vale',
+        targetBookId: keeperBookId,
+        targetCharacterId: 'hart',
+      });
+      expect(res.status).toBe(200);
+      const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+        (c) => c.id === 'hartwell-brennan-vale',
+      ) as Record<string, unknown> & { overrideTtsVoices?: unknown };
+      /* The user's voice fields are untouched... */
+      expect(after.voiceId).toBe('v_mine');
+      expect(after.voiceState).toBe(voiceState);
+      expect(after.ttsEngine).toBeNull();
+      expect(after.overrideTtsVoices).toBeUndefined();
+      expect(after.voiceStyle).toBeUndefined();
+      /* ...while the profile merge applyManualMatch also applies still lands. */
+      expect(after.description).toBe('a quirky, earnest boy genius');
+    },
+  );
+
   it("does not clobber the source's own persona when denormalising (srv-18)", async () => {
     /* The source already carries a hand-edited persona — the link must keep it,
        even while it adopts the target's designed voice. */
