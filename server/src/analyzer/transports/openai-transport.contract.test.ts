@@ -217,7 +217,7 @@ describe('OpenAITransport — streamed success', () => {
 
 describe('OpenAITransport — unreachable', () => {
   /* Host-independent DNS: the resolver's answer is injected through connect.lookup,
-     which undici spreads into net.connect (undici/lib/core/connect.js:108-128). No
+     which undici spreads into net.connect (the `connect` function `buildConnector` returns, undici lib/core/connect.js). No
      machine's resolver can turn ENOTFOUND into EAI_AGAIN here. */
   const resolverAgent = (code: 'ENOTFOUND' | 'EAI_AGAIN', counter: { lookups: number }): Agent => {
     const lookup: LookupFunction = (hostname, _options, callback) => {
@@ -611,7 +611,7 @@ describe('OpenAITransport — credentials', () => {
   });
 
   it('OPENAI_CUSTOM_HEADERS in the host env never reaches the wire; the endpoint key does (P22)', async () => {
-    /* The SDK merges this env into every request after its own auth header (the `OpenAI` constructor in client.mjs). */
+    /* The SDK reads this env into `defaultHeaders` (the `OpenAI` constructor in client.mjs), which `buildHeaders` applies to every request after its own auth header. */
     process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer stolen\nX-Leak: 1';
     try {
       const url = await start((_req, res) => {

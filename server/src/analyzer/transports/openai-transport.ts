@@ -5,7 +5,8 @@
    global fetch rejects an npm-undici Agent) and a long-call dispatcher (no header
    or body timeout, 10 s connect), SDK retries off, SDK logging off. The SDK DOES
    read OPENAI_* environment variables when it is constructed: it merges
-   OPENAI_CUSTOM_HEADERS into every request after its auth header (the `OpenAI` constructor in client.mjs).
+   OPENAI_CUSTOM_HEADERS into `defaultHeaders` (the `OpenAI` constructor in client.mjs), which
+   `buildHeaders` applies to every request after its auth header.
    Every option it would take from env is passed explicitly, and allowlistedFetch
    rebuilds the outgoing headers from an allowlist, so no host env header reaches
    an endpoint and the key goes only to its own origin (P22).
@@ -146,7 +147,7 @@ export function classifyOpenAIOutcome(err: unknown, ctx: OutcomeContext): Error 
   const codes = chain.map((c) => c.code).filter((c): c is string => typeof c === 'string');
   /* P21 — only a connection-level failure can be "unreachable". An APIError with an
      HTTP status was built after the response arrived and carries the body's error.code
-     (openai core/error.mjs:12, :35-65): a proxy's 502 reporting ECONNREFUSED is an
+     (openai `APIError` and `APIError.generate` in core/error.mjs): a proxy's 502 reporting ECONNREFUSED is an
      answer, not an outage, and must never reach FallbackAnalyzer. */
   const connectionLevel =
     !isOwnAnalyzerError(err) &&

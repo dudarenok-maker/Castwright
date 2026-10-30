@@ -401,7 +401,7 @@ describe('DEFAULT_CATALOG_DEPS.listEndpoint over a real socket', () => {
     });
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
     const { port } = server.address() as AddressInfo;
-    /* The SDK merges this env into every request after its own auth header (the `OpenAI` constructor in client.mjs). */
+    /* The SDK reads this env into `defaultHeaders` (the `OpenAI` constructor in client.mjs), which `buildHeaders` applies to every request after its own auth header. */
     process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer stolen\nX-Leak: 1\nX-Stainless-Lang: evil';
     try {
       await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, 'sk-local');

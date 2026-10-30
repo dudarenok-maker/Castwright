@@ -5,12 +5,13 @@
 
    The SDK builds each request's headers from its own defaults (Accept, User-Agent,
    X-Stainless-*: `buildHeaders` in openai client.mjs), the host's OPENAI_CUSTOM_HEADERS env
-   (merged after its auth header: the `OpenAI` constructor) and the placeholder key, then calls
+   (read in the `OpenAI` constructor into `defaultHeaders`, which `buildHeaders` applies after the
+   auth header) and the placeholder key, then calls
    `fetch(url, { headers, … })` (`fetchWithTimeout` in client.mjs). NONE of that is
    forwarded. The wire carries exactly FIXED_HEADERS, plus `Authorization: Bearer
    <key>` when the request URL is on the origin the key was resolved for. No
    `x-stainless-*` header is ever sent. undici drops `authorization` on a cross-origin
-   redirect (lib/web/fetch/index.js:1352). */
+   redirect (`httpRedirectFetch` in undici lib/web/fetch/index.js). */
 import { fetch as undiciFetch } from 'undici';
 
 export const ANALYZER_USER_AGENT = 'castwright-analyzer';
