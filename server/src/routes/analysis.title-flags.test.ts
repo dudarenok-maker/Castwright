@@ -31,6 +31,9 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       if (opts.phase === 'phase1' && g.__analyzer_device_test_phase1_selection) {
         return g.__analyzer_device_test_phase1_selection;
       }
+      if (opts.phase === 'phase0' && g.__analyzer_device_test_phase0_selection) {
+        return g.__analyzer_device_test_phase0_selection;
+      }
       return actual.selectAnalyzerForPhase(
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
       );
@@ -64,6 +67,7 @@ afterAll(() => {
 
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase0_selection;
 });
 
 function phase1Selection(): AnalyzerSelection {
@@ -305,9 +309,26 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
 });
 
 describe.each(['main', 'subset'] as const)(
-  '#3703 — titleOverridden does not land on a different chapter after a restart (%s persist)',
+  '#3829 — a %s analysis start is refused on a book whose chapter hints are out of sync with state.json',
   (kind) => {
-  it('carries the flag only while the persisted title is unchanged', async () => {
+  /* Both phases get the stub analyzer, so a start that is NOT refused never reaches Ollama. */
+  const start = (app: express.Express, manuscriptId: string) => {
+    const g = globalThis as Record<string, unknown>;
+    g.__analyzer_device_test_phase0_selection = phase1Selection();
+    g.__analyzer_device_test_phase1_selection = phase1Selection();
+    return kind === 'main'
+      ? request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({})
+      : request(app).post(`/api/manuscripts/${manuscriptId}/analysis/chapters`).send({ chapterIds: [1] });
+  };
+  const analysisApp = async () => {
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+    return app;
+  };
+
+  it('answers 409 hints_out_of_sync and leaves state.json byte-identical', async () => {
     // Chapter 2 is a merge the user titled "Part Two"; the manuscript still has four headings.
     const ms = `# Prologue\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
     const { manuscriptId, bookDir } = await seedBook(`misaligned-${kind}`, ms, [
@@ -317,11 +338,98 @@ describe.each(['main', 'subset'] as const)(
     ]);
     const { removeManuscript } = await import('../store/manuscripts.js');
     removeManuscript(manuscriptId); // a restart: hints come from a fresh parse of the 4 headings
-    await runAnalysis(manuscriptId, kind);
-    const ch = readState(bookDir).chapters;
-    expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
-    expect(ch.length).toBe(4);
-    expect(ch.filter((c) => c.titleOverridden)).toEqual([]);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(res.body.error).toMatch(/Re-parse/);
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(readState(bookDir).chapters.length).toBe(3);
+  }, 60_000);
+
+  it('does not refuse a restructured book whose persisted hints pair with state.json', async () => {
+    const { manuscriptId, bookId, bookDir } = await seedBook(`persisted-${kind}`, FLAGGED_MANUSCRIPT, FLAGGED_BOOK);
+    // A real merge: state now has 2 chapters, the manuscript still parses to 3, and the merge persists its hints.
+    const merge = await request(await restructureApp())
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(merge.status).toBe(200);
+    expect(readState(bookDir).chapters.length).toBe(2);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId); // a restart: the next lookup re-hydrates from disk
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('persisted');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('does not refuse a never-restructured book whose state title is an older parser form', async () => {
+    // Same ids and count as the parse; chapter 2's title was written before the parser decoded entities.
+    const { manuscriptId } = await seedBook(`drift-${kind}`, FLAGGED_MANUSCRIPT, [
+      { title: 'Alpha' },
+      { title: 'Prologue&rsquo;' },
+      { title: 'Epilogue' },
+    ]);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('KNOWN GAP (#3837): a same-count reorder from before #3703 is still analysed', async () => {
+    // Same ids and count as the parse, headings in a different order. Analysis refuses on the
+    // count/id check only; the title arm is deliberately not used (design owed in #3837), so this starts, as on main.
+    const ms = `# Book\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
+    const { manuscriptId } = await seedBook(`gap-${kind}`, ms, [
+      { title: 'Chapter 1', titleSynthesized: true },
+      { title: 'Gamma' },
+      { title: 'Alpha' },
+      { title: 'Beta' },
+    ]);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('does not refuse an unflagged (pre-#3628) fresh import with an untitled lead section before "Chapter 1"', async () => {
+    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;
+    const { manuscriptId } = await seedBook(`lead-legacy-${kind}`, ms, [
+      { title: 'Chapter 1' },
+      { title: 'Chapter 1' },
+      { title: 'Chapter 2' },
+    ]);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('does not refuse a fresh import whose untitled lead section precedes a bare "Chapter 1"', async () => {
+    // Parse and state are both ["Chapter 1" (made up), "Chapter 1", "Chapter 2"].
+    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;
+    const { manuscriptId } = await seedBook(`lead-${kind}`, ms, [
+      { title: 'Chapter 1', titleSynthesized: true },
+      { title: 'Chapter 1' },
+      { title: 'Chapter 2' },
+    ]);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const rec = (await getOrHydrateManuscript(manuscriptId))!;
+    expect(rec.hintsSource).toBe('parse');
+    expect(rec.parseTitles).toEqual([null, 'Chapter 1', 'Chapter 2']);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('does not refuse a healthy fresh import', async () => {
+    const { manuscriptId } = await seedBook(`healthy-${kind}`, FLAGGED_MANUSCRIPT, FLAGGED_BOOK);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
   }, 60_000);
   },
 );

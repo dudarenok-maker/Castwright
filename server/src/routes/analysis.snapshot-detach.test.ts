@@ -1,6 +1,7 @@
-/* #3174 (G1) — the four detached (`void …`) cold-boot snapshot writes in
-   analysis.ts (`persistRunningSnapshot`, the stale-snapshot delete IIFE, and
-   `persistTerminalSnapshot` for both 'paused' and 'halted') all route through
+/* #3174 (G1) — the four detached cold-boot snapshot writes in analysis.ts
+   (`persistRunningSnapshot` and the stale-snapshot delete IIFE are `void`;
+   `persistTerminalSnapshot` for both 'paused' and 'halted' is collected into
+   `job.terminalWrites`, #3711) all route through
    `withVerifiedBookDir` / `tryResolveVerifiedBookDir`. Those, in turn, share
    `resolveVerifiedBookDir`'s slow path: when the candidate book dir can't be
    trusted, it calls `getOrHydrateManuscript`, which can itself throw (e.g. an

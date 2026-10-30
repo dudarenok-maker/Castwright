@@ -224,6 +224,30 @@ describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
     }
   });
 
+  /* #3829 - a start on a book whose chapter hints are out of sync with state.json is a 409
+     `{ error: <curated sentence>, code }` (the restructure routes' shape: the sentence is in
+     `error`, the machine code in `code`). The user must see the sentence, not "failed (409)". */
+  it('maps a 409 hints_out_of_sync body to AnalysisError(error sentence, code) on both readers', async () => {
+    const { api, AnalysisError } = await import('./api');
+    const HINTS = {
+      error: "This book's chapter list is out of date with its manuscript. Re-parse it from the book's menu in the Library to fix this.",
+      code: 'hints_out_of_sync',
+    };
+    for (const start of [
+      () => api.analyseManuscript('mns-1', {}),
+      () => api.runAnalysisForChapters('mns-1', [4], {}),
+    ]) {
+      fetchMock.mockResolvedValueOnce(refusedResponse(HINTS));
+      const err = await start().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(AnalysisError);
+      expect((err as InstanceType<typeof AnalysisError>).code).toBe('hints_out_of_sync');
+      expect((err as Error).message).toBe(HINTS.error);
+    }
+  });
+
   /* #3400 pass 8 - the server refuses an analysis start while the book is being
      restructured. Same quiet "try again" outcome as the #3435 refusals, on every
      reader and both wire forms; never a generic `stream_failed`. */

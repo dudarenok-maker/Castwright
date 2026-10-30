@@ -165,6 +165,7 @@ import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { assertHintsPairWithState, HintsOutOfSyncError } from '../workspace/restructure.js';
 import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
@@ -3712,9 +3713,11 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (!job.controller.signal.aborted) job.controller.abort();
   job.watermark?.releaseAll();
   if (finalEv) broadcastToJob(job, finalEv);
-  /* Cold-boot snapshot transition. Fire-and-forget; we still tear
-     down subscribers + deregister synchronously below so the route
-     response isn't held up by the disk write.
+  /* Cold-boot snapshot transition. Not awaited here: the writes are
+     collected into `job.terminalWrites` (#3711), which `settleJob` awaits
+     before the book-op lease is released. We still tear down subscribers +
+     deregister synchronously below so the route response isn't held up by
+     the disk write.
 
      Plan 32 D1: a subset job's terminal success never deletes a MAIN
      run's snapshot (a paused main's Resume affordance must survive a
@@ -3940,6 +3943,35 @@ function releaseBusyAndPin(job: AnalysisJob): void {
   }
 }
 
+/** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs one-to-one
+    with state.json (a different chapter count or an id state lacks) would rebuild `state.chapters` from the parse: chapters reappear, a uuid lands on
+    another chapter and rendered audio is orphaned. Answered before the SSE headers open, with the 409
+    the restructure routes use. Fail-open on an unreadable or foreign state.json, like the `loadState`
+    read in the runners. Persisted hints are not checked here: they carry their own staleness check.
+    A count/id mismatch has two causes: (a) a merge made before #3703 persisted its hints, and (b) a
+    chapter-splitting parser change after import (a4ba11aa, non-English plaintext; 532654fe, CJK
+    plaintext), which makes today's parse split the book differently. Both are refused. Accepted cost:
+    an affected book with no rendered audio needs a re-parse, which discards its cast (analysis used
+    to re-split such a book itself).
+    The count/id check ONLY: `parseTitles` is deliberately not passed. Its title arm cannot tell a
+    same-count reorder from title drift without refusing never-restructured books, so a same-count
+    reorder from before #3703 is still analysed, as on main (design owed in #3837). */
+async function hintsOutOfSyncRefusal(
+  manuscriptId: string,
+  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1] },
+): Promise<{ error: string; code: string } | null> {
+  if (record.hintsSource !== 'parse' || !record.bookDir) return null;
+  const state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
+  if (!state || state.manuscriptId !== manuscriptId) return null;
+  try {
+    assertHintsPairWithState(state, record.chapterHints);
+  } catch (e) {
+    if (e instanceof HintsOutOfSyncError) return { error: e.message, code: e.code };
+    throw e;
+  }
+  return null;
+}
+
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
   /* D2 (#3169) — `requestedModel` / `requestedFresh` used to be parsed much
@@ -4002,6 +4034,20 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     }
   }
 
+  /* #3829 -- a START (not a join of a live run) on a book with out-of-sync chapter hints is
+     refused before the stream opens. Hydrating here is not new work: the later lookup is a hit. */
+  {
+    const live = inFlightAnalysisByManuscript.get(manuscriptId);
+    if (!(live && !live.controller.signal.aborted && !requestedFresh)) {
+      const rec = await getOrHydrateManuscript(manuscriptId);
+      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
+      if (refusal) {
+        console.log(`[analysis] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json(refusal);
+      }
+    }
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -4009,9 +4055,9 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   res.flushHeaders();
   /* Vite's dev proxy (http-proxy under the hood) closes the upstream
      connection if it sees no body data for a while after the headers
-     land — which is exactly what happens on a cold server where
-     getOrHydrateManuscript re-parses a 100k+ word EPUB before the
-     first SSE event lands. The proxy fires RST, the route's
+     land — which is what happens on a cold server while the analyzer
+     prepares its first chapter (a start's hydrate itself now runs BEFORE
+     the headers, for the #3829 refusal; a join still hydrates after them). The proxy fires RST, the route's
      req.on('close') runs, the analysis aborts before the first
      chapter is even prepared. Writing a single SSE comment (`:ok\n\n`)
      right after flushHeaders keeps the stream visibly "active" so the
@@ -7795,14 +7841,29 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     }
   }
 
+  /* #3829 -- same refusal as the main POST, for a subset START (a join of a live subset run is
+     not one). */
+  {
+    const live = inFlightSubsetByManuscript.get(manuscriptId);
+    if (!(live && !live.controller.signal.aborted)) {
+      const rec = await getOrHydrateManuscript(manuscriptId);
+      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
+      if (refusal) {
+        console.log(`[analysis-subset] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json(refusal);
+      }
+    }
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
   /* Vite dev-proxy keep-alive shim — see the comment on the parent
-     analysis route. Same hazard (silence during getOrHydrateManuscript)
-     applies on a cold subset retry. */
+     analysis route. Same hazard (silence while the first chapter is
+     prepared) applies on a cold subset retry; a start hydrates before the
+     headers (#3829), a join after them. */
   res.write(':ok\n\n');
   const keepAlive = setInterval(() => {
     try {
