@@ -4217,12 +4217,14 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     try {
       renderWithLibrary(store);
       await openA(store);
-      act(() => { store.dispatch(uiActions.goHome()); });
       await act(async () => { await vi.advanceTimersByTimeAsync(600); });
 
+      /* A stays open through the delete (the route sends it home afterwards), so a
+         persisted reset would still have a book in scope to PUT to. Mark before the
+         delete so that delete-time cast PUT falls inside the window. */
+      const logFrom = disk.log.length;
       await libraryDeleteA(disk);
       disk.reimport('A', bundle());
-      const logFrom = disk.log.length;
 
       let releaseRead!: () => void;
       const gate = new Promise<void>((r) => (releaseRead = r));
