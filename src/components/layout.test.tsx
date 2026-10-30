@@ -2923,6 +2923,65 @@ describe("Layout — Confirm's voice match re-runs when the cast changes mid-mat
     });
     expect(matchVoicesMock).toHaveBeenCalledTimes(1);
   });
+
+  it('S1: the roster swapping to different ids at the same count re-arms the match', async () => {
+    let resolveFirst!: (value: ReturnType<typeof matchFor>) => void;
+    matchVoicesMock.mockReset();
+    matchVoicesMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ matches: [] });
+
+    const store = makeStoreWithScopeAndPersistence();
+    renderConfirm(store);
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      store.dispatch(castSlice.actions.hydrateCharacters([sidekick]));
+    });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(2));
+    expect(matchVoicesMock.mock.calls[1][0]).toMatchObject({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-sidekick' })],
+    });
+
+    resolveFirst(matchFor('stale-voice'));
+    await act(async () => {});
+  });
+
+  it('M1: a rejected match stays spent, so a later roster change does not run it again', async () => {
+    /* The rejection branch rethrows (behaves as before); absorb it so the
+       runner does not fail on the unhandled rejection. */
+    const saved = process.listeners('unhandledRejection');
+    process.removeAllListeners('unhandledRejection');
+    process.on('unhandledRejection', () => {});
+    try {
+      matchVoicesMock.mockReset();
+      matchVoicesMock.mockRejectedValue(new Error('match failed'));
+
+      const store = makeStoreWithScopeAndPersistence();
+      renderConfirm(store);
+      await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      act(() => {
+        store.dispatch(castSlice.actions.addCharacter(sidekick));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+    } finally {
+      process.removeAllListeners('unhandledRejection');
+      for (const l of saved) process.on('unhandledRejection', l as never);
+    }
+  });
 });
 
 describe('Layout — a failed save on leaving a book is re-sent before the re-read (#3421)', () => {

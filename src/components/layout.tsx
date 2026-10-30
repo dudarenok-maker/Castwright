@@ -1288,6 +1288,10 @@ export function Layout() {
      leaves the once-guard unspent, so the real match runs once the slices
      hold this book. */
   const voiceMatchFiredFor = useRef<string | null>(null);
+  /* The effect's roster dependency: the sorted ids, so a swap to different ids
+     at the same count re-runs it too (a bare length misses that), while an
+     identity-only change does not. */
+  const rosterKey = useMemo(() => characters.map((c) => c.id).sort().join('\n'), [characters]);
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1323,7 +1327,7 @@ export function Layout() {
       if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length, manuscript.bookId]);
+  }, [stageKind, bookId, rosterKey, manuscript.bookId]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
