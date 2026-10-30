@@ -229,11 +229,17 @@ export class AnalyzerReasoningOverflowError extends Error {
   /** #3084 wave 5 — the level the overflowing request was sent at, set at the throw site
       (mapFinish's ctx, runFreeText's inline check). Never re-derived from live settings. */
   readonly reasoningLevel?: ReasoningLevel;
+  /** #3084 wave 5b (N13, 5b-D1) — the custom-payload key that set the overflowing request's output cap
+      (`options.num_predict`, `config.maxOutputTokens`, `max_completion_tokens`, `n_predict`, …), stamped at the
+      throw site from the payload that request sent. Never re-derived from live settings. */
+  readonly payloadCapKey?: string;
+  /** #3084 wave 5b (5b-D3) — true when that key's value is `null` or -1 (it removes the cap); any other value is false. */
+  readonly payloadCapRemoved?: boolean;
   constructor(
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
-    opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel },
+    opts?: { endpointId?: string; persona?: boolean; reasoningLevel?: ReasoningLevel; payloadCapKey?: string; payloadCapRemoved?: boolean },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
@@ -245,6 +251,8 @@ export class AnalyzerReasoningOverflowError extends Error {
     this.name = 'AnalyzerReasoningOverflowError';
     this.endpointId = opts?.endpointId;
     this.reasoningLevel = opts?.reasoningLevel;
+    this.payloadCapKey = opts?.payloadCapKey;
+    this.payloadCapRemoved = opts?.payloadCapRemoved;
   }
 }
 

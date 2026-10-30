@@ -14,6 +14,7 @@ import { configValue } from '../config/resolver.js';
 import { resolveGeminiMaxOutputTokens } from './capacity.js';
 import { getCachedUserSettings } from '../workspace/user-settings.js';
 import { resolveReasoningSetting } from './reasoning.js';
+import { requestMaxOutputTokens, resolveExtraParamsSetting } from './runner/extra-params.js';
 
 /* Re-exports for backward compatibility — callers and tests that imported
    these from gemini.ts still resolve after the wave-1 extraction. */
@@ -42,11 +43,16 @@ export class GeminiAnalyzer extends TransportAnalyzer {
         policy: GEMINI_RETRY_POLICY,
         /* The mode is read per request (analyzer.gemini.structuredOutput).
            maxOutputTokens reads the catalog the transport's prepare() warmed. */
-        settings: () => ({
-          structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
-          maxOutputTokens: resolveGeminiMaxOutputTokens(opts.model),
-          reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: opts.model }),
-        }),
+        settings: () => {
+          const extraParams = resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'gemini' });
+          return {
+            structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
+            /* P19 — the model's output limit, or the payload's own cap. */
+            maxOutputTokens: requestMaxOutputTokens('gemini', extraParams, () => resolveGeminiMaxOutputTokens(opts.model)),
+            reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: opts.model }),
+            extraParams,
+          };
+        },
         adaptSchema: adaptSchemaForGemini,
       }),
     );

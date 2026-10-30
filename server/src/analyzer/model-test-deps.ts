@@ -16,6 +16,7 @@ import { GeminiTransport } from './transports/gemini-transport.js';
 import { OpenAITransport } from './transports/openai-transport.js';
 import { adaptSchemaForGemini, adaptSchemaForOllama, adaptSchemaForOpenAI } from './runner/schema-adapters.js';
 import { resolveCapacity, resolveGeminiMaxOutputTokens } from './capacity.js';
+import { payloadOutputCap, resolveExtraParamsSetting } from './runner/extra-params.js';
 import { resolveNumPredict } from './ollama-settings.js';
 import { ollamaModelDigest } from './ollama-digest.js';
 import { ALL_STRUCTURED_OUTPUT_MODES, configuredReasoningFor, reasoningSelectionFor, type ModelTestDeps } from './capabilities.js';
@@ -34,11 +35,13 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
      endpoint keys are added to the saved secrets. */
   const secrets = [...knownAnalyzerSecrets(), ...Object.values(settings.analyzerEndpointKeys).map((k) => k.key)];
   const redact = (text: string): string => redactKnownSecrets(text, secrets);
+  const extraParams = resolveExtraParamsSetting(settings, reasoningSelectionFor(settings, modelId));
   const offered = {
     offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
     redact,
     reasoningSelection: (id: string) => reasoningSelectionFor(settings, id),
     configuredReasoning: (id: string) => configuredReasoningFor(settings, id),
+    extraParams,
   };
   const engine = inferEngineFromModelId(modelId);
   if (engine === 'openai') {
@@ -73,10 +76,10 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
       configuredMode: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
       adaptSchema: adaptSchemaForGemini,
       /* W2's Auto cap (the listed outputTokenLimit, 8192 without a list); prepare() warms the list. */
-      probeLimits: () => ({
+      probeLimits: withPayloadCap('gemini', extraParams, () => ({
         contextTokens: resolveCapacity({ engine: 'gemini', model: modelId }).contextTokens,
         maxOutputTokens: resolveGeminiMaxOutputTokens(modelId),
-      }),
+      })),
     };
   }
   const url = getResolvedOllamaUrl();
@@ -89,12 +92,26 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
     configuredMode: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
     adaptSchema: adaptSchemaForOllama,
     /* num_ctx is the context; num_predict -1 (the default) is Ollama's Auto — the context governs. */
-    probeLimits: () => {
+    probeLimits: withPayloadCap('ollama', extraParams, () => {
       const numPredict = resolveNumPredict();
       return {
         contextTokens: resolveCapacity({ engine: 'local', model: modelId }).contextTokens,
         maxOutputTokens: numPredict > 0 ? numPredict : null,
       };
-    },
+    }),
+  };
+}
+
+/** P19 — Test probes size against the payload's output cap when it sets or removes one. The endpoint branch
+    needs no wrap: resolveCapacity applies the payload cap itself. */
+function withPayloadCap(
+  kind: 'gemini' | 'ollama',
+  extraParams: Record<string, unknown> | undefined,
+  limits: () => { contextTokens: number; maxOutputTokens: number | null },
+): () => { contextTokens: number; maxOutputTokens: number | null } {
+  return () => {
+    const base = limits();
+    const cap = payloadOutputCap(kind, extraParams);
+    return cap === undefined ? base : { ...base, maxOutputTokens: cap };
   };
 }

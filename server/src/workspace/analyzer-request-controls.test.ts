@@ -117,3 +117,46 @@ describe('stored schema stays lenient', () => {
     expect(DEFAULT_USER_SETTINGS.analyzerReasoningByEngine).toEqual({});
   });
 });
+
+describe('analyzerRequestControlsPatchSchema — custom payload', () => {
+  it('prefixes each validation error with the engine', () => {
+    expect(
+      messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerExtraParamsByEngine: { ollama: { options: { num_ctx: 8192 } }, gemini: { topK: 4 } } })),
+    ).toEqual([
+      'Ollama custom parameters: These keys are controlled by Castwright and cannot be set here: options.num_ctx.',
+      'Gemini custom parameters: "topK" is not a Gemini request field — put generation options inside "config".',
+    ]);
+  });
+  it('accepts valid payloads', () => {
+    expect(messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } } }))).toEqual([]);
+  });
+});
+
+describe('stored schema stays lenient for payloads', () => {
+  it('loads a stored payload a newer protected-key list would refuse, and keeps it', () => {
+    const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, analyzerExtraParamsByEngine: { ollama: { think: true } } });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.analyzerExtraParamsByEngine.ollama).toEqual({ think: true });
+  });
+  it('defaults to an empty map', () => {
+    expect(DEFAULT_USER_SETTINGS.analyzerExtraParamsByEngine).toEqual({});
+  });
+});
+
+describe('changedRequestControls — payloads (N6)', () => {
+  it('leaves out a sent engine payload identical to the stored one, and keeps a changed one', () => {
+    const stored = { analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'X' } } } } };
+    expect(
+      changedRequestControls(
+        { analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'X' } } }, ollama: { top_k: 1 } } },
+        stored,
+      ),
+    ).toEqual({ analyzerExtraParamsByEngine: { ollama: { top_k: 1 } } });
+  });
+  it('leaves out a sent payload equal to the stored one with its keys in another order (5b-D14)', () => {
+    const stored = { analyzerExtraParamsByEngine: { ollama: { top_k: 1, options: { min_p: 0.05, num_predict: 64 } } } };
+    expect(
+      changedRequestControls({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 64, min_p: 0.05 }, top_k: 1 } } }, stored),
+    ).toEqual({ analyzerExtraParamsByEngine: {} });
+  });
+});

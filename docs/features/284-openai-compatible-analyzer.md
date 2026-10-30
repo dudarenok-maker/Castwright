@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 284 — OpenAI-compatible analyzer endpoints and request controls (#3084)
 
-> Status: draft. The design is approved in phases (spec, then plan), and implementation follows in waves 1–5 after wave 0 (#3139, #3141) merges.
+> Status: active. All five waves have shipped (see Ship notes); on-box acceptance for waves 2–5 is still owed as register rows, so the plan is not archived.
 > Key files (planned):
 > - `server/src/analyzer/runner/` (stage runner, transport contract, retry policies, schema adapters, payload merge)
 > - `server/src/analyzer/transports/` (Ollama, Gemini, OpenAI)
@@ -79,6 +79,16 @@ owner: null
    - Reasoning-overflow fixes (F7) extend invariant 7: `AnalysisFailureFix.reasoningSetting` names an engine and model with no registry key or endpoint. At an explicit Gemini level, "lower the level" is offered only when the row has a real level strictly below it; at `model-default` on a `thinkingLevel` row a suggestion names the row's lowest rung; a `gemmaOnOff` row at `model-default` gets neither (P27). Ollama's "turn off" fix is offered at `on`, a named level or `model-default`, not unconditionally. The endpoint fix is offered only for a controllable endpoint above its style's floor (`off` for `enable_thinking`, `none` for `reasoning_effort`, 5.5-D2). The frontend deep-links via `#/advanced?reasoningEngine=&reasoningModel=` and scrolls to and highlights the row.
    - The reasoning-overflow remediation names the control per instance where one exists, while `userMessage` stays the F7 headline (5.5-D1).
    - On-box rows: A118, B107, E114 (run sheet section 11 to 13).
+10. **Custom request payload (wave 5b).**
+   - A payload is a JSON object merged last into the native request: top-level keys replace, the owned container (Ollama `options`, Gemini `config`, endpoint `chat_template_kwargs`) merges key by key, and `null` removes a key but never a container. Settings live in `analyzerExtraParamsByEngine` (Ollama, Gemini) and per-endpoint `extraParams`.
+   - Pipeline-owned keys are refused on save naming them, and re-applied at merge time to a payload stored before a rule existed (names logged, never values). A Gemini payload is an allowlist inside `config`; `safetySettings` must be `{ category, threshold }` strings; `__proto__`, `constructor` and `prototype` are refused on save and dropped at merge at any depth.
+   - A payload temperature sets attempt 1 only; the retry policy's temperature stands on the validation retry.
+   - A payload output cap disables Auto, becomes the cap that the Test action and the overflow rule size against, and the run label says so. Test probes carry the payload ("+ custom params"). A persona request carries it without its output-cap keys (A4).
+   - The overflow error carries the payload cap key and whether it removes the cap, stamped at throw time by the shared runner (5b-D1), never re-read from settings. The remediation names the key and the fixes it overrides are dropped, for all three engines (5b-D2); the wording is "Set a value for" when the raw value is `null` or `-1`, "Raise" otherwise (5b-D3).
+   - The endpoint's Max output tokens is read-only but kept and sent while a payload sets the cap (5b-D5).
+   - A save judges only the payloads that change; the A7 payload comparison and `changedRequestControls` ignore key order (`isDeepStrictEqual`, 5b-D10, 5b-D14).
+   - Privacy: payloads are never logged or persisted into analyzer files and are not a place for credentials. A string value of 8 or more raw characters is redacted from the errors of the request that carried it, in all three transports, and never from another request's errors (P29); a value under 8 raw characters is never redacted (5b-D11).
+   - On-box rows: A119 (custom payload on real servers) and E115 (Gemini config payload), run sheet sections 14 and 15.
 
 ## Test plan
 
@@ -124,3 +134,24 @@ These run in mock mode (`npm run dev:mock`) once PR 3d has merged.
 5. Open Advanced configuration → Analyzer models. **Persona generation engine** lists `local`, `gemini` and the endpoint's models. Pick an endpoint model; the row shows it as overridden with Revert.
 
 **On-box acceptance** (live structured output, thinking-model output, long silent prefill, same-card eviction, capacity recalibration) is recorded in `docs/testing/onbox-acceptance-register.md` by the PRs that ship each behaviour.
+
+## Ship notes
+
+Status is `active`, not `stable`: all five waves have shipped, but on-box acceptance for waves 2–5 is still owed as register rows, so CLAUDE.md step 8 (move to `archive/`, `stable`) does not apply yet.
+
+| Wave | PR | Merge SHA |
+|---|---|---|
+| Design and plan | #3245 | `99d048d6` |
+| 0 (rate-limit overrides, #3139) | #3163 | `ade92d2b` |
+| 0 (Advanced Settings overrides, #3141) | #3192 | `80be2f1d` |
+| 1a (characterisation) | #3283 | `46af6a78` |
+| 1b (stage runner) | #3349 | `369b644e` |
+| 2a (capacity model) | #3373 | `72c044c2` |
+| 2b (Gemini Auto output, reasoning overflow) | #3412 | `7b46aed9` |
+| 3a (engine ids) | #3466 | `6f01fa20` |
+| 3b (endpoints, keys, transport) | #3525 | `f404e99a` |
+| 3c (catalog, limits, Test) | #3595 | `a0712ff5` |
+| 3d (endpoints selectable) | #3710 | `b015aae9` |
+| 4 (persona generation) | #3777 | `daff0e8c` |
+| 5a (reasoning controls) | #3834 | `c28705db` |
+| 5b (custom request payload) | #3878 | filled when the PR merges; it is reached through the PR |

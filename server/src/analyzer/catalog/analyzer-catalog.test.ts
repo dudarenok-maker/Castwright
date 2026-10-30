@@ -285,6 +285,21 @@ describe('buildAnalyzerCatalog', () => {
     const same = deps({ settings: withRec, listOllamaTags: vi.fn(async () => [{ name: 'qwen3.5:4b', digest: 'sha256:old' }]) });
     expect((await buildAnalyzerCatalog({ refresh: false }, same)).groups[0].models[0].capability).toEqual(rec);
   });
+
+  it('entries carry the payload label parts: + custom params, and a payload output cap (#3084 wave 5)', async () => {
+    const partsFor = async (over: Partial<UserSettings>) =>
+      (await buildAnalyzerCatalog({ refresh: true }, deps({ settings: () => settings(over) }))).groups.map(
+        (g) => g.models[0]?.requestControlLabelParts,
+      );
+    // groups: [ollama, gemini (fallback, no models), lab endpoint]
+    expect(await partsFor({ analyzerExtraParamsByEngine: { ollama: { top_k: 40 } } })).toEqual([['+ custom params'], undefined, []]);
+    expect(await partsFor({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 2048 } } } })).toEqual([
+      ['+ custom params', 'max output set by custom params'],
+      undefined,
+      [],
+    ]);
+    expect(await partsFor({ analyzerEndpoints: [{ ...lab, extraParams: { min_p: 0.05 } }] })).toEqual([[], undefined, ['+ custom params']]);
+  });
 });
 
 describe('previewEndpointModels', () => {
@@ -401,7 +416,7 @@ describe('DEFAULT_CATALOG_DEPS.listEndpoint over a real socket', () => {
     });
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
     const { port } = server.address() as AddressInfo;
-    /* The SDK merges this env into every request after its own auth header (client.mjs:240-249). */
+    /* The SDK reads this env into `defaultHeaders` (the `OpenAI` constructor in client.mjs), which `buildHeaders` applies to every request after its own auth header. */
     process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer stolen\nX-Leak: 1\nX-Stainless-Lang: evil';
     try {
       await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, 'sk-local');

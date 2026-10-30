@@ -76,7 +76,8 @@ export interface TransportRequest {
       (Ollama think:false; Gemini and OpenAI-compatible send no reasoning field). */
   reasoning?: ReasoningLevel;
   /** #3084 wave 5 — the engine/endpoint custom payload, merged last by the
-      transport (PR 5b). undefined = no payload. */
+      transport (mergeExtraParams); a persona request carries it without its
+      output-cap keys. undefined = no payload. */
   extraParams?: Record<string, unknown>;
   estimatedInputTokens: number;
   signal?: AbortSignal;
