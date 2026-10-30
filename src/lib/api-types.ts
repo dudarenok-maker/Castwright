@@ -3799,6 +3799,27 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /**
+         * @description #3084 — custom request parameters per engine. Protected keys, and keys
+         *     named __proto__, constructor or prototype at any depth, are refused on
+         *     save with a message naming them; `null` removes a key but never an
+         *     owned container. A PUT replaces this map, and each engine's payload
+         *     inside it, as a whole: send both engines' payloads, because one left
+         *     out of a sent map loses its payload. Not a place for credentials: an
+         *     endpoint key belongs in its API key field (P29). Never logged; string
+         *     values of 8+ characters are redacted from the errors of the request
+         *     that carried them.
+         */
+        AnalyzerExtraParamsByEngine: {
+            /** @description Merged last into Ollama /api/chat; `options` merges key by key. */
+            ollama?: {
+                [key: string]: unknown;
+            };
+            /** @description Only `config` is allowed, and inside it only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed and safetySettings (P16); safetySettings must be an array of objects with only a string category and a string threshold (N11). It merges key by key into the Gemini request config. */
+            gemini?: {
+                [key: string]: unknown;
+            };
+        };
         UserSettings: {
             /**
              * @description Free-text name shown in the top-bar avatar and used as the
@@ -3988,6 +4009,7 @@ export interface components {
                 [key: string]: number;
             };
             analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
+            analyzerExtraParamsByEngine?: components["schemas"]["AnalyzerExtraParamsByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
@@ -4145,6 +4167,8 @@ export interface components {
                 /** @description ISO date of the Test that recorded `outcome` (A2: a merged record holds verdicts from more than one Test). Absent when `outcome` is absent. */
                 outcomeTestedAt?: string;
             };
+            /** @description Run-label parts from the custom payload, e.g. "+ custom params", "max output set by custom params" (#3084 wave 5) */
+            requestControlLabelParts?: string[];
             testPlan: {
                 configured: number;
                 all: number;
@@ -4236,6 +4260,7 @@ export interface components {
                 [key: string]: number;
             };
             analyzerReasoningByEngine?: components["schemas"]["AnalyzerReasoningByEngine"];
+            analyzerExtraParamsByEngine?: components["schemas"]["AnalyzerExtraParamsByEngine"];
             /**
              * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
              *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
@@ -4917,7 +4942,7 @@ export interface components {
             label: string;
             /** @description Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix. */
             settingKey?: string;
-            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields). */
+            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields; from wave 5b, its custom parameters (`extraParams`) when a payload set the output cap). */
             endpointField?: {
                 endpointId: string;
                 field: string;
@@ -10797,6 +10822,14 @@ export interface operations {
                     "application/json": {
                         deleted: boolean;
                         artifactPurgeIncomplete?: boolean;
+                        /**
+                         * @description Artifacts a purge could not erase. File entries are paths relative
+                         *     to the workspace root using `/` (e.g. `voices/xtts/xtts-abc.pt`),
+                         *     never absolute — the absolute paths are logged server-side only.
+                         *     A failed sidecar cache evict is the synthetic
+                         *     `sidecar:<qwen|xtts>:<voiceId>` marker; an unscannable voices
+                         *     directory is `sweep:<relative dir>`.
+                         */
                         artifactPurgeFailedPaths?: string[];
                     };
                 };
@@ -13400,8 +13433,11 @@ export interface operations {
              *     all on-disk file paths (fs-38 Wave 3c, Task 14a): a failed
              *     sidecar in-process cache-evict is recorded as a synthetic
              *     `sidecar:<qwen|xtts>:<voiceId>` marker alongside any real file
-             *     path that could not be removed (e.g. a file held open by the
-             *     sidecar).
+             *     that could not be removed (e.g. a file held open by the
+             *     sidecar). File entries are paths relative to the workspace root
+             *     using `/` (e.g. `voices/xtts/xtts-abc.pt`), never absolute (#3720;
+             *     the absolute paths are logged server-side only); an unscannable
+             *     voices directory is `sweep:<relative dir>`.
              */
             200: {
                 headers: {

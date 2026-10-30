@@ -32,8 +32,18 @@ describe('modelLabel (#3084)', () => {
     expect(modelLabel('mistral:7b', catalog)).toBe('mistral:7b');
     expect(modelLabel('openai:latest', catalog)).toBe('openai:latest');
   });
-  it('catalogEntryFor + runLabelSuffixes expose the structured-output label (W5 appends custom params)', () => {
+  it('catalogEntryFor + runLabelSuffixes expose the structured-output label', () => {
     expect(runLabelSuffixes(catalogEntryFor('openai:lab::qwen3-30b', catalog))).toEqual(['schema (not enforced)']);
     expect(runLabelSuffixes(catalogEntryFor('unknown', catalog))).toEqual([]);
+  });
+  it('runLabelSuffixes appends the server-sent request-control parts after the structured-output label (#3084 wave 5)', () => {
+    const entry = catalogEntryFor('openai:lab::qwen3-30b', catalog)!;
+    expect(runLabelSuffixes({ ...entry, requestControlLabelParts: ['+ custom params', 'max output set by custom params'] })).toEqual([
+      'schema (not enforced)',
+      '+ custom params',
+      'max output set by custom params',
+    ]);
+    expect(runLabelSuffixes({ ...entry, requestControlLabelParts: [] })).toEqual(['schema (not enforced)']);
+    expect(runLabelSuffixes(entry)).toEqual(['schema (not enforced)']);
   });
 });

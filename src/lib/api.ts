@@ -86,6 +86,7 @@ import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { endpointModelId, engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
 import { structuredOutputLabel } from './structured-output-label';
+import { requestControlsLabelParts } from './extra-params';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -7328,6 +7329,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
   analyzerReasoningByEngine: {},
+  analyzerExtraParamsByEngine: {},
   analyzerRateLimitsByModel: {},
   analyzerCapabilitiesByModel: {},
   analyzerEndpoints: [],
@@ -7949,6 +7951,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerKeepAliveByModel,
     analyzerRateLimitsByModel,
     analyzerReasoningByEngine,
+    analyzerExtraParamsByEngine,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7971,6 +7974,8 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
             ? { ollama: Object.fromEntries(Object.entries(analyzerReasoningByEngine.ollama).map(([m, l]) => [mockNormalizeTag(m), l])) }
             : {}),
         },
+        /* 5b-D9 — passed through unjudged: protected keys are refused by the server only. */
+        analyzerExtraParamsByEngine,
       }).filter(([, v]) => v !== undefined),
     ),
   );
@@ -8021,8 +8026,8 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEn
     problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
   }
   if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
-  /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
-     payload refusal until PR 5b. */
+  /* #3084 — mirrors the server's parseEndpointInput level rule (PR 5a). A payload is accepted as sent:
+     protected keys are refused by the server only (5b-D9). */
   const controlProblems: { path: string[]; message: string }[] = [];
   const style = input.reasoningStyle ?? 'not_controllable';
   const level = input.reasoning ?? 'model-default';
@@ -8033,9 +8038,6 @@ function mockEndpointFromInput(input: AnalyzerEndpointInput, stored?: AnalyzerEn
       path: ['reasoning'],
       message: `Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
     });
-  }
-  if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
-    controlProblems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
   if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
   if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
@@ -9471,7 +9473,7 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
    differs from the control's + 1 when the mode is not `off`; all = the control + one request per
    other testable level + the schema and json checks. The mock's configured level is the control's.
    Group statuses follow the contract: Gemini without a key is `fallback`. */
-type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
+type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus' | 'analyzerExtraParamsByEngine'>;
 
 /* The level a W3 request is sent at, and so the record key (server capabilities.ts →
    reasoning.ts defaultReasoningLevel, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
@@ -9519,6 +9521,12 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       },
       testPlan: { configured: mode === 'off' ? 1 : 2, all: 1 + otherTestableLevels + 2, attempts: engine === 'local' ? 1 : 3 },
       offeredReasoningLevels: [...offered],
+      requestControlLabelParts: requestControlsLabelParts(
+        engine === 'local' ? 'ollama' : engine,
+        engine === 'openai'
+          ? source.analyzerEndpoints?.find((e) => e.id === parseEndpointModelId(id)?.endpointId)?.extraParams
+          : (source.analyzerExtraParamsByEngine?.[engine === 'local' ? 'ollama' : 'gemini'] as Record<string, unknown> | undefined),
+      ),
     };
   };
   return {

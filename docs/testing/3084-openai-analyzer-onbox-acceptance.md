@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), B107 (§12, Ollama reasoning levels and Test attribution) and E114 (§13, Gemini reasoning levels).
+> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (§12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
 
 ---
 
@@ -467,5 +467,87 @@ A8, Gemma `on` step: ___ Result:
 G1, `on` vs default: ___ Result:
 
 Stale `minimal` refusal and row: ___ Result:
+
+Run by / date / SHA:
+
+## 14. Custom payload on real servers — register row A119
+
+**Hardware:** the GPU box with llama-swap and Ollama; one thinking model on an endpoint. Follow the
+endpoint's request log and `logs/server.log`.
+
+### Preconditions
+
+- An OpenAI-compatible endpoint on llama-swap, and a local Ollama model. A chapter to analyse.
+- A thinking model on the endpoint (for the overflow check in step 5).
+
+### Procedure
+
+1. Endpoint with Custom parameters `{"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}`: analyse a
+   chapter. Read llama-swap's request log for those fields. Note the run label.
+2. Ollama with `{"options": {"min_p": 0.05}}` in its custom payload: analyse a chapter.
+3. Redaction: save `{"grammar_note": "castwright-onbox-probe-value"}` on a server that rejects unknown
+   fields, or `{"options": {"num_keep": "castwright-onbox-probe-value"}}` on Ollama, and analyse. Read the
+   failure on screen and in `logs/server.log`.
+4. Endpoint Max output tokens: with a custom output cap in the payload, check the field is read-only with
+   the note "Ignored while custom parameters set the output cap." and keeps its stored value.
+5. 5b-D1 / 5b-D2 / 5b-D3: set the thinking-model endpoint's custom parameters to `{"max_tokens": 64}` and
+   analyse. It overflows (`analyzer-reasoning-overflow`). Read the remediation and the fix list. Then set
+   `{"max_tokens": null}` and repeat.
+
+### Pass
+
+- Step 1 and step 2 complete a chapter; llama-swap's log shows the three fields. The run label reads
+  "+ custom params".
+- Step 3 fails with `[redacted]` in place of the value, on screen and in `logs/server.log`; the value
+  appears in neither.
+- Step 4: Max output tokens is read-only with that note, and its stored value is unchanged.
+- Step 5, `{"max_tokens": 64}`: the failure is `analyzer-reasoning-overflow`; its remediation names
+  `max_tokens` ("Raise the custom parameter …"); its fixes include that payload fix and
+  `Read: Custom payload`, and offer no `Lower <name>'s max output tokens`. With `{"max_tokens": null}` the
+  wording is "Set a value for the custom parameter …".
+
+Fields in the request log (step 1): ___ label: ___ Result:
+
+Ollama payload chapter: ___ Result:
+
+Redaction, screen / `server.log`: ___ / ___ Result:
+
+Max output tokens read-only and note: ___ Result:
+
+Overflow wording and fixes, `max_tokens` 64 / null: ___ / ___ Result:
+
+Run by / date / SHA:
+
+## 15. Gemini config payload — register row E115
+
+**Hardware:** any machine with a Gemini API key; no GPU.
+
+### Preconditions
+
+- A Gemini API key. A chapter to analyse. The Gemini payload editor is always shown in Advanced settings,
+  with or without a key.
+
+### Procedure
+
+1. Set the Gemini payload to `{"config": {"topK": 40}}` and analyse a chapter.
+2. Set `{"config": {"maxOutputTokens": 2048}}` and read the run label.
+3. Set `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}`
+   (a value Gemini rejects) and analyse. Read the failure on screen and in `logs/server.log`.
+4. Try to save `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}`.
+
+### Pass
+
+- Step 1 completes a chapter.
+- Step 2: the label reads "max output set by custom params".
+- Step 3 returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
+- Step 4 is refused on save, naming `config.httpOptions`.
+
+topK chapter: ___ Result:
+
+Label with `maxOutputTokens`: ___ Result:
+
+Rejected safetySettings, screen / `server.log`: ___ / ___ Result:
+
+`httpOptions` refusal: ___ Result:
 
 Run by / date / SHA:

@@ -20,6 +20,7 @@ import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from
 import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
+import { resetBookSlices } from '../store/reset-book-slices';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { selectIsOpenBook } from '../store/open-book';
@@ -168,6 +169,13 @@ export function BooksRoute() {
            next open would read only its revisions and show (and write back)
            the deleted book. Mark it so that open reads it in full. */
         dispatch(bookMetaActions.markNeedsFullRead({ bookId: b.bookId }));
+        /* #3841 — the slices may still hold the deleted book. A bundle re-import
+           keeps both its ids, so its reopen would read only revisions and show
+           (and write back) the deleted roster. Resetting them makes that reopen
+           a full read. Read live; non-persisted actions only. */
+        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+          resetBookSlices(dispatch, b.bookId);
+        }
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());

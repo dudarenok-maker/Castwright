@@ -156,7 +156,8 @@ describe('POST /api/analyzer/endpoints/detect-context (#3084 PR 3b)', () => {
   it('the 502 body never carries a typed key that the HTTP client echoed in its error (P22)', async () => {
     /* undici refuses the header value before dispatching and throws
        `Headers.append: "Bearer <key>" is an invalid header value.` (undici
-       lib/web/webidl/index.js:68-73, lib/web/fetch/headers.js:101-105). */
+       `webidl.errors.invalidArgument` in lib/web/webidl/index.js, called from `appendHeader` in
+       lib/web/fetch/headers.js). */
     const origin = await upstream();
     const res = await request(app)
       .post('/api/analyzer/endpoints/detect-context')

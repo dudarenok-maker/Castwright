@@ -6,10 +6,12 @@
    (mutateUserSettings). No I/O. It must not import user-settings.ts, which
    imports it. */
 
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { parseEndpointModelId } from '../analyzer/model-id.js';
 import { AnalyzerKeyOriginError } from '../analyzer/errors.js';
 import { levelsForReasoningStyle } from '../analyzer/reasoning.js';
+import { validateExtraParams } from '../analyzer/runner/extra-params.js';
 
 export const REASONING_STYLES = ['reasoning_effort', 'enable_thinking', 'not_controllable'] as const;
 
@@ -243,8 +245,7 @@ export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): A
   }
   const ep = parsed.data;
   /* #3084 PR 5a — a reasoning level must be one its control style offers. This
-     replaces P23's "model-default only" refusal. The `extraParams` refusal stays
-     until PR 5b replaces it with validateExtraParams. */
+     replaces P23's "model-default only" refusal. */
   const problems: { path: string[]; message: string }[] = [];
   /* A7 — judge the level only when this save changes it, or changes the style that decides which
      levels are offered. P17 still refuses a run that would send an unchanged stale level. */
@@ -256,8 +257,22 @@ export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): A
       message: `Reasoning "${ep.reasoning}" is not offered by the ${ep.reasoningStyle} control style (offered: ${offeredLevels.join(', ')}).`,
     });
   }
-  if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
-    problems.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+  /* #3084 PR 5b — P23's payload refusal, lifted: a payload must pass validateExtraParams under this
+     endpoint's reasoning style (chat_template_kwargs.enable_thinking is protected only under
+     enable_thinking). A7: on an update, only when this save changes the payload or that style; an
+     unchanged stale payload must not block every later edit, and mergeExtraParams still filters it.
+     The payload comparison ignores key order (5b-D10): the same payload re-sent with its keys
+     reordered is unchanged. */
+  /* The zod record parse strips a `__proto__` key, so the payload is judged from the raw input: a
+     prototype key is refused here exactly as Advanced settings refuses it, never silently dropped. */
+  const rawPayload = isRecord(withGpu) && isRecord(withGpu.extraParams) ? withGpu.extraParams : ep.extraParams;
+  const payloadChanged =
+    !stored ||
+    stored.reasoningStyle !== ep.reasoningStyle ||
+    !isDeepStrictEqual(stored.extraParams, rawPayload);
+  if (rawPayload !== undefined && payloadChanged) {
+    const payload = validateExtraParams('openai', rawPayload, { reasoningStyle: ep.reasoningStyle });
+    if (!payload.ok) for (const error of payload.errors) problems.push({ path: ['extraParams'], message: error });
   }
   if (problems.length > 0) {
     throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', problems);
