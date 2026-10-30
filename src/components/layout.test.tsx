@@ -2377,7 +2377,10 @@ describe('Layout — revisions polls (plan 286)', () => {
 
   it('a stale active poll (lower rev) does not clobber pending', async () => {
     getBookStateMock.mockResolvedValue(bookStateFor('b1', revState('b1', F1, 5, ['keep'])));
-    pollRevisionsMock.mockResolvedValue({ ...revState('b1', F1, 4, []), drift: [] });
+    // #3426 — the bounded read settles a couple of microtasks later than before; answer the poll on a timer so it still lands second.
+    pollRevisionsMock.mockImplementation(
+      () => new Promise((r) => setTimeout(() => r({ ...revState('b1', F1, 4, []), drift: [] }), 0)),
+    );
     pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
     const store = makeStore();
     act(() => {
@@ -4335,5 +4338,136 @@ describe('Layout - showInfo primary action while the named book restructures (#3
       store.dispatch(uiActions.clearRestructuringBook('b1'));
     });
     expect(screen.getByRole('button', { name: /Analyse now/i })).not.toBeDisabled();
+  });
+});
+
+describe('Layout — a stalled book-state read is bounded and retried (#3426)', () => {
+  const hydrateToast = (store: ReturnType<typeof makeStore>) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const castOf = (name: string) => ({ characters: [{ id: 'eliza', name, role: '', color: 'narrator' }] });
+  const neverSettles = () => new Promise<never>(() => {});
+
+  it('T1: a stalled full read shows the notice at 15 s and retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock
+        .mockImplementationOnce(neverSettles)
+        .mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, [])));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(14000);
+      expect(hydrateToast(store)).toBe(false);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1500); // +15 500
+      expect(hydrateToast(store)).toBe(true);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1000); // +16 500 (retry due at +17 000)
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(1000); // +17 500
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      expect(hydrateToast(store)).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("T2: a timed-out read's late answer is discarded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let resolveFirst!: (v: unknown) => void;
+      getBookStateMock
+        .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+        .mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, []), { cast: castOf('Second') }));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(17500);
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(store.getState().cast.characters.map((c) => c.name)).toContain('Second');
+      await act(async () => { resolveFirst(bookStateFor('A', revState('A', null, 0, []), { cast: castOf('First') })); });
+      await advance(500);
+      const names = store.getState().cast.characters.map((c) => c.name);
+      expect(names).toContain('Second');
+      expect(names).not.toContain('First');
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T3: the retry schedule is 2 s, 4 s, 8 s, 16 s, then 30 s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockRejectedValue(new Error('disk error'));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(0);
+      // Calls land at 0, 2 000, 6 000, 14 000, 30 000, 60 000, 90 000 ms.
+      const landings = [0, 2000, 6000, 14000, 30000, 60000, 90000];
+      let now = 0;
+      for (let i = 1; i < landings.length; i++) {
+        await advance(landings[i] - 500 - now);
+        now = landings[i] - 500;
+        expect(getBookStateMock).toHaveBeenCalledTimes(i);
+        await advance(1000);
+        now += 1000;
+        expect(getBookStateMock).toHaveBeenCalledTimes(i + 1);
+      }
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4: a stalled revisions-only read stays silent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockResolvedValueOnce(bookStateFor('A', revState('A', null, 0, [])));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(100);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      getBookStateMock.mockImplementationOnce(neverSettles);
+      act(() => { store.dispatch(uiActions.goHome()); });
+      openAt(store, 'A');
+      await advance(20000);
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      expect(hydrateToast(store)).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('T5: leaving the book cancels the bound and the retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation((id: string) =>
+        id === 'A' ? neverSettles() : Promise.resolve(bookStateFor('B', revState('B', null, 0, []))));
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(5000);
+      openAt(store, 'B');
+      await advance(100);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      expect(hydrateToast(store)).toBe(false);
+      expect(getBookStateMock.mock.calls.filter(([id]) => id === 'A')).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

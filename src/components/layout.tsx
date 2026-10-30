@@ -181,11 +181,33 @@ export interface LayoutContext {
 }
 
 /* #3395 pass 4, S2 — the per-book hydrate retries a failed getBookState with
-   doubling backoff (1 s, 2 s, 4 s, … capped at 15 s) until it lands, showing
-   one deduped notice meanwhile. */
+   doubling backoff (2 s, 4 s, 8 s, … capped at 30 s) until it lands, showing
+   one deduped notice meanwhile. Each read is bounded at 15 s
+   (BOOK_READ_TIMEOUT_MS), and an expired read is handled as a rejection
+   (#3426). */
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
-const REVISIONS_HYDRATE_RETRY_BASE_MS = 1000;
-const REVISIONS_HYDRATE_RETRY_MAX_MS = 15000;
+const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
+const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
+const BOOK_READ_TIMEOUT_MS = 15000;
+const retryDelayMs = (attempt: number) =>
+  Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
+
+/* #3426 — settle `p`, or reject after `ms` if it hasn't. Does not cancel `p`;
+   its late answer is discarded. `timers` collects the bound's timer so the
+   caller's cleanup can clear it. */
+function within<T>(p: Promise<T>, ms: number, timers: Set<ReturnType<typeof setTimeout>>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      reject(new Error(`timed out after ${ms} ms`));
+    }, ms);
+    timers.add(timer);
+    p.then(
+      (v) => { clearTimeout(timer); timers.delete(timer); resolve(v); },
+      (e) => { clearTimeout(timer); timers.delete(timer); reject(e); },
+    );
+  });
+}
 
 /* Plan 286, OD2 — the unreadable-revisions.json toast fires at most once per
    book per session. Module-level so it survives across every book-open
@@ -915,8 +937,10 @@ export function Layout() {
     /* #3395 pass 4, S2 (OD3) — a failed FULL load is retried with bounded
        backoff until it lands, with a notice shown while it can't. A failed
        revisions-only re-read is dropped silently instead (Task 18): the next
-       30 s poll repairs it, and nothing else on this book was waiting on it. */
+       30 s poll repairs it, and nothing else on this book was waiting on it.
+       A read that has not settled in 15 s is treated as a failed read (#3426). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
        never carries over onto the next book (#3395 pass 5, minor c). */
     let failureNoticeShown = false;
@@ -928,8 +952,7 @@ export function Layout() {
       /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
          so a save that lands while it is in flight wins over what it read. */
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
-      api
-        .getBookState(bookId)
+      within(api.getBookState(bookId), BOOK_READ_TIMEOUT_MS, boundTimers)
         .then((res) => {
           if (cancelled) return;
           if (!revisionsOnly) {
@@ -1196,10 +1219,7 @@ export function Layout() {
             }),
           );
           failureNoticeShown = true;
-          retryTimer = setTimeout(
-            () => load(attempt + 1),
-            Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS),
-          );
+          retryTimer = setTimeout(() => load(attempt + 1), retryDelayMs(attempt));
         })
         .catch((err) => {
           console.warn('[book-state] hydrate skipped:', err.message);
@@ -1223,6 +1243,8 @@ export function Layout() {
       cancelled = true;
       fullReadInFlight.current = null;
       if (retryTimer) clearTimeout(retryTimer);
+      for (const t of boundTimers) clearTimeout(t);
+      boundTimers.clear();
       if (failureNoticeShown) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
