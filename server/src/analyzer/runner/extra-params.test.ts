@@ -20,7 +20,7 @@ import {
 } from './extra-params.js';
 import type { TransportKind } from '../errors.js';
 
-const NEW_OPENAI_KEYS = ['structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'thinking_token_budget'];
+const NEW_OPENAI_KEYS = ['structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'thinking_token_budget', 'stop_token_ids'];
 
 const geminiRefusal = (paths: string) =>
   `Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: ${paths}.`;
@@ -28,7 +28,7 @@ const geminiRefusal = (paths: string) =>
 describe('protected keys are exactly spec §9; Gemini config is an allowlist (P16)', () => {
   it('per transport', () => {
     expect(PROTECTED_KEYS.openai).toEqual([
-      'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
+      'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'stop_token_ids', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
       'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
       'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag',
     ]);
@@ -91,6 +91,30 @@ describe('validateExtraParams', () => {
     expect(validateExtraParams('openai', p, { reasoningStyle: 'enable_thinking' })).toEqual(refusal);
     /* fail closed: no style is not "not controllable" */
     expect(validateExtraParams('openai', p, {})).toEqual(refusal);
+  });
+  it('protects the LiteLLM top-level thinking field like enable_thinking: free only under not_controllable (#3904)', () => {
+    const p = { thinking: { type: 'enabled', budget_tokens: 16000 } };
+    const refusal = { ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: thinking.'] };
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'reasoning_effort' })).toEqual(refusal);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'enable_thinking' })).toEqual(refusal);
+    expect(validateExtraParams('openai', p, {})).toEqual(refusal);
+    const r = validateExtraParams('openai', { Thinking: {} }, { reasoningStyle: 'reasoning_effort' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.errors.join(' ')).toContain('Thinking');
+    expect(validateExtraParams('openai', { Thinking: {} }, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
+  });
+  it('drops a stored thinking under a gated style with a names-only warning (#3904)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const secret = 'sk-secret-value-123456';
+    const stored = { thinking: { type: 'enabled', note: secret }, top_k: 40 };
+    expect(mergeExtraParams('openai', { model: 'm' }, stored, { reasoningStyle: 'reasoning_effort' })).toEqual({ model: 'm', top_k: 40 });
+    expect(mergeExtraParams('openai', { model: 'm' }, stored)).toEqual({ model: 'm', top_k: 40 });
+    expect(mergeExtraParams('openai', { model: 'm' }, stored, { reasoningStyle: 'not_controllable' })).toEqual({ model: 'm', ...stored });
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join(' | ');
+    expect(logged).toContain('thinking');
+    expect(logged).not.toContain(secret);
+    vi.restoreAllMocks();
   });
   it.each(NEW_OPENAI_KEYS)('refuses the vLLM key %s (#3904)', (key) => {
     expect(validateExtraParams('openai', { [key]: {}, top_k: 40 }, {})).toEqual({

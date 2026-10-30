@@ -179,6 +179,13 @@ describe('create / update / delete / key decisions', () => {
       { path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.' },
     ]);
   });
+  it('refuses the LiteLLM top-level thinking field under a controllable style, naming it (#3904)', () => {
+    const r = refusal(() =>
+      applyCreate(empty, { ...base, reasoningStyle: 'reasoning_effort', reasoning: 'none', extraParams: { thinking: { type: 'enabled', budget_tokens: 16000 } } }),
+    );
+    expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: thinking.' }]);
+  });
   it('refuses a top-level __proto__ key in the payload instead of silently dropping it', () => {
     const payload = JSON.parse('{"__proto__":{"x":1}}');
     const refused = refusal(() => applyCreate(empty, { ...base, extraParams: payload }));
