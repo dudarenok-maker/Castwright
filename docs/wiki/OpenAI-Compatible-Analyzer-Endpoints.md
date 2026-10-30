@@ -258,7 +258,7 @@ whether it understands it.
   non-OpenAI sampler fields such as `top_k` and `min_p` directly in the body. <!-- UNVERIFIED: not re-read against the vLLM v0.31.0 docs on this date. -->
 - **LiteLLM:** the gateway forwards the body to the backend behind it, so the keys are the
   backend's. Whether an unknown key passes through depends on the gateway's configuration: check
-  its documentation (verify at implementation). <!-- UNVERIFIED. -->
+  its documentation. <!-- UNVERIFIED. -->
 - **OpenRouter:** `{"presence_penalty": 0.5, "top_k": 40}`. Hosted models differ in which
   parameters they honour, and OpenRouter documents which ones each model supports. A reasoning
   model needs `max_completion_tokens` rather than `max_tokens`. <!-- UNVERIFIED: not re-checked against OpenRouter's parameter reference on this date. -->
