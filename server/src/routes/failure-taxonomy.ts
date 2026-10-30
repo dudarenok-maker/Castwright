@@ -892,24 +892,27 @@ export function reasoningOverflowAdvice(ctx: Parameters<typeof reasoningOverflow
 }
 
 /* #3084 PR 3b — the settings that shape a request, per transport, named in an
-   analyzer-request-rejected remediation. Wave 5b adds the custom-payload
-   settings. */
+   analyzer-request-rejected remediation: structured output, context and output
+   size, reasoning (5a) and custom parameters (5b). */
 const REQUEST_SHAPING_SETTINGS: Record<TransportKind, string[]> = {
   ollama: [
     'Ollama structured output (analyzer.ollama.structuredOutput)',
     'Ollama num_ctx (analyzer.ollama.numCtx)',
     'Ollama num_predict (analyzer.ollama.numPredict)',
     'the Ollama reasoning setting (Advanced settings → Analyzer request controls)',
+    'the Ollama custom parameters (Advanced settings → Analyzer request controls)',
   ],
   gemini: [
     'Gemini structured output (analyzer.gemini.structuredOutput)',
     'Gemini max output tokens (analyzer.gemini.maxOutputTokens)',
     'the Gemini reasoning setting (Advanced settings → Analyzer request controls)',
+    'the Gemini custom parameters (Advanced settings → Analyzer request controls)',
   ],
   openai: [
     "the endpoint's Structured output field",
     "the endpoint's Context size field",
     "the endpoint's Reasoning setting",
+    "the endpoint's Custom parameters field",
   ],
 };
 
