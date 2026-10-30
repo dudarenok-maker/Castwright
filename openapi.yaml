@@ -2977,7 +2977,16 @@ paths:
                 properties:
                   deleted: { type: boolean }
                   artifactPurgeIncomplete: { type: boolean }
-                  artifactPurgeFailedPaths: { type: array, items: { type: string } }
+                  artifactPurgeFailedPaths:
+                    type: array
+                    items: { type: string }
+                    description: |
+                      Artifacts a purge could not erase. File entries are paths relative
+                      to the workspace root using `/` (e.g. `voices/xtts/xtts-abc.pt`),
+                      never absolute — the absolute paths are logged server-side only.
+                      A failed sidecar cache evict is the synthetic
+                      `sidecar:<qwen|xtts>:<voiceId>` marker; an unscannable voices
+                      directory is `sweep:<relative dir>`.
         '404':
           description: No library entry with that voiceUuid
         '409':
@@ -5091,8 +5100,11 @@ paths:
             all on-disk file paths (fs-38 Wave 3c, Task 14a): a failed
             sidecar in-process cache-evict is recorded as a synthetic
             `sidecar:<qwen|xtts>:<voiceId>` marker alongside any real file
-            path that could not be removed (e.g. a file held open by the
-            sidecar).
+            that could not be removed (e.g. a file held open by the
+            sidecar). File entries are paths relative to the workspace root
+            using `/` (e.g. `voices/xtts/xtts-abc.pt`), never absolute (#3720;
+            the absolute paths are logged server-side only); an unscannable
+            voices directory is `sweep:<relative dir>`.
           content:
             application/json:
               schema:
@@ -5615,6 +5627,28 @@ components:
         send every engine's entries, because an engine left out of a sent map loses
         them.
 
+    AnalyzerExtraParamsByEngine:
+      type: object
+      properties:
+        ollama:
+          type: object
+          additionalProperties: true
+          description: Merged last into Ollama /api/chat; `options` merges key by key.
+        gemini:
+          type: object
+          additionalProperties: true
+          description: Only `config` is allowed, and inside it only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed and safetySettings (P16); safetySettings must be an array of objects with only a string category and a string threshold (N11). It merges key by key into the Gemini request config.
+      description: |
+        #3084 — custom request parameters per engine. Protected keys, and keys
+        named __proto__, constructor or prototype at any depth, are refused on
+        save with a message naming them; `null` removes a key but never an
+        owned container. A PUT replaces this map, and each engine's payload
+        inside it, as a whole: send both engines' payloads, because one left
+        out of a sent map loses its payload. Not a place for credentials: an
+        endpoint key belongs in its API key field (P29). Never logged; string
+        values of 8+ characters are redacted from the errors of the request
+        that carried them.
+
     UserSettings:
       type: object
       required:
@@ -5834,6 +5868,8 @@ components:
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
         analyzerReasoningByEngine:
           $ref: '#/components/schemas/AnalyzerReasoningByEngine'
+        analyzerExtraParamsByEngine:
+          $ref: '#/components/schemas/AnalyzerExtraParamsByEngine'
         analyzerRateLimitsByModel:
           type: object
           additionalProperties:
@@ -6030,6 +6066,10 @@ components:
               description: >-
                 ISO date of the Test that recorded `outcome` (A2: a merged record holds
                 verdicts from more than one Test). Absent when `outcome` is absent.
+        requestControlLabelParts:
+          type: array
+          items: { type: string }
+          description: 'Run-label parts from the custom payload, e.g. "+ custom params", "max output set by custom params" (#3084 wave 5)'
         testPlan:
           type: object
           required: [configured, all, attempts]
@@ -6149,6 +6189,8 @@ components:
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
         analyzerReasoningByEngine:
           $ref: '#/components/schemas/AnalyzerReasoningByEngine'
+        analyzerExtraParamsByEngine:
+          $ref: '#/components/schemas/AnalyzerExtraParamsByEngine'
         analyzerRateLimitsByModel:
           type: object
           additionalProperties:
@@ -6982,7 +7024,7 @@ components:
           description: Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix.
         endpointField:
           type: object
-          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields).'
+          description: 'Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Emitted for an OpenAI-compatible endpoint (its output, context and, on a controllable style, reasoning fields; from wave 5b, its custom parameters (`extraParams`) when a payload set the output cap).'
           required: [endpointId, field]
           properties:
             endpointId: { type: string }

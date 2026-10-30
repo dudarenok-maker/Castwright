@@ -722,21 +722,26 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 40 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 41 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 15 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 16 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**71 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**73 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-27 (#3084 wave 5a, PR 5a), 68 → 71.** Rows **A118**
+> **Last change: 2026-10-30 (#3084 wave 5b, PR 5b), 71 → 73.** Rows **A119**
+> (custom payload on real servers) and **E115** (Gemini config payload) added from #3084 PR 5b's
+> run sheet (`3084-openai-analyzer-onbox-acceptance.md` §14–§15). Group A 40 → 41, E 15 → 16.
+> `next-id` bumped A119 → A120 and E115 → E116 in the same change. Rows are owed; not run here.
+>
+> **Prior change: 2026-10-27 (#3084 wave 5a, PR 5a), 68 → 71.** Rows **A118**
 > (endpoint reasoning styles take effect on llama-swap), **B107** (Ollama reasoning levels and
 > Test attribution) and **E114** (Gemini reasoning levels take effect) added from #3084 PR 5a's
 > run sheet (`3084-openai-analyzer-onbox-acceptance.md` §11–§13). Group A 39 → 40, B 7 → 8,
@@ -1860,7 +1865,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A119 -->
+<!-- next-id: A120 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6364,6 +6369,16 @@ The automated tests prove the wire bodies carry `reasoning_effort` or `chat_temp
 
 *Needs:* the GPU box with llama-swap and a Qwen3.6 model. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §11. Clears when each split and the probe verdict are recorded with the server log line that shows them.
 
+### A119 · Custom payload on real servers ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **one GPU box: llama-swap and Ollama**
+
+The automated tests prove the merged request bodies, the redaction and the overflow wording against mocks. Only real servers show that they accept the fields, that a provider error repeating a value back is redacted, and that a thinking model's overflow names the payload key.
+
+- **Endpoint payload.** `{"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}` completes a chapter, llama-swap's request log shows those fields, and the run label reads "+ custom params". Ollama with `{"options": {"min_p": 0.05}}` completes a chapter.
+- **Redaction.** A value the server rejects (`castwright-onbox-probe-value`) fails with `[redacted]` on screen and in `logs/server.log`, never the value.
+- **Output cap.** With a payload cap, the endpoint's Max output tokens is read-only with its note and keeps its stored value. `{"max_tokens": 64}` on a thinking model overflows (`analyzer-reasoning-overflow`); the remediation names `max_tokens` ("Raise the custom parameter …") and the fixes include `Read: Custom payload` and no `Lower <name>'s max output tokens`. With `{"max_tokens": null}` the wording is "Set a value for …".
+
+*Needs:* the GPU box with llama-swap, Ollama and a thinking model. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §14. Clears when each bullet is recorded with the server log line that shows it.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B108 -->
@@ -6923,7 +6938,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E115 -->
+<!-- next-id: E116 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7590,6 +7605,17 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 - **G1.** On a chapter long enough to exhaust the cap, record what Gemma `on` does with an empty `MAX_TOKENS` answer (expected: `analyzer-reasoning-overflow`, the run stops) against the same chapter at Gemma's default level (expected: the chunk splits and recovers, #528).
 
 *Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §13. Clears when each bullet is recorded.
+
+### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
+
+The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that it accepts a payload `topK`, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.
+
+- **`topK`.** `{"config": {"topK": 40}}` completes a chapter.
+- **Output cap.** `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params".
+- **Rejected value.** `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
+- **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
+
+*Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
 
 ## Group G — GitHub Actions itself
 

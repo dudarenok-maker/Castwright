@@ -78,7 +78,7 @@ import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 import { isTransient } from '../tts/retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
-import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
+import { purgeCloneArtifacts, toClientPurgePaths } from '../workspace/purge-clone-artifacts.js';
 import { httpStatusForSidecarError } from './sidecar-error-status.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 
@@ -2167,7 +2167,10 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
    `artifactPurgeIncomplete` while XTTS's TTL-less latents cache
    (`CoquiEngine._latents_cache`) still held the voice — this route needed
    no code change of its own to pick that up, since it already forwards
-   `purgeResult.failed` verbatim. */
+   `purgeResult.failed`.
+
+   #3720 — the response carries that list converted to workspace-relative
+   entries by `toClientPurgePaths`; the absolute list is only logged. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -2204,7 +2207,7 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     }
     return res.status(200).json(
       purgeResult.failed.length > 0
-        ? { ...final, artifactPurgeIncomplete: true, artifactPurgeFailedPaths: purgeResult.failed }
+        ? { ...final, artifactPurgeIncomplete: true, artifactPurgeFailedPaths: toClientPurgePaths(purgeResult.failed) }
         : final,
     );
   } catch (e) {
@@ -2253,7 +2256,9 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    artifact sweep both genuinely ran; this is a partial outcome, not an
    error. `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` are the same
    two fields the revoke route above already carries (Task 14a), deliberately
-   reused rather than a second, delete-only signal.
+   reused rather than a second, delete-only signal. As on revoke (#3720), the
+   paths are converted to workspace-relative entries by `toClientPurgePaths`
+   and the absolute list is only logged.
 
    #1981 — the whole scan -> clear -> erase sequence (`readEntry` and its
    404, `scanLibraryVoiceUsage`, `clearLibraryVoiceReferences`,
@@ -2313,7 +2318,7 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
         return res.status(200).json({
           deleted: false,
           artifactPurgeIncomplete: true,
-          artifactPurgeFailedPaths: purgeResult.failed,
+          artifactPurgeFailedPaths: toClientPurgePaths(purgeResult.failed),
         });
       }
 

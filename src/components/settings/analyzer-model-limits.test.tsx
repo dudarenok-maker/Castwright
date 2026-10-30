@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { accountSlice, fetchAccountSettings } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import { chaptersSlice, type ActiveStreamSnapshot } from '../../store/chapters-slice';
@@ -135,5 +135,29 @@ describe('AnalyzerModelLimits (#3084)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run test' }));
     expect(screen.queryByText('Pause audio generation to analyse?')).toBeNull();
     await waitFor(() => expect(api.testAnalyzerModel).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('AnalyzerModelLimits - draft survives other settings saves', () => {
+  it('keeps an unsaved RPM when another save replaces the saved map with an equal-valued one', async () => {
+    const store = renderLimits();
+    store.dispatch(fetchAccountSettings.fulfilled({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 10 } } } as never, 'req'));
+    const rpm = (await screen.findByLabelText('Gemini 3.6 Flash RPM')) as HTMLInputElement;
+    fireEvent.change(rpm, { target: { value: '3' } });
+    /* Any other settings save returns the whole object: a new map reference, the same limits. */
+    act(() => {
+      store.dispatch(fetchAccountSettings.fulfilled({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 10 } } } as never, 'req'));
+    });
+    expect((screen.getByLabelText('Gemini 3.6 Flash RPM') as HTMLInputElement).value).toBe('3');
+  });
+
+  it('resyncs the draft when the saved limit really changes', async () => {
+    const store = renderLimits();
+    store.dispatch(fetchAccountSettings.fulfilled({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 10 } } } as never, 'req'));
+    fireEvent.change(await screen.findByLabelText('Gemini 3.6 Flash RPM'), { target: { value: '3' } });
+    act(() => {
+      store.dispatch(fetchAccountSettings.fulfilled({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 20 } } } as never, 'req'));
+    });
+    expect((screen.getByLabelText('Gemini 3.6 Flash RPM') as HTMLInputElement).value).toBe('20');
   });
 });

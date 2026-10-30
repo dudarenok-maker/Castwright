@@ -15,6 +15,7 @@ import {
 } from '../../store/account-slice';
 import { api, detectAnalyzerEndpointContext, AnalyzerEndpointError } from '../../lib/api';
 import { defaultGpuForBaseUrl } from '../../lib/analyzer-endpoints';
+import { parseExtraParamsText, payloadSetsOutputCap } from '../../lib/extra-params';
 import { endpointModelId, engineForModelId } from '../../lib/model-id';
 import { modelLabel } from '../../lib/model-label';
 import type { AnalyzerEndpoint, AnalyzerEndpointInput, AnalyzerEndpointModelsPreview, GpuDevice } from '../../lib/types';
@@ -40,6 +41,7 @@ export interface EndpointDraft {
   structuredOutput: Mode;
   reasoningStyle: ReasoningStyle;
   reasoning: ReasoningLevel;
+  extraParamsText: string;
   maxOutputTokens: string;
   contextTokens: string;
   maxInputTokensPerRequest: string;
@@ -48,7 +50,7 @@ export interface EndpointDraft {
 }
 
 /** Form fields a save refusal's `issues[].path[0]` can name (the endpoint schema's editable fields). */
-const ISSUE_FIELDS = ['name', 'baseUrl', 'gpu', 'unloadUrl', 'concurrency', 'requestCeilingMs', 'structuredOutput', 'reasoningStyle', 'reasoning', 'maxOutputTokens', 'contextTokens', 'maxInputTokensPerRequest'] as const;
+const ISSUE_FIELDS = ['name', 'baseUrl', 'gpu', 'unloadUrl', 'concurrency', 'requestCeilingMs', 'structuredOutput', 'reasoningStyle', 'reasoning', 'extraParams', 'maxOutputTokens', 'contextTokens', 'maxInputTokensPerRequest'] as const;
 type IssueField = (typeof ISSUE_FIELDS)[number];
 type DraftErrors = Partial<Record<IssueField | 'key', string>>;
 
@@ -63,6 +65,7 @@ export const ENDPOINT_FIELD_TEST_IDS: Record<IssueField, string> = {
   structuredOutput: 'endpoint-structured-output',
   reasoningStyle: 'endpoint-reasoning-style',
   reasoning: 'endpoint-reasoning',
+  extraParams: 'endpoint-extra-params',
   maxOutputTokens: 'endpoint-max-output-tokens',
   contextTokens: 'endpoint-context-tokens',
   maxInputTokensPerRequest: 'endpoint-max-input-tokens',
@@ -98,6 +101,7 @@ function draftFrom(e: AnalyzerEndpoint | null): EndpointDraft {
     structuredOutput: e?.structuredOutput ?? 'schema',
     reasoningStyle: e?.reasoningStyle ?? 'not_controllable',
     reasoning: (e?.reasoning as ReasoningLevel | undefined) ?? 'model-default',
+    extraParamsText: e?.extraParams ? JSON.stringify(e.extraParams, null, 2) : '',
     maxOutputTokens: String(e?.maxOutputTokens ?? 0),
     contextTokens: e ? String(e.contextTokens) : '',
     maxInputTokensPerRequest: e?.maxInputTokensPerRequest ? String(e.maxInputTokensPerRequest) : '',
@@ -126,6 +130,8 @@ export function validateEndpointDraft(
   if (hostChanged && d.key.trim() === '' && !d.noKey) {
     errors.key = `The host changed — re-enter the API key for ${original?.name}. The saved key is only sent to ${originOf(original?.baseUrl ?? '')}.`;
   }
+  const payload = parseExtraParamsText(d.extraParamsText);
+  if (!payload.ok) errors.extraParams = payload.error;
   if (Object.keys(errors).length > 0) return { errors, input: null, hostChanged };
   const maxInput = Number.parseInt(d.maxInputTokensPerRequest, 10);
   const input: AnalyzerEndpointInput = {
@@ -142,7 +148,7 @@ export function validateEndpointDraft(
     maxOutputTokens: Math.max(0, Number.parseInt(d.maxOutputTokens, 10) || 0),
     contextTokens: context,
     ...(Number.isInteger(maxInput) && maxInput >= 256 ? { maxInputTokensPerRequest: maxInput } : {}),
-    ...(original?.extraParams ? { extraParams: original.extraParams } : {}),
+    ...(payload.ok && payload.value ? { extraParams: payload.value } : {}),
   };
   return { errors, input, hostChanged };
 }
@@ -208,6 +214,8 @@ export function AnalyzerEndpointsSection() {
     () => editing != null && originOf(editing.baseUrl) !== originOf(draft.baseUrl) && (keyStatus[editing.id] ?? 'unset') !== 'unset',
     [editing, draft.baseUrl, keyStatus],
   );
+  const payloadParse = parseExtraParamsText(draft.extraParamsText);
+  const payloadCapsOutput = payloadParse.ok && payloadSetsOutputCap('openai', payloadParse.value);
 
   const open = (endpoint: AnalyzerEndpoint | null) => {
     setEditing(endpoint);
@@ -490,14 +498,40 @@ export function AnalyzerEndpointsSection() {
               {errors.reasoning && <p className="mt-1 text-xs text-rose-700">{errors.reasoning}</p>}
             </FieldRow>
             <FieldRow label="Max output tokens" sublabel="0 = Auto (the model's limit, or context minus input).">
-              <input data-testid="endpoint-max-output-tokens" type="number" min={0} value={draft.maxOutputTokens} onChange={(e) => set('maxOutputTokens', e.target.value)} className={INPUT} />
+              <input data-testid="endpoint-max-output-tokens" type="number" min={0} value={draft.maxOutputTokens} onChange={(e) => set('maxOutputTokens', e.target.value)} readOnly={payloadCapsOutput} className={INPUT} />
               {errors.maxOutputTokens && <p className="mt-1 text-xs text-rose-700">{errors.maxOutputTokens}</p>}
+              {payloadCapsOutput && (
+                <p data-testid="endpoint-max-output-controlled" className="mt-1 text-xs text-amber-800">
+                  Ignored while custom parameters set the output cap.
+                </p>
+              )}
             </FieldRow>
             <FieldRow label="Max input tokens per request" sublabel="Optional cap. When set, it (or this endpoint's TPM limit, whichever is smaller) lowers the chunk size below the Context size bound.">
               <input data-testid="endpoint-max-input-tokens" type="number" min={256} value={draft.maxInputTokensPerRequest} onChange={(e) => set('maxInputTokensPerRequest', e.target.value)} className={INPUT} />
               {errors.maxInputTokensPerRequest && <p className="mt-1 text-xs text-rose-700">{errors.maxInputTokensPerRequest}</p>}
             </FieldRow>
           </div>
+          {/* #3084 wave 5b (5b-D6) — full width below the two-column grid: a JSON editor needs the room. */}
+          <FieldRow label="Custom parameters" sublabel='JSON merged last into every request to this endpoint, e.g. {"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}. chat_template_kwargs merges key by key; null removes a key. A temperature here sets the first attempt only. Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. Not a place for credentials: put this endpoint key in the API key field above. OpenAI reasoning models need max_completion_tokens instead of max_tokens; llama.cpp n_predict also sets the output cap.'>
+            <textarea
+              data-testid="endpoint-extra-params"
+              value={draft.extraParamsText}
+              onChange={(e) => {
+                set('extraParamsText', e.target.value);
+                /* The last save's JSON error or server refusal no longer applies to edited text; the live parse error takes over. */
+                setErrors((er) => ({ ...er, extraParams: undefined }));
+              }}
+              rows={4}
+              spellCheck={false}
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white font-mono text-xs text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0"
+            />
+            {/* A server refusal at path extraParams (Task 5.9's protected-key messages) lands in errors.extraParams; the live parse error shows while typing. */}
+            {(errors.extraParams || !payloadParse.ok) && (
+              <p data-testid="endpoint-extra-params-error" className="mt-1 text-xs text-rose-700">
+                {errors.extraParams ?? (payloadParse.ok ? '' : payloadParse.error)}
+              </p>
+            )}
+          </FieldRow>
           {saveError && <p data-testid="endpoint-save-error" className="text-xs text-rose-700">{saveError}</p>}
           <div className="flex items-center gap-3">
             <button type="button" data-testid="endpoint-save" onClick={() => void save()} className="px-4 py-2 rounded-xl bg-ink text-white text-sm min-h-[44px] fine-pointer:min-h-0">Save endpoint</button>

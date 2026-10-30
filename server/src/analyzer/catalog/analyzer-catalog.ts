@@ -34,6 +34,7 @@ import {
   structuredOutputLabel,
 } from '../runner/schema-adapters.js';
 import type { AdaptedSchema, StructuredOutputMode } from '../runner/transport.js';
+import { requestControlsLabelParts, resolveExtraParamsSetting } from '../runner/extra-params.js';
 
 export type CatalogGroupKind = 'ollama' | 'gemini' | 'endpoint';
 
@@ -53,6 +54,8 @@ export interface AnalyzerCatalogEntry {
   /** `outcomeTestedAt` (5.4-D2): the date of the Test that recorded `outcome`, which after a merged
       record can be older than `capability.testedAt`. */
   structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string; outcome?: ProbeOutcome; outcomeTestedAt?: string };
+  /** #3084 wave 5b — run-label parts from the saved custom payload ("+ custom params", "max output set by custom params"); [] when none. */
+  requestControlLabelParts?: string[];
   /** `attempts` (N6): the most attempts one Test request can take on this model's transport,
       retries included, so the confirm dialog can state the maximum. */
   testPlan: { configured: number; all: number; attempts: number };
@@ -319,6 +322,10 @@ function toEntry(
       ...(outcome ? { outcome } : {}),
       ...(outcomeTestedAt ? { outcomeTestedAt } : {}),
     },
+    requestControlLabelParts: requestControlsLabelParts(
+      ctx.kind === 'endpoint' ? 'openai' : ctx.kind,
+      resolveExtraParamsSetting(ctx.settings, { engine: ctx.engine, endpoint: ctx.endpoint }),
+    ),
     testPlan: {
       configured: plannedTestRequestCount({ modelId: raw.id, scope: 'configured' }, planDeps),
       all: plannedTestRequestCount({ modelId: raw.id, scope: 'all' }, planDeps),

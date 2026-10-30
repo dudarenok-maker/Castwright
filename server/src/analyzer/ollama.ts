@@ -13,6 +13,7 @@ import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
 import { configValue } from '../config/resolver.js';
 import { getCachedUserSettings } from '../workspace/user-settings.js';
 import { resolveReasoningSetting } from './reasoning.js';
+import { requestMaxOutputTokens, resolveExtraParamsSetting } from './runner/extra-params.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
 export { ANALYZER_DISPATCHER, classifyConnectError, PERSONA_ABSOLUTE_MAX_MS } from './transports/ollama-transport.js';
 export {
@@ -46,11 +47,16 @@ export class OllamaAnalyzer extends TransportAnalyzer {
         policy: OLLAMA_RETRY_POLICY,
         /* The mode is read per request (analyzer.ollama.structuredOutput); the
            output cap is num_predict, resolved per request. */
-        settings: () => ({
-          structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
-          maxOutputTokens: resolveNumPredict(),
-          reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model: opts.model }),
-        }),
+        settings: () => {
+          const extraParams = resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' });
+          return {
+            structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
+            /* P19 — num_predict, or the payload's own cap. */
+            maxOutputTokens: requestMaxOutputTokens('ollama', extraParams, resolveNumPredict),
+            reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model: opts.model }),
+            extraParams,
+          };
+        },
         adaptSchema: adaptSchemaForOllama,
       }),
     );

@@ -5,7 +5,8 @@
    global fetch rejects an npm-undici Agent) and a long-call dispatcher (no header
    or body timeout, 10 s connect), SDK retries off, SDK logging off. The SDK DOES
    read OPENAI_* environment variables when it is constructed: it merges
-   OPENAI_CUSTOM_HEADERS into every request after its auth header (client.mjs:240-249).
+   OPENAI_CUSTOM_HEADERS into `defaultHeaders` (the `OpenAI` constructor in client.mjs), which
+   `buildHeaders` applies to every request after its auth header.
    Every option it would take from env is passed explicitly, and allowlistedFetch
    rebuilds the outgoing headers from an allowlist, so no host env header reaches
    an endpoint and the key goes only to its own origin (P22).
@@ -14,7 +15,7 @@
    created AFTER the endpoint semaphore is acquired, so queue time is never
    charged to the request. The idle watchdog arms on the first delta (answer
    OR reasoning). The SDK ends a stream SILENTLY on abort (openai
-   core/streaming.ts:171-186), so a clean loop end is never trusted:
+   `Stream.fromSSEResponse` in core/streaming), so a clean loop end is never trusted:
    classifyOpenAIOutcome decides from our own signals. */
 
 import OpenAI, { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from 'openai';
@@ -52,6 +53,7 @@ import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { allowlistedFetch } from './allowlisted-fetch.js';
 import { redactKnownSecrets } from '../redact.js';
 import { reasoningWireFragment } from '../reasoning.js';
+import { mergeExtraParams, payloadSecretValues } from '../runner/extra-params.js';
 import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
@@ -103,7 +105,7 @@ export interface OutcomeContext {
   sawFinish: boolean;
   elapsedMs: number;
   model: string;
-  /** P22: redacted from every error this builds (the endpoint's key and every saved analyzer secret) */
+  /** P22, P29: redacted from every error this builds (the endpoint's key, every saved analyzer secret and the values of the payload this request carried) */
   secrets: readonly string[];
 }
 
@@ -146,7 +148,7 @@ export function classifyOpenAIOutcome(err: unknown, ctx: OutcomeContext): Error 
   const codes = chain.map((c) => c.code).filter((c): c is string => typeof c === 'string');
   /* P21 — only a connection-level failure can be "unreachable". An APIError with an
      HTTP status was built after the response arrived and carries the body's error.code
-     (openai core/error.mjs:12, :35-65): a proxy's 502 reporting ECONNREFUSED is an
+     (openai `APIError` and `APIError.generate` in core/error.mjs): a proxy's 502 reporting ECONNREFUSED is an
      answer, not an outage, and must never reach FallbackAnalyzer. */
   const connectionLevel =
     !isOwnAnalyzerError(err) &&
@@ -269,7 +271,8 @@ export function endpointAutoOutputMargin(contextTokens: number): number {
     EngineRequestSettings.maxOutputTokens, a number (wave 2b resolves every engine's
     cap). A manual value is clamped to the served output limit when one is known (PR 3c, P15).
     Auto returns min(served output limit if known, contextTokens − margin). The
-    request builder then takes each request's estimated input off Auto. */
+    request builder then takes each request's estimated input off Auto. A custom payload
+    cap replaces it (openAIRequestSettings, P19). */
 export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): number {
   if (endpoint.maxOutputTokens > 0) {
     return servedOutputLimit !== undefined ? Math.min(endpoint.maxOutputTokens, servedOutputLimit) : endpoint.maxOutputTokens;
@@ -278,7 +281,7 @@ export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, serve
   return servedOutputLimit !== undefined ? Math.min(servedOutputLimit, contextBound) : contextBound;
 }
 
-/** #3084 — reasoning: wave 5a (Task 5.3); extraParams: wave 5b (Task 5.10). */
+/** #3084 — reasoning: wave 5a (Task 5.3); the custom payload is merged last: wave 5b (Task 5.10). */
 export function buildOpenAIRequestBody(
   endpoint: AnalyzerEndpoint,
   model: string,
@@ -295,7 +298,7 @@ export function buildOpenAIRequestBody(
     endpoint.maxOutputTokens > 0 && req.maxOutputTokens !== undefined
       ? req.maxOutputTokens
       : Math.min(req.maxOutputTokens ?? perRequestBound, perRequestBound);
-  return {
+  const native: Record<string, unknown> = {
     model,
     /* #3084 W4 — free text sends no empty system turn and leaves temperature / max_tokens to the server. */
     messages: [
@@ -312,6 +315,10 @@ export function buildOpenAIRequestBody(
        builder, so they carry the level too. */
     ...(req.reasoning !== undefined ? reasoningWireFragment('openai', { model, endpoint }, req.reasoning) : {}),
   };
+  /* #3084 wave 5b — the payload is merged LAST, after the level's fragment. The reasoning style lets the
+     merge drop a stored chat_template_kwargs.enable_thinking when the transport owns it (P17). With no
+     payload mergeExtraParams returns `native` itself, so the body is byte-identical. */
+  return mergeExtraParams('openai', native, req.extraParams, { reasoningStyle: endpoint.reasoningStyle });
 }
 
 interface StreamChunk {
@@ -482,9 +489,14 @@ export class OpenAITransport implements ChatTransport {
       release();
     }
 
-    /* P22 — every error this attempt builds is redacted against this endpoint's key and
-       every saved analyzer secret, read from settings if the cache is still cold. */
-    const secrets = [...(this.apiKey ? [this.apiKey] : []), ...(await loadKnownAnalyzerSecrets())];
+    /* P22, P29 — every error this attempt builds is redacted against this endpoint's key, every saved
+       analyzer secret (read from settings if the cache is still cold), and the values of the payload
+       THIS request carries. */
+    const secrets = [
+      ...(this.apiKey ? [this.apiKey] : []),
+      ...(await loadKnownAnalyzerSecrets()),
+      ...payloadSecretValues(req.extraParams),
+    ];
     const failure = classifyOpenAIOutcome(streamError, {
       callerAborted: caller?.aborted === true,
       ceilingAborted: ceiling.aborted,

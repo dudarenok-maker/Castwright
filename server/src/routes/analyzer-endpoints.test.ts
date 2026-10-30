@@ -100,14 +100,32 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(res.body.code).toBe('unload-off-origin');
   });
 
-  it('until PR 5b, refuses a non-empty payload on update (P23)', async () => {
+  it('accepts a custom payload on create and update, validated by validateExtraParams', async () => {
+    const created = await request(app).post('/api/analyzer/endpoints').send({ ...lab, extraParams: { top_k: 20 } });
+    expect(created.status).toBe(201);
+    const updated = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20, min_p: 0.05 } });
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0].extraParams).toEqual({ top_k: 20, min_p: 0.05 });
+  });
+
+  it('refuses a raw-JSON __proto__ payload key on create and update instead of silently dropping it', async () => {
+    const raw = JSON.stringify(lab).replace(/}$/, ',"extraParams":{"__proto__":{"x":1}}}');
+    const post = await request(app).post('/api/analyzer/endpoints').set('Content-Type', 'application/json').send(raw);
+    expect(post.status).toBe(400);
+    expect(JSON.stringify(post.body)).toContain('__proto__');
     await request(app).post('/api/analyzer/endpoints').send(lab);
-    const payload = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20 } });
-    expect(payload.status).toBe(400);
-    expect(payload.body.issues).toEqual([
-      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
-    ]);
-    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).not.toHaveProperty('extraParams');
+    const put = await request(app).put('/api/analyzer/endpoints/lab').set('Content-Type', 'application/json').send(raw);
+    expect(put.status).toBe(400);
+    expect(JSON.stringify(put.body)).toContain('__proto__');
+  });
+
+  it('update refuses a protected endpoint payload key', async () => {
+    await request(app).post('/api/analyzer/endpoints').send({ id: 'lab2', name: 'Lab 2', baseUrl: 'http://127.0.0.1:8082/v1', gpu: 'any', contextTokens: 32768 });
+    const res = await request(app).put('/api/analyzer/endpoints/lab2').send({
+      id: 'lab2', name: 'Lab 2', baseUrl: 'http://127.0.0.1:8082/v1', gpu: 'any', contextTokens: 32768, extraParams: { response_format: { type: 'text' } },
+    });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('cannot be set here: response_format');
   });
 
   it('accepts a reasoning level its control style offers on create and update, validated by the 5a rules', async () => {

@@ -82,6 +82,8 @@ export interface ModelTestDeps {
   reasoningSelection: (modelId: string) => ReasoningSelection;
   /** #3084 wave 5 — the level the next run of this model would send (resolveReasoningSetting). */
   configuredReasoning: (modelId: string) => ReasoningLevel;
+  /** #3084 wave 5b (P19) — the engine/endpoint custom payload a run would send; every ladder request carries it. */
+  extraParams?: Record<string, unknown>;
   /** The client's abort signal: the route aborts it when the request closes. */
   signal?: AbortSignal;
   now?: () => Date;
@@ -369,6 +371,7 @@ function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: num
     estimatedInputTokens: estimateProbeInput(format),
     signal: deps.signal,
     reasoning,
+    extraParams: deps.extraParams,
     call: {},
   });
 }
