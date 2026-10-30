@@ -168,6 +168,13 @@ describe('create / update / delete / key decisions', () => {
     /* The key is protected only under the enable_thinking style, so the reasoning style reaches the check. */
     expect(applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } }).analyzerEndpoints).toHaveLength(1);
   });
+  it('refuses a top-level __proto__ key in the payload instead of silently dropping it', () => {
+    const payload = JSON.parse('{"__proto__":{"x":1}}');
+    const refused = refusal(() => applyCreate(empty, { ...base, extraParams: payload }));
+    expect(refused).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(JSON.stringify(refused.issues)).toContain('__proto__');
+    expect(refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: payload })).issues).toEqual(refused.issues);
+  });
   it('an update judges the payload only when it changes: an unchanged stale payload saves, a changed one is refused (A7)', () => {
     /* A payload stored before a rule existed (or written straight into user-settings.json). */
     const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });

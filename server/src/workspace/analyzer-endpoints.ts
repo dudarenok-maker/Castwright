@@ -263,12 +263,15 @@ export function parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint): A
      unchanged stale payload must not block every later edit, and mergeExtraParams still filters it.
      The payload comparison ignores key order (5b-D10): the same payload re-sent with its keys
      reordered is unchanged. */
+  /* The zod record parse strips a `__proto__` key, so the payload is judged from the raw input: a
+     prototype key is refused here exactly as Advanced settings refuses it, never silently dropped. */
+  const rawPayload = isRecord(withGpu) && isRecord(withGpu.extraParams) ? withGpu.extraParams : ep.extraParams;
   const payloadChanged =
     !stored ||
     stored.reasoningStyle !== ep.reasoningStyle ||
-    !isDeepStrictEqual(stored.extraParams, ep.extraParams);
-  if (ep.extraParams !== undefined && payloadChanged) {
-    const payload = validateExtraParams('openai', ep.extraParams, { reasoningStyle: ep.reasoningStyle });
+    !isDeepStrictEqual(stored.extraParams, rawPayload);
+  if (rawPayload !== undefined && payloadChanged) {
+    const payload = validateExtraParams('openai', rawPayload, { reasoningStyle: ep.reasoningStyle });
     if (!payload.ok) for (const error of payload.errors) problems.push({ path: ['extraParams'], message: error });
   }
   if (problems.length > 0) {

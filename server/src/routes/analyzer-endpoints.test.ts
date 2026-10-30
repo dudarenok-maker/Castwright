@@ -108,6 +108,17 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0].extraParams).toEqual({ top_k: 20, min_p: 0.05 });
   });
 
+  it('refuses a raw-JSON __proto__ payload key on create and update instead of silently dropping it', async () => {
+    const raw = JSON.stringify(lab).replace(/}$/, ',"extraParams":{"__proto__":{"x":1}}}');
+    const post = await request(app).post('/api/analyzer/endpoints').set('Content-Type', 'application/json').send(raw);
+    expect(post.status).toBe(400);
+    expect(JSON.stringify(post.body)).toContain('__proto__');
+    await request(app).post('/api/analyzer/endpoints').send(lab);
+    const put = await request(app).put('/api/analyzer/endpoints/lab').set('Content-Type', 'application/json').send(raw);
+    expect(put.status).toBe(400);
+    expect(JSON.stringify(put.body)).toContain('__proto__');
+  });
+
   it('update refuses a protected endpoint payload key', async () => {
     await request(app).post('/api/analyzer/endpoints').send({ id: 'lab2', name: 'Lab 2', baseUrl: 'http://127.0.0.1:8082/v1', gpu: 'any', contextTokens: 32768 });
     const res = await request(app).put('/api/analyzer/endpoints/lab2').send({
