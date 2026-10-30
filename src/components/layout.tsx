@@ -190,7 +190,7 @@ export interface LayoutContext {
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
-const BOOK_READ_TIMEOUT_MS = 15000;
+export const BOOK_READ_TIMEOUT_MS = 15000;
 const retryDelayMs = (attempt: number) =>
   Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
 
@@ -198,7 +198,7 @@ const retryDelayMs = (attempt: number) =>
    rejection) lets the caller abort the request; otherwise `p` is not cancelled
    and its late answer is discarded. `timers` collects the bound's timer so the
    caller's cleanup can clear it. */
-function within<T>(
+export function within<T>(
   p: Promise<T>,
   ms: number,
   timers: Set<ReturnType<typeof setTimeout>>,
