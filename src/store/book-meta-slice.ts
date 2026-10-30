@@ -275,9 +275,11 @@ export const bookMetaSlice = createSlice({
       const pending = s.lastCommitted?.[bookId];
       if (!pending) return;
       Object.assign(pending.saved, landed);
-      /* A settled field's landed value is also what the screen shows: a full
-         read processed before this 200 hydrated `saved` from before the landing
-         (plan 289 C4). A field with a newer value queued keeps that on screen. */
+      /* Backstop (#3827 N1): the read-first ordering is already fixed by the
+         `keepDraft` hydrate's in-flight `saved` hold, which keeps a field of a
+         commit still in flight on screen. This write only matters if a read
+         hydrated `saved` from before the landing without that hold (plan 289
+         C4). A field with a newer value queued keeps that on screen. */
       const shown = s.saved[bookId];
       if (shown) for (const f of settled) (shown as Record<string, unknown>)[f] = landed[f];
       for (const f of settled) delete pending.draft[f];
