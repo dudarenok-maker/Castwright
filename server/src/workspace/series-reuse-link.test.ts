@@ -343,7 +343,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
         priorCast as unknown as Parameters<typeof mergeAnalysisResultWithExistingCast>[0],
         fresh,
       );
-      const row = merged[0] as Record<string, unknown>;
+      const row = merged[0] as unknown as Record<string, unknown>;
       expect(row.matchedFrom).toBeUndefined();
       expect(row.overrideTtsVoices).toBeUndefined();
       expect(row.voiceStyle).toBeUndefined();
