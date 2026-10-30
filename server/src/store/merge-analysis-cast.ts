@@ -439,8 +439,18 @@ function mergeCore<T extends { id: string }>(
     }
     if (!old) return f;
     const merged = { ...(f as Record<string, unknown>) };
+    // #3920: the merge must apply the #3842 owner rule — no voice match,
+    // automatic or manual, replaces a voice the user locked or tuned. A
+    // locked or tuned voice is therefore taken whole from the prior row:
+    // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
+    // key it lacks is deleted, so nothing the series linker stamped onto the
+    // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
+    // voiceStyle, voiceId) survives a join to it — under the id, exact-name
+    // or surname-tolerant join alike.
+    const pinned = old.voiceState === 'locked' || old.voiceState === 'tuned';
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];
+      else if (pinned) delete merged[key];
     }
     const aliases = unionAliases(old.aliases, (f as Record<string, unknown>).aliases);
     if (aliases) merged.aliases = aliases;

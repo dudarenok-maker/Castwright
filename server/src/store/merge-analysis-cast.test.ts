@@ -1220,3 +1220,133 @@ describe('dedupePriorCastByName', () => {
     expect(retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
   });
 });
+
+describe('mergeAnalysisResultWithExistingCast — locked/tuned voice is taken whole (#3920)', () => {
+  // The #3842 owner rule at the re-analysis merge: no voice match, automatic
+  // or manual, replaces a voice the user locked or tuned. The series linker
+  // (linkSeriesReuseAtAnalysis) stamps its match onto the FRESH row
+  // (voiceId/voiceUuid/matchedFrom, plus the denormalised qwen slot and
+  // persona); when that fresh row then joins a prior row whose voiceState is
+  // 'locked' or 'tuned', the prior row's voice fields must be taken WHOLE —
+  // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
+  // key it lacks is deleted — so none of the linker's stamp survives the
+  // join, under the id, exact-name and surname-tolerant joins alike.
+  const lockedPrior = (over: Partial<C> = {}): C => ({
+    id: 'wren',
+    name: 'Wren',
+    voiceId: 'v_mine',
+    voiceState: 'locked',
+    ...over,
+  });
+  // A fresh row carrying everything the series linker stamps/denormalises.
+  const linkedFresh = (over: Partial<C> = {}): C => ({
+    id: 'wren',
+    name: 'Wren',
+    voiceId: 'v_book1',
+    voiceUuid: 'u_book1',
+    matchedFrom: { bookId: 'b1', characterId: 'wren', bookTitle: 'One', confidence: 0.9 },
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    ttsEngine: 'qwen',
+    voiceStyle: 'warm',
+    ...over,
+  });
+
+  it('id join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it('exact-name join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh({ id: 'wren-x' })];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe('wren-x');
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+    expect(retirements).toEqual([{ from: 'wren', to: 'wren-x' }]);
+  });
+
+  it('surname-tolerant join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh({ id: 'wren-ashby', name: 'Wren Ashby' })];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe('wren-ashby');
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+    expect(retirements).toEqual([{ from: 'wren', to: 'wren-ashby' }]);
+  });
+
+  it('tuned is pinned the same as locked', () => {
+    const existing: C[] = [lockedPrior({ voiceState: 'tuned' })];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('tuned');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it("prior row's own fields kept: a locked prior row's own voiceUuid and qwen slot win, not the fresh ones", () => {
+    const existing: C[] = [
+      lockedPrior({ voiceUuid: 'u_mine', overrideTtsVoices: { qwen: { name: 'mine' } } }),
+    ];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].voiceUuid).toBe('u_mine');
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'mine' } });
+    // The stamp keys the prior row still lacks are deleted, not inherited.
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it("control, 'generated' prior row: the fresh linker stamp survives (today's behaviour, unchanged)", () => {
+    const existing: C[] = [lockedPrior({ voiceState: 'generated' })];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    // Prior-defined keys still copy over the fresh row.
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('generated');
+    // The linker's stamp on the fresh row survives untouched.
+    expect(merged[0].matchedFrom).toEqual({
+      bookId: 'b1',
+      characterId: 'wren',
+      bookTitle: 'One',
+      confidence: 0.9,
+    });
+    expect(merged[0].voiceUuid).toBe('u_book1');
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wren' } });
+    expect(merged[0].ttsEngine).toBe('qwen');
+    expect(merged[0].voiceStyle).toBe('warm');
+  });
+});
+
