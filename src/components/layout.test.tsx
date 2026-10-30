@@ -2992,6 +2992,180 @@ describe('Layout — a failed save on leaving a book is re-sent before the re-re
   });
 });
 
+describe('Layout — a stalled save before the re-read is bounded (#3426)', () => {
+  const elizaOf = (name: string) => ({ id: 'eliza', name, role: '', color: 'narrator' }) as Character;
+  type Store = ReturnType<typeof makeStoreWithScopeAndPersistence>;
+
+  /* As the #3421 block's disk model, but the cast PUT for A is controllable:
+     when `armed`, it returns a deferred the test settles by hand. */
+  function stallModel() {
+    const disk: Record<string, Character[]> = { A: [elizaOf('Eliza')], B: [{ id: 'b-hero', name: 'Hero', role: '', color: 'peach' } as Character] };
+    const calls: string[] = [];
+    const model = {
+      disk,
+      calls,
+      armed: false,
+      /* index in `calls` at which the edit first reached disk (-1: not yet) */
+      landedAt: -1,
+      stalled: null as null | { resolve: () => void; reject: (e: Error) => void },
+    };
+    const landed = (chars: Character[]) => {
+      if (model.landedAt < 0 && chars.some((c) => c.name === 'Eliza Vane')) model.landedAt = calls.length;
+    };
+    getBookStateMock.mockImplementation(async (id: string) => {
+      calls.push(`get:${id}`);
+      return bookStateFor(id, revState(id, null, 0, []), { cast: { characters: disk[id] } });
+    });
+    putBookStateMock.mockImplementation((id: string, req: { slice: string; patch: { characters?: Character[] } }) => {
+      if (id === 'A' && req.slice === 'cast' && model.armed) {
+        return new Promise<void>((resolve, reject) => {
+          model.stalled = {
+            resolve: () => {
+              landed(req.patch.characters!);
+              disk[id] = req.patch.characters!;
+              calls.push('put:A:cast:ok');
+              resolve();
+            },
+            reject,
+          };
+        });
+      }
+      if (req.slice === 'cast') {
+        if (id === 'A') landed(req.patch.characters!);
+        disk[id] = req.patch.characters!;
+      }
+      calls.push(`put:${id}:${req.slice}:ok`);
+      return Promise.resolve();
+    });
+    return model;
+  }
+
+  const castPutsForA = () =>
+    putBookStateMock.mock.calls.filter(([id, req]) => id === 'A' && (req as { slice: string }).slice === 'cast').length;
+  const hasNotice = (store: Store) =>
+    store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed');
+  const getsA = (calls: string[]) => calls.filter((c) => c === 'get:A').length;
+  /* the first read of A issued at or after index `from` of the call log */
+  const firstGetAFrom = (calls: string[], from: number) => calls.findIndex((c, i) => i >= from && c === 'get:A');
+  async function openAAndSettle(store: Store) {
+    openAt(store as never, 'A');
+    renderLayoutAt(store as never, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await act(async () => { await store.dispatch(flushBookPersistence('A') as never); });
+  }
+  const renameEliza = (store: Store) =>
+    act(() => { store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' })); });
+  const elizaName = (store: Store) => store.getState().cast.characters.find((c) => c.id === 'eliza')?.name;
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  async function stallAndLeave(store: Store, m: ReturnType<typeof stallModel>, viaB: boolean) {
+    await openAAndSettle(store);
+    m.armed = true;
+    renameEliza(store);
+    act(() => { store.dispatch(uiActions.goHome()); });
+    if (viaB) {
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+    }
+    await waitFor(() => expect(m.stalled).not.toBeNull());
+  }
+
+  it('T1: a stalled save shows the notice at 15 s, issues no read and no re-send, and reads once it lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const putsAtStall = castPutsForA();
+      const getsBefore = getsA(m.calls);
+      const reopenAt = m.calls.length;
+      openAt(store as never, 'A');
+      await advance(14000);
+      expect(hasNotice(store)).toBe(false);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      await advance(1500);
+      expect(hasNotice(store)).toBe(true);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(castPutsForA()).toBe(putsAtStall);
+      await advance(60000);
+      expect(getsA(m.calls)).toBe(getsBefore);
+      expect(castPutsForA()).toBe(putsAtStall);
+
+      m.armed = false;
+      act(() => { m.stalled!.resolve(); });
+      await advance(31000);
+      expect(m.landedAt).toBeGreaterThanOrEqual(0);
+      expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      expect(elizaName(store)).toBe('Eliza Vane');
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(hasNotice(store)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T2: a stalled save that later fails is kept and re-sent by the next step', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const reopenAt = m.calls.length;
+      openAt(store as never, 'A');
+      await advance(15500);
+      expect(hasNotice(store)).toBe(true);
+      m.armed = false;
+      act(() => { m.stalled!.reject(new Error('Book state PUT failed (503): down')); });
+      await advance(40000);
+      console.info('[T2] calls order:', m.calls.join(' > '));
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      expect(m.landedAt).toBeGreaterThanOrEqual(0);
+      expect(firstGetAFrom(m.calls, reopenAt)).toBeGreaterThanOrEqual(m.landedAt);
+      expect(m.disk.A[0].name).toBe('Eliza Vane');
+      expect(elizaName(store)).toBe('Eliza Vane');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T3: a stalled save on a revisions-only reopen stays silent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, false);
+      openAt(store as never, 'A');
+      await advance(20000);
+      expect(hasNotice(store)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T4: leaving the book cancels the bounded wait and its retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const store = makeStoreWithScopeAndPersistence();
+    const m = stallModel();
+    try {
+      await stallAndLeave(store, m, true);
+      const getsBefore = getsA(m.calls);
+      openAt(store as never, 'A');
+      /* a toast may auto-dismiss, so watch for it ever appearing */
+      let everNotified = false;
+      const unsubscribe = store.subscribe(() => { if (hasNotice(store)) everNotified = true; });
+      await advance(5000);
+      openAt(store as never, 'B');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('B'));
+      await advance(60000);
+      unsubscribe();
+      expect(everNotified).toBe(false);
+      expect(getsA(m.calls)).toBe(getsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('Layout — a save made stale elsewhere is refused, and the book re-read (plan 289)', () => {
   const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as Character;
   const isTitlePut = (id: string, req: { slice: string; patch: unknown }) =>

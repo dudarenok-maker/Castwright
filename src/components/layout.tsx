@@ -1230,15 +1230,37 @@ export function Layout() {
        snapshot from before it, then write that stale memory back over it.
        Sends anything queued now and waits for in-flight PUTs; `null` (or the
        bare action, in a store without the persistence middleware) means
-       there is nothing to wait for. */
-    const writes = dispatch(flushBookPersistence(bookId)) as unknown;
-    if (writes instanceof Promise) {
-      void writes.then(() => {
-        if (!cancelled) load(0);
-      });
-    } else {
-      load(0);
-    }
+       there is nothing to wait for. The wait is bounded at 15 s (#3426): on
+       expiry the read is NOT issued (it would read disk from before the
+       stalled save) and the whole step is retried. The late PUT is neither
+       cancelled nor re-sent: the re-dispatch returns its running flight. */
+    const step = (attempt: number): void => {
+      const writes = dispatch(flushBookPersistence(bookId)) as unknown;
+      if (!(writes instanceof Promise)) return load(attempt);
+      within(writes, BOOK_READ_TIMEOUT_MS, boundTimers).then(
+        () => {
+          if (!cancelled) load(attempt);
+        },
+        () => {
+          if (cancelled) return;
+          if (manuscriptReady && marksFor(bookId) === 0) {
+            console.warn('[book-state] save before the revisions re-read still in flight after 15 s; the next poll repairs it');
+            return;
+          }
+          console.warn('[book-state] save before the re-read still in flight after 15 s, retrying');
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: "Couldn't load this book. Retrying — it will appear once it loads.",
+              dedupeKey: REVISIONS_HYDRATE_FAILED_KEY,
+            }),
+          );
+          failureNoticeShown = true;
+          retryTimer = setTimeout(() => step(attempt + 1), retryDelayMs(attempt));
+        },
+      );
+    };
+    step(0);
     return () => {
       cancelled = true;
       fullReadInFlight.current = null;
