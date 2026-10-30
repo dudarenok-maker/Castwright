@@ -83,6 +83,7 @@ import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { endpointModelId, engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
 import { structuredOutputLabel } from './structured-output-label';
+import { requestControlsLabelParts } from './extra-params';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -9340,7 +9341,7 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
    differs from the control's + 1 when the mode is not `off`; all = the control + one request per
    other testable level + the schema and json checks. The mock's configured level is the control's.
    Group statuses follow the contract: Gemini without a key is `fallback`. */
-type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
+type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus' | 'analyzerExtraParamsByEngine'>;
 
 /* The level a W3 request is sent at, and so the record key (server capabilities.ts →
    reasoning.ts defaultReasoningLevel, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
@@ -9388,6 +9389,12 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       },
       testPlan: { configured: mode === 'off' ? 1 : 2, all: 1 + otherTestableLevels + 2, attempts: engine === 'local' ? 1 : 3 },
       offeredReasoningLevels: [...offered],
+      requestControlLabelParts: requestControlsLabelParts(
+        engine === 'local' ? 'ollama' : engine,
+        engine === 'openai'
+          ? source.analyzerEndpoints?.find((e) => e.id === parseEndpointModelId(id)?.endpointId)?.extraParams
+          : (source.analyzerExtraParamsByEngine?.[engine === 'local' ? 'ollama' : 'gemini'] as Record<string, unknown> | undefined),
+      ),
     };
   };
   return {
