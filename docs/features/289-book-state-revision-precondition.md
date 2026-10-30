@@ -488,7 +488,7 @@ run(key):
 
 | Outcome | Fields affected | Effect |
 |---|---|---|
-| **200** | sent fields still holding the sent value | Removed from the outbox. `known` learns them (C4). For each handler with an `onSuccess` among the removed entries: dispatch it only if **no** entry it owns remains in the outbox. A newer commit still queued keeps its rollback baseline; this is #2230's gate, now per field. A kept save that lands on replay prunes `lastCommitted` (OD5 / N2). |
+| **200** | sent fields still holding the sent value | Removed from the outbox. `known` learns them (C4). For each handler with an `onLanded` among the sent entries, dispatch it once with every sent field's value and the fields still holding it: the book-meta handler folds each landed value into the rollback baseline and drops each settled field from the typed set, deleting the snapshot when it empties (#3827). A newer commit still queued keeps its snapshot, now based on the newest landed value. A kept save that lands on replay prunes `lastCommitted` (OD5 / N2). |
 | **409 `stale_revision`** | the sent units, among those that carried a base, that hold a named field and still hold the sent value | Removed. **No rollback** (D2). If at least one was removed, toast and `markNeedsFullRead`. The toast uses the handler's message if a removed entry has a handler, else `staleMessage(title)`; its dedupe key is `book-persist-stale:<bookId>`. If none was removed (every stale unit was overwritten by a newer value), there is no toast and no mark, because the newer value owns the outcome (P6-3, now per field; OD-C3). Every other entry stays and goes in the follow-up with its base. **If `fields` is missing, malformed, empty, or names no based unit, read it as "every sent unit that carried a base".** Only a based unit can be stale, so this never drops a live edit, and it always removes or un-bases something (termination). The server never sends an empty list (`book-state.ts:1073` throws only on a non-empty one). |
 | **Other 4xx** | per **rollback** handler among the sent entries | If every outbox entry the handler owns still holds its sent value, remove them, toast the handler's message (no title), and dispatch `rollback(bookId, restoreDraft = bookOpen)`. Otherwise a newer commit is queued and owns the outcome, so do nothing for that handler (no toast, no rollback); its entries go in the follow-up. **If the send carried no rollback handler at all,** remove every sent field still holding its sent value (a 4xx is final), and toast only if one of them has a toast-only handler (bulk reassign), as today. Entries with no rollback handler that rode with a rolled-back handler (a `castConfirmed`) **stay and go in the follow-up**. This is R2's fix. |
 | **Give-up** (4th transport failure) | — | Bases are stamped (C3). The flight ends `ok: false` and the entries stay (kept, C7). **If the book is open:** for each rollback handler, remove its entries and dispatch `rollback(bookId, true)`; other entries stay kept (a304ae55). **If the book is not open:** no rollback; everything stays kept and is re-sent on the book's next flush (f8871b1a). One toast: the handler's message (with the title) if any sent entry has a handler, else `flushFailedMessage(title)`. |
@@ -531,8 +531,8 @@ A send whose 4xx was in fact caused by a non-handler field next to a handler (no
 | a304ae55: a rolled-back save keeps the carried earlier edit | **Natural:** a rollback removes only the entries its handler owns. |
 | 6c002345: combined queued edits | **Natural** (C1). |
 | f8871b1a: kept and re-sent after leaving | **Natural** (C7). |
-| OD5 / N2: a landed replay prunes `lastCommitted` | **Natural** (C6, 200 row). |
-| N7: an older landing does not prune a newer commit's baseline | **Natural** (C6: the handler still owns a queued entry). |
+| OD5 / N2: a landed replay prunes `lastCommitted` | **Natural** (C6, 200 row; per field since #3827). |
+| N7: an older landing does not delete a newer commit's snapshot, and folds its landed value into that snapshot's baseline (#3827) | **Needs code** (#3827): `onLanded`, `commitFieldsLanded`. |
 | Pass-7 cleanup: a replayed book-meta save that lands prunes `lastCommitted`, so a later give-up rolls back to the replayed title | **Natural**; gets a pin (it had no test that could fail). |
 
 #### C9 — Stale refusal UX, and the 409 contract
@@ -900,7 +900,7 @@ Owner decision of 2026-10-26 (#3784, after review pass 7). OD-C1 to OD-C4 were a
   - **Tests:** new P9-1, P9-2 and P9-3 pins, red at d80157b2; tests that asserted the eight-field send now assert the typed fields.
 - **Size, honestly:** `persistence-middleware.ts` is **803 lines, 33 of them over 100 characters**, down from 865. It is 3 lines over the plan's 800 ceiling, and was not compressed to meet it.
 - **Fuzz:** the fix agent's re-implementation of pass 9's model-based fuzz of the P1 window, oracles O1 to O4, gives 0 on each over 3,000 runs against this engine. Its O4 is not pass 9's: it fires 136 times on f2a41423 and 135 on d80157b2, where pass 9's fired 0 and 5. Review pass 10 ran its own harness as well. It reported O4b 1 and O5 2 at head, all three by D6's design (seeds 71, 271 and 1588), so what it confirmed was the fix agent's harness's zero, not a zero of its own. *Corrected 2026-10-28 (pass-10 C2): this bullet first called it the reviewer's fuzz. Corrected 2026-10-29 (pass-11 C3): it said pass 10 "confirmed the zero at head".*
-- **Routed to #3827:** a field the user typed that already landed can be sent again by a later commit while it is still in `lastCommitted.draft`. Whether to prune `lastCommitted` per field is the open question on #3827; it is not changed here.
+- **Routed to #3827:** a field the user typed that already landed can be sent again by a later commit while it is still in `lastCommitted.draft`. Whether to prune `lastCommitted` per field is the open question on #3827; it is not changed here. *Decided 2026-10-30 (owner, #3827): option (a), per field. See "Rollback baseline per landed field (#3827)".*
 - **Corrections to earlier text (pass-9 C1):** C-I9 said the exports are unchanged, but `dropRetainedSaves` gained `onFullRead`; and "Layout retries the read until it lands" holds only while the book stays open. Both are fixed above. The two code comments that called P2's kept entry a "book-details field" (its case is `castConfirmed`) were already reworded in ae6bb325.
 
 ### Review pass 10 fixes (PR #3775, all #3784)
@@ -1023,6 +1023,16 @@ These are the owner decisions on #3784 (2026-10-30), from review pass 13 (https:
   | the same, with wireDisk on `put` | 2 (slice unit, P11-2 through the throw) |
   | the same, with the throw removed too (control) | 2 (slice unit, the new disk unit test); P11-2 green |
   | the throw removed | 1 (the new disk unit test) |
+
+### Rollback baseline per landed field (#3827)
+
+Owner decision on #3827, 2026-10-30: "option **(a)**, and it covers the related shape in the comment above too. Each book-meta field is pruned from `lastCommitted.draft` and folded into the rollback baseline **as soon as it lands**, per field. So: a refused later commit rolls back to the newest value known to have landed (T1), never the window baseline (T0); a field that already landed is never re-sent unbased by a later commit in the same window, so an outside writer's change to it is not overwritten."
+
+- **What changed.** `bookMeta.commitFieldsLanded` (d1aa8b69) folds each landed value into the snapshot's baseline and drops each settled field from the typed set. The middleware's `onLanded` hook (15b94011) replaces `onSuccess` and dispatches it; `commitDraftSucceeded` is removed.
+- **New behaviour.** A later commit refused in the same window (a non-stale 4xx, or a give-up while the book is open) rolls back to T1, not T0. A field that already landed is not re-sent by a later commit.
+- **Retention is unchanged (#3758).** A rolled-back details save is still not kept. A kept save that lands after the user left the book folds like any other landing. The stale refusal (D2) still never rolls back.
+- **Tests.** Five `commitFieldsLanded` unit tests (#3898) and four new middleware tests (#3899: T1 on a 4xx, no re-send, T1 on a give-up, case (i)). Two existing tests changed: the `#2230` race test's title assertion went from `'The Northern Star'` to `'Edit A'`, and the slice's `commitDraftSucceeded` test was replaced by `commitFieldsLanded` test (3).
+- **Mutants, observed red.** #3898: MA1 (delete the baseline fold) 3 red; MA2 (prune every landed field, not only settled ones) 1; MA3 (drop the empty-typed-set deletion) 1. #3899: MB1 (settled always `[]`) 6; MB2 (values always `{}`) 4; MB3 (old gate back) 5; MB4 (settle before `holds`) 1, the race test, failing at the snapshot-survival assertion rather than on `draft.title`. None stayed green. Counts are from the #3898 and #3899 completion comments.
 
 ### Not owed
 
