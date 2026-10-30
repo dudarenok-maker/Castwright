@@ -22,7 +22,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('a payload output cap is the cap every consumer uses (#3084 wave 5, P19)', () => {
   it('options.num_predict 512: capacity reports 512, and the request the overflow rule judges carries 512', async () => {
     _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 512 } } } });
-    /* Chunk sizing (W2 Task 2.3) and the Test probe cap receive this EngineCapacity; the catalog's outputTokens stays the model's listed maximum (5b-D15). */
+    /* The Test probe cap receives this EngineCapacity; the catalog's outputTokens stays the model's listed maximum (5b-D15). */
     expect(resolveCapacity({ engine: 'local', model: 'q:4b' })).toEqual({ ...TODAY_LOCAL_CAPACITY(), maxOutputTokens: 512 });
     const send = vi
       .spyOn(OllamaTransport.prototype, 'send')
