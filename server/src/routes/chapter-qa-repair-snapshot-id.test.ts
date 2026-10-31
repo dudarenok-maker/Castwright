@@ -103,7 +103,7 @@ vi.mock('../tts/hydrate-reused-voice-workspace.js', () => ({
 }));
 
 vi.mock('../store/analysis-cache-rebuild.js', () => ({
-  rebuildCacheFromEdits: vi.fn(async () => {}),
+  refreshCacheFromEdits: vi.fn(async () => 'rebuilt'),
 }));
 
 vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
