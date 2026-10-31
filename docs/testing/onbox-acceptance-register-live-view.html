@@ -972,7 +972,7 @@
         <ul>
         <li>The character still has the voice you assigned (on main it falls back to Book One&#39;s) and the &#8220;Continuity preserved&#8221; footer is gone.</li>
         </ul>
-        <p>Known gap, not part of this row: a locked character whose id drifts between analyses can still lose its voice to a duplicate row (<a href="https://github.com/dudarenok-maker/Castwright/issues/3965">#3965</a>, design owed), so a failure of that shape is not a failure of this row.</p>
+        <p>The id-drift case, a locked character whose id changes between analyses, was fixed by <a href="https://github.com/dudarenok-maker/Castwright/issues/3965">#3965</a>, so a duplicate default-voice row of that shape now is a failure of this row.</p>
         <p>The similarly-named-character case (&#8220;Brann&#8221; and &#8220;Brann Weir&#8221;) is not a bullet here: roster dedup collapses that shape on a real run, and where a distinct survivor remains the linker may legitimately link it to Book One, which would read as a failure on correct code. It is pinned by the <code>series-reuse-link.test.ts</code> and <code>merge-analysis-cast.test.ts</code> fixtures instead.</p>
         <p class="src">a real local Ollama analyzer and a real two-book series &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3920">#3920</a> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3934">#3934</a> &#183; no per-feature run sheet</p>
       </div>
