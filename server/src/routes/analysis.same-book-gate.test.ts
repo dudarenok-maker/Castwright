@@ -7,9 +7,10 @@
    id-drifted twin. A gate that ignores `bookId` then reads that edge as a
    decline between the two group members, so an interrupted run's two-row prior
    never heals. Same-book edges (cast-reject-orphan writes them) must still
-   block at every gate. These tests go red when any of the four `currentBookId`
-   arguments at the analysis.ts call sites (remapFreshToPriorIds and
-   dedupePriorCastByName, main and subset) is removed. */
+   block at every gate. Each of the six `currentBookId` arguments at the
+   analysis.ts call sites (remapFreshToPriorIds, mergeAnalysisResultWithExistingCast
+   and dedupePriorCastByName, main and subset) is pinned by a case that goes
+   red when that one argument alone is removed. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -414,7 +415,7 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         voiceState: 'locked',
         notLinkedTo: [{ bookId: BOOK, characterId: 'mira-2' }],
       };
-      const b: CastRow = { id: 'mira-2', name: 'Mira', lines: 3 };
+      const b: CastRow = { id: 'mira-2', name: 'Mira', voiceId: 'v_mira2', lines: 3 };
       const { manuscriptId, bookDir } = mkBook([{ ...NARR }, a, b], 'Mira');
       try {
         await run(manuscriptId, bookDir, [NARR, rosterRow('mira-2', 'Mira')], {
@@ -426,6 +427,7 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
             .map((r) => r.id)
             .sort(),
         ).toEqual(['mira', 'mira-2']);
+        expect(named(bookDir, 'Mira').find((r) => r.id === 'mira-2')?.voiceId).toBe('v_mira2');
       } finally {
         await cleanup(manuscriptId, bookDir);
       }
@@ -458,6 +460,50 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
           (r) => (r.notLinkedTo as Array<{ bookId: string; characterId: string }>) ?? [],
         );
         expect(edges).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    'the remap keeps the PRIOR id of an id-drifted locked row (%s job)',
+    async (kind) => {
+      /* Without the remap's own book scope the merge name-fallback still
+         rescues the voice, but the row takes the FRESH id. */
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...LOCKED_TOM }], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, tomRoster, {
+          speaker: 'old-tom-2',
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Old Tom');
+        expect(rows).toHaveLength(1);
+        expect(rows[0].id).toBe('old-tom');
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    'a surname drift past a cross-book edge still joins the locked row (%s job)',
+    async (kind) => {
+      /* The remap matches exact names only, so a surname drift reaches the
+         merge's own name-fallback gate alone. */
+      const prior: CastRow = {
+        ...LOCKED_TOM,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom-weir' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, prior], 'Old Tom Weir');
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom-weir', 'Old Tom Weir')], {
+          speaker: 'old-tom-weir',
+          subset: kind === 'subset',
+        });
+        const rows = readCast(bookDir).filter((c) => String(c.name).startsWith('Old Tom'));
+        expect(rows).toHaveLength(1);
+        expect(rows[0].voiceId).toBe('v_tom');
       } finally {
         await cleanup(manuscriptId, bookDir);
       }

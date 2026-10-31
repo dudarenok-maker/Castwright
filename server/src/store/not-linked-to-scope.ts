@@ -1,8 +1,8 @@
 /** True when `row.notLinkedTo` names `targetId`, in either shape the field is
     written in: a bare string (defensive; nothing mints this shape today) or
     the real on-disk `{ bookId, characterId }` shape `POST /not-linked-to`
-    writes (`server/src/routes/cast-not-linked-to.ts:238`; typed in
-    `voices.ts:104`/`voice-override-linked.ts:65`).
+    writes (`server/src/routes/cast-not-linked-to.ts`; typed in `voices.ts`
+    and `voice-override-linked.ts`).
 
     Book scoping (#3965, owner decision 2026-10-31): an OBJECT entry whose
     `bookId` names a DIFFERENT book than `currentBookId` is a cross-book
@@ -14,6 +14,9 @@
     Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
     writes) and bare strings still block. `currentBookId` omitted (a record
     with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe.
+    (The same-name dedupe's `groupHasNotLinkedEdge` additionally ignores a
+    row's edge naming ITS OWN id, which `main` counted: a self-edge is not a
+    decision between two rows. Declared in the PR body.)
 
     The ONE book-scope predicate shared by every notLinkedTo join gate
     (`merge-analysis-cast.ts` fresh-to-prior match and same-name dedupe,

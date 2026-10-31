@@ -61,7 +61,7 @@
 
         Durability holds via ONE of the two §4.4 matchers, not both — they
         are not equivalent, and this route only needs (and gets) the one
-        that fires early enough to matter. `remap-fresh-to-prior.ts`'s
+        that fires early enough to matter. `store/not-linked-to-scope.ts`'s
         `notLinkedToId` (fix round 2 review finding) matches on
         `characterId` and ignores only object entries whose `bookId` names a
         DIFFERENT book (#3965: cross-book decisions say nothing about a
