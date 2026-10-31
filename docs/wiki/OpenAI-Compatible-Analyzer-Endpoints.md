@@ -232,12 +232,17 @@ and its stop-token list, `stop_token_ids`. `chat_template_kwargs.enable_thinking
 Reasoning control is Not controllable, because under either of the other two controls the server
 lets an explicit `enable_thinking` override the reasoning control Castwright owns. LiteLLM's
 top-level `thinking` field (for example `{"thinking": {"type": "enabled", "budget_tokens": 16000}}`)
-follows the same rule. LiteLLM's request-level `additional_drop_params` and `drop_params` are always
-refused: the first can strip any parameter Castwright sends (`response_format`, `reasoning_effort`, ...)
-and the second turns an unsupported-parameter error into a request sent silently without it. If you run
-LiteLLM and want unsupported parameters dropped, set that in the proxy's own config instead. This list
-covers the spellings of llama.cpp, vLLM and LiteLLM's `thinking`, `additional_drop_params` and
-`drop_params`; other servers' spellings (OpenRouter, LM Studio and others) have not been checked. Keys named
+follows the same rule. Five more LiteLLM request fields are always refused, whatever the Reasoning
+control: `additional_drop_params` can strip any parameter Castwright sends (`response_format`,
+`reasoning_effort`, ...); `drop_params` turns an unsupported-parameter error into a request sent silently
+without it; `extra_body` is copied to the OpenAI SDK, which merges it over the request body, so it can replace
+any of those controls; `fallbacks`, `context_window_fallbacks` and `content_policy_fallbacks` apply their
+target over the request when a call fails, so a target re-carries any refused key or replaces `model`; and
+`output_config` carries `effort` and `format`, which LiteLLM ranks above `reasoning_effort`. If you run
+LiteLLM and want unsupported parameters dropped or fallbacks, set that in the proxy's own config instead. This
+list covers the spellings of llama.cpp, vLLM and the LiteLLM fields above; other servers' spellings
+(OpenRouter, LM Studio and others) have not been checked. The LiteLLM behaviour was read from its source at
+`main` commit `837f36e8`, not tested against a live proxy. Keys named
 `__proto__`, `constructor` or `prototype` are refused at any depth.
 
 **The output cap.** A payload that sets `max_tokens`, `max_completion_tokens` or llama.cpp's
@@ -268,9 +273,10 @@ whether it understands it.
 - **vLLM:** `{"max_completion_tokens": 2048, "top_k": 20, "min_p": 0.05}`. Use
   `max_completion_tokens`; it takes over the output cap as described above. vLLM takes
   non-OpenAI sampler fields such as `top_k` and `min_p` directly in the body. <!-- UNVERIFIED: not re-read against the vLLM v0.31.0 docs on this date. -->
-- **LiteLLM:** the gateway forwards the body to the backend behind it, so the keys are the
-  backend's. Whether an unknown key passes through depends on the gateway's configuration: check
-  its documentation. <!-- UNVERIFIED. -->
+- **LiteLLM:** the gateway consumes some request fields itself (the ones refused above, among
+  others) and, on its `openai/` route, forwards a key it does not recognise to the backend inside
+  `extra_body`. So a sampler key such as `top_k` reaches the backend; the keys are otherwise the
+  backend's. <!-- Source: LiteLLM main 837f36e8, read not run; not tested on a live proxy. -->
 - **OpenRouter:** `{"presence_penalty": 0.5, "top_k": 40}`. Hosted models differ in which
   parameters they honour, and OpenRouter documents which ones each model supports. A reasoning
   model needs `max_completion_tokens` rather than `max_tokens`. <!-- UNVERIFIED: not re-checked against OpenRouter's parameter reference on this date. -->
