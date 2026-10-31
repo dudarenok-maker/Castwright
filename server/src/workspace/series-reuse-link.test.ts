@@ -1168,9 +1168,13 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
 
     expect(fresh[0].notLinkedTo).toEqual([edge]); // the narrator no longer makes the name ambiguous
     expect(postLink[0].matchedFrom).toBeUndefined(); // so the linker lands no link
-    // No row carries a stamp next to the edge that forbids it (srv-13 class). The merge's
-    // own join of old-tom-2 to its prior row may be refused by #3965 (id-drift split,
-    // decision owed); that is deliberately not asserted here.
+    // The merge joins old-tom-2 to its locked prior row (#3965: the row's own cross-book
+    // edge is no decline between them), so the locked voice survives on one real row.
+    const tom = merged.filter((c) => c.name === 'Old Tom' && c.id !== 'char-narrator');
+    expect(tom).toHaveLength(1);
+    expect(tom[0].voiceId).toBe('v_tom');
+    expect(tom[0].voiceState).toBe('locked');
+    // No row carries a stamp next to the edge that forbids it (srv-13 class).
     for (const row of merged) {
       expect(row.matchedFrom?.bookId === BOOK1 && row.matchedFrom?.characterId === 'old-tom').toBe(false);
     }

@@ -1276,6 +1276,14 @@ describe('dedupePriorCastByName', () => {
     expect(dedupePriorCastByName(prior, 'book-2').cast).toHaveLength(2);
   });
 
+  it('still refuses to collapse a pair separated by a legacy notLinkedTo entry with no bookId (#3965)', () => {
+    const prior: C[] = [
+      { id: 'john-a', name: 'John', voiceState: 'tuned', notLinkedTo: [{ characterId: 'john-b' }] },
+      { id: 'john-b', name: 'John', voiceState: 'tuned' },
+    ];
+    expect(dedupePriorCastByName(prior, 'book-2').cast).toHaveLength(2);
+  });
+
   it('never collapses narrator rows sharing a name', () => {
     const prior: C[] = [
       { id: 'narrator', name: 'Narrator', voiceState: 'tuned' },
