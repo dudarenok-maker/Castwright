@@ -327,7 +327,7 @@ describe('#3992 — a fork leaves no variant the render path cannot resolve', ()
   /* the key synthesis asks the sidecar for, per emotion */
   const renderKey = async (title: string, emotion: string) => {
     const pick = await import('../tts/voice-mapping.js');
-    const row = readRow(title) as Parameters<typeof pick.pickVoiceForEngine>[1];
+    const row = readRow(title) as unknown as Parameters<typeof pick.pickVoiceForEngine>[1];
     const base = pick.pickVoiceForEngine('qwen', row);
     const variants = (row as { overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } } })
       .overrideTtsVoices?.qwen?.variants;
@@ -439,6 +439,78 @@ describe('#3992 — a forked row’s Save cannot write another book’s row', ()
     const saved = await put(bookTwoId, 'qwen-u_shared');
     expect(saved.status).toBe(204);
     expect(qwenName('Book One')).toBe('qwen-u_shared');
+  });
+});
+
+/* Review pass 1, finding 5 — a declined row that never got a uuid takes the
+   series mint, which stamps the earlier book too and so moves ITS render key
+   onto the redesigned bytes. Both rows carry the legacy name-derived key
+   `qwen-v_wren` and the earlier book's bytes live there. */
+describe('#3992 — a declined row with no uuid does not move the earlier book’s key', () => {
+  const legacy = { ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+  const noUuid = (title: string, extra: Record<string, unknown> = {}) => {
+    const row: Record<string, unknown> = { ...readRow(title), ...legacy, ...extra };
+    delete row.voiceUuid;
+    writeFileSync(castPath(title), JSON.stringify({ characters: [row] }));
+  };
+  const seedLegacy = (twoExtra: Record<string, unknown> = {}) => {
+    seed({});
+    noUuid('Book One');
+    noUuid('Book Two', twoExtra);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), ORIG_JSON);
+  };
+  const keyOf = async (title: string) => {
+    const pick = await import('../tts/voice-mapping.js');
+    return pick.pickVoiceForEngine('qwen', readRow(title) as unknown as Parameters<typeof pick.pickVoiceForEngine>[1]);
+  };
+
+  it('Book One keeps qwen-v_wren and its bytes; Book Two gets its own uuid', async () => {
+    seedLegacy();
+    expect(await keyOf('Book One')).toBe('qwen-v_wren');
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+    expect(await keyOf('Book One')).toBe('qwen-v_wren');
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).toBeTruthy();
+    expect(requestedVoiceIds).toEqual([`qwen-${fresh}`]);
+  });
+
+  it('preview then Cancel: Book Two sits on its own copy of the earlier bytes', async () => {
+    seedLegacy();
+    const res = await design(() => bookTwoId, { preview: true });
+    expect(res.status).toBe(200);
+    const discard = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: requestedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(discard.status).toBe(200);
+    const key = await keyOf('Book Two');
+    expect(key).not.toBe('qwen-v_wren');
+    expect(readFileSync(join(qwenDir(), `${key}.pt`)).equals(ORIG_PT)).toBe(true);
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
+  });
+
+  it('Linked (Book Two names Book One): the series mint still stamps both rows with one uuid', async () => {
+    seedLegacy({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } });
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid;
+    expect(fresh).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBe(fresh);
+  });
+
+  it('Nobody has designed yet: the series mint still stamps both rows with one uuid', async () => {
+    seed({});
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid;
+    expect(fresh).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBe(fresh);
   });
 });
 

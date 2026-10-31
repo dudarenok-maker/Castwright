@@ -57,7 +57,11 @@ import {
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
-import { shouldForkSharedVoiceUuid, isVariantUsedByOtherVoiceUuid } from '../workspace/voice-uuid-fork.js';
+import {
+  shouldForkSharedVoiceUuid,
+  shouldMintApartFromLegacyKey,
+  isVariantUsedByOtherVoiceUuid,
+} from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
@@ -258,15 +262,9 @@ function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
       : qwenVoiceWavPath(name);
 }
 
-/* #3992 — see ensureCharacterVoiceUuid. Caller holds the design lock. */
-async function forkSharedVoiceUuid(
-  bookDir: string,
-  characterId: string,
-  oldUuid: string,
-): Promise<string | undefined> {
-  const newUuid = nanoid();
-  const oldKey = `qwen-${oldUuid}`;
-  const newKey = `qwen-${newUuid}`;
+/* #3992 — copy the base artifact family of `oldKey` to `newKey` (never the
+   emotion variants). Returns the files written, for cleanup. */
+async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]> {
   const family: Array<['pt' | 'json' | 'wav', string]> = [
     ['pt', ''],
     ['json', ''],
@@ -283,9 +281,58 @@ async function forkSharedVoiceUuid(
       /* source absent (or dest already there): skip — never overwrite. */
     }
   }
-  const cleanup = async (): Promise<void> => {
-    await Promise.all(copied.map((f) => rm(f, { force: true }).catch(() => {})));
-  };
+  return copied;
+}
+
+const removeFiles = async (files: string[]): Promise<void> => {
+  await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
+};
+
+/* #3992 — a no-uuid row that shares a designed legacy key (`qwen-<voiceId>`)
+   with the earlier book gets a uuid of its own, book-scoped, with the legacy
+   family copied first so a Cancel leaves it on the earlier bytes rather than on
+   nothing. Does NOT stamp other books: their render key stays `qwen-<voiceId>`.
+   Caller holds the design lock. */
+async function mintUuidApartFromLegacyKey(
+  bookDir: string,
+  characterId: string,
+  legacyKey: string,
+): Promise<string | undefined> {
+  const newUuid = nanoid();
+  const copied = await copyBaseFamily(legacyKey, `qwen-${newUuid}`);
+  return withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) {
+      await removeFiles(copied);
+      return undefined;
+    }
+    const x = fresh.characters[idx];
+    if (x.voiceUuid) {
+      await removeFiles(copied);
+      return x.voiceUuid;
+    }
+    const linkId = x.voiceId ?? x.id;
+    for (let i = 0; i < fresh.characters.length; i++) {
+      const c = fresh.characters[i];
+      if ((c.voiceId ?? c.id) === linkId && !c.voiceUuid) {
+        fresh.characters[i] = { ...c, voiceUuid: newUuid };
+      }
+    }
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return newUuid;
+  });
+}
+
+/* #3992 — see ensureCharacterVoiceUuid. Caller holds the design lock. */
+async function forkSharedVoiceUuid(
+  bookDir: string,
+  characterId: string,
+  oldUuid: string,
+): Promise<string | undefined> {
+  const newUuid = nanoid();
+  const copied = await copyBaseFamily(`qwen-${oldUuid}`, `qwen-${newUuid}`);
+  const cleanup = (): Promise<void> => removeFiles(copied);
 
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -384,6 +431,12 @@ export async function ensureCharacterVoiceUuid(
     if (character.voiceUuid) return forkIfSharedLocked(bookDir, characterId, character.voiceUuid, character);
 
     if (seriesFilter) {
+      /* #3992 — a declined row that never got a uuid and shares the earlier
+         book's designed legacy key must not take the series mint below, which
+         would stamp the earlier book and move its render key. */
+      if (await shouldMintApartFromLegacyKey(bookDir, character)) {
+        return mintUuidApartFromLegacyKey(bookDir, characterId, qwenStorageKey(character, characterId));
+      }
       /* forEachMatchingCastCharacter takes its own per-book cast lock as it
          walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
          unlocked and delegating; it must not gain a lock of its own. */

@@ -55,21 +55,7 @@ export async function shouldForkSharedVoiceUuid(
   if (character.matchedFrom) return false;
 
   const selfDir = resolve(bookDir);
-  const selfState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-  const selfBookId: string | undefined = selfState?.bookId || undefined;
-
-  /* Does Y's characterId name X? Resolved through X's own book (live cast +
-     id history) so a retired id still matches; no second id matcher. */
-  let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
-  const namesSelf = async (characterId: string): Promise<boolean> => {
-    if (characterId === character.id) return true;
-    if (!resolver) {
-      const cast = await readJson<CastFile>(castJsonPath(bookDir));
-      const history = await loadCastIdHistory(bookDir);
-      resolver = buildCastResolver<CastRow>(cast?.characters ?? [], history);
-    }
-    return resolver.resolve(characterId)?.character.id === character.id;
-  };
+  const linksToSelf = await makeLinksToSelf(bookDir, character);
 
   let hasHolder = false;
   for (const authorName of listDirs(BOOKS_ROOT)) {
@@ -82,17 +68,92 @@ export async function shouldForkSharedVoiceUuid(
         for (const y of cast.characters) {
           if (y.voiceUuid !== uuid) continue;
           hasHolder = true;
-          const mf = y.matchedFrom as { bookId?: string; characterId?: string } | null | undefined;
-          if (!mf) continue;
-          if (!mf.bookId) return false; // bookId-less link: could point at anyone
-          if (selfBookId && mf.bookId === selfBookId) {
-            if (!mf.characterId || (await namesSelf(mf.characterId))) return false;
-          }
+          if (await linksToSelf(y.matchedFrom as MatchedFrom)) return false;
         }
       }
     }
   }
   return hasHolder;
+}
+
+/* #3992 — read-only: the no-uuid sibling of shouldForkSharedVoiceUuid. A row
+   with NO uuid and no `matchedFrom` that already carries a designed qwen slot
+   (the linker denormalised the earlier book's `qwen-<voiceId>` onto it) shares
+   that legacy key with the earlier book. The series mint would stamp the earlier
+   book too and move ITS render key onto the redesign, so the row must mint a uuid
+   of its own instead. True only when ANOTHER book's row has the same
+   `voiceId ?? id`, no uuid and a designed qwen slot of its own, and does not
+   link back to X. A row whose own slot is empty (nobody designed yet) never
+   trips it. */
+export async function shouldMintApartFromLegacyKey(
+  bookDir: string,
+  character: LegacyRow,
+): Promise<boolean> {
+  if (character.voiceUuid || character.matchedFrom) return false;
+  if (!character.overrideTtsVoices?.qwen?.name) return false;
+  const linkId = character.voiceId ?? character.id;
+
+  const selfDir = resolve(bookDir);
+  const linksToSelf = await makeLinksToSelf(bookDir, character);
+
+  let hasHolder = false;
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (resolve(otherDir) === selfDir) continue;
+        const cast = await readJson<{ characters?: LegacyRow[] }>(castJsonPath(otherDir));
+        for (const y of cast?.characters ?? []) {
+          if (y.voiceUuid || (y.voiceId ?? y.id) !== linkId) continue;
+          if (!y.overrideTtsVoices?.qwen?.name) continue;
+          hasHolder = true;
+          if (await linksToSelf(y.matchedFrom as MatchedFrom)) return false;
+        }
+      }
+    }
+  }
+  return hasHolder;
+}
+
+interface LegacyRow {
+  id: string;
+  voiceId?: string | null;
+  voiceUuid?: string | null;
+  matchedFrom?: unknown;
+  overrideTtsVoices?: { qwen?: { name?: string } } | null;
+}
+
+type MatchedFrom = { bookId?: string; characterId?: string } | null | undefined;
+
+/* Does another book's `matchedFrom` link back to X (the character in
+   `bookDir`)? A bookId-less one could point at anyone, so it counts; one naming
+   X's bookId counts when its characterId is absent or resolves to X. Resolved
+   through X's own book (live cast + id history) so a retired id still matches;
+   no second id matcher. */
+async function makeLinksToSelf(
+  bookDir: string,
+  character: { id: string },
+): Promise<(mf: MatchedFrom) => Promise<boolean>> {
+  const selfState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+  const selfBookId: string | undefined = selfState?.bookId || undefined;
+  let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
+  const namesSelf = async (characterId: string): Promise<boolean> => {
+    if (characterId === character.id) return true;
+    if (!resolver) {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      const history = await loadCastIdHistory(bookDir);
+      resolver = buildCastResolver<CastRow>(cast?.characters ?? [], history);
+    }
+    return resolver.resolve(characterId)?.character.id === character.id;
+  };
+  return async (mf) => {
+    if (!mf) return false;
+    if (!mf.bookId) return true;
+    if (selfBookId && mf.bookId === selfBookId) {
+      return !mf.characterId || (await namesSelf(mf.characterId));
+    }
+    return false;
+  };
 }
 
 /* #3992 — read-only: does some OTHER character, under a DIFFERENT base
