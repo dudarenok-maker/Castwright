@@ -256,7 +256,7 @@ function countRawStateWrites(
    reads) -- reads only, no write site moved; the fs-error curation pass then
    routed the listen-progress GET/PUT's uuid reads through it too, taking
    book-state.ts 11 -> 9 -- reads only; #3829 added routes/analysis.ts's start-route
-   refusal read of state.json (`hintsOutOfSyncRefusal`), 1 -> 2 -- a read, not a write
+   refusal read of state.json (now `parseHintsStartCheck`'s no-bookId read), 1 -> 2 -- a read, not a write
    site. Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {

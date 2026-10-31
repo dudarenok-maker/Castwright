@@ -58,7 +58,7 @@ import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-lang
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
-import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { spliceChapterSegments, secToByteOffset, type SegmentReplacement } from '../audio/splice-chapter.js';
@@ -418,7 +418,8 @@ chapterQaRepairRouter.post(
       const editsPath = manuscriptEditsJsonPath(bookDir);
       const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath).catch(() => null);
       if (Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0) {
-        await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
+        /* Plan 290 — skipped while the edits predate the chapter list. */
+        await refreshCacheFromEdits(state, editsPath, {
           excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
         }).catch(() => {});
       }

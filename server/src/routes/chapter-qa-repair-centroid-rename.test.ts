@@ -47,7 +47,7 @@ vi.mock('../store/analysis-cache.js', () => ({
   })),
 }));
 vi.mock('../tts/hydrate-reused-voice-workspace.js', () => ({ hydrateCastReusedVoices: vi.fn(async (c: unknown[]) => c) }));
-vi.mock('../store/analysis-cache-rebuild.js', () => ({ rebuildCacheFromEdits: vi.fn(async () => {}) }));
+vi.mock('../store/analysis-cache-rebuild.js', () => ({ refreshCacheFromEdits: vi.fn(async () => 'rebuilt') }));
 vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
   return { ...real, finalizeChapterAudioWrite: vi.fn(async () => ({ durationSec: 2.0, segmentCount: 2, audioPath: '/fake.mp3' })) };
