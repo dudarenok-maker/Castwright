@@ -812,16 +812,58 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
         expect(screen.getByRole('dialog')).toBeInTheDocument();
       });
 
+      function renderCompareWithStore() {
+        const store = makeReadyStore(null);
+        const view = render(
+          <Provider store={store}>
+            <LibraryView library={libraryB1} />
+          </Provider>,
+        );
+        return { ...view, store };
+      }
+
       it('aborts the in-flight read when the view unmounts, with no failure toast', async () => {
         getBookState.mockImplementation(() => new Promise(() => {}));
-        const { unmount } = renderCompare(libraryB1, null);
-        selectBothAndCompare();
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(0);
-        });
-        expect(bookStateSignals).toHaveLength(1);
-        unmount();
-        expect(bookStateSignals[0]!.aborted).toBe(true);
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const { unmount, store } = renderCompareWithStore();
+          selectBothAndCompare();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+          });
+          expect(bookStateSignals).toHaveLength(1);
+          unmount();
+          expect(bookStateSignals[0]!.aborted).toBe(true);
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+          });
+          expect(store.getState().notifications.toasts).toHaveLength(0);
+          expect(error).not.toHaveBeenCalledWith('[voices] foreign cast fetch failed', expect.anything());
+        } finally {
+          error.mockRestore();
+        }
+      });
+
+      it('leaving while a retry is pending issues no further read and raises no toast', async () => {
+        getBookState.mockImplementation(() => new Promise(() => {}));
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const { unmount, store } = renderCompareWithStore();
+          selectBothAndCompare();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(15500);
+          });
+          expect(getBookState).toHaveBeenCalledTimes(1);
+          unmount();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(300000);
+          });
+          expect(getBookState).toHaveBeenCalledTimes(1);
+          expect(store.getState().notifications.toasts).toHaveLength(0);
+          expect(error).not.toHaveBeenCalledWith('[voices] foreign cast fetch failed', expect.anything());
+        } finally {
+          error.mockRestore();
+        }
       });
     });
   });

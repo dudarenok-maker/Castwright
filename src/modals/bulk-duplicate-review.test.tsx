@@ -111,14 +111,43 @@ describe('BulkDuplicateReviewModal — a foreign-cast read that never settles (#
     expect(screen.getByRole('button', { name: 'Same character — link them' })).toBeEnabled();
   });
 
-  it('aborts the in-flight read when the modal unmounts', async () => {
+  it('aborts the in-flight read when the modal unmounts, without reporting a failed load', async () => {
     getBookState.mockImplementation(() => new Promise(() => {}));
-    const { unmount } = renderBulk();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(bookStateSignals).toHaveLength(1);
-    unmount();
-    expect(bookStateSignals[0]!.aborted).toBe(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { unmount } = renderBulk();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(bookStateSignals).toHaveLength(1);
+      unmount();
+      expect(bookStateSignals[0]!.aborted).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(warn).not.toHaveBeenCalledWith('[bulk-duplicate] foreign cast hydrate failed', expect.anything());
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('leaving while a retry is pending issues no further read and reports no failed load', async () => {
+    getBookState.mockImplementation(() => new Promise(() => {}));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { unmount } = renderBulk();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15500);
+      });
+      expect(getBookState).toHaveBeenCalledTimes(1);
+      unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300000);
+      });
+      expect(getBookState).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalledWith('[bulk-duplicate] foreign cast hydrate failed', expect.anything());
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
