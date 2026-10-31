@@ -68,13 +68,19 @@ export interface ManuscriptRecord {
       pairs with state.json), `parse` = the fallback fresh parse, which carries
       no identity. Absent = built alongside state.json from one parse in this
       process (import, sample, re-parse), so there is nothing to check.
-      Merge, split and reorder title-check a `parse` record (`parseTitles`). */
+      A restructure judges a `parse` record before it runs (#3837,
+      `routes/chapters-restructure.ts`): by the saved analysis sentences where it
+      can (`workspace/hints-proof.ts`), else by the positional title check
+      (`parseTitles`). */
   hintsSource?: 'persisted' | 'parse';
   /** The parser's own chapter titles, by position, for a `parse` record only;
       `null` where the parser made the title up (`Chapter N`), which says nothing
       about which chapter it is. `hintsFromParse` re-titles the hints from
       state.json, which hides a same-count mispairing, so the raw titles are kept
-      to compare against it. */
+      to compare against it: at every position when the sentence check cannot
+      run, and at the positions without saved sentences when it can (#3837). Also
+      the purity test: a record whose hints still line up one-to-one with these
+      titles, each hint at its own `parseIndex`, is an untransformed parse. */
   parseTitles?: Array<string | null>;
   /** Set when this manuscript was registered via POST /api/books (workspace
       flow). Lets the analysis route persist cast.json + state.json updates

@@ -749,7 +749,14 @@ export class HintsOutOfSyncError extends Error {
     is app-made is NOT skipped: reorder renumbers it, so skipping it let a swap
     between an app-titled and a heading chapter through, and on a book never
     restructured the parse is `null` at that position anyway. The blind spot is a
-    reorder that only permutes app-titled chapters among themselves. */
+    reorder that only permutes app-titled chapters among themselves.
+
+    Since #3837 (plan 290) this is the restructure seam's fallback rule, applied
+    by `routes/chapters-restructure.ts` when the sentence check cannot run (an
+    impure record, ids out of order, unreadable edits, the stale-evidence marker).
+    When it can, a chapter with saved sentences is judged by
+    `workspace/hints-proof.ts` instead, and only the evidence-less positions keep
+    this test, through `titlePairsAt`. */
 export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
@@ -769,9 +776,13 @@ export function titlePairsAt(
 
 /** Hints pair with state when both hold the same chapter ids (so the same
     count). Hints carry no uuid, so for hints from a persisted file that is all
-    there is to check. Hints from a parse fallback (`parseTitles` given) carry no
-    identity at all, so each position's parsed title must also match state's: a
-    same-count mispairing (a reorder from before #3703) fails here. */
+    there is to check. Hints from a parse fallback carry no identity at all; the
+    restructure route judges them before the transform (#3837): by the saved
+    sentences where the check can run, in which case it passes no `parseTitles`
+    and this asserts count/id only, else by the positional title rule, in which
+    case `parseTitles` is given and each position's parsed title must also match
+    state's, so a same-count mispairing (a reorder from before #3703) fails here
+    too. */
 export function assertHintsPairWithState(
   state: BookStateJson,
   hints: readonly ChapterHint[],

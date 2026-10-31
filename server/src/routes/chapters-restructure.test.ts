@@ -529,7 +529,8 @@ describe('merge/split/reorder refuse when hints do not pair with state.json (#37
       expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
     });
 
-    it('exclude still succeeds but writes no hints file, so the mispairing is not made `persisted`', async () => {
+    it('exclude still succeeds and, as a toggle, writes no hints file, so the mispairing is not made `persisted`', async () => {
+      /* A toggle never writes a hints file (#3837 round 8): it moves no id or uuid. */
       seedPreReorderedBook();
       const res = await request(app)
         .post(`/api/books/${bookId}/chapters/exclude`)
