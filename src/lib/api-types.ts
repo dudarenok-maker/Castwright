@@ -8116,7 +8116,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Snapshot is corrupt / unparseable */
+            /** @description Snapshot is corrupt / unparseable (`{ error }`). Also `{ error, code: book_busy }` (PR #3966) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: a curated sentence naming what is running; stop it or wait for it to finish, then restore the backup. Checked first, before the snapshot is read; nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;

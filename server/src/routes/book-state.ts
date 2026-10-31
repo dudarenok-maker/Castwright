@@ -1070,7 +1070,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
 
 export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -1090,6 +1090,11 @@ export function busySentence(
   }
   if (action === 'exclude') {
     return `This book is busy (${what}). Stop it or wait for it to finish, then exclude chapters.`;
+  }
+  /* PR #3966 review pass 2 -- a backup restore rewrites state.json and can clear
+     the analysis cache under a job that may still be saving it. */
+  if (action === 'restore') {
+    return `This book is busy (${what}). Stop it or wait for it to finish, then restore the backup.`;
   }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
