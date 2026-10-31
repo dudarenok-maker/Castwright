@@ -1278,7 +1278,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(store.getState().analysis.activeStream).toEqual(newer);
   });
 
-  it('#3967 — a book-state read that never settles is aborted at 15 s and given up as a failed re-read (warned, snapshot untouched)', async () => {
+  it('#3967 — a book-state read that never settles is aborted at 15 s and warned; the stale running snapshot the server denied is cleared, not kept', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -1287,7 +1287,6 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
       getBookStateMock.mockReturnValueOnce(new Promise(() => {}));
-      const atStart = store.getState().analysis.activeStream;
       lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
       await vi.advanceTimersByTimeAsync(0);
       expect(bookStateSignals).toHaveLength(1);
@@ -1295,7 +1294,29 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       await vi.advanceTimersByTimeAsync(15000);
       expect(bookStateSignals[0]!.aborted).toBe(true);
       expect(warn).toHaveBeenCalledWith('[analysis-state] refusal re-read failed:', expect.stringContaining('timed out'));
-      expect(store.getState().analysis.activeStream).toEqual(atStart);
+      expect(store.getState().analysis.activeStream).toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3967 pass 2 — the read answering after the bound is the pass-2 repro: the server said
+     `paused`, so a local `running` must not survive (the handle is closed, no tick corrects it). */
+  it('#3967 — a book-state read that answers at 16 s leaves no running snapshot behind', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+      getBookStateMock.mockReturnValueOnce(
+        new Promise((r) => setTimeout(() => r({ state: { castConfirmed: false } }), 16000)),
+      );
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await vi.advanceTimersByTimeAsync(120000);
+      expect(store.getState().analysis.activeStream?.state).not.toBe('running');
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
