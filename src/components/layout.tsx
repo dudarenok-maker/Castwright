@@ -83,6 +83,7 @@ import { WhatsNewBanner } from './whats-new-banner';
 import { BulkReassignUndoBanner } from './bulk-reassign-undo-banner';
 import { UpdateNotifierBanner } from './update-notifier-banner';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
+import { DuplicateBookRepairBanner } from './duplicate-book-repair-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -2346,6 +2347,7 @@ export function Layout() {
       <WhatsNewBanner />
       <BulkReassignUndoBanner />
       <SettingsCorruptBanner />
+      <DuplicateBookRepairBanner />
 
       {/* fe-27 — "update available" notifier; self-gated, dark in mock mode. */}
       <UpdateNotifierBanner />
