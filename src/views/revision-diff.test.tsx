@@ -381,4 +381,29 @@ describe('RevisionDiffPlayer', () => {
     await waitFor(() => expect(played).toHaveLength(2));
     expect(played[1].at).toBe(20); // B, segment 1, from the re-fetched metadata
   });
+  it('#4002 — a stale take-load failure does not enable Listen back-to-back while the chapter refetches', async () => {
+    const getA = api.getChapterAudioPrevious as ReturnType<typeof vi.fn>;
+    getA.mockRejectedValue(new Error('404'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seg = { id: 1, changed: true } as unknown as Revision['segments'][number];
+    const revision = makeRevision({ segments: [seg] });
+    const view = renderPlayer(revision);
+    const toggle = screen.getByRole('button', { name: /Listen back-to-back/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    getA.mockReturnValue(new Promise<ChapterAudio>(() => {})); // refetch stays pending
+    view.rerender(
+      <RevisionDiffPlayer
+        revision={revision}
+        bookId="book-1"
+        chapter={{ ...chapter }}
+        character={character}
+        onClose={view.onClose}
+        onAccept={view.onAccept}
+        onReject={view.onReject}
+      />,
+    );
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(toggle).toBeDisabled();
+    warn.mockRestore();
+  });
 });

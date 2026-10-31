@@ -100,6 +100,8 @@ export function RevisionDiffPlayer({
   useEffect(() => {
     if (!chapter) return;
     let cancelled = false;
+    setAudioAFailed(false);
+    setAudioBError(null);
     if (hasPreviousAudio) {
       api
         .getChapterAudioPrevious({ bookId, chapterId: chapter.id, duration: chapter.duration })
