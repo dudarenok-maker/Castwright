@@ -24,6 +24,7 @@ import {
   readFileSync,
   readdirSync,
   existsSync,
+  renameSync,
 } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1199,6 +1200,45 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     );
   });
 
+  it('reorder [1,3,2,4,5] moves a stamp-less excluded chapter\'s audio with it (#3919, probe P5)', async () => {
+    seedDigitTitledBook();
+    // Only the excluded chapter 2 has audio on disk; chapter 3 is unrendered.
+    seedAudio('02-chapter-2');
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    st.chapters.forEach((c: { uuid?: string }, i: number) => {
+      c.uuid = `00000000-0000-4000-8000-00000000000${i + 1}`;
+    });
+    // Excluded and stamp-less: a backup restore can drop both render stamps.
+    st.chapters[1].excluded = true;
+    delete st.chapters[1].audioRenderedAt;
+    delete st.chapters[1].audioModelKey;
+    writeFileSync(stPath, JSON.stringify(st));
+    const excludedUuid = st.chapters[1].uuid as string;
+    const unrenderedUuid = st.chapters[2].uuid as string;
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [1, 3, 2, 4, 5] });
+    expect(res.status).toBe(200);
+
+    const after = readState();
+    type Ch = (typeof after.chapters)[number];
+    const moved = after.chapters.find((c: Ch) => c.uuid === excludedUuid)!;
+    const inheritor = after.chapters.find((c: Ch) => c.uuid === unrenderedUuid)!;
+    // Old chapter 2 was healed, kept its audio and carries it to its new slug.
+    expect(moved.slug).not.toBe('02-chapter-2');
+    expect(moved.audioRenderedAt).toBeDefined();
+    expect(readFileSync(join(audioRoot, `${moved.slug}.mp3`), 'utf8')).toBe('audio-02-chapter-2');
+    // Old chapter 3 now sits at 02-chapter-2 and must not inherit that audio.
+    expect(inheritor.slug).toBe('02-chapter-2');
+    expect(inheritor.audioRenderedAt).toBeUndefined();
+    const inheritedPath = join(audioRoot, '02-chapter-2.mp3');
+    if (existsSync(inheritedPath)) {
+      expect(readFileSync(inheritedPath, 'utf8')).not.toBe('audio-02-chapter-2');
+    }
+  });
+
   function seedRenderedChapters(slugs: string[]): void {
     for (const slug of slugs) {
       seedAudio(slug);
@@ -2174,7 +2214,8 @@ describe('#3704 — a renumbered chapter keeps its pending A/B take', () => {
   });
 
   it('R4: a chapter that did not move keeps its own .previous.* when its render stamp is missing', async () => {
-    // An excluded chapter whose stamp restoreBackup stripped: the scan heal skips excluded chapters.
+    // An excluded chapter whose stamp restoreBackup stripped. Its segments file is hidden for the POST so the
+    // route's own resolve-time heal cannot re-stamp it, leaving the held-audio guard to protect the take.
     const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     state.chapters[1].excluded = true;
     delete state.chapters[1].audioRenderedAt;
@@ -2183,12 +2224,15 @@ describe('#3704 — a renumbered chapter keeps its pending A/B take', () => {
     const entryForCh2 = { ...entryForCh1, id: 'revision:2:1', chapterId: 2, chapterUuid: UUIDS[1] };
     writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [entryForCh2], dismissed: [], acceptedSelections: {}, timeline: {} }));
 
+    const seg = join(audioRoot, '02-chapter-two.segments.json');
+    renameSync(seg, `${seg}.hidden`);
     const inc = await request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: false });
+    renameSync(`${seg}.hidden`, seg);
     expect(inc.status).toBe(200);
     expect(inc.body.audioSummary.deleted).toEqual([]);
     expect(readFileSync(join(audioRoot, '02-chapter-two.previous.mp3'), 'utf8')).toBe('ORIGINAL-2');
 
-    // GET heals the stamp back from the segments file, so the entry pairs again.
+    // GET heals the stamp back from the restored segments file, so the entry pairs again.
     expect((await request(app).get(`/api/books/${bookId}/state`)).status).toBe(200);
     const res = await request(app).post(`/api/books/${bookId}/revisions/${entryForCh2.id}/reject`).send({});
     expect(res.status).toBe(200);

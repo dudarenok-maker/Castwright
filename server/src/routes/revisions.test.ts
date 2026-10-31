@@ -21,7 +21,7 @@
    Workspace tempdir + supertest pattern matches book-state.reparse.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -225,6 +225,20 @@ describe('GET /api/books/:bookId/revisions — basic shape', () => {
       snapshots: { eliza: { voiceId: 'v1', voiceEngine: 'coqui', tone: { warmth: 60, pace: 50 } } },
       cast: [{ id: 'eliza', voiceId: 'v1', tone: { warmth: 60, pace: 50 } }],
     });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('reports no drift for an excluded chapter, which never renders (#3919)', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old', voiceEngine: 'coqui' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    state.chapters[0].excluded = true;
+    writeFileSync(statePath, JSON.stringify(state));
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
     expect(res.body.drift).toEqual([]);

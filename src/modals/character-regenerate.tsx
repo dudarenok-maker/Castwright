@@ -15,7 +15,8 @@ interface Props {
   /** `preview: false` → regenerate every affected chapter now. `preview: true`
       → render only the first affected chapter (chapterIds[0]) and open the A/B
       gate; the layout fans the rest out on Approve. Either way `chapterIds`
-      carries every chapter the character speaks in, in reading order. */
+      carries every INCLUDED chapter the character speaks in, in reading
+      order (excluded chapters never render, so they are left out). */
   onConfirm: (args: {
     characterId: string;
     chapterIds: number[];
@@ -31,13 +32,16 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
   if (!character) return null;
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
 
-  /* Chapters the character speaks in, in reading order. Regeneration is
+  /* Chapters the character speaks in, in reading order — excluded chapters
+     never render (the server drops them), so they stay out of the ids and
+     the ETA, and can't become the preview sample. Regeneration is
      whole-chapter — there is no per-character synthesis server-side, so a
      voice change is applied by re-rendering each affected chapter in full.
      The first chapter is the A/B preview sample. */
-  const speakingChapters = chapters.filter(
-    (ch) => ch.characters[character.id] && ch.characters[character.id] !== 'skipped',
-  );
+  const speaks = (ch: Chapter) =>
+    ch.characters[character.id] && ch.characters[character.id] !== 'skipped';
+  const speakingChapters = chapters.filter((ch) => !ch.excluded && speaks(ch));
+  const speaksOnlyInExcluded = speakingChapters.length === 0 && chapters.some(speaks);
   const chapterIds = speakingChapters.map((ch) => ch.id);
   const previewChapter = speakingChapters[0] ?? null;
   const n = speakingChapters.length;
@@ -77,7 +81,9 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
               </p>
               {n === 0 ? (
                 <p className="text-sm text-ink/60">
-                  {character.name} doesn't speak in any chapter yet — nothing to regenerate.
+                  {speaksOnlyInExcluded
+                    ? `${character.name} speaks only in excluded chapters — nothing to regenerate.`
+                    : `${character.name} doesn't speak in any chapter yet — nothing to regenerate.`}
                 </p>
               ) : (
                 <>

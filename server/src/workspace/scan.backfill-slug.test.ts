@@ -57,3 +57,66 @@ describe('backfillAudioModelKeysFromSegments — slug-matched patch (#3700)', ()
     }
   });
 });
+
+describe('backfillAudioModelKeysFromSegments — excluded chapters (#3919)', () => {
+  const readState = (bookDir: string) =>
+    JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')) as {
+      chapters: Array<{ excluded?: boolean; audioRenderedAt?: string; audioModelKey?: string }>;
+    };
+
+  it('stamps audioRenderedAt/audioModelKey on an excluded chapter and keeps it excluded', async () => {
+    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-backfill-excluded-'));
+    try {
+      mkdirSync(join(bookDir, 'audio'), { recursive: true });
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      writeFileSync(join(bookDir, 'audio', '02-chapter-2.mp3'), 'x');
+      writeFileSync(
+        join(bookDir, 'audio', '02-chapter-2.segments.json'),
+        JSON.stringify({ durationSec: 50, modelKey: 'kokoro', synthesizedAt: '2026-02-02T00:00:00.000Z' }),
+      );
+      const st = {
+        ...base,
+        chapters: [{ id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '00:00', excluded: true }],
+      };
+      writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(st));
+
+      const res = await backfillAudioModelKeysFromSegments(bookDir, st as unknown as BookStateJson);
+
+      for (const ch of [res.state.chapters[0], readState(bookDir).chapters[0]]) {
+        expect(ch.audioRenderedAt).toBe('2026-02-02T00:00:00.000Z');
+        expect(ch.audioModelKey).toBe('kokoro');
+        expect(ch.excluded).toBe(true);
+      }
+    } finally {
+      rmSync(bookDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the excluded chapter out of totalSec', async () => {
+    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-backfill-excluded-total-'));
+    try {
+      mkdirSync(join(bookDir, 'audio'), { recursive: true });
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      for (const [slug, dur] of [['01-chapter-1', 100], ['02-chapter-2', 50]] as const) {
+        writeFileSync(join(bookDir, 'audio', `${slug}.mp3`), 'x');
+        writeFileSync(
+          join(bookDir, 'audio', `${slug}.segments.json`),
+          JSON.stringify({ durationSec: dur, modelKey: 'kokoro', synthesizedAt: '2026-02-02T00:00:00.000Z' }),
+        );
+      }
+      const st = {
+        ...base,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', duration: '00:00' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '00:00', excluded: true },
+        ],
+      };
+      writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(st));
+
+      const res = await backfillAudioModelKeysFromSegments(bookDir, st as unknown as BookStateJson);
+      expect(res.totalSec).toBe(100);
+    } finally {
+      rmSync(bookDir, { recursive: true, force: true });
+    }
+  });
+});

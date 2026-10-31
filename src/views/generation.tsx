@@ -636,6 +636,20 @@ export function GenerationView({
       try {
         await api.setChapterExcluded(bookId, chapterId, true);
         if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+        /* #3919 — a queued preview of this chapter can never complete (the
+           server skips an excluded chapter), so the rest would never fan out,
+           silently. Drop it and say so. */
+        const pv = store.getState().ui.previewRegen;
+        if (pv && pv.bookId === bookId && pv.previewChapterId === chapterId) {
+          dispatch(uiActions.clearPreviewForBook(bookId));
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: 'The chapter you were previewing was excluded, so the preview was cancelled.',
+              dedupeKey: 'gen-preview-cleared',
+            }),
+          );
+        }
       } catch (e) {
         console.error('[generation] exclude failed', e);
         /* #3774 — the server refuses an exclude with a 409 `book_busy` while a
@@ -1497,7 +1511,7 @@ export function GenerationView({
 
   /* Honest "runtime so far" — sum of completed chapter durations. Replaces
      the hardcoded "4h 38m". */
-  const runtimeSec = chapters
+  const runtimeSec = activeChapters
     .filter((c) => c.state === 'done')
     .reduce((s, c) => s + parseDuration(c.duration), 0);
 

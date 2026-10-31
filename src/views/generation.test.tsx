@@ -7,7 +7,7 @@ import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
 import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
@@ -3476,6 +3476,47 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBeFalsy();
   });
 
+  it('#3919 excluding the chapter of a queued preview clears the preview and says why', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 2,
+        remainingChapterIds: [3],
+        reason: 'voice',
+        note: '',
+        bookId: 'b1',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen).toBeNull();
+    expect(store.getState().notifications.toasts).toEqual([
+      expect.objectContaining({ kind: 'warn', dedupeKey: 'gen-preview-cleared', message: expect.stringMatching(/preview/i) }),
+    ]);
+  });
+
+  it('#3919 excluding another chapter leaves a queued preview alone', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 1,
+        remainingChapterIds: [2],
+        reason: 'voice',
+        note: '',
+        bookId: 'b1',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen).not.toBeNull();
+  });
+
   it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
     const message = 'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.';
     const store = makeIncludeStore();
@@ -5230,5 +5271,58 @@ describe('GenerationView — instruct selector is stable before hydrate (#3722)'
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('GenerationView — runtime so far ignores excluded chapters (#3919)', () => {
+  /* The server heal now stamps `duration` on an excluded chapter that has
+     audio on disk, and hydrate marks any chapter with audio `done`. The
+     "Runtime so far" sum must still cover only the included chapters. */
+  it('does not add the seconds of an excluded chapter that has audio on disk', () => {
+    const store = configureStore({
+      reducer: {
+        analysis: analysisSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a', duration: '01:40' },
+          { id: 2, title: 'Chapter 2', slug: '02-b', duration: '00:50', excluded: true },
+        ],
+        completedSlugs: ['01-a', '02-b'],
+        characters,
+      } as any),
+    );
+    const hydrated = store.getState().chapters.chapters;
+    expect(hydrated.map((c) => c.state)).toEqual(['done', 'done']);
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={hydrated}
+          characters={characters}
+          paused
+          title="Runtime Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    const label = screen.getByText(/Runtime so far:/);
+    expect(label.textContent).toContain('1:40');
+    expect(label.textContent).not.toContain('2:30');
   });
 });
