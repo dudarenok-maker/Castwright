@@ -90,7 +90,15 @@ async function castRowCount(dir: string): Promise<number> {
 
 export async function findDuplicateBookIdGroups(): Promise<DuplicateBookIdGroup[]> {
   const byId = new Map<string, TwinRankInput[]>();
-  const dirs = bookDirsInWalkOrder();
+  let dirs: string[];
+  try {
+    dirs = bookDirsInWalkOrder();
+  } catch {
+    /* A folder that exists but cannot be listed may hold a twin, or the id the
+       counter would mint next: a partial walk is not the library. Path-free line. */
+    console.warn('[duplicate-bookid-sweep] a directory is unlistable; skipping the sweep until next startup');
+    return [];
+  }
   for (let walkIndex = 0; walkIndex < dirs.length; walkIndex++) {
     const dir = dirs[walkIndex];
     let state;
