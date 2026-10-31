@@ -401,3 +401,86 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(rowsOf('Book Three').map((r) => r.voiceUuid)).toEqual([fresh, fresh, 'u_shared']);
   });
 });
+
+describe('#3992 — a row that vanishes mid-fork fails the request, it never falls back to the shared voice', () => {
+  const vanish = () => {
+    beforeCopy.fn = () => writeRows('Book Two', [{ ...baseRow, id: 'someone_else', voiceId: 'v_other', voiceUuid: 'u_other' }]);
+  };
+  const strays = () => readdirSync(qwenDir()).filter((f) => f !== 'qwen-u_shared.pt' && f !== 'qwen-u_shared.json');
+
+  it('base design: 404, the sidecar is never asked, Book One’s bytes and the directory are untouched', async () => {
+    seedChain();
+    vanish();
+    const res = await design('Book Two');
+    expect(res.status).toBe(404);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+    expect(strays()).toEqual([]);
+  });
+
+  it('emotion variant: 404 and nothing written under the earlier book’s name', async () => {
+    seedChain();
+    writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('ONE-ANGRY'));
+    vanish();
+    const res = await design('Book Two', { emotion: 'angry' });
+    expect(res.status).toBe(404);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt')).equals(Buffer.from('ONE-ANGRY'))).toBe(true);
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('the legacy-key mint (a declined row with no uuid yet) fails the same way', async () => {
+    seedChain();
+    const slot = { qwen: { name: 'qwen-v_wren' } };
+    const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: slot };
+    writeRows('Book One', [{ ...legacy }]);
+    writeRows('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']] }]);
+    writeRows('Book Three', []);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+    vanish();
+    const res = await design('Book Two');
+    expect(res.status).toBe(404);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
+  });
+
+  it('ensureCharacterVoiceUuid rejects with CharacterGoneError rather than returning a uuid to fall back on', async () => {
+    seedChain();
+    vanish();
+    const { ensureCharacterVoiceUuid, CharacterGoneError } = await import('./qwen-voice.js');
+    await expect(ensureCharacterVoiceUuid(bookDir('Book Two'), 'wren')).rejects.toBeInstanceOf(CharacterGoneError);
+    expect(strays()).toEqual([]);
+  });
+
+  it('ensureCharacterVoiceUuid on the legacy-key mint rejects with CharacterGoneError too', async () => {
+    seedChain();
+    const slot = { qwen: { name: 'qwen-v_wren' } };
+    const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: slot };
+    writeRows('Book One', [{ ...legacy }]);
+    writeRows('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']] }]);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+    vanish();
+    const { ensureCharacterVoiceUuid, CharacterGoneError } = await import('./qwen-voice.js');
+    await expect(
+      ensureCharacterVoiceUuid(bookDir('Book Two'), 'wren', { author: AUTHOR, series: SERIES }),
+    ).rejects.toBeInstanceOf(CharacterGoneError);
+    expect(strays()).toEqual(['qwen-v_wren.pt']); // only the seeded legacy file: the mint's copies were removed
+  });
+
+  it('requireDesignVoiceUuid: a missing uuid is "gone" for a base design and for a variant on a row that had one, but not for a variant on a row that never had one', async () => {
+    const { requireDesignVoiceUuid, CharacterGoneError } = await import('./qwen-voice.js');
+    const had = { id: 'wren', voiceUuid: 'u_shared' } as never;
+    const never = { id: 'wren' } as never;
+    expect(() => requireDesignVoiceUuid(never, false, undefined)).toThrow(CharacterGoneError);
+    expect(() => requireDesignVoiceUuid(had, false, undefined)).toThrow(CharacterGoneError);
+    expect(() => requireDesignVoiceUuid(had, true, undefined)).toThrow(CharacterGoneError);
+    expect(requireDesignVoiceUuid(never, true, undefined)).toBeUndefined();
+    expect(requireDesignVoiceUuid(had, true, 'u_new')).toBe('u_new');
+    expect(requireDesignVoiceUuid(never, false, 'u_new')).toBe('u_new');
+  });
+
+  it('control: the row still there, the same request forks and answers 200', async () => {
+    seedChain();
+    expect((await design('Book Two')).status).toBe(200);
+  });
+});

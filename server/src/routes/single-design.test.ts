@@ -228,6 +228,27 @@ describe('single-design job — first design', () => {
   });
 });
 
+describe('single-design job — the character vanishes mid-fork (#3992)', () => {
+  it('ends the job with a not_found error and never designs under the pre-fork uuid', async () => {
+    const qwenMod = await import('./qwen-voice.js');
+    const spy = vi.spyOn(qwenMod, 'ensureCharacterVoiceUuid').mockResolvedValueOnce(undefined);
+    capturedDesignArgs = null;
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+      expect(res.status).toBe(200);
+      const events = collectSse(res);
+      expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'not_found' });
+      expect(events.some((e) => e.type === 'designed' || e.type === 'preview_ready')).toBe(false);
+      expect(capturedDesignArgs).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(designLock.isDesignBusy(bookDir)).toBe(false);
+  });
+});
+
 describe('single-design job — preview (re-design)', () => {
   it('emits preview_ready WITHOUT persisting, and previewUrl matches the core stub', async () => {
     const res = await request(app)

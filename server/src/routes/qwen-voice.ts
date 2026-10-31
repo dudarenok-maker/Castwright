@@ -256,6 +256,17 @@ export async function persistEmotionVariant(
   });
 }
 
+/* #3992 — the character vanished (deleted, merged away) between a design's early
+   read and the locked write of its fork or mint. There is no uuid to design under,
+   and falling back to the one it read before the fork would write the earlier
+   book's `qwen-<uuid>.pt`, so the request fails instead. Routes answer 404. */
+export class CharacterGoneError extends Error {
+  constructor(message = 'Character no longer exists.') {
+    super(message);
+    this.name = 'CharacterGoneError';
+  }
+}
+
 /* #3992 — the base artifact family of one voice key (no emotion variants). */
 function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
   return kind === 'pt'
@@ -315,7 +326,7 @@ async function mintUuidApartFromLegacyKey(
     const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
     if (!fresh || idx === -1) {
       await removeFiles(copied);
-      return undefined;
+      throw new CharacterGoneError();
     }
     const x = fresh.characters[idx];
     if (x.voiceUuid) {
@@ -361,7 +372,7 @@ async function forkSharedVoiceUuid(
       const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
       if (!fresh || idx === -1) {
         await cleanup();
-        return undefined;
+        throw new CharacterGoneError();
       }
       const x = fresh.characters[idx];
       if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
@@ -469,6 +480,23 @@ export async function forkDeclinedVoiceUuidIfShared(
     if (!character?.voiceUuid) return undefined;
     return forkIfSharedLocked(bookDir, characterId, character.voiceUuid, character);
   });
+}
+
+/* #3992 — check the uuid a design is about to run under, for a character the
+   caller has JUST read from cast.json. A BASE design ensures (mints or forks) one;
+   a VARIANT only forks a declined shared one and never mints (#1057). An
+   `undefined` answer for a character that is known to exist means it vanished, or
+   lost its uuid, since that read, and the caller's fallback
+   (`voiceUuid ?? character.voiceUuid`) would be the pre-fork shared uuid: the
+   design would overwrite the earlier book's `.pt`. So it throws CharacterGoneError
+   instead. A variant on a row that never had a uuid legitimately has none. */
+export function requireDesignVoiceUuid(
+  character: CastCharacter,
+  emotion: boolean,
+  uuid: string | undefined,
+): string | undefined {
+  if (!uuid && (!emotion || character.voiceUuid)) throw new CharacterGoneError();
+  return uuid;
 }
 
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
@@ -966,9 +994,19 @@ qwenVoiceRouter.post(
        voiceUuid (first forking a declined, shared one so it never lands on the
        earlier book's variant files, but never minting) and anchors on the base's
        current key. */
-    const voiceUuid = emotion
-      ? await forkDeclinedVoiceUuidIfShared(bookDir, characterId)
-      : await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
+    let voiceUuid: string | undefined;
+    try {
+      voiceUuid = requireDesignVoiceUuid(
+        character,
+        !!emotion,
+        emotion
+          ? await forkDeclinedVoiceUuidIfShared(bookDir, characterId)
+          : await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined),
+      );
+    } catch (e) {
+      if (e instanceof CharacterGoneError) return res.status(404).json({ error: e.message });
+      throw e;
+    }
     const characterForDesign: CastCharacter = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
     try {
       const { voiceId, url } = await designQwenVoiceForCharacter({

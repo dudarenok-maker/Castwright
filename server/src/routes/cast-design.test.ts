@@ -2166,6 +2166,34 @@ describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not
   });
 });
 
+describe('cast-design — a character that vanishes mid-fork fails alone and is never designed (#3992)', () => {
+  it('records character_failed for it, does not call the design core, and still designs the next character', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-x',
+      url: '/u',
+    });
+    const real = qwenVoiceMod.ensureCharacterVoiceUuid;
+    /* the race's observable shape: the ensure step answers undefined for a row it
+       can no longer find */
+    const resolveSpy = vi
+      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
+      .mockImplementation(async (dir, id, series) => (id === 'aria' ? undefined : real(dir, id, series)));
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria', 'hart'], modelKey: QWEN_KEY });
+    } finally {
+      resolveSpy.mockRestore();
+    }
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failed?.errorReason).toBe('Character no longer exists.');
+    expect(spy.mock.calls.every((c) => c[0].characterId !== 'aria')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'hart')).toBe(true);
+  });
+});
+
 describe('cast-design — a node fs error out of a character’s design is curated, not leaked (#3992)', () => {
   it('reports the path-free fs sentence as the character’s failure reason', async () => {
     const castLockMod = await import('../workspace/cast-lock.js');

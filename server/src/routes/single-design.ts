@@ -28,7 +28,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid, requireDesignVoiceUuid, CharacterGoneError } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
@@ -125,10 +125,10 @@ async function runSingleDesign(
        the bulk-job and REST-endpoint paths so every design entry point produces
        the same uuid-keyed cache key. */
     const seriesFilterForUuid = seriesFilter;
-    const voiceUuid = await ensureCharacterVoiceUuid(
-      job.bookDir,
-      job.characterId,
-      seriesFilterForUuid,
+    const voiceUuid = requireDesignVoiceUuid(
+      character,
+      false,
+      await ensureCharacterVoiceUuid(job.bookDir, job.characterId, seriesFilterForUuid),
     );
     const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
 
@@ -200,6 +200,11 @@ async function runSingleDesign(
       voiceUuid: characterForDesign.voiceUuid,
     });
   } catch (e) {
+    /* #3992 — the character vanished between the read above and the fork/mint. */
+    if (e instanceof CharacterGoneError) {
+      endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
     /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and
        `applyOverrideToCastFiles`, both of which take cast locks, so the raw
        message here could be the absolute path of the book's cast.json, sent
