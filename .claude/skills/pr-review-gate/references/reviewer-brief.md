@@ -844,6 +844,23 @@ recite:
     healthy ratio (`t - k x reference > margin`), which stays near 0 under
     uniform slowdown and grows by the defect's cost.
 
+65. **A fixture timestamp taken before harness setup, compared against a
+    timestamp the code under test takes at spawn** — PR #4012 pass 1 (#4005):
+    `T = Date.now() + 100` was captured before the harness wrote its fixture
+    files and spawned the step, then compared (`live.startedAt >= spawnedAt`)
+    against the `spawnedAt` that `runStepProcess` stamps at spawn. On an idle
+    box setup took a few ms and the margin held; once setup plus spawn passed
+    the constant (a loaded Windows CI runner) the root read as recycled and
+    nothing was swept. The sibling test two screens down had the same shape
+    but a different spelling (`T` rather than `now + 50`), so a grep for the
+    reported spelling missed it. Checkable: for every fixture time offset by a
+    small constant that must postdate (or predate) a timestamp the code takes
+    itself, add a 200 ms busy-wait to the harness setup and rerun; a test
+    that now fails only because of the delay has the race. Fix by stamping
+    from a time taken after the spawn (`const p = h.run(); afterSpawn =
+    Date.now(); await p;`, rows built lazily from it), not at callback time,
+    which would stop distinguishing a spawn-time bound from a kill-time one.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
