@@ -16,6 +16,7 @@ import {
   lineOf,
   opaqueRangeAt,
 } from './guard-scan.js';
+import * as scanner from './guard-scan.js';
 
 /* Unit tests for the shared guard scanner (#3685). Every case pins a behaviour
    the guard files relied on while each carried its own private copy, so drift
@@ -186,49 +187,124 @@ describe('token-skipping opaque ranges', () => {
   });
 });
 
-/* Replaces the four retired byte-identical drift tests (#3685). Those compared
+/* Replaces the five retired byte-identical drift tests (#3685). Those compared
    per-guard copies of the tokenizer; the copies are gone, so the failure they
    guarded against is a guard growing a PRIVATE scanner again. Parsed, not
-   regexed: guards quote these names in comments. */
+   regexed: guards quote these names in comments. The banned names are every
+   runtime export of guard-scan.ts (so a new export is covered the moment it
+   lands) plus the names a retired private copy went by. */
 const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // server/src
-const SHARED_SCANNER_NAMES = new Set([
-  'collectSourceFiles',
-  'collectTestFiles',
-  'computeOpaqueRanges',
-  'computeAstOpaqueRanges',
-  'isOpaque',
-  'opaqueEnd',
-  'findMatchingClose',
-  'lineOf',
-  'skipOpaqueToken',
-]);
+const RETIRED_SCANNER_ALIASES = ['computeOpaqueRanges', 'collectTsFiles'];
+const SHARED_SCANNER_NAMES = new Set([...Object.keys(scanner), ...RETIRED_SCANNER_ALIASES]);
 
-/** `<relative file>: <name>` for each top-level function declaration in `root`'s
-    `*.guard.test.ts` files that re-declares a shared scanner helper. */
+/** `<relative file>: <name>` -> reason, for a guard that legitimately shares a
+    banned name. Empty today: the first run found none. */
+const SCANNER_NAME_EXEMPTIONS = new Map<string, string>();
+
+/** A guard file is `*.guard.test.ts` or `*-guard.test.ts`. */
+function isGuardFile(file: string): boolean {
+  return file.endsWith('.guard.test.ts') || file.endsWith('-guard.test.ts');
+}
+
+/** `<relative file>: <name>` for each declaration at ANY depth (a function
+    declaration, or a variable bound to anything) in `root`'s guard files that
+    re-declares a shared scanner helper. */
 function privateScannerCopies(root: string): { scanned: number; offenders: string[] } {
-  const guards = collectTestFiles(root).filter((f) => f.endsWith('.guard.test.ts'));
+  const guards = collectTestFiles(root).filter(isGuardFile);
   const offenders: string[] = [];
   for (const file of guards) {
-    const sf = ts.createSourceFile(
-      file,
-      readFileSync(file, 'utf8'),
-      ts.ScriptTarget.Latest,
-      true,
-    );
-    for (const stmt of sf.statements) {
-      if (ts.isFunctionDeclaration(stmt) && stmt.name && SHARED_SCANNER_NAMES.has(stmt.name.text)) {
-        offenders.push(`${relative(root, file).split(sep).join('/')}: ${stmt.name.text}`);
+    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    const rel = relative(root, file).split(sep).join('/');
+    const visit = (node: ts.Node): void => {
+      let name: string | undefined;
+      if (ts.isFunctionDeclaration(node) && node.name) name = node.name.text;
+      else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) name = node.name.text;
+      if (
+        name &&
+        SHARED_SCANNER_NAMES.has(name) &&
+        !SCANNER_NAME_EXEMPTIONS.has(`${rel}: ${name}`)
+      ) {
+        offenders.push(`${rel}: ${name}`);
       }
-    }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
   }
   return { scanned: guards.length, offenders };
 }
 
 describe('guards share the scanner (no private copies)', () => {
-  it('no *.guard.test.ts declares a top-level copy of a shared scanner helper', () => {
+  it('no guard file declares a copy of a shared scanner helper, at any depth', () => {
     const { scanned, offenders } = privateScannerCopies(SRC_ROOT);
     // Floor: a broken walk must not pass by finding nothing.
     expect(scanned).toBeGreaterThanOrEqual(8);
     expect(offenders).toEqual([]);
+  });
+
+  it('the banned names cover every runtime export of guard-scan.ts and the retired aliases', () => {
+    for (const name of [
+      'collectSourceFiles',
+      'collectTestFiles',
+      'computeAstOpaqueRanges',
+      'isOpaque',
+      'opaqueEnd',
+      'findMatchingClose',
+      'lineOf',
+      'skipOpaqueToken',
+      'computeTokenOpaqueRanges',
+      'opaqueRangeAt',
+      'isOpaqueInTokenRanges',
+      'astOpaqueRangesFor',
+      'computeOpaqueRanges',
+      'collectTsFiles',
+    ]) {
+      expect(SHARED_SCANNER_NAMES.has(name), name).toBe(true);
+    }
+  });
+
+  describe('every declaration shape goes red (temp-tree fixtures)', () => {
+    const shapes: Array<[string, string, string]> = [
+      ['a top-level function', 'a.guard.test.ts', 'function lineOf() { return 1; }\n'],
+      [
+        'a function nested in a describe',
+        'b.guard.test.ts',
+        "describe('x', () => {\n  function lineOf() { return 1; }\n});\n",
+      ],
+      ['a top-level const arrow', 'c.guard.test.ts', 'const isOpaque = () => false;\n'],
+      [
+        'a top-level const function expression',
+        'd.guard.test.ts',
+        'const opaqueEnd = function () { return -1; };\n',
+      ],
+      ['collectTsFiles (retired alias)', 'e.guard.test.ts', 'function collectTsFiles() {}\n'],
+      ['opaqueRangeAt', 'f.guard.test.ts', 'function opaqueRangeAt() {}\n'],
+      ['computeTokenOpaqueRanges', 'g.guard.test.ts', 'function computeTokenOpaqueRanges() {}\n'],
+      ['isOpaqueInTokenRanges', 'h.guard.test.ts', 'function isOpaqueInTokenRanges() {}\n'],
+      ['astOpaqueRangesFor', 'i.guard.test.ts', 'function astOpaqueRangesFor() {}\n'],
+      ['the *-guard.test.ts spelling', 'j-guard.test.ts', 'function lineOf() { return 1; }\n'],
+    ];
+
+    for (const [label, fileName, body] of shapes) {
+      it(`flags ${label}`, () => {
+        const root = mkdtempSync(join(tmpdir(), 'guard-scan-shape-'));
+        try {
+          writeFileSync(join(root, fileName), body);
+          expect(privateScannerCopies(root).offenders).toHaveLength(1);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it('does not flag a non-guard test file or an unrelated name', () => {
+      const root = mkdtempSync(join(tmpdir(), 'guard-scan-shape-'));
+      try {
+        writeFileSync(join(root, 'plain.test.ts'), 'function lineOf() { return 1; }\n');
+        writeFileSync(join(root, 'ok.guard.test.ts'), 'function helper() { return 1; }\n');
+        expect(privateScannerCopies(root).offenders).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });
