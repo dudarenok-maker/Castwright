@@ -738,7 +738,8 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 > **Last change: 2026-11-01 (#3992, PR #4007), 74 → 75.** Row **A120** (a declined series link
 > followed by a redesign gives the later book its own voice and leaves the earlier book's voice
-> untouched) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same change. Row is
+> untouched, the decline survives re-analysis, and a book linked to the redesigned one follows
+> it) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same change. Row is
 > owed; not run here.
 >
 > **Prior change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
@@ -6398,9 +6399,11 @@ The automated tests prove the fork against fixture workspaces. Only a real Qwen 
 3. **Book 1 is untouched.** Its character keeps its `voiceUuid`, `qwen-<old>.pt` is unchanged (same size and mtime from before step 1), and a line rendered in Book 1 sounds the same as before, including its emotion variants (`qwen-<old>__<emotion>.pt` still on disk, still playing).
 4. **Variants are not copied, and the stale map is dropped.** The fork copies only the base family, and it drops Book 2's `overrideTtsVoices.qwen.variants` map in the same write, because the render path re-derives `qwen-<uuid>__<emotion>` from the uuid. Book 2's `cast.json` has no `variants` after the fork; Book 1's `qwen-<old>__<emotion>.pt` files and its own variants map are untouched.
 5. **An emotion-tagged line in Book 2 renders.** After the redesign (also after a Cancel in Design and compare, and after designing one new emotion on Book 2 with "Emotion variants"), render a chapter in Book 2 that has a line tagged with the emotion Book 1 has a variant for. It plays in Book 2's own voice (the base voice when no variant was designed again) with no `voice_not_designed` in the sidecar or server log. This is the step that catches a surviving variants map asking for a `.pt` that does not exist under the new uuid.
-6. **Controls.** A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork.
+6. **Controls.** A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork. A character that was never declined but shares a uuid with an earlier book without a link (Book 2 confirmed before Book 1) is not forked either: designing it twice leaves both books on one uuid.
+7. **Don't reuse sticks across re-analysis.** After step 1 (before and after the redesign), re-analyse Book 2. The character stays unlinked (no `matchedFrom`, no "Reused" badge), its `cast.json` row still carries `declinedVoiceFrom: [<Book 1's bookId>]`, and it keeps its voice (the shared one before the redesign, the new one after). Redesigning it afterwards still leaves Book 1's `qwen-<old>.pt` unchanged. Linking it to Book 1 again by hand (link to an earlier character) clears the marker for that book.
+8. **A chain follows the middle book.** With a Book 3 whose character links to Book 2's (its `matchedFrom` names Book 2, the same `voiceUuid`): decline Book 2's link to Book 1 and redesign Book 2's character. Book 3's character moves to Book 2's new `voiceUuid` in the same write and plays Book 2's new voice; Book 1 is untouched and Book 3 is still linked to Book 2. A character that links to Book 2 without a book id (a manual Assign) stays on Book 1's voice.
 
-*Needs:* the GPU box with the Qwen sidecar and a two-book series with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+*Needs:* the GPU box with the Qwen sidecar and a series of two books (three for step 8) with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
 ## Group B — local Ollama analyzer only
 
