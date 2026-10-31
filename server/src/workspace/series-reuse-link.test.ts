@@ -1115,6 +1115,57 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(narrator?.voiceState).not.toBe('reused');
   });
 
+  it('renamed narrator across the id flip: the declined narrator link follows the narrator id class, not the name (#3920)', async () => {
+    const declined = { bookId: BOOK1, characterId: 'narrator' };
+    const prior: PriorRow[] = [
+      { id: 'char-narrator', name: 'Old Tom', voiceId: 'v_own_narr', notLinkedTo: [declined] },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'narrator', name: 'Narrator', gender: 'neutral', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'narrator', name: 'Narrator', gender: 'neutral', ageRange: 'adult', voiceId: 'v_b1_narr' },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    expect(fresh[0].notLinkedTo).toEqual([declined]); // seeded by id class despite the differing names
+    expect(postLink[0].matchedFrom).toBeUndefined(); // so Book One's narrator is not linked
+    expect(merged.find((c) => c.id === 'narrator')?.matchedFrom).toBeUndefined();
+  });
+
+  it('a renamed narrator sharing a real row name no longer hides that real row edge (#3920)', async () => {
+    const edge = { bookId: BOOK1, characterId: 'old-tom' };
+    const prior: PriorRow[] = [
+      { id: 'char-narrator', name: 'Old Tom', voiceId: 'v_narr' },
+      { id: 'old-tom', name: 'Old Tom', voiceId: 'v_tom', voiceState: 'locked', notLinkedTo: [edge] },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'old-tom-2', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    expect(fresh[0].notLinkedTo).toEqual([edge]); // the narrator no longer makes the name ambiguous
+    expect(postLink[0].matchedFrom).toBeUndefined(); // so the linker lands no link
+    // No row carries a stamp next to the edge that forbids it (srv-13 class). The merge's
+    // own join of old-tom-2 to its prior row may be refused by #3965 (id-drift split,
+    // decision owed); that is deliberately not asserted here.
+    for (const row of merged) {
+      expect(row.matchedFrom?.bookId === BOOK1 && row.matchedFrom?.characterId === 'old-tom').toBe(false);
+    }
+  });
+
   it('narrator rename: the locked narrator keeps its voice and renamed name; a same-name real row inherits neither', async () => {
     const narrLink = {
       bookId: 'book-0',

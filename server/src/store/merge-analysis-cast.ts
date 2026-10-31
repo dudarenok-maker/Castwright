@@ -598,12 +598,15 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     `matchedFrom` (a spurious copy lands a wrong link) uses the same candidate
     set as mergeCore's exact-name fallback — dropped (no fresh row claims the
     prior by id), non-narrator rows only. `notLinkedTo` (a spurious copy only
-    prevents a link, which fails safe) uses every prior row, narrators included:
-    on the main job this runs on the stage-1 roster BEFORE roster dedup, and dedup
-    can later move the join onto a row the strict set refused, which must still
-    carry the separation; and the narrator id flips between analyses
-    (`char-narrator` <-> `narrator`), where a declined narrator link must follow
-    it. A narrator row never takes or hands on a `matchedFrom` fallback. */
+    prevents a link, which fails safe) uses every NON-narrator prior row, dropped
+    or not: on the main job this runs on the stage-1 roster BEFORE roster dedup,
+    and dedup can later move the join onto a row the strict set refused, which
+    must still carry the separation. Narrator-id rows (NARRATOR_CHARACTER_IDS)
+    never go through the name bridge, in either direction, for either guard: the
+    narrator id flips between analyses (`char-narrator` <-> `narrator`) and its
+    display name is user-editable, so a fresh narrator row takes `notLinkedTo`
+    from the UNIQUE prior narrator-id row by id class, whatever either is named
+    (two or more prior narrator-id rows are ambiguous: nothing is bridged). */
 export function seedReuseGuardsFromPriorCast<
   T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
@@ -616,9 +619,9 @@ export function seedReuseGuardsFromPriorCast<
      prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
      fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
      normalised name shared by >1 prior OR >1 fresh row falls back to id-only.
-     #3920 (A2): `matchedFrom` is bridged only from dropped, non-narrator prior
-     rows (mergeCore's candidate set); `notLinkedTo` is bridged from any prior
-     row, narrators included (see the doc comment above). */
+     #3920 (A2): `matchedFrom` is bridged only from dropped prior rows;
+     `notLinkedTo` from any prior row; narrator-id rows are in neither (see the
+     doc comment above). */
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
     typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
   const freshNameCounts = new Map<string, number>();
@@ -631,7 +634,7 @@ export function seedReuseGuardsFromPriorCast<
     const byName = new Map<string, CastRecord>();
     const ambiguous = new Set<string>();
     for (const old of existing) {
-      if (strict && NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+      if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
       if (strict && freshIds.has(old.id)) continue;
       const key = nameOf(old);
       if (!key) continue;
@@ -640,6 +643,8 @@ export function seedReuseGuardsFromPriorCast<
     }
     return { byName, ambiguous };
   };
+  const priorNarrators = existing.filter((c) => NARRATOR_CHARACTER_IDS.includes(c.id));
+  const uniquePriorNarrator = priorNarrators.length === 1 ? priorNarrators[0] : undefined;
   const strictBridge = bridgeable(true);
   const looseBridge = bridgeable(false);
   const bridged = (
@@ -654,11 +659,11 @@ export function seedReuseGuardsFromPriorCast<
   for (const f of fresh) {
     const byIdRow = byId.get(f.id);
     // #3920 (A2): a fresh narrator row never takes a matchedFrom name-fallback
-    // candidate, mirroring mergeCore's fresh-side narrator exclusion. The
-    // notLinkedTo fallback has no such exclusion (it fails safe, and the
-    // narrator id flips between analyses).
+    // candidate, mirroring mergeCore's fresh-side narrator exclusion. Its
+    // notLinkedTo comes from the unique prior narrator-id row (by id class),
+    // never by name.
     const isNarrator = NARRATOR_CHARACTER_IDS.includes(f.id);
-    const nlFrom = byIdRow ?? bridged(f, looseBridge);
+    const nlFrom = byIdRow ?? (isNarrator ? uniquePriorNarrator : bridged(f, looseBridge));
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
