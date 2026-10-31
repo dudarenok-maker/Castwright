@@ -11,17 +11,20 @@
  *
  *   - AST family (`computeAstOpaqueRanges` and friends): book-op-lock,
  *     cast-lock, state-json-lock, state-json-read and voice-library-write-seam
- *     (all under `server/src/workspace/`). Built on the TypeScript parser; the
- *     block header below records why the hand-rolled walker it replaced was
- *     removed.
+ *     (under `server/src/workspace/`), plus `server/src/parsers/version.guard.test.ts`.
+ *     Built on the TypeScript parser; the block header below records why the
+ *     hand-rolled walker it replaced was removed.
  *   - Token-skipping family (`skipOpaqueToken`, `computeTokenOpaqueRanges`,
  *     `isOpaqueInTokenRanges`, `opaqueRangeAt`): state-language and
  *     state-fixture-language. A quote-to-quote walker that does NOT understand
  *     regex literals or nested templates; kept as-is because migrating those
  *     two guards would change what they detect.
- *   - Walker only: state-lock, and
- *     `server/src/store/cast-history-threading.guard.test.ts` (`collectTsFiles`,
- *     same filter) - they use the file collectors and no tokenizer.
+ *   - File collector only: state-lock, and
+ *     `server/src/store/cast-history-threading.guard.test.ts` (`collectSourceFiles`).
+ *     Neither uses a shared tokenizer; cast-history-threading carries its own
+ *     comment/string blanker (`blankOutOpaque`), which
+ *     `routes/generation-cast-history-seq.guard.test.ts` copies - deliberately
+ *     not shared, so neither guard's matching changes.
  *
  * This is a non-test file under `server/src/**`, so every tree-scanning guard
  * scans it too. It therefore contains no write-primitive text outside a

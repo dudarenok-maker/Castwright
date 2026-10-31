@@ -20,7 +20,8 @@ import * as scanner from './guard-scan.js';
 
 /* Unit tests for the shared guard scanner (#3685). Every case pins a behaviour
    the guard files relied on while each carried its own private copy, so drift
-   in the shared module reddens HERE rather than in eight guards at once.
+   in the shared module reddens HERE (the tokenizer cases below, and the
+   no-private-copies block at the bottom) rather than in ten guards at once.
    Nothing writes inside the repo: the collector tests build a temp tree under
    os.tmpdir() and remove it in afterAll. */
 describe('file collectors', () => {

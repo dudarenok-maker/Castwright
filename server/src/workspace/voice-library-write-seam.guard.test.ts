@@ -95,7 +95,7 @@
  *       skipping is broken. Place (a) as the LAST LINE OF A BLOCK, i.e. with
  *       `}` as its only following token, not mid-block: that placement is the
  *       one the tokenizer used to miss entirely (see T5/T6 and the tokenizer
- *       block header), so a mid-block comment runs this row without exercising
+ *       block header in ../test-utils/guard-scan.ts), so a mid-block comment runs this row without exercising
  *       the case it exists to catch.
  */
 import { describe, it, expect } from 'vitest';
@@ -300,7 +300,7 @@ describe('opaque-range tokenizer', () => {
     // the inner template's own text is opaque
     expect(isOpaque(opaque, src.indexOf("it's"))).toBe(true);
     // the `${...}` slot holds LIVE CODE and is deliberately not opaque - see the
-    // scope decision in the tokenizer block header
+    // scope decision in the tokenizer block header (test-utils/guard-scan.ts)
     expect(isOpaque(opaque, src.indexOf('flag'))).toBe(false);
     // and the real call after the template is still counted
     expect(isOpaque(opaque, src.indexOf('writeEntry('))).toBe(false);
@@ -332,7 +332,7 @@ describe('opaque-range tokenizer', () => {
   /* T5/T6 pin the PUNCTUATION blind spot - the `forEachChild` traversal that
      preceded the leaf-token descent never visited `}`, `]` or `,`, so a comment
      whose only following token was one of those was asked for by nobody and
-     stayed live code. See the tokenizer block header for the mechanism.
+     stayed live code. See the tokenizer block header in test-utils/guard-scan.ts for the mechanism.
 
      Both are red against the tokenizer they replace, measured (not asserted):
        T5  isOpaque -> false, countNonOpaque -> 1   (want true / 0)

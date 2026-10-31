@@ -37,15 +37,14 @@
      needs this guard's `castHistorySeq:` check literal updated by hand
      alongside it, never silently.
    - Comment/string text is stripped before matching (`blankOutOpaque`,
-     copied from `cast-history-threading.guard.test.ts` rather than
-     imported — see that file's `collectTsFiles` doc comment for why guard
-     files copy small helpers instead of coupling to each other), so a call
+     copied from `cast-history-threading.guard.test.ts` rather than imported
+     from it, so this guard does not couple to another guard file), so a call
      quoted inside a doc comment neither fires nor masks a real one.
    - FAIL-OPEN GUARD: `extractRouteHandlerBody` THROWS (never returns an
      empty/null slice) when the route registration string isn't found — a
      renamed route or moved file must redden this suite, not pass on zero
-     evidence. The same shape as guard 3's `collectTsFiles` throwing on a
-     missing directory. Proven by pointing the extractor at a route literal
+     evidence. The same shape as the shared `collectSourceFiles`
+     (`test-utils/guard-scan.ts`) throwing on a missing directory. Proven by pointing the extractor at a route literal
      that doesn't exist. */
 
 import { describe, expect, it } from 'vitest';
@@ -58,8 +57,7 @@ const SRC = readFileSync(GENERATION_TS_PATH, 'utf8');
 const ROUTE = '/:bookId/generation';
 
 /** Copied from `cast-history-threading.guard.test.ts`'s `blankOutOpaque`
- *  (guard files deliberately copy small helpers rather than import each
- *  other's — see that file's `collectTsFiles` doc comment). Replaces every
+ *  (a guard file does not import another guard file's helpers). Replaces every
  *  line comment, block comment and string literal with spaces of the same
  *  length, so indices stay stable and quoted/commented code never matches. */
 export function blankOutOpaque(src: string): string {
