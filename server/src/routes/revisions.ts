@@ -145,7 +145,12 @@ export async function computeRevisionsForBook(
 
   const dismissed = new Set(file.dismissed);
 
-  const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
+  /* #3919 — an excluded chapter never renders, so its old audio can't drift:
+     reporting it offers a "Regenerate" that ends in a no-op success. */
+  const excludedIds = new Set(state.chapters.filter((c) => c.excluded).map((c) => c.id));
+  const segmentsByChapter = (await loadSegmentsFiles(bookDir, state.chapters)).filter(
+    (seg) => !excludedIds.has(seg.chapterId),
+  );
   /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
      wins when populated (older segments files may omit it); state.chapters
      is the next-best source; "Chapter N" is the floor. */

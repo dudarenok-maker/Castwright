@@ -7,7 +7,7 @@ import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
 import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
@@ -3474,6 +3474,47 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     );
     expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 2, true);
     expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBeFalsy();
+  });
+
+  it('#3919 excluding the chapter of a queued preview clears the preview and says why', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 2,
+        remainingChapterIds: [3],
+        reason: 'voice',
+        note: '',
+        bookId: 'b1',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen).toBeNull();
+    expect(store.getState().notifications.toasts).toEqual([
+      expect.objectContaining({ kind: 'warn', dedupeKey: 'gen-preview-cleared', message: expect.stringMatching(/preview/i) }),
+    ]);
+  });
+
+  it('#3919 excluding another chapter leaves a queued preview alone', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 1,
+        remainingChapterIds: [2],
+        reason: 'voice',
+        note: '',
+        bookId: 'b1',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen).not.toBeNull();
   });
 
   it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
