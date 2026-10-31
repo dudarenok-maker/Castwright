@@ -1641,7 +1641,8 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
   it('promotes first-sentence candidate when title is generic and candidate passes heuristics', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
-      '# Chapter 1\n\nFirst body sentence here.\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nMore content.\n',
+      // Each chapter's saved sentence sits mid-body, so the analysis evidence is in its own chapter.
+      '# Chapter 1\n\nFirst body sentence here.\nRegistry File For Wren Sparrow\nMore content.\n\n# Chapter 2\n\nSecond body sentence here.\n"Hello," she said softly.\nMore content.\n\n# Chapter 3\n\nThird body sentence here.\nA very long opening sentence that runs well past the eighty character limit chapter titles allow for, almost certainly body text not a title.\nMore content.\n',
     );
     writeFileSync(
       join(bookDir, '.audiobook', 'state.json'),
@@ -1816,7 +1817,7 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
     // file-wide beforeEach) expect a 3-chapter manuscript on disk.
     writeFileSync(
       join(bookDir, 'manuscript.md'),
-      '# Chapter 1\n\nFirst body sentence here.\nMore.\n\n# Chapter 2\n\nSecond body sentence here.\nMore.\n\n# Chapter 3\n\nThird body sentence here.\nMore.\n',
+      '# Chapter 1\n\nFirst body sentence here.\nTempting Candidate For Chapter One\nMore.\n\n# Chapter 2\n\nSecond body sentence here.\nTempting Candidate For Chapter Two\nMore.\n\n# Chapter 3\n\nThird body sentence here.\nTempting Candidate For Chapter Three\nMore.\n',
     );
     writeFileSync(
       join(bookDir, '.audiobook', 'state.json'),

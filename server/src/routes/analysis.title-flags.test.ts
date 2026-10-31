@@ -44,7 +44,9 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
 
 const AUTHOR = 'Title Flags Author';
 const SERIES = 'Standalones';
-const LINE = '"The plan is set." Silence followed.';
+/* A distinct evidence sentence per chapter position (>= 24 chars), keeping the shared stage-1 quote. */
+const lineFor = (n: number) =>
+  `"The plan is set." Silence followed by ${['rain', 'snow', 'wind', 'fog'][n - 1] ?? `weather ${n}`}.`;
 
 let workspaceRoot: string;
 const settingsTmpDir = mkdtempSync(join(tmpdir(), 'audiobook-title-flags-settings-'));
@@ -82,7 +84,7 @@ function phase1Selection(): AnalyzerSelection {
     },
     async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
       return {
-        sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: 'nova', confidence: 0.9, text: LINE }],
+        sentences: [{ id: chapterId * 100 + 1, chapterId, characterId: 'nova', confidence: 0.9, text: lineFor(chapterId) }],
       };
     },
     runEmotionChapter: () => Promise.reject(new Error('not used')),
@@ -95,7 +97,13 @@ function phase1Selection(): AnalyzerSelection {
 
 /* Seeds an analysed book whose state.json chapters carry the given fields,
    plus a cached stage1 (so the subset job takes its already-analysed branch). */
-async function seedBook(tag: string, manuscript: string, chapters: Array<Record<string, unknown>>) {
+async function seedBook(
+  tag: string,
+  manuscript: string,
+  chapters: Array<Record<string, unknown>>,
+  /* Saved sentence text(s) for the chapter at state position `i`; defaults to lineFor(i + 1). */
+  sentencesFor?: (stateIndex: number) => string | string[],
+) {
   const title = `Title Flags ${tag}`;
   const manuscriptId = `m_title_flags_${tag}_${Date.now()}`;
   const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
@@ -122,7 +130,9 @@ async function seedBook(tag: string, manuscript: string, chapters: Array<Record<
       updatedAt: new Date().toISOString(),
     }),
   );
-  const sentences = chapters.map((_, i) => ({ id: 1, chapterId: i + 1, characterId: 'nova', text: LINE }));
+  const sentences = chapters.flatMap((_, i) =>
+    [sentencesFor?.(i) ?? lineFor(i + 1)].flat().map((text, k) => ({ id: k + 1, chapterId: i + 1, characterId: 'nova', text })),
+  );
   writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({ sentences }));
   const { saveAnalysisCache } = await import('../store/analysis-cache.js');
   await saveAnalysisCache(manuscriptId, {
@@ -219,7 +229,7 @@ const FLAGGED_BOOK = [
   { title: 'Prologue' },
   { title: 'Epilogue' },
 ];
-const FLAGGED_MANUSCRIPT = `# Alpha\n\n${LINE}\n\n# Prologue\n\n${LINE}\n\n# Epilogue\n\n${LINE}\n`;
+const FLAGGED_MANUSCRIPT = `# Alpha\n\nIt began.\n\n${lineFor(1)}\n\n# Prologue\n\nIt began.\n\n${lineFor(2)}\n\n# Epilogue\n\nIt began.\n\n${lineFor(3)}\n`;
 
 describe.each(['main', 'subset'] as const)(
   '#3628 — a completed %s analysis keeps the title-source flags',
@@ -278,7 +288,7 @@ describe('#3628 — merge after an analysis renumbers like a merge without one',
     /* The headings read "Chapter 1".."Chapter 3", so the parse's titles equal state's: a
        merge on a parse-fallback book title-checks them (#3791), and a heading of other
        wording against a synthesized state title is a state no current import produces. */
-    const ms = `# Prologue\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n\n# Chapter 3\n\n${LINE}\n`;
+    const ms = `# Prologue\n\nIt began.\n\n${lineFor(1)}\n\n# Chapter 1\n\nIt began.\n\n${lineFor(2)}\n\n# Chapter 2\n\nIt began.\n\n${lineFor(3)}\n\n# Chapter 3\n\nIt began.\n\n${lineFor(4)}\n`;
     const control = await seedBook('merge-control', ms, book);
     const analysed = await seedBook('merge-analysed', ms, book);
     await runAnalysis(analysed.manuscriptId, 'main');
@@ -330,7 +340,7 @@ describe.each(['main', 'subset'] as const)(
 
   it('answers 409 hints_out_of_sync and leaves state.json byte-identical', async () => {
     // Chapter 2 is a merge the user titled "Part Two"; the manuscript still has four headings.
-    const ms = `# Prologue\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
+    const ms = `# Prologue\n\nIt began.\n\n${lineFor(1)}\n\n# Alpha\n\nIt began.\n\n${lineFor(2)}\n\n# Beta\n\nIt began.\n\n${lineFor(3)}\n\n# Gamma\n\nIt began.\n\n${lineFor(4)}\n`;
     const { manuscriptId, bookDir } = await seedBook(`misaligned-${kind}`, ms, [
       { title: 'Prologue' },
       { title: 'Part Two', titleOverridden: true },
@@ -380,7 +390,7 @@ describe.each(['main', 'subset'] as const)(
   it('KNOWN GAP (#3837): a same-count reorder from before #3703 is still analysed', async () => {
     // Same ids and count as the parse, headings in a different order. Analysis refuses on the
     // count/id check only; the title arm is deliberately not used (design owed in #3837), so this starts, as on main.
-    const ms = `# Book\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
+    const ms = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Alpha\n\nIt began.\n\n${lineFor(2)}\n\n# Beta\n\nIt began.\n\n${lineFor(3)}\n\n# Gamma\n\nIt began.\n\n${lineFor(4)}\n`;
     const { manuscriptId } = await seedBook(`gap-${kind}`, ms, [
       { title: 'Chapter 1', titleSynthesized: true },
       { title: 'Gamma' },
@@ -395,7 +405,7 @@ describe.each(['main', 'subset'] as const)(
   }, 60_000);
 
   it('does not refuse an unflagged (pre-#3628) fresh import with an untitled lead section before "Chapter 1"', async () => {
-    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;
+    const ms = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Chapter 1\n\nIt began.\n\n${lineFor(2)}\n\n# Chapter 2\n\nIt began.\n\n${lineFor(3)}\n`;
     const { manuscriptId } = await seedBook(`lead-legacy-${kind}`, ms, [
       { title: 'Chapter 1' },
       { title: 'Chapter 1' },
@@ -409,7 +419,7 @@ describe.each(['main', 'subset'] as const)(
 
   it('does not refuse a fresh import whose untitled lead section precedes a bare "Chapter 1"', async () => {
     // Parse and state are both ["Chapter 1" (made up), "Chapter 1", "Chapter 2"].
-    const ms = `# Book\n\n${LINE}\n\n# Chapter 1\n\n${LINE}\n\n# Chapter 2\n\n${LINE}\n`;
+    const ms = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Chapter 1\n\nIt began.\n\n${lineFor(2)}\n\n# Chapter 2\n\nIt began.\n\n${lineFor(3)}\n`;
     const { manuscriptId } = await seedBook(`lead-${kind}`, ms, [
       { title: 'Chapter 1', titleSynthesized: true },
       { title: 'Chapter 1' },
