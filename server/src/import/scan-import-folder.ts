@@ -54,7 +54,8 @@ import {
 import { reencodeToJpeg } from '../cover/reencode.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { mintEditEpoch } from '../workspace/slice-revision.js';
-import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
+import { readEditsForHintsCheck } from '../workspace/hints-proof-io.js';
+import { swapLeavesStaleEvidence } from '../workspace/stale-evidence.js';
 import { removeManuscript } from '../store/manuscripts.js';
 import {
   BOOK_GONE,
@@ -488,16 +489,18 @@ export async function importPortableBundle(
           state.manuscriptId && live?.manuscriptId === state.manuscriptId
             ? state.manuscriptId
             : await freshManuscriptId(ids);
-        /* Plan 290 (#3837) -- a bundle never carries manuscript-edits.json and the
-           overwrite leaves the local one in place, so its saved sentences are
-           keyed to the old chapter list. Read under this hold (book-op for an
-           existing id -> the claim); unknown content (corrupt / unreadable) is
-           treated as stale. */
-        const localEdits = await readEditsForHintsCheck(targetDir);
-        const editsPredate =
-          localEdits.kind === 'corrupt' ||
-          localEdits.kind === 'unreadable' ||
-          (localEdits.kind === 'ok' && sentencesOf(localEdits.value).length > 0);
+        /* Plan 290 (#3837, round 10) -- a bundle never carries manuscript-edits.json
+           and the overwrite leaves the local one in place. Its saved sentences are
+           stale only if the bundle's chapter list differs from the one they are
+           keyed to (the target's current state, `live`, read above under this
+           same hold), or the target is already marked. Read under this hold
+           (book-op for an existing id -> the claim); unknown edits content
+           (corrupt / unreadable) counts as sentences. */
+        const editsPredate = swapLeavesStaleEvidence(
+          await readEditsForHintsCheck(targetDir),
+          state.chapters,
+          live,
+        );
         await writeStagedState(bookId, baseTitle, manuscriptId, editsPredate);
         /* #3703 -- the manuscript on disk is becoming the bundle's, so a local
            restructure's hints describe another book's bodies and can still

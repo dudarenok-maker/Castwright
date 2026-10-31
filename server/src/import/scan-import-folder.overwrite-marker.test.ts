@@ -71,46 +71,100 @@ const EDITS_WITH_SENTENCES = JSON.stringify({
   sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'An old-keyed saved sentence.' }],
 });
 
-/** Fresh import, then (optionally) a local edits file, then an overwrite import. */
-async function overwriteWithLocalEdits(title: string, edits: string | null): Promise<string> {
+/** Fresh import, then (optionally) a local edit of the target's state.json and
+    a local edits file, then an overwrite import of the same bundle. Without a
+    `localState` edit the target's chapter list equals the bundle's. */
+async function overwriteWithLocalEdits(
+  title: string,
+  edits: string | null,
+  localState?: (s: BookStateJson) => void,
+): Promise<string> {
   const state = fixtureState(title);
   const bundle = await makeBundle(state);
   const target = targetDirFor(state);
   rmSync(target, { recursive: true, force: true });
   await importPortableBundle(bundle, { onConflict: 'fail' });
   expect(readState(target).sentencesPredateChapters).toBeUndefined();
+  if (localState) {
+    const live = readState(target);
+    localState(live);
+    writeFileSync(stateJsonPath(target), JSON.stringify(live), 'utf8');
+  }
   if (edits !== null) writeFileSync(manuscriptEditsJsonPath(target), edits, 'utf8');
   await importPortableBundle(bundle, { onConflict: 'overwrite' });
   return target;
 }
 
+/* Round 10 (#3837): the overwrite stamps only when the bundle's chapter list
+   (ids + titles, in order) differs from the target's, or the target is
+   already marked. */
+const retitleChapter2 = (s: BookStateJson) => {
+  s.chapters[1]!.title = 'Chapter Two (merged)';
+};
+const renumberChapter2 = (s: BookStateJson) => {
+  s.chapters[1]!.id = 3;
+};
+const dropChapter2 = (s: BookStateJson) => {
+  s.chapters.splice(1, 1);
+};
+const alreadyMarked = (s: BookStateJson) => {
+  s.sentencesPredateChapters = true;
+};
+
 describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
-  it('an overwrite onto a book with saved sentences lands the marker and leaves the edits file untouched', async () => {
-    const title = 'Marker Overwrite Sentences';
+  it.each([
+    ['a retitled chapter', 'Title', retitleChapter2],
+    ['a renumbered chapter', 'Id', renumberChapter2],
+    ['a different chapter count', 'Count', dropChapter2],
+  ] as const)(
+    'an overwrite onto a book with saved sentences and %s lands the marker; the edits file is untouched',
+    async (_label, tag, localState) => {
+      let target = '';
+      try {
+        target = await overwriteWithLocalEdits(`Marker Overwrite Differs ${tag}`, EDITS_WITH_SENTENCES, localState);
+        expect(readState(target).sentencesPredateChapters).toBe(true);
+        expect(readFileSync(manuscriptEditsJsonPath(target), 'utf8')).toBe(EDITS_WITH_SENTENCES);
+      } finally {
+        if (target) rmSync(target, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('a same-chapters overwrite onto a book with saved sentences stamps nothing (a restore of the same structure)', async () => {
     let target = '';
     try {
-      target = await overwriteWithLocalEdits(title, EDITS_WITH_SENTENCES);
-      expect(readState(target).sentencesPredateChapters).toBe(true);
+      target = await overwriteWithLocalEdits('Marker Overwrite Same', EDITS_WITH_SENTENCES);
+      expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
       expect(readFileSync(manuscriptEditsJsonPath(target), 'utf8')).toBe(EDITS_WITH_SENTENCES);
     } finally {
       if (target) rmSync(target, { recursive: true, force: true });
     }
   });
 
-  it('an unreadable (corrupt) local edits file is treated as stale and stamps the marker', async () => {
+  it('a same-chapters overwrite onto an already-marked book with saved sentences keeps the marker', async () => {
     let target = '';
     try {
-      target = await overwriteWithLocalEdits('Marker Overwrite Corrupt', '{ not json');
+      target = await overwriteWithLocalEdits('Marker Overwrite Marked', EDITS_WITH_SENTENCES, alreadyMarked);
       expect(readState(target).sentencesPredateChapters).toBe(true);
     } finally {
       if (target) rmSync(target, { recursive: true, force: true });
     }
   });
 
-  it('an overwrite onto a book with no edits file stamps nothing', async () => {
+  it('an unreadable (corrupt) local edits file is treated as stale and stamps the marker when the chapters differ', async () => {
     let target = '';
     try {
-      target = await overwriteWithLocalEdits('Marker Overwrite Absent', null);
+      target = await overwriteWithLocalEdits('Marker Overwrite Corrupt', '{ not json', retitleChapter2);
+      expect(readState(target).sentencesPredateChapters).toBe(true);
+    } finally {
+      if (target) rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('an overwrite onto a book with no edits file stamps nothing, even when the chapters differ', async () => {
+    let target = '';
+    try {
+      target = await overwriteWithLocalEdits('Marker Overwrite Absent', null, retitleChapter2);
       expect(existsSync(manuscriptEditsJsonPath(target))).toBe(false);
       expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
     } finally {
@@ -121,7 +175,7 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
   it('an overwrite onto a book whose edits hold an empty sentences array stamps nothing', async () => {
     let target = '';
     try {
-      target = await overwriteWithLocalEdits('Marker Overwrite Empty', JSON.stringify({ sentences: [] }));
+      target = await overwriteWithLocalEdits('Marker Overwrite Empty', JSON.stringify({ sentences: [] }), retitleChapter2);
       expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
     } finally {
       if (target) rmSync(target, { recursive: true, force: true });

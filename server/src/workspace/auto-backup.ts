@@ -18,6 +18,8 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
+import { readEditsForHintsCheck } from './hints-proof-io.js';
+import { swapLeavesStaleEvidence } from './stale-evidence.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { withLocatedBook } from './book-state-update.js';
 import { writeJsonAtomic } from './state-io.js';
@@ -234,6 +236,10 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
        prior local override of 5). Three slots cover the realistic recovery
        window: the last completed write, the one before it, and one earlier. */
     const parsed = value as BookStateJson;
+    /* Plan 290 (#3837, round 10) -- a restore swaps state.json only, so the local
+       manuscript-edits.json stays. Read here, under the book lock every edits
+       writer takes (or under book-op, which the route holds). */
+    const edits = await readEditsForHintsCheck(bookDir);
     /* #3700 — a whole-file overwrite that renames over state.json; it takes the
        per-book state-json leaf lock (inside the book lock) so it can't
        interleave with a render's stamp. */
@@ -246,8 +252,16 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
          restore goes ahead. */
       const sp = stateJsonPath(bookDir);
       if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
+      /* Plan 290 (#3837, round 10) -- the book's current state, read under this
+         leaf lock: the snapshot's chapters are compared with it to decide the
+         stale-evidence marker. Unreadable counts as a different list. */
+      const current = await readStateJsonWithRecovery(sp).catch(() => null);
+      const stale = swapLeavesStaleEvidence(edits, parsed.chapters, current);
       await writeStateJsonAtomic(stateJsonPath(bookDir), {
         ...parsed,
+        /* Never the snapshot's own marker: only the rule above decides
+           (undefined is not serialised). */
+        sentencesPredateChapters: stale ? true : undefined,
         language: parsed.language ?? null,
         /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
            own epoch must not come back, or a save based on a read taken under
