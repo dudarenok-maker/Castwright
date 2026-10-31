@@ -29,7 +29,7 @@ import { mintEditEpoch } from './slice-revision.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 import { removeManuscript } from '../store/manuscripts.js';
-import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCacheWithRetry } from '../store/analysis-cache.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
    chronological, and human-readable in File Explorer. */
@@ -288,7 +288,7 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
          cache file is not under the state-json lock, so this runs after it,
          still under the book lock. A restore that stamps nothing keeps it. */
       if (stamped && typeof parsed.manuscriptId === 'string' && parsed.manuscriptId) {
-        await clearAnalysisCache(parsed.manuscriptId);
+        await clearAnalysisCacheWithRetry(parsed.manuscriptId);
       }
     } finally {
       /* PR #3966 review pass 1 -- the restored state.json describes another

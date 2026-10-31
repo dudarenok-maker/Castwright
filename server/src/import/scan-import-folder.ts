@@ -57,7 +57,7 @@ import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { readEditsForHintsCheck } from '../workspace/hints-proof-io.js';
 import { swapLeavesStaleEvidence } from '../workspace/stale-evidence.js';
 import { removeManuscript } from '../store/manuscripts.js';
-import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCacheWithRetry } from '../store/analysis-cache.js';
 import {
   BOOK_GONE,
   BookBusyError,
@@ -551,7 +551,7 @@ export async function importPortableBundle(
              the claim. In the `finally` for the same reason as above: a later
              rename failing does not undo the state.json that landed. Last, so
              a failure here cannot skip the record drops. */
-          if (editsPredate && stateLanded && manuscriptId) await clearAnalysisCache(manuscriptId);
+          if (editsPredate && stateLanded && manuscriptId) await clearAnalysisCacheWithRetry(manuscriptId);
         }
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });

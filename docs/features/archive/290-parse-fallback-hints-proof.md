@@ -796,6 +796,7 @@ None. The last one, what an exclude/include prune does on an unpaired parse book
 - **Delta vs plan:**
   - Owner round 10: the bundle overwrite and the backup restore stamp the stale-evidence marker only when the chapter list changed (`swapLeavesStaleEvidence`); backup restore was added as a third producer.
   - Owner round 11: the bundle overwrite and the backup restore clear the analysis cache when they stamp the stale-evidence marker.
+  - PR review pass 3: the post-swap analysis-cache clear in the backup restore and the bundle overwrite retries up to 3 attempts on EBUSY/EPERM/EACCES/EMFILE (`clearAnalysisCacheWithRetry`), rethrowing the last error so the request still fails loud.
   - The backup restore now drops the in-memory manuscript record(s) for the current and the snapshot's manuscriptId (a pre-existing defect, found by PR review pass 1).
   - The backup restore now refuses with 409 `book_busy` while any long job is registered for the book, as the overwrite does (controller ruling, PR review pass 2): a running analysis re-saved the cache the restore had cleared, rebuilt the chapters from the record it had dropped and deleted the marker. `busySentence` gained a `'restore'` action; `openapi.yaml` documents the 409.
   - The prune refusal includes the count/id failure (controller ruling under owner round 9; pinned by M20b-a).

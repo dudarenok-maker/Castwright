@@ -163,6 +163,69 @@ describe('restoreBackup — the analysis cache (owner round 11)', () => {
       expect(existsSync(cacheFile)).toBe(false);
     });
   });
+
+  /* PR #3966 pass 3 -- the clear runs AFTER the swap landed, so a transient fs
+     fault (AV / sync-client lock) must not leave the cache behind for a later
+     non-fresh analysis to replay. Bounded retry; the last error still surfaces. */
+  async function restoreWithRmFault(
+    name: string,
+    failures: number,
+    code: string,
+    run: (cacheFile: string, rmCalls: () => number) => Promise<void>,
+  ): Promise<void> {
+    let calls = 0;
+    vi.doMock('node:fs/promises', async (orig) => {
+      const real = await orig<typeof import('node:fs/promises')>();
+      return {
+        ...real,
+        rm: (async (p: string, o?: object) => {
+          if (String(p).includes(`${name}.json`)) {
+            calls++;
+            if (calls <= failures) throw Object.assign(new Error(`${code}: injected`), { code });
+          }
+          return real.rm(p, o as never);
+        }) as typeof real.rm,
+      };
+    });
+    vi.resetModules();
+    paths = await import('./paths.js');
+    mod = await import('./auto-backup.js');
+    try {
+      await withCache(name, (cacheFile) => run(cacheFile, () => calls));
+    } finally {
+      vi.doUnmock('node:fs/promises');
+    }
+  }
+
+  it('one transient EBUSY on the cache rm: the restore still succeeds and the cache is cleared', async () => {
+    const { existsSync } = await import('node:fs');
+    await restoreWithRmFault('cache-transient', 1, 'EBUSY', async (cacheFile, rmCalls) => {
+      const after = await restoreOnto('cache-transient', {}, { chapters: retitled }, EDITS);
+      expect(after.sentencesPredateChapters).toBe(true);
+      expect(existsSync(cacheFile)).toBe(false);
+      expect(rmCalls()).toBe(2);
+    });
+  });
+
+  it('a persistent fault on the cache rm: the restore still rejects, after a bounded 3 attempts', async () => {
+    const { existsSync } = await import('node:fs');
+    await restoreWithRmFault('cache-persistent', 99, 'EBUSY', async (cacheFile, rmCalls) => {
+      await expect(restoreOnto('cache-persistent', {}, { chapters: retitled }, EDITS)).rejects.toMatchObject({
+        code: 'EBUSY',
+      });
+      expect(rmCalls()).toBe(3);
+      expect(existsSync(cacheFile)).toBe(true);
+    });
+  });
+
+  it('a non-transient fault (ENOSPC) is not retried', async () => {
+    await restoreWithRmFault('cache-enospc', 99, 'ENOSPC', async (_cacheFile, rmCalls) => {
+      await expect(restoreOnto('cache-enospc', {}, { chapters: retitled }, EDITS)).rejects.toMatchObject({
+        code: 'ENOSPC',
+      });
+      expect(rmCalls()).toBe(1);
+    });
+  });
 });
 
 /* PR #3966 review pass 1 — the restore drops the warm ManuscriptRecord for the
