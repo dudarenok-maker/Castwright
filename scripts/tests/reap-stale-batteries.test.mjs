@@ -907,18 +907,23 @@ test(
     //      the query is too slow for its bound: FAIL.
     //   2. slow control: rerun the real collector through the `spawn` seam
     //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
-    //      slow control must NOT excuse a slow query, so the rerun is timed:
-    //      more than 15s AND more than RERUN_RATIO_MAX x the control FAILS.
+    //      slow control must NOT excuse a slow query, so each attempt is timed
+    //      through the seam and the attempt that SUCCEEDED is gated: more than
+    //      15s AND more than RERUN_RATIO_MAX x the control FAILS. (A stalled
+    //      attempt that the retry recovers from is host load, not query cost.)
     //      Both calls are dominated by PowerShell startup, not the ~400-row
     //      enumeration: measured locally the control costs 0.4-0.5s against
     //      0.5s for the full query (ratio ~1.1-1.3), and a uniformly slow host
-    //      keeps that ratio. A 16s census regression against a 5s control is
-    //      ~3.2, and against a responsive 0.5s control ~30. 3 sits well above
-    //      the healthy ~1.3 and below the defect.
-    //   3. skip only when the host is shown unresponsive: slow control AND the
-    //      extended collector still timed out (docs/testing/flaky-register.md).
-    //      Residual: a query that hangs outright on a slow-control host still
-    //      lands here and skips; that is the gap the register row records.
+    //      keeps that ratio. A 16s census regression against a 0.5s control is
+    //      ~30; against a uniformly slowed host the ratio is ~3.9 at a 5s
+    //      control (measured, pass 3) and the gate flips at a control of about
+    //      8s. 3 sits well above the healthy ~1.3 and below the defect.
+    //   3. skip only when the control ITSELF failed or timed out AND the rerun
+    //      still timed out (docs/testing/flaky-register.md). A control that
+    //      succeeded, even slowly, with both rerun attempts timing out FAILS:
+    //      the host answered.
+    //      Residual: a query that hangs outright on a host whose control also
+    //      fails still lands here and skips; the register row records that gap.
     // Any OTHER empty result (empty rows, unparseable output, a permanent
     // failure — the pass-1 date bug lands here as 'empty Win32_Process result
     // after retry') still fails.
@@ -944,13 +949,27 @@ test(
         `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
           'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
       );
-      const tRerun = Date.now();
-      snapshot = collectProcessSnapshot({ spawn: (c, a, o) => spawnSync(c, a, { ...o, timeout: 120000 }) });
-      const rerunMs = Date.now() - tRerun;
-      t.diagnostic(`C3 slow-control rerun: ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)})`);
+      const attemptMs = [];
+      snapshot = collectProcessSnapshot({
+        spawn: (c, a, o) => {
+          const t0 = Date.now();
+          const r = spawnSync(c, a, { ...o, timeout: 120000, windowsHide: true });
+          attemptMs.push(Date.now() - t0);
+          return r;
+        },
+      });
+      // The collector's result comes from its last attempt.
+      const rerunMs = attemptMs[attemptMs.length - 1];
+      t.diagnostic(`C3 slow-control rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)})`);
       if (isTimeout(snapshot)) {
+        const controlFailed = Boolean(control.error) || control.status !== 0;
+        assert.ok(
+          controlFailed,
+          `the one-row control answered (${controlMs}ms) but the full query timed out on both 120s attempts (${attemptMs.join('/')}ms) — ` +
+            'the host responded, so the census query itself hangs (Castwright#3917)',
+        );
         t.skip(
-          `host unresponsive: the one-row control took ${controlMs}ms (>= ${CONTROL_FAST_MS}ms or failed) and the full query ` +
+          'host unresponsive: the one-row control itself failed or timed out and the full query ' +
             'timed out even at 120s (Castwright#3917)',
         );
         return;
