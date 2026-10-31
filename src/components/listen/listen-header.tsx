@@ -1,6 +1,6 @@
 /* Listen-view header region — pure presentational lift from listen.tsx.
    Owns: cover art + title/author/narrator line + runtime/chapter/format
-   stats + the primary action row (Play / Export / Preview / Restructure /
+   stats + the primary action row (Play / Export / Restructure /
    Share) AND the bottom metadata editor (book-meta fields + cover
    Replace/Regenerate). Behaviour-neutral split — every data-testid,
    className, and child order matches the pre-refactor JSX so the
@@ -18,7 +18,6 @@ import {
   IconWaveform,
   IconShare,
   IconDownload,
-  IconEye,
   IconRefresh,
   IconUpload,
   IconImage,
@@ -151,7 +150,6 @@ interface ListenHeaderProps {
   onChangeCover: () => void;
   onPlayFromStart: (id: number) => void;
   onOpenExportModal: () => void;
-  onEnterPreview: () => void;
   onOpenRestructure: () => void;
   /** Set while an analysis runs for the book: disables Restructure with this reason. */
   restructureDisabledReason?: string;
@@ -189,7 +187,6 @@ export function ListenHeader({
   onChangeCover,
   onPlayFromStart,
   onOpenExportModal,
-  onEnterPreview,
   onOpenRestructure,
   restructureDisabledReason,
   onReplaceManuscript,
@@ -290,12 +287,6 @@ export function ListenHeader({
             className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
           >
             <IconDownload className="w-4 h-4" /> Export audiobook
-          </button>
-          <button
-            onClick={onEnterPreview}
-            className="min-h-[44px] px-4 py-3 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/80 hover:text-ink inline-flex items-center gap-2"
-          >
-            <IconEye className="w-4 h-4" /> Preview as listener
           </button>
           <RestructureChaptersButton onClick={onOpenRestructure} disabledReason={restructureDisabledReason} />
           {onReplaceManuscript && (

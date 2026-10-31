@@ -40,7 +40,6 @@ function makeStore({
     showDriftReport: false,
     driftReportCharacterFilter: null,
     driftReportScope: 'book',
-    previewMode: false,
     selectedModel: DEFAULT_MODEL,
     ttsModelKey: DEFAULT_TTS_MODEL,
     selectedModelExplicit: false,
