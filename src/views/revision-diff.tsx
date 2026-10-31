@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   IconArrowLeft,
   IconAB,
@@ -124,6 +124,12 @@ export function RevisionDiffPlayer({
     urlB: audioB?.url ?? null,
   });
 
+  /* Latest `playing`, for the auto-compare wait below: that effect's closure is
+     frozen at the render where autoCompare flipped, so reading `ab.playing`
+     there never sees playback end (#4002). */
+  const playingRef = useRef(ab.playing);
+  playingRef.current = ab.playing;
+
   /* Auto-compare: walk changed segments, playing A then B for each.
      Aborts on stop / unmount / next segment. */
   useEffect(() => {
@@ -155,13 +161,13 @@ export function RevisionDiffPlayer({
     })();
     /* The end-of-segment signal is the hook's `playing` going back to
        null. Poll because the hook is built around event-driven state
-       internally; a 50ms tick is plenty for sentence-length audio. */
+       internally; a 100ms tick is plenty for sentence-length audio. */
     function waitForVersionEnd(): Promise<void> {
       return new Promise((resolve) => {
         const start = Date.now();
         const tick = () => {
           if (cancelled) return resolve();
-          if (ab.playing === null) return resolve();
+          if (playingRef.current === null) return resolve();
           if (Date.now() - start > 30_000) return resolve();
           setTimeout(tick, 100);
         };

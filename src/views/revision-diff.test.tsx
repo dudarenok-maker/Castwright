@@ -292,4 +292,24 @@ describe('RevisionDiffPlayer', () => {
     expect(screen.queryByTestId('revision-recovered-badge')).toBeNull();
     expect(screen.getByText('Already in your audiobook')).toBeInTheDocument();
   });
+  it('#4002 — Listen back-to-back waits for each take to end before starting the next', async () => {
+    const played: Array<{ src: string | null; el: HTMLMediaElement }> = [];
+    basePlay.mockImplementation(function (this: HTMLMediaElement) {
+      played.push({ src: this.getAttribute('src'), el: this });
+      return Promise.resolve();
+    });
+    const seg = (id: number) => ({ id, changed: true }) as unknown as Revision['segments'][number];
+    renderPlayer(makeRevision({ segments: [seg(1), seg(2)] }));
+    await waitFor(() => expect(api.getChapterAudio).toHaveBeenCalled());
+    await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); }); // let both URLs land in the hook
+    fireEvent.click(screen.getByRole('button', { name: /Listen back-to-back/i }));
+    await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a']));
+    /* The first take is still playing: several poll ticks later nothing else may start. */
+    await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+    expect(played.map((p) => p.src)).toEqual(['blob:a']);
+    /* It ends, and only then does B start. */
+    await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+    await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:b']));
+  });
 });
