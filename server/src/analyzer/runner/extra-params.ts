@@ -52,6 +52,9 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
        `reasoning_effort` (router.py), so it can replace the reasoning control and the structured output. Always
        refused, not style-gated. (`reasoning`, the sibling carrier, is already refused above.) */
     'output_config',
+    /* #3921 — LiteLLM's proxy lifts the three fallback keys out of `router_settings_override` into the request, so it
+       carries them one level down. Always refused; settings it would carry belong in the proxy's config. */
+    'router_settings_override',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
   /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */

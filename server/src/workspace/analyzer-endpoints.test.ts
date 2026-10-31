@@ -203,6 +203,16 @@ describe('create / update / delete / key decisions', () => {
     expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
     expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: fallbacks.' }]);
   });
+  it('refuses LiteLLM router_settings_override, which the proxy lifts the fallback keys out of, under any style, naming it (#3921)', () => {
+    const r = refusal(() =>
+      applyCreate(empty, {
+        ...base,
+        extraParams: { router_settings_override: { fallbacks: [{ model: 'qwen3-30b', additional_drop_params: ['response_format'] }] } },
+      }),
+    );
+    expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: router_settings_override.' }]);
+  });
   it('refuses a top-level __proto__ key in the payload instead of silently dropping it', () => {
     const payload = JSON.parse('{"__proto__":{"x":1}}');
     const refused = refusal(() => applyCreate(empty, { ...base, extraParams: payload }));
