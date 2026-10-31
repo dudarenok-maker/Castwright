@@ -937,6 +937,36 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(mara2?.matchedFrom?.confidence).not.toBe(seededLink.confidence);
   });
 
+  it('Start fresh: a locked voice that differs from Book One keeps its own voiceId (w_mine, not w_b1) and gets no link', async () => {
+    const rawPrior: PriorRow[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceId: 'w_mine',
+        voiceState: 'locked',
+        matchedFrom: { bookId: BOOK1, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+    const prior = dropReuseContinuityKeepDesignedVoice(rawPrior);
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen', voiceId: 'w_b1' },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+    expect(postLink[0].voiceId).toBe('w_b1'); // the linker did try to hand over Book One's voice
+    const wren = merged.find((c) => c.id === 'wren');
+    expect(wren?.voiceId).toBe('w_mine');
+    expect(wren?.voiceState).toBe('locked');
+    expect(wren?.matchedFrom).toBeUndefined();
+    expect(wren?.overrideTtsVoices).toBeUndefined();
+  });
+
   it('dedup moves the join onto a row the seed refused: the prior notLinkedTo separation survives, no link is stamped', async () => {
     /* Prior brann is separated from Book One's Brann. The stage-1 roster mints
        brann ("Brann Weir", 1 line) and brann-2 ("Brann", 3 lines). The seed

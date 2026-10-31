@@ -786,14 +786,26 @@ describe('seedReuseGuardsFromPriorCast', () => {
   });
 
   it('does NOT use the name-fallback when two fresh rows share a name (ambiguous — pre-dedup main route)', () => {
-    const existing: C[] = [{ id: 'olga', name: 'Ольга', matchedFrom: { bookId: 'b0', characterId: 'olga' } }];
+    /* The prior id is claimed by NO fresh row (olga-old), so the fresh-id exclusion
+       cannot mask the clause: only the fresh-name ambiguity count keeps both
+       guards off the two same-name fresh rows. */
+    const existing: C[] = [
+      {
+        id: 'olga-old',
+        name: 'Ольга',
+        matchedFrom: { bookId: 'b0', characterId: 'olga' },
+        notLinkedTo: [{ bookId: 'b0', characterId: 'x' }],
+      },
+    ];
     const fresh: C[] = [
       { id: 'olga', name: 'Ольга' },
       { id: 'ольга', name: 'Ольга' },
     ];
     seedReuseGuardsFromPriorCast(existing, fresh);
-    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'olga' }); // id match still works
-    expect(fresh[1].matchedFrom).toBeUndefined(); // ambiguous fresh name → not seeded
+    for (const f of fresh) {
+      expect(f.matchedFrom).toBeUndefined(); // ambiguous fresh name → not seeded
+      expect(f.notLinkedTo).toBeUndefined();
+    }
   });
 
   it('does NOT use the name-fallback when two prior rows share a name (ambiguous source)', () => {

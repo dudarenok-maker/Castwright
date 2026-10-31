@@ -57,8 +57,9 @@ export interface Retirement {
 
 /** Reuse-continuity fields — a voice matched/linked from ANOTHER book or the
     library, plus the "not the same person" guard. A `fresh: true` ("Start
-    fresh") re-analysis re-derives these from scratch. The bespoke DESIGNED-voice
-    fields (`overrideTtsVoices` / `voiceUuid` / `ttsEngine` / `voiceStyle`) are
+    fresh") re-analysis re-derives these from scratch, except a locked or tuned
+    row's pinned `voiceId` (see `dropReuseContinuityKeepDesignedVoice`). The
+    bespoke DESIGNED-voice fields (`overrideTtsVoices` / `voiceUuid` / `ttsEngine` / `voiceStyle`) are
     deliberately NOT here — a fresh run must never discard them (the 2026-07-14
     Coalfall voice-strip incident: `fresh` set the merge's prior to `[]` and so
     overwrote cast.json voiceless). */
