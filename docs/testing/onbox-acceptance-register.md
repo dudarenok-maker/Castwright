@@ -723,7 +723,7 @@ row this register still carries. Keep the table even when it is empty.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 41 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 16 |
@@ -732,11 +732,16 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**73 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**74 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-30 (#3084 wave 5b, PR 5b), 71 → 73.** Rows **A119**
+> **Last change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
+> locked or tuned character's voice whole, and no fresh row inherits a link it was not joined
+> to) added. Group B 8 → 9. `next-id` bumped B108 → B109 in the same change. Row is owed; not
+> run here.
+>
+> **Prior change: 2026-10-30 (#3084 wave 5b, PR 5b), 71 → 73.** Rows **A119**
 > (custom payload on real servers) and **E115** (Gemini config payload) added from #3084 PR 5b's
 > run sheet (`3084-openai-analyzer-onbox-acceptance.md` §14–§15). Group A 40 → 41, E 15 → 16.
 > `next-id` bumped A119 → A120 and E115 → E116 in the same change. Rows are owed; not run here.
@@ -6381,7 +6386,7 @@ The automated tests prove the merged request bodies, the redaction and the overf
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B108 -->
+<!-- next-id: B109 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6532,6 +6537,15 @@ Ollama accepts a reasoning level only on a model that thinks, so the Test must r
 - **A2 — a re-pulled tag.** After a Test (`scope: all`), re-pull the same tag so its build changes (`ollama pull <tag>`; `ollama list` shows a new digest), then Test `scope: configured`. The stored record keeps only the verdict this Test probed; the earlier levels are gone rather than carried onto a different build.
 
 *Needs:* local Ollama with a thinking and a non-thinking tag. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §12. Clears when all four are recorded.
+
+### B108 · Re-analysis keeps a locked or tuned character's voice whole, and no fresh row inherits a link it was not joined to ([#3920](https://github.com/dudarenok-maker/Castwright/issues/3920), PR [#3934](https://github.com/dudarenok-maker/Castwright/pull/3934)) · **a real analyzer (local Ollama/llama.cpp or Gemini); a real two-book series in the workspace**
+
+Re-analysis used to let a series-continuity match overwrite a locked or tuned character's own voice, and a new, similarly-named character could pick up a lock or link it was never joined to. The automated tests use fixtures. Only a real analyzer on a real series shows the matcher's actual candidates. In a two-book series, open Book Two and lock one character's voice (pick one that also appears in Book One with a different voice). Re-analyse Book Two. Observe:
+- the character keeps its own locked voice, not Book One's;
+- it shows no "Continuity preserved" footer;
+- a new, similarly-named character did not pick up the lock or the link.
+
+*Needs:* a real analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all three are recorded against a real series.
 
 ---
 

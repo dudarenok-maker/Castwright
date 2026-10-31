@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="64" data-publish-id="f4f3640756a8"></div>
+  <div hidden data-published-as="65" data-publish-id="9b1432943ad5"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">73</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">74</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,7 +210,7 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->41<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->8<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->9<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->16<!-- END GENERATED:glance:E --></td></tr>
@@ -849,7 +849,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">9 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -957,6 +957,18 @@
         <li>A2: after a Test (<code>scope: all</code>), re-pull the same tag so its build changes (<code>ollama pull &lt;tag&gt;</code>; <code>ollama list</code> shows a new digest), then Test <code>scope: configured</code>: the stored record keeps only the verdict this Test probed; the earlier levels are gone rather than carried onto a different build.</li>
         </ul>
         <p class="src">local Ollama with a thinking and a non-thinking tag &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;12</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B108</span><span class="iname">Re-analysis keeps a locked or tuned character&#39;s voice whole, and no fresh row inherits a link it was not joined to</span><span class="risk">a real analyzer; a real two-book series</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Re-analysis used to let a series-continuity match overwrite a locked or tuned character&#39;s own voice, and a new, similarly-named character could pick up a lock or link it was never joined to. Only a real analyzer on a real series shows the matcher&#39;s actual candidates. In a two-book series, open Book Two and lock one character&#39;s voice (one that also appears in Book One with a different voice), then re-analyse Book Two.</p>
+        <ul>
+        <li>The character keeps its own locked voice, not Book One&#39;s.</li>
+        <li>It shows no &#8220;Continuity preserved&#8221; footer.</li>
+        <li>A new, similarly-named character did not pick up the lock or the link.</li>
+        </ul>
+        <p class="src">a real analyzer (local Ollama/llama.cpp or Gemini) and a real two-book series &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3920">#3920</a> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3934">#3934</a> &#183; no per-feature run sheet</p>
       </div>
     </details>
   </section>
