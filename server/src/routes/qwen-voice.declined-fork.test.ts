@@ -136,7 +136,8 @@ beforeEach(() => {
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
     try {
-      voiceId = JSON.parse(init?.body ?? '{}').voiceId;
+      const b = JSON.parse(init?.body ?? '{}');
+      voiceId = b.variantVoiceId ?? b.voiceId;
     } catch {
       /* not a design call */
     }
@@ -249,5 +250,58 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     expect(res.status).toBe(200);
     expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+  });
+});
+
+describe('#3992 — emotion variants stay off the earlier book', () => {
+  const VAR_BYTES = Buffer.from('BOOK-ONE-ANGRY-VARIANT');
+  const slot = (title: string, key: string) => {
+    const q = (readRow(title).overrideTtsVoices as { qwen?: { variants?: Record<string, { name: string }> } } | undefined)?.qwen;
+    return q?.variants?.[key]?.name;
+  };
+  const seedVariant = (bookTwoExtra: Record<string, unknown>) => {
+    seed(bookTwoExtra);
+    writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), VAR_BYTES);
+  };
+
+  it('Declined variant: Book Two forks; Book One’s variant file and row are untouched', async () => {
+    seedVariant({});
+    const res = await design(() => bookTwoId, { emotion: 'angry' });
+    expect(res.status).toBe(200);
+
+    expect(requestedVoiceIds).toHaveLength(1);
+    const m = /^qwen-(.+)__angry$/.exec(requestedVoiceIds[0]);
+    expect(m).not.toBeNull();
+    const fresh = m![1];
+    expect(fresh).not.toBe('u_shared');
+
+    expect(readRow('Book Two').voiceUuid).toBe(fresh);
+    expect(readFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt')).equals(VAR_BYTES)).toBe(true);
+    expect(readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT)).toBe(true);
+    expect(slot('Book One', 'angry')).toBeUndefined();
+    expect(slot('Book Two', 'angry')).toBe(`qwen-${fresh}__angry`);
+  });
+
+  it('Linked variant: sidecar asked for qwen-u_shared__angry; both rows carry the slot', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two'), matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } };
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+
+    const res = await design(() => bookTwoId, { emotion: 'angry' });
+    expect(res.status).toBe(200);
+    expect(requestedVoiceIds).toEqual(['qwen-u_shared__angry']);
+    expect(slot('Book One', 'angry')).toBe('qwen-u_shared__angry');
+    expect(slot('Book Two', 'angry')).toBe('qwen-u_shared__angry');
+  });
+
+  it('No uuid: a variant design mints nothing', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two') };
+    delete row.voiceUuid;
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+
+    await design(() => bookTwoId, { emotion: 'angry' });
+    expect(readRow('Book Two').voiceUuid).toBeUndefined();
+    expect(requestedVoiceIds).toEqual(['qwen-v_wren__angry']);
   });
 });

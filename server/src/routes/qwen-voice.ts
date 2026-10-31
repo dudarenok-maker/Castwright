@@ -208,6 +208,9 @@ export async function persistEmotionVariant(
         residualSkip = true;
         return c; // unchanged — this book's own write correctly declined
       }
+      /* #3992 — a variant anchored on one base cannot belong to a row with a
+         different base (a declined, forked row still shares the voiceId). */
+      if (c.voiceUuid && character.voiceUuid && c.voiceUuid !== character.voiceUuid) return c;
       return addVariant(c, baseVoiceId);
     });
     if (residualSkip) {
@@ -308,6 +311,34 @@ async function forkSharedVoiceUuid(
   });
 }
 
+/* #3992 — the fork decision for a row that already has a uuid. Caller holds
+   the design lock. Returns the uuid to design under (forked or existing). */
+async function forkIfSharedLocked(
+  bookDir: string,
+  characterId: string,
+  uuid: string,
+  character: CastCharacter,
+): Promise<string | undefined> {
+  if (!(await shouldForkSharedVoiceUuid(bookDir, character))) return uuid;
+  return forkSharedVoiceUuid(bookDir, characterId, uuid);
+}
+
+/* #3992 — the variant path's uuid resolver. Forks a declined shared uuid (so a
+   variant never overwrites the earlier book's `qwen-<U>__<emotion>`) but NEVER
+   mints: a row with no uuid returns undefined (#1057). Takes the design lock
+   itself; the cast write inside the fork takes the cast lock on a fresh read. */
+export async function forkDeclinedVoiceUuidIfShared(
+  bookDir: string,
+  characterId: string,
+): Promise<string | undefined> {
+  return withDesignLock(bookDir, async () => {
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!character?.voiceUuid) return undefined;
+    return forkIfSharedLocked(bookDir, characterId, character.voiceUuid, character);
+  });
+}
+
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
    voice is designed (the .pt is named from qwenStorageKey, which reads the
    uuid). Idempotent for a live character: returns the existing uuid untouched.
@@ -336,10 +367,7 @@ export async function ensureCharacterVoiceUuid(
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!cast || !character) return undefined;
-    if (character.voiceUuid) {
-      if (!(await shouldForkSharedVoiceUuid(bookDir, character))) return character.voiceUuid;
-      return forkSharedVoiceUuid(bookDir, characterId, character.voiceUuid);
-    }
+    if (character.voiceUuid) return forkIfSharedLocked(bookDir, characterId, character.voiceUuid, character);
 
     if (seriesFilter) {
       /* forEachMatchingCastCharacter takes its own per-book cast lock as it
@@ -792,7 +820,7 @@ qwenVoiceRouter.post(
        old key — orphaning it (#1057). A variant reuses the character's existing
        voiceUuid and anchors on the base's current key. */
     const voiceUuid = emotion
-      ? character.voiceUuid
+      ? await forkDeclinedVoiceUuidIfShared(bookDir, characterId)
       : await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
     const characterForDesign: CastCharacter = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
     try {
