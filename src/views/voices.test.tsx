@@ -763,8 +763,8 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
          up; React re-renders re-use the cached path. */
       fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
       await flush();
-      /* Still only one fetch — the second Compare click reads
-         `globalCastCache` and short-circuits the fetch path. */
+      /* Still only one fetch — the second Compare click is served from the
+         hydrate loader's cache and short-circuits the fetch path. */
       expect(getBookState).toHaveBeenCalledTimes(1);
     });
   });
@@ -1596,6 +1596,93 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /1 duplicate candidate/i })).toBeInTheDocument(),
     );
+  });
+
+  /* #3991 — a second open while the first foreign fetches are in flight is
+     a concurrent caller of `hydrateForeignCast`. It used to wait in a poll
+     over render-time state from a stale closure, so it never saw the fetch
+     land and re-armed a 25 ms timer for the life of the page. It now shares
+     the first caller's in-flight promise through the keyed loader
+     (lib/keyed-loader.ts). Callers are fire-and-forget here, so these count
+     the 25 ms polls and the reads sent; what the sharing hands each caller
+     is unit-tested in lib/keyed-loader.test.ts. */
+  describe('concurrent foreign-cast waiter (#3991)', () => {
+    const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 150))));
+    const pollTimers = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter((c) => c[1] === 25).length;
+
+    async function openTwice() {
+      const view = renderWithLibrarySlice();
+      await act(async () => {});
+      const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
+      fireEvent.click(pill);
+      await act(async () => {});
+      /* The first click's in-flight state has re-rendered the view; this
+         second call is a concurrent caller for the same books and must
+         share the first reads. */
+      fireEvent.click(pill);
+      await act(async () => {});
+      return view;
+    }
+
+    it('a second open while the reads are in flight sends one read per book and arms no endless poll', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      const resolvers = new Map<string, (v: BookStateResponse | null) => void>();
+      getBookState.mockImplementation(
+        (bookId: string) => new Promise((r) => resolvers.set(bookId, r)),
+      );
+      await openTwice();
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        resolvers.get('b1')!(elizaCasts('b1'));
+        resolvers.get('b2')!(elizaCasts('b2'));
+      });
+      await settle();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled(),
+      );
+      const armed = pollTimers(spy);
+      await settle();
+      expect(pollTimers(spy)).toBe(armed);
+      expect(armed).toBeLessThan(5);
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
+    it('a failed read arms no endless poll, and a later open sends no new read (failure is sticky)', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      const rejecters = new Map<string, (e: Error) => void>();
+      getBookState.mockImplementation(
+        (bookId: string) => new Promise((_, rej) => rejecters.set(bookId, rej)),
+      );
+      await openTwice();
+      await act(async () => {
+        rejecters.get('b1')!(new Error('network down'));
+        rejecters.get('b2')!(new Error('network down'));
+      });
+      await settle();
+      const armed = pollTimers(spy);
+      await settle();
+      expect(pollTimers(spy)).toBe(armed);
+      expect(armed).toBeLessThan(5);
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      /* One more open after the failure must not re-send either read. */
+      fireEvent.click(screen.getByRole('button', { name: /1 duplicate candidate/i }));
+      await settle();
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
+    it('leaves no poll timer running after unmount while a read is still pending', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      getBookState.mockImplementation(() => new Promise(() => {}));
+      const { unmount } = await openTwice();
+      unmount();
+      const armed = pollTimers(spy);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(pollTimers(spy)).toBe(armed);
+      spy.mockRestore();
+    });
   });
 });
 

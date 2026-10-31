@@ -267,6 +267,56 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair) — the edi
   });
 });
 
+/* Plan 290 (#3837) — the repair's edits overlay goes through
+   refreshCacheFromEdits with the route's state: while state.json carries the
+   stale-evidence marker the cache is left exactly as it is; with no marker the
+   edits are overlaid. */
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair) — the stale-evidence marker gates the edits overlay (plan 290)', () => {
+  const manuscriptId = 'm_qa_repair_marker';
+  const line = { id: 1, chapterId: 1, characterId: 'amy', text: 'Amy line.' };
+  const edited = { ...line, characterId: 'castor' };
+
+  async function repairWith(marker: boolean): Promise<{ before: Buffer; after: Buffer; chapter1: unknown }> {
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache, cachePath } = await vi.importActual<
+      typeof import('../store/analysis-cache.js')
+    >('../store/analysis-cache.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const original = readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    state.manuscriptId = manuscriptId;
+    if (marker) state.sentencesPredateChapters = true;
+    writeFileSync(statePath, JSON.stringify(state));
+    await saveAnalysisCache(manuscriptId, { chapters: { 1: [line] } });
+    writeFileSync(editsPath, JSON.stringify({ sentences: [edited] }));
+    try {
+      const before = readFileSync(cachePath(manuscriptId));
+      /* The flagged segment's sentence (id 2) is in neither take, so the repair
+         refuses after the overlay and before any audio is touched. */
+      await request(app)
+        .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`)
+        .send({ dryRun: false, modelKey: 'kokoro-v1' });
+      const after = readFileSync(cachePath(manuscriptId));
+      return { before, after, chapter1: (await loadAnalysisCache(manuscriptId)).chapters[1] };
+    } finally {
+      writeFileSync(statePath, original);
+      rmSync(editsPath, { force: true });
+      await clearAnalysisCache(manuscriptId);
+    }
+  }
+
+  it('on a marker-set book, leaves the analysis cache file byte-unchanged', async () => {
+    const r = await repairWith(true);
+    expect(r.after.equals(r.before)).toBe(true);
+  });
+
+  it('on a marker-free book, overlays the edits', async () => {
+    const r = await repairWith(false);
+    expect(r.chapter1).toEqual([edited]);
+  });
+});
+
 describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair)', () => {
   it('fails gracefully when flagged segments have no cached analysis to re-synthesise', async () => {
     // No analysis cache for this fixture, so the re-record can't find sentences
