@@ -845,7 +845,7 @@ describe('seedReuseGuardsFromPriorCast', () => {
       expect(fresh[1].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
     });
 
-    it('split rule: a prior narrator row hands neither guard to a same-name fresh row', () => {
+    it('split rule: a prior narrator row hands no matchedFrom (but does hand notLinkedTo) to a same-name fresh row', () => {
       const existing: C[] = [
         {
           id: 'narrator',
@@ -857,10 +857,11 @@ describe('seedReuseGuardsFromPriorCast', () => {
       const fresh: C[] = [{ id: 'old-tom', name: 'Old Tom' }];
       seedReuseGuardsFromPriorCast(existing, fresh);
       expect(fresh[0].matchedFrom).toBeUndefined();
-      expect(fresh[0].notLinkedTo).toBeUndefined();
+      // notLinkedTo has no narrator exclusion: it fails safe, and the narrator id flips
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
     });
 
-    it('split rule: a fresh narrator row takes neither guard by name', () => {
+    it('split rule: a fresh narrator row takes no matchedFrom (but does take notLinkedTo) by name', () => {
       const existing: C[] = [
         {
           id: 'tom',
@@ -872,7 +873,8 @@ describe('seedReuseGuardsFromPriorCast', () => {
       const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
       seedReuseGuardsFromPriorCast(existing, fresh);
       expect(fresh[0].matchedFrom).toBeUndefined();
-      expect(fresh[0].notLinkedTo).toBeUndefined();
+      // notLinkedTo has no narrator exclusion: it fails safe, and the narrator id flips
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
     });
 
     it('a prior narrator row is never a name-fallback candidate (user-renamed narrator)', () => {

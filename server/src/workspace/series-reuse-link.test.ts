@@ -1054,6 +1054,37 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(brann?.voiceStyle).toBeUndefined();
   });
 
+  it('narrator id flip: a declined narrator link survives char-narrator -> narrator (no link applied, edge seeded)', async () => {
+    const declined = { bookId: BOOK1, characterId: 'narrator' };
+    const prior: PriorRow[] = [
+      {
+        id: 'char-narrator',
+        name: 'Narrator',
+        voiceState: 'generated',
+        voiceId: 'v_own_narr',
+        notLinkedTo: [declined],
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'narrator', name: 'Narrator', gender: 'neutral', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'narrator', name: 'Narrator', gender: 'neutral', ageRange: 'adult', voiceId: 'v_b1_narr' },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    expect(fresh[0].notLinkedTo).toEqual([declined]); // the edge was seeded
+    expect(postLink[0].matchedFrom).toBeUndefined(); // so the linker applied no link
+    const narrator = merged.find((c) => c.id === 'narrator');
+    expect(narrator?.matchedFrom).toBeUndefined();
+    expect(narrator?.voiceId).not.toBe('v_b1_narr');
+    expect(narrator?.voiceState).not.toBe('reused');
+  });
+
   it('narrator rename: the locked narrator keeps its voice and renamed name; a same-name real row inherits neither', async () => {
     const narrLink = {
       bookId: 'book-0',
