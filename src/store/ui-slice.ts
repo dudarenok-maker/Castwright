@@ -330,6 +330,13 @@ export const uiSlice = createSlice({
       }
     },
 
+    /* #3713 — the server re-minted the id of the book this tab has open (a
+       duplicate-bookId sweep): same book, new id, same stage and view. */
+    rebindBook: (s, a: PayloadAction<{ from: string; to: string }>) => {
+      const stage = s.stage as { bookId?: string };
+      if (stage.bookId === a.payload.from) stage.bookId = a.payload.to;
+    },
+
     /* ── Ready-state mutations ──────────────────────────────────────── */
     changeView: (s, a: PayloadAction<View>) => {
       if (s.stage.kind !== 'ready') return;

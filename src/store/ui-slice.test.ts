@@ -632,3 +632,18 @@ describe('uiSlice — #3400 restructure epochs', () => {
     expect(s.restructuringBooks).toEqual({});
   });
 });
+
+describe('uiSlice — rebindBook (#3713)', () => {
+  it('swaps the open book id and keeps the stage and view', () => {
+    const open = uiSlice.reducer(undefined, uiActions.openBook({ id: 'A', status: 'complete' }));
+    const s = uiSlice.reducer(open, uiActions.rebindBook({ from: 'A', to: 'A-2' }));
+    expect(s.stage).toEqual({ ...open.stage, bookId: 'A-2' });
+  });
+
+  it('leaves a different open book, and a stage with no book, alone', () => {
+    const open = uiSlice.reducer(undefined, uiActions.openBook({ id: 'B', status: 'complete' }));
+    expect(uiSlice.reducer(open, uiActions.rebindBook({ from: 'A', to: 'A-2' })).stage).toEqual(open.stage);
+    const home = uiSlice.reducer(undefined, uiActions.goHome());
+    expect(uiSlice.reducer(home, uiActions.rebindBook({ from: 'A', to: 'A-2' })).stage).toEqual({ kind: 'books' });
+  });
+});

@@ -222,11 +222,27 @@ describe('repairDuplicateBookIds', () => {
   it('4. the record uses relative folders and no absolute path', async () => {
     canonical();
     const r = await sweep.repairDuplicateBookIds();
+    /* The seeded twins share m_T, so the loser's old manuscriptId cannot identify it. */
     expect(r).toEqual([
-      { previousBookId: 'a__s__t', newBookId: 'a__s__t-2', keptFolder: 'A/S/T2', reassignedFolder: 'A/S/T' },
+      {
+        previousBookId: 'a__s__t',
+        newBookId: 'a__s__t-2',
+        keptFolder: 'A/S/T2',
+        reassignedFolder: 'A/S/T',
+        reassignedManuscriptId: null,
+      },
     ]);
     expect(sweep.getDuplicateBookIdRepairs()).toEqual(r);
     expect(JSON.stringify(r)).not.toContain(workspaceRoot);
+  });
+
+  it("4b. a loser whose manuscriptId differs from its twin's records it, so an open tab can tell which twin it holds", async () => {
+    const winner = seed('A', 'S', 'W', 'dup', { rendered: 1 });
+    const loser = seed('A', 'S', 'L', 'dup');
+    const [r] = await sweep.repairDuplicateBookIds();
+    expect(r.reassignedManuscriptId).toBe('m_L');
+    expect(JSON.parse(readFileSync(paths.stateJsonPath(loser), 'utf8')).manuscriptId).toBe('m_L');
+    expect(JSON.parse(readFileSync(paths.stateJsonPath(winner), 'utf8')).manuscriptId).toBe('m_W');
   });
 
   it('5. one log line names both absolute dirs', async () => {

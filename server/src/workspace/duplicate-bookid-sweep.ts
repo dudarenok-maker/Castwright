@@ -158,6 +158,10 @@ export interface DuplicateBookIdRepair {
   /** RELATIVE to BOOKS_ROOT, '/'-separated. Never an absolute path: this reaches the client. */
   keptFolder: string;
   reassignedFolder: string;
+  /** The loser's manuscriptId before the repair, when it differed from every twin's
+   *  (so a tab holding it can tell it holds the loser); null when it was shared and
+   *  re-minted, which identifies nothing. */
+  reassignedManuscriptId: string | null;
 }
 
 let repairs: DuplicateBookIdRepair[] = [];
@@ -331,7 +335,7 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
             if (wrote === null) return null;
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
             if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
-            return wrote.newBookId;
+            return { newBookId: wrote.newBookId, reassignedManuscriptId: wrote.oldMs && !wrote.newMs ? wrote.oldMs : null };
           },
           { hintDir: loserDir },
         );
@@ -345,13 +349,14 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
         }
         console.warn(
           `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
-            `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${result}"`,
+            `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${result.newBookId}"`,
         );
         done.push({
           previousBookId: group.bookId,
-          newBookId: result,
+          newBookId: result.newBookId,
           keptFolder: relFolder(group.winnerDir),
           reassignedFolder: relFolder(loserDir),
+          reassignedManuscriptId: result.reassignedManuscriptId,
         });
       } catch (err) {
         console.warn(`[duplicate-bookid] repair of "${group.bookId}" failed for one twin; continuing`, err);

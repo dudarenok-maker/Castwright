@@ -67,6 +67,7 @@ describe('GET /api/info', () => {
       newBookId: 'a__s__t-2',
       keptFolder: 'A/S/T2',
       reassignedFolder: 'A/S/T',
+      reassignedManuscriptId: null,
     };
     __setDuplicateBookIdRepairsForTest([record]);
     try {
