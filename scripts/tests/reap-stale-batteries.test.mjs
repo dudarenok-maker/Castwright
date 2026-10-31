@@ -892,8 +892,27 @@ test('C1 DECLARED GAP: pytest IS a recognised invocation but can never enable a 
 test(
   'C3: collectProcessSnapshot returns real, plausibly-shaped rows from a real Win32_Process query',
   { skip: process.platform !== 'win32' ? 'Windows-only: Get-CimInstance Win32_Process' : false },
-  () => {
-    const snapshot = collectProcessSnapshot();
+  (t) => {
+    // collectProcessSnapshot gives up after two 15s spawnSync timeouts and
+    // returns [] with a `snapshotError` naming the timeout (#3331). On a loaded
+    // runner that is the OS not answering, not the collector being broken
+    // (Castwright#3917: the 31.9s test body is exactly two timed-out attempts),
+    // so a timeout-caused empty result is retried here and, if every try times
+    // out, the test is skipped as inconclusive. Any OTHER empty result (empty
+    // rows, unparseable output, a permanent failure — the pass-1 date bug
+    // lands here as 'empty Win32_Process result after retry') still fails.
+    const TRIES = 3;
+    let snapshot = [];
+    let timeouts = 0;
+    for (let i = 0; i < TRIES; i++) {
+      snapshot = collectProcessSnapshot();
+      if (snapshot.length > 0 || !/timed out/.test(String(snapshot.snapshotError))) break;
+      timeouts++;
+    }
+    if (timeouts === TRIES) {
+      t.skip(`Win32_Process query timed out on all ${TRIES} collector calls — the host is too loaded to answer (Castwright#3917)`);
+      return;
+    }
     assert.ok(
       snapshot.length > 0,
       'the collector returned ZERO rows — this is pass 1\u0027s blocking finding, reinstated',
