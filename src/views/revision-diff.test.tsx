@@ -312,7 +312,35 @@ describe('RevisionDiffPlayer', () => {
     await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
     await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:b']));
   });
-  it('#4002 — Listen back-to-back seeks each take to its segment even when the metadata lands after the toggle', async () => {
+  it('#4002 — Listen back-to-back is held until both segment sets are loaded', async () => {
+    let resolveA!: (v: ChapterAudio) => void;
+    let resolveB!: (v: ChapterAudio) => void;
+    (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<ChapterAudio>((r) => (resolveA = r)),
+    );
+    (api.getChapterAudio as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<ChapterAudio>((r) => (resolveB = r)),
+    );
+    const seg = { id: 1, changed: true } as unknown as Revision['segments'][number];
+    renderPlayer(makeRevision({ segments: [seg] }));
+    const toggle = screen.getByRole('button', { name: /Listen back-to-back/i });
+    expect(toggle).toBeDisabled();
+    await act(async () => { resolveA(audioMeta('blob:a')); });
+    expect(toggle).toBeDisabled(); // B still pending
+    await act(async () => { resolveB(audioMeta('blob:b')); });
+    expect(toggle).toBeEnabled();
+  });
+  it('#4002 — Listen back-to-back stays usable when a take metadata fails to load', async () => {
+    (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('404'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seg = { id: 1, changed: true } as unknown as Revision['segments'][number];
+    renderPlayer(makeRevision({ segments: [seg] }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Listen back-to-back/i })).toBeEnabled(),
+    );
+    warn.mockRestore();
+  });
+  it('#4002 — Listen back-to-back reads segment windows from the metadata current at each take', async () => {
     const played: Array<{ src: string | null; at: number; el: HTMLMediaElement }> = [];
     basePlay.mockImplementation(function (this: HTMLMediaElement) {
       played.push({ src: this.getAttribute('src'), at: this.currentTime, el: this });
@@ -322,31 +350,35 @@ describe('RevisionDiffPlayer', () => {
       ...audioMeta(url),
       segments: starts.map((start, i) => ({ sentenceId: i + 1, start, end: start + 1 })),
     });
-    let resolveA!: (v: ChapterAudio) => void;
-    let resolveB!: (v: ChapterAudio) => void;
-    (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockReturnValue(
-      new Promise<ChapterAudio>((r) => (resolveA = r)),
-    );
-    (api.getChapterAudio as ReturnType<typeof vi.fn>).mockReturnValue(
-      new Promise<ChapterAudio>((r) => (resolveB = r)),
-    );
+    const getA = api.getChapterAudioPrevious as ReturnType<typeof vi.fn>;
+    const getB = api.getChapterAudio as ReturnType<typeof vi.fn>;
+    getA.mockResolvedValue(withSegs('blob:a', [1, 3]));
+    getB.mockResolvedValue(withSegs('blob:b', [10, 12]));
     const seg = (id: number) => ({ id, changed: true }) as unknown as Revision['segments'][number];
-    renderPlayer(makeRevision({ segments: [seg(1), seg(2)] }));
-    await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
-    /* Toggle first: the segment windows are not known yet. */
-    fireEvent.click(screen.getByRole('button', { name: /Listen back-to-back/i }));
+    const revision = makeRevision({ segments: [seg(1), seg(2)] });
+    const view = renderPlayer(revision);
+    const toggle = screen.getByRole('button', { name: /Listen back-to-back/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
     await waitFor(() => expect(played).toHaveLength(1));
-    await act(async () => {
-      resolveA(withSegs('blob:a', [1, 3]));
-      resolveB(withSegs('blob:b', [10, 12]));
-    });
+    expect(played[0].at).toBe(1);
+    /* The chapter object changes mid-run, so both takes are re-fetched and the
+       metadata the effect must use is no longer the one it started with. */
+    getB.mockResolvedValue(withSegs('blob:b2', [20, 22]));
+    view.rerender(
+      <RevisionDiffPlayer
+        revision={revision}
+        bookId="book-1"
+        chapter={{ ...chapter }}
+        character={character}
+        onClose={view.onClose}
+        onAccept={view.onAccept}
+        onReject={view.onReject}
+      />,
+    );
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
     await waitFor(() => expect(played).toHaveLength(2));
-    expect(played[1].src).toBe('blob:b');
-    expect(played[1].at).toBe(10); // B, segment 1, from the metadata that landed after the toggle
-    await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
-    await waitFor(() => expect(played).toHaveLength(3));
-    expect(played[2].src).toBe('blob:a');
-    expect(played[2].at).toBe(3); // A, segment 2
+    expect(played[1].at).toBe(20); // B, segment 1, from the re-fetched metadata
   });
 });

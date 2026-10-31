@@ -85,11 +85,17 @@ export function RevisionDiffPlayer({
   const [audioA, setAudioA] = useState<ChapterAudio | null>(null);
   const [audioB, setAudioB] = useState<ChapterAudio | null>(null);
   const [audioBError, setAudioBError] = useState<string | null>(null);
+  const [audioAFailed, setAudioAFailed] = useState(false);
   const hasPreviousAudio = revision.hasPreviousAudio !== false;
   const playable = revision.playable !== false;
   const aUnavailable = !hasPreviousAudio || previousMissing === true;
   const bAvailable = playable && !rendering;
   const recovered = revision.recovered === true;
+  /* Both takes' segment windows must be known before back-to-back starts, or
+     the first take would play unbounded. A failed fetch counts as settled
+     (today's behaviour: the toggle stays usable, that take just has no window). */
+  const audioPending =
+    (hasPreviousAudio && !audioA && !audioAFailed) || (playable && !audioB && !audioBError);
 
   useEffect(() => {
     if (!chapter) return;
@@ -102,6 +108,7 @@ export function RevisionDiffPlayer({
         })
         .catch((err) => {
           console.warn('[revision-diff] previous audio fetch failed:', err);
+          if (!cancelled) setAudioAFailed(true);
         });
     }
     if (playable) {
@@ -324,7 +331,7 @@ export function RevisionDiffPlayer({
             </div>
             <button
               onClick={() => setAutoCompare(!autoCompare)}
-              disabled={!bAvailable || aUnavailable || totalChanged === 0}
+              disabled={!bAvailable || aUnavailable || totalChanged === 0 || audioPending}
               className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
             >
               {autoCompare ? (
