@@ -763,8 +763,8 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
          up; React re-renders re-use the cached path. */
       fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
       await flush();
-      /* Still only one fetch — the second Compare click reads
-         `globalCastCache` and short-circuits the fetch path. */
+      /* Still only one fetch — the second Compare click is served from the
+         hydrate loader's cache and short-circuits the fetch path. */
       expect(getBookState).toHaveBeenCalledTimes(1);
     });
   });
@@ -1603,7 +1603,8 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
      render-time state from a stale closure, so it never saw the fetch land
      and re-armed a 25 ms timer for the life of the page. The waiter's
      outcome is only observable through its timer (callers are
-     fire-and-forget here), so these count the 25 ms polls. */
+     fire-and-forget here), so these count the 25 ms polls. What the
+     sharing hands each caller is unit-tested in lib/keyed-loader.test.ts. */
   describe('concurrent foreign-cast waiter (#3991)', () => {
     const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 150))));
     const pollTimers = (spy: { mock: { calls: unknown[][] } }) =>
@@ -1622,7 +1623,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       return view;
     }
 
-    it('lets the waiter see the first fetch land: one read per book, the poll stops', async () => {
+    it('a second open while the reads are in flight sends one read per book and arms no endless poll', async () => {
       const spy = vi.spyOn(globalThis, 'setTimeout');
       const resolvers = new Map<string, (v: BookStateResponse | null) => void>();
       getBookState.mockImplementation(
@@ -1646,7 +1647,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       spy.mockRestore();
     });
 
-    it('resolves the waiter when the single read fails, and the poll stops', async () => {
+    it('a failed read arms no endless poll, and a later open sends no new read (failure is sticky)', async () => {
       const spy = vi.spyOn(globalThis, 'setTimeout');
       const rejecters = new Map<string, (e: Error) => void>();
       getBookState.mockImplementation(
@@ -1662,6 +1663,10 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       await settle();
       expect(pollTimers(spy)).toBe(armed);
       expect(armed).toBeLessThan(5);
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      /* One more open after the failure must not re-send either read. */
+      fireEvent.click(screen.getByRole('button', { name: /1 duplicate candidate/i }));
+      await settle();
       expect(getBookState).toHaveBeenCalledTimes(2);
       spy.mockRestore();
     });
