@@ -912,7 +912,7 @@ test(
     //      timed through the seam, and the attempt that SUCCEEDED must have
     //      finished within PRODUCTION_ATTEMPT_MS, the census's own per-attempt
     //      bound. Why the production bound and not a control-relative ratio:
-    //      CI measured healthy full queries at 4.5-8.4s against 350-750ms
+    //      CI measured healthy full queries at 1.7-8.4s (9 green runs) against 350-750ms
     //      controls, so the slowdown is specific to the census query, not
     //      uniform across spawns, and a ratio against the control false-reds.
     //      A query slower than the production bound is exactly the case where
@@ -955,7 +955,7 @@ test(
       // The collector's result comes from its last attempt.
       const rerunMs = attemptMs[attemptMs.length - 1];
       t.diagnostic(
-        `C3 timeout rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms against the ${PRODUCTION_ATTEMPT_MS}ms production bound`,
+        `C3 timeout rerun: attempts ${attemptMs.join('/')}ms, last attempt ${rerunMs}ms (production bound ${PRODUCTION_ATTEMPT_MS}ms, gated only if it succeeded)`,
       );
       if (isTimeout(snapshot)) {
         const controlFailed = Boolean(control.error) || control.status !== 0;

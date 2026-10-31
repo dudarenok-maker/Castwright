@@ -344,6 +344,7 @@ test('runStepProcess re-sweep: a stale-ppid process older than its parent is not
   const KID = 2147480012; // genuine child of LATE
   // The root's recorded start is spawnedAt (approx, empty pre-kill snapshot), so every row that must
   // postdate the spawn is stamped from a time taken AFTER it, however slow setup was (#4005).
+  // Valid only because runStepProcess stamps spawnedAt and spawns synchronously, before its first await; an await ahead of the spawn would break this.
   let T;
   const h = resweepStaleHarness(dir, {
     preKill: () => [],
@@ -384,6 +385,7 @@ test('runStepProcess re-sweep: pre-kill snapshot failed => root bounded by spawn
   const OLD = 2147480030;
   const NEW = 2147480031;
   const now = Date.now();
+  // Valid only because runStepProcess stamps spawnedAt and spawns synchronously, before its first await; an await ahead of the spawn would break this.
   let afterSpawn;
   const h = resweepStaleHarness(dir, {
     preKill: () => null,
