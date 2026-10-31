@@ -36,7 +36,7 @@ import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildAnalyzerPickerGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
-import { BOOK_READ_TIMEOUT_MS, Layout, type LayoutContext, within } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS, Layout, type LayoutContext, readWithRetry, within } from '../components/layout';
 import { PairShell } from '../views/pair';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
@@ -739,12 +739,13 @@ export function ConfirmRoute() {
      if a cast save could post-date what it read (castWrittenSince) it does NOT
      put that older cast over the slice, it reads again — at most 3 reads in
      all — and after the last one it keeps the slice as it is.
-     #3967 — the read itself is bounded at 15 s and aborted when the route is
+     #3967 — the read itself is bounded at 15 s, an expired read is retried on
+     the hydrate's schedule until it lands, and it is aborted when the route is
      left, so re-entering Confirm never piles up open reads. */
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
-    let readCtrl: AbortController | null = null;
+    const life = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const attempt = (n: number): void => {
       const writes = dispatch(flushBookPersistence(bookId)) as unknown;
@@ -756,9 +757,7 @@ export function ConfirmRoute() {
         .then(() => {
           if (cancelled) return undefined;
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
-          const ctrl = new AbortController();
-          readCtrl = ctrl;
-          return within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort()).then((res) => {
+          return readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers).then((res) => {
             if (cancelled) return;
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
@@ -786,7 +785,7 @@ export function ConfirmRoute() {
     attempt(0);
     return () => {
       cancelled = true;
-      readCtrl?.abort();
+      life.abort();
       timers.forEach(clearTimeout);
     };
   }, [bookId, dispatch]);

@@ -1928,4 +1928,38 @@ describe('prosody auto-trigger — the book-state read is bounded and aborted (#
     await advance(1_000);
     expect(signals[0].aborted).toBe(false);
   });
+
+  it('(d) an expired read is retried and detection then runs for the book', async () => {
+    const store = makeStore();
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) => {
+      const mine = id === 'b1' && store.getState().manuscript.manuscriptId === 'mns_b1';
+      if (mine && signals.length === 0) {
+        signals.push(signal ?? new AbortController().signal);
+        return hung(signal);
+      }
+      if (mine) signals.push(signal ?? new AbortController().signal);
+      return Promise.resolve({
+        ...defaultStateResponse(id),
+        state: { ...defaultStateResponse(id).state, prosodyAnnotated: false },
+      });
+    });
+    await openAndAwaitRead(store);
+    await advance(15_500);
+    expect(signals[0].aborted).toBe(true);
+    expect(runProsodyPassesMock).not.toHaveBeenCalled();
+    await advance(2_000);
+    await waitFor(() => expect(runProsodyPassesMock).toHaveBeenCalled());
+    expect(signals.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('(e) unmounting while the retry timer is pending issues no further read', async () => {
+    const store = makeStore();
+    arm(store);
+    const view = await openAndAwaitRead(store);
+    await advance(15_500);
+    expect(signals).toHaveLength(1);
+    view.unmount();
+    await advance(60_000);
+    expect(signals).toHaveLength(1);
+  });
 });

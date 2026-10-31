@@ -29,7 +29,7 @@ import { ModelControlPill, type ModelControlState } from '../components/ModelCon
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
 import { FailureFixList } from '../components/failure-fix-list';
-import { BOOK_READ_TIMEOUT_MS, within } from '../components/layout';
+import { readWithRetry } from '../components/layout';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
@@ -913,11 +913,14 @@ export function AnalysingView({
        key) never arms castIncomplete, even if the mount read was cancelled
        before it answered. */
     const isMountRead = bookStateRefreshKey === 0;
-    /* #3967 — bounded and aborted like Layout's hydrate: cleanup (unmount or a
-       refresh) aborts the read, and one that never answers is given up on. */
+    /* #3967 — bounded, retried and aborted like Layout's hydrate: cleanup
+       (unmount or a refresh) aborts the read and its pending retry; one that
+       never answers is retried until it lands, warning once. */
     const ctrl = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
-    within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort())
+    readWithRetry((signal) => api.getBookState(bookId, signal), ctrl.signal, timers, (n) => {
+      if (n === 0) console.warn('[analysing] failed-chapter hydrate skipped: read timed out, retrying');
+    })
       .then((res) => {
         if (cancelled || res === null) return;
         const titles: Record<number, string> = {};

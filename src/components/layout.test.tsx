@@ -5525,7 +5525,44 @@ describe('Layout — the duplicate-review far-book read is bounded and aborted (
       expect(signal.aborted).toBe(false);
       await advance(15_500);
       expect(signal.aborted).toBe(true);
-      expect(warn).toHaveBeenCalledWith('[duplicate-review] foreign cast hydrate failed', expect.any(String));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(c) an expired far-book read is retried', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await openDuplicateReview();
+      /* the next far-book read answers with the far cast */
+      getBookStateMock.mockImplementation((id: string) =>
+        id === 'B'
+          ? Promise.resolve({
+              ...bookStateFor('B', revState('B', null, 0, [])),
+              cast: { characters: [{ id: 'eliza', voiceId: 'eliza', name: 'Eliza Gray' }] },
+            })
+          : Promise.resolve(bookStateFor(id, revState(id, null, 0, []))));
+      expect(farReads()).toHaveLength(1);
+      await advance(15_500);
+      await advance(2_000);
+      expect(farReads()).toHaveLength(2);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('[duplicate-review]'))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(d) closing the review while the retry timer is pending issues no further far-book read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = await openDuplicateReview();
+      await advance(15_500);
+      expect(farReads()).toHaveLength(1);
+      act(() => { store.dispatch(uiActions.setOpenProfileId(null)); });
+      await advance(60_000);
+      expect(farReads()).toHaveLength(1);
     } finally {
       warn.mockRestore();
     }

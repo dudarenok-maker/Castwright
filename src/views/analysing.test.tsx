@@ -1426,6 +1426,56 @@ describe('AnalysingView — the book-state read is bounded and aborted (#3967)',
       vi.useRealTimers();
     }
   });
+
+  const answer = () =>
+    Promise.resolve({
+      state: { chapters: [{ id: 44, title: 'Chapter Forty-Two' }], castConfirmed: false },
+      cast: null,
+      analysis: { failedChapterIds: [44] },
+    } as never);
+
+  it('(d) an expired read is retried and the failed-chapter row lands; the timeout warns once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let calls = 0;
+      getBookStateImpl = (_id, signal) => (++calls <= 2 ? hung(signal) : answer());
+      renderView('b1');
+      await advance(15_500);
+      expect(calls).toBe(1);
+      await advance(2_000);
+      expect(calls).toBe(2);
+      await advance(15_500);
+      await advance(4_000);
+      expect(calls).toBe(3);
+      expect(await screen.findByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(hydrateWarns(warn)).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('(e) unmounting while the retry timer is pending issues no further read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let calls = 0;
+      getBookStateImpl = (_id, signal) => {
+        calls++;
+        return hung(signal);
+      };
+      const view = renderView('b1');
+      await advance(15_500);
+      expect(calls).toBe(1);
+      view.unmount();
+      await advance(60_000);
+      expect(calls).toBe(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('AnalysingView — failed-chapter retry', () => {

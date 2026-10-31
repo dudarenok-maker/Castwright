@@ -312,6 +312,20 @@ describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', ()
       signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     });
 
+  function renderConfirmWithStore() {
+    const store = makeStore([VOICELESS_COALFALL]);
+    store.dispatch(uiActions.openBook({ id: BOOK_ID, status: 'cast_pending' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${BOOK_ID}/confirm`]}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return store;
+  }
   function renderConfirm() {
     const store = makeStore([VOICELESS_COALFALL]);
     store.dispatch(uiActions.openBook({ id: BOOK_ID, status: 'cast_pending' }));
@@ -378,6 +392,42 @@ describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', ()
       expect(getBookStateMock).toHaveBeenCalledTimes(3);
       const open = getBookStateMock.mock.calls.filter(([, s]) => !(s as AbortSignal | undefined)?.aborted);
       expect(open.length).toBeLessThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(d) an expired read is retried on Layout\'s schedule and the designed voice lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock
+        .mockImplementationOnce((_id: string, signal?: AbortSignal) => hung(signal))
+        .mockResolvedValue({
+          state: { bookId: BOOK_ID, chapters: [] },
+          cast: { characters: [VOICED_COALFALL] },
+        });
+      const store = renderConfirmWithStore();
+      await advance(15_500);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await advance(2_000);
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+      const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
+      expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(e) unmounting while the retry timer is pending issues no further read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      const view = renderConfirm();
+      await advance(15_500);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      view.unmount();
+      await advance(60_000);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
