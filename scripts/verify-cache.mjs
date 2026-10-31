@@ -1608,6 +1608,10 @@ function killStepChildTree(child, { windows = process.platform === 'win32', tree
 // snapshot, 4 graces (8s) and up to TIMEOUT_RESWEEP_MAX re-sweep snapshots (each
 // up to ~30.25s) plus a killTree spawn (up to 15s) per target. Typical is a few
 // seconds; the wedged worst case is minutes, not the grace arithmetic alone.
+// That pre-kill delay is accepted deliberately (#3952, owner decision
+// 2026-10-31): it only hits a step that has already timed out, and a shorter or
+// post-kill snapshot would weaken this re-sweep. Tests stub the snapshot
+// (withInstantCensus, #3917) rather than time it.
 export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
 export const TIMEOUT_RESWEEP_MAX = 3;
 // Whether the step root's pid can be trusted comes from Node itself, not from
