@@ -36,6 +36,7 @@ import {
   runShutdownSequence,
   bootWarmUserSettings,
   bootStartSidecarSupervisor,
+  bootRepairDuplicateBookIds,
   type ShutdownDeps,
 } from './index.js';
 
@@ -201,6 +202,57 @@ describe('bootWarmUserSettings (#3174 G4)', () => {
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('bootRepairDuplicateBookIds (#3713)', () => {
+  const repairRecord = {
+    previousBookId: 'a__s__t',
+    newBookId: 'a__s__t-2',
+    keptFolder: 'A/S/T2',
+    reassignedFolder: 'A/S/T',
+  };
+
+  it('a repair that resolves [] logs nothing', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await bootRepairDuplicateBookIds(async () => []);
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a repair that resolves one record logs the count line', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await bootRepairDuplicateBookIds(async () => [repairRecord]);
+      expect(logSpy).toHaveBeenCalledWith(
+        '[duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).',
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('a repair that rejects is swallowed and warned, never rethrown', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        bootRepairDuplicateBookIds(async () => {
+          throw new Error('simulated repair failure');
+        }),
+      ).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[duplicate-bookid] startup repair failed',
+        expect.any(Error),
+      );
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

@@ -146,6 +146,10 @@ export function __resetDuplicateBookIdRepairsForTest(): void {
   repairs = [];
 }
 
+export function __setDuplicateBookIdRepairsForTest(next: DuplicateBookIdRepair[]): void {
+  repairs = next;
+}
+
 function relFolder(dir: string): string {
   return relative(BOOKS_ROOT, dir).split(sep).join('/');
 }

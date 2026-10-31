@@ -45,6 +45,7 @@ import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { sweepStaleStaging } from './workspace/portable-staging.js';
+import { repairDuplicateBookIds } from './workspace/duplicate-bookid-sweep.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
 import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js';
 import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
@@ -167,6 +168,23 @@ export async function bootStartSidecarSupervisor(
   }
 }
 
+/** #3713 — startup repair of duplicate bookIds. repairDuplicateBookIds() already
+    never throws; this wrapper is the belt-and-braces containment (same shape as
+    {@link bootWarmUserSettings}) so a surprise rejection can never abort boot. */
+export async function bootRepairDuplicateBookIds(
+  repair: () => Promise<readonly unknown[]> = repairDuplicateBookIds,
+): Promise<void> {
+  try {
+    const repaired = await repair();
+    if (repaired.length > 0) {
+      console.log(
+        `[duplicate-bookid] gave ${repaired.length} book(s) a fresh id on startup (see the lines above).`,
+      );
+    }
+  } catch (err) {
+    console.warn('[duplicate-bookid] startup repair failed', err);  }
+}
+
 async function main(): Promise<void> {
   ensureWorkspace();
 
@@ -179,6 +197,11 @@ async function main(): Promise<void> {
   if (sweptStaging.length > 0) {
     console.log(`[staging] removed ${sweptStaging.length} stale portable-import staging dir(s).`);
   }
+
+  /* #3713 — give each losing twin of a duplicated bookId a fresh id. AWAITED, and
+     before either listenWithAutoRebind() call below, so no request can see a twin
+     mid-repair. Never throws (see bootRepairDuplicateBookIds). */
+  await bootRepairDuplicateBookIds();
 
   /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
      onnxruntime-gpu (or another swap package) provides `onnxruntime`, so a
