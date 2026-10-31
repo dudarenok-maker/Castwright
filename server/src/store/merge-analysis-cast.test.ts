@@ -991,6 +991,26 @@ describe('dropReuseContinuityKeepDesignedVoice (fresh re-analysis prior)', () =>
     expect(out[1].voiceState).toBe('tuned');
   });
 
+  it('#3920: a locked or tuned row keeps its voiceId but drops its series link; a generated row loses voiceId', () => {
+    const link = { bookId: 'book-1', characterId: 'x', confidence: 0.9 };
+    const prior: C[] = [
+      { id: 'a', name: 'A', voiceId: 'w2', voiceState: 'locked', matchedFrom: link, notLinkedTo: ['z'] },
+      { id: 'b', name: 'B', voiceId: 'w3', voiceState: 'tuned', matchedFrom: link, notLinkedTo: ['z'] },
+      { id: 'c', name: 'C', voiceId: 'w4', voiceState: 'generated', matchedFrom: link, notLinkedTo: ['z'] },
+    ];
+    const [a, b, c] = dropReuseContinuityKeepDesignedVoice(prior);
+    expect(a.voiceId).toBe('w2');
+    expect(a.voiceState).toBe('locked');
+    expect(a.matchedFrom).toBeUndefined();
+    expect(a.notLinkedTo).toBeUndefined();
+    expect(b.voiceId).toBe('w3');
+    expect(b.voiceState).toBe('tuned');
+    expect(b.matchedFrom).toBeUndefined();
+    expect(b.notLinkedTo).toBeUndefined();
+    expect(c.voiceId).toBeUndefined(); // control: unpinned rows lose it as before
+    expect(c.matchedFrom).toBeUndefined();
+  });
+
   it('does not mutate the input', () => {
     const prior: C[] = [
       { id: 'a', name: 'A', voiceId: 'v', matchedFrom: { bookId: 'x' }, voiceUuid: 'U' },

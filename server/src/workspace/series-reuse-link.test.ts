@@ -21,6 +21,7 @@ import {
   seedReuseGuardsFromPriorCast,
   mergeAnalysisResultWithExistingCast,
   applyRewriteToPriorCast,
+  dropReuseContinuityKeepDesignedVoice,
 } from '../store/merge-analysis-cast.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { composeRewrites, stripEstablishedAsciiRewrites } from '../analyzer/roster-dedup.js';
@@ -827,6 +828,35 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
 
   it('surname drift, tuned variant: same whole-voice outcome', async () => {
     await surnameDrift('tuned');
+  });
+
+  it('Start fresh: a locked row whose voice equals Book One keeps voiceId, loses matchedFrom (strip → seed → link → merge)', async () => {
+    const rawPrior: PriorRow[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceId: 'w2',
+        voiceState: 'locked',
+        matchedFrom: { bookId: BOOK1, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+    const prior = dropReuseContinuityKeepDesignedVoice(rawPrior);
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen', voiceId: 'w2' },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+    expect(postLink[0].matchedFrom?.bookId).toBe(BOOK1); // the linker did re-stamp a link
+    const wren = merged.find((c) => c.id === 'wren');
+    expect(wren?.voiceId).toBe('w2');
+    expect(wren?.voiceState).toBe('locked');
+    expect(wren?.matchedFrom).toBeUndefined();
   });
 
   it('cousin name: a same-name fresh row never inherits the seeded link of the prior row it was not joined to', async () => {

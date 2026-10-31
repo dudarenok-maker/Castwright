@@ -68,13 +68,21 @@ const REUSE_CONTINUITY_FIELDS = ['voiceId', 'matchedFrom', 'notLinkedTo'] as con
     bespoke designed voice — the transform applied to the prior cast before a
     `fresh: true` re-analysis overlays it. Reuse-derived `voiceState: 'reused'` is
     cleared too (the fresh run re-derives lifecycle state); a bespoke 'tuned' /
-    'locked' pin is kept. Returns a new array; the input is not mutated. */
+    'locked' pin is kept. #3920 (owner decision 2026-10-31): a locked or tuned
+    row also keeps its `voiceId` — Start fresh clears its series link
+    (`matchedFrom` / `notLinkedTo`) but never the voice the user pinned, which
+    the pinned overlay in the merge would otherwise delete with no linker
+    re-stamp to replace it. Returns a new array; the input is not mutated. */
 export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
   cast: ReadonlyArray<T>,
 ): T[] {
   return cast.map((c) => {
     const next: CastRecord = { ...c };
-    for (const field of REUSE_CONTINUITY_FIELDS) delete next[field];
+    const pinned = next.voiceState === 'locked' || next.voiceState === 'tuned';
+    for (const field of REUSE_CONTINUITY_FIELDS) {
+      if (field === 'voiceId' && pinned) continue;
+      delete next[field];
+    }
     if (next.voiceState === 'reused') delete next.voiceState;
     return next as T;
   });
