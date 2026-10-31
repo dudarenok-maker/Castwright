@@ -839,9 +839,40 @@ describe('seedReuseGuardsFromPriorCast', () => {
         confidence: 0.9,
       });
       expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
-      // the cousin-named fresh row does not inherit them
+      // the cousin-named fresh row does not inherit the link (strict rule) ...
       expect(fresh[1].matchedFrom).toBeUndefined();
-      expect(fresh[1].notLinkedTo).toBeUndefined();
+      // ... but DOES get the protective separation (loose rule, #3920 finding 2)
+      expect(fresh[1].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
+    });
+
+    it('split rule: a prior narrator row hands neither guard to a same-name fresh row', () => {
+      const existing: C[] = [
+        {
+          id: 'narrator',
+          name: 'Old Tom',
+          matchedFrom: { bookId: 'b1', characterId: 'narrator', confidence: 0.8 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [{ id: 'old-tom', name: 'Old Tom' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+      expect(fresh[0].notLinkedTo).toBeUndefined();
+    });
+
+    it('split rule: a fresh narrator row takes neither guard by name', () => {
+      const existing: C[] = [
+        {
+          id: 'tom',
+          name: 'Narrator',
+          matchedFrom: { bookId: 'b1', characterId: 'tom', confidence: 0.8 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+      expect(fresh[0].notLinkedTo).toBeUndefined();
     });
 
     it('a prior narrator row is never a name-fallback candidate (user-renamed narrator)', () => {

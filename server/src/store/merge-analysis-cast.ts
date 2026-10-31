@@ -579,9 +579,14 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     can re-link a pair the user explicitly separated; pre-seeding `matchedFrom`
     also makes the pass's `if (c.matchedFrom) continue` skip already-linked rows.
     Only fills fields the fresh row lacks (the analyzer never emits either).
-    #3920 (A2): the name fallback uses the same candidate set as mergeCore's
-    exact-name fallback — dropped (no fresh row claims the prior by id),
-    non-narrator rows only — and a fresh narrator row never takes a candidate. */
+    #3920 (A2): the two guards take different name-fallback candidate sets.
+    `matchedFrom` (a spurious copy lands a wrong link) uses the same candidate
+    set as mergeCore's exact-name fallback — dropped (no fresh row claims the
+    prior by id), non-narrator rows only. `notLinkedTo` (a spurious copy only
+    prevents a link, which fails safe) uses every non-narrator prior row, because
+    on the main job this runs on the stage-1 roster BEFORE roster dedup: dedup can
+    later move the join onto a row the strict set refused, and that row must still
+    carry the separation. A fresh narrator row never takes either fallback. */
 export function seedReuseGuardsFromPriorCast<
   T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
@@ -594,10 +599,9 @@ export function seedReuseGuardsFromPriorCast<
      prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
      fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
      normalised name shared by >1 prior OR >1 fresh row falls back to id-only.
-     #3920 (A2): the candidate set now mirrors mergeCore's exact-name fallback —
-     dropped, non-narrator prior rows only, and a fresh narrator row never takes
-     a candidate — so the seed never hands a prior row's guards to a fresh row
-     the merge would not join it to. */
+     #3920 (A2): `matchedFrom` is bridged only from dropped, non-narrator prior
+     rows (mergeCore's candidate set); `notLinkedTo` is bridged from any
+     non-narrator prior row (see the doc comment above). */
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
     typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
   const freshNameCounts = new Map<string, number>();
@@ -605,36 +609,42 @@ export function seedReuseGuardsFromPriorCast<
     const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
     if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
   }
-  // #3920 (A2): a prior row some fresh row already claims by id is not a
-  // name-fallback candidate for a DIFFERENT fresh row, and a prior narrator row
-  // (either id shape) never is — the same dropped, non-narrator candidate set
-  // mergeCore's exact-name fallback uses.
   const freshIds = new Set(fresh.map((f) => f.id));
-  const existingByName = new Map<string, CastRecord>();
-  const ambiguousExistingNames = new Set<string>();
-  for (const old of existing) {
-    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
-    const key = nameOf(old);
-    if (!key) continue;
-    if (existingByName.has(key)) ambiguousExistingNames.add(key);
-    else existingByName.set(key, old);
-  }
+  const bridgeable = (strict: boolean) => {
+    const byName = new Map<string, CastRecord>();
+    const ambiguous = new Set<string>();
+    for (const old of existing) {
+      if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+      if (strict && freshIds.has(old.id)) continue;
+      const key = nameOf(old);
+      if (!key) continue;
+      if (byName.has(key)) ambiguous.add(key);
+      else byName.set(key, old);
+    }
+    return { byName, ambiguous };
+  };
+  const strictBridge = bridgeable(true);
+  const looseBridge = bridgeable(false);
+  const bridged = (
+    f: T,
+    bridge: { byName: Map<string, CastRecord>; ambiguous: Set<string> },
+  ): CastRecord | undefined => {
+    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+    if (!key || bridge.ambiguous.has(key) || freshNameCounts.get(key) !== 1) return undefined;
+    return bridge.byName.get(key);
+  };
 
   for (const f of fresh) {
-    let old = byId.get(f.id);
+    const byIdRow = byId.get(f.id);
     // #3920 (A2): a fresh narrator row never takes a name-fallback candidate,
     // mirroring mergeCore's fresh-side narrator exclusion.
-    if (!old && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-      if (key && !ambiguousExistingNames.has(key) && freshNameCounts.get(key) === 1) {
-        old = existingByName.get(key);
-      }
-    }
-    if (!old) continue;
-    if (f.notLinkedTo === undefined && old.notLinkedTo !== undefined)
-      f.notLinkedTo = old.notLinkedTo as T['notLinkedTo'];
-    if (f.matchedFrom === undefined && old.matchedFrom !== undefined)
-      f.matchedFrom = old.matchedFrom as T['matchedFrom'];
+    const isNarrator = NARRATOR_CHARACTER_IDS.includes(f.id);
+    const nlFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, looseBridge));
+    const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
+    if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
+      f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
+      f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }
 }
 

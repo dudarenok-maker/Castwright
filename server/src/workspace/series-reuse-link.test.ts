@@ -24,7 +24,11 @@ import {
   dropReuseContinuityKeepDesignedVoice,
 } from '../store/merge-analysis-cast.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { composeRewrites, stripEstablishedAsciiRewrites } from '../analyzer/roster-dedup.js';
+import {
+  composeRewrites,
+  dedupeRosterByName,
+  stripEstablishedAsciiRewrites,
+} from '../analyzer/roster-dedup.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
 
 const AUTHOR = 'A';
@@ -757,18 +761,27 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     prior: PriorRow[],
     fresh: LinkableCharacter[],
     options: LinkSeriesReuseOptions,
+    /* When given, the route's roster dedup (dedupAndPrepare ->
+       dedupeRosterByName) runs on the linked stage-1 roster over these
+       sentences, and its rewrites + deduped roster feed the remap and the
+       merge, exactly as the route does. Omitted: no dedup, an empty journal. */
+    sentences?: Array<{ characterId: string }>,
   ): Promise<{ merged: LinkableCharacter[]; postLink: LinkableCharacter[] }> => {
     seedReuseGuardsFromPriorCast(prior, fresh);
     await pruneStaleReuseLinks(BOOK2, fresh, options);
     await linkSeriesReuseAtAnalysis(BOOK2, fresh, options);
     const postLink = fresh.map((c) => ({ ...c }));
+    const dd = sentences
+      ? dedupeRosterByName(fresh as never, sentences)
+      : { characters: fresh as never as LinkableCharacter[], rewrites: {} };
+    const roster = dd.characters as unknown as LinkableCharacter[];
     const cumulative = stripEstablishedAsciiRewrites(
-      composeRewrites({}, {}),
+      composeRewrites(dd.rewrites, {}),
       prior,
-      fresh as unknown as Array<{ id: string } & Record<string, unknown>>,
+      roster as unknown as Array<{ id: string } & Record<string, unknown>>,
     );
     const remappedToPrior = remapFreshToPriorIds(
-      fresh,
+      roster,
       [] as Array<{ characterId: string }>,
       prior,
       cumulative,
@@ -913,6 +926,50 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(mara2?.matchedFrom?.bookId).toBe(BOOK1);
     expect(mara2?.matchedFrom?.characterId).toBe('mara');
     expect(mara2?.matchedFrom?.confidence).not.toBe(seededLink.confidence);
+  });
+
+  it('dedup moves the join onto a row the seed refused: the prior notLinkedTo separation survives, no link is stamped', async () => {
+    /* Prior brann is separated from Book One's Brann. The stage-1 roster mints
+       brann ("Brann Weir", 1 line) and brann-2 ("Brann", 3 lines). The seed
+       runs BEFORE dedup: brann claims the prior row by id, so the strict
+       matchedFrom candidate set refuses brann-2. Tier-2a then collapses
+       brann into brann-2 (rewrite {brann: 'brann-2'}) and the rewritten prior
+       joins brann-2 by id — a row that must still carry the prior's
+       notLinkedTo, or the linker re-links the pair the user separated. */
+    const prior: PriorRow[] = [
+      {
+        id: 'brann',
+        name: 'Brann',
+        voiceState: 'generated',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'brann' }],
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'brann', name: 'Brann Weir', gender: 'male', ageRange: 'adult' },
+      { id: 'brann-2', name: 'Brann', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'brann', name: 'Brann', gender: 'male', ageRange: 'adult', voiceId: 'v_b1_brann' },
+      },
+    ];
+    const sentences = [
+      { characterId: 'brann' },
+      { characterId: 'brann-2' },
+      { characterId: 'brann-2' },
+      { characterId: 'brann-2' },
+    ];
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library), sentences);
+
+    const brann = merged.find((c) => c.id === 'brann-2');
+    expect(brann).toBeTruthy();
+    expect(merged.some((c) => c.id === 'brann')).toBe(false); // dedup really collapsed it
+    expect(brann?.matchedFrom).toBeUndefined();
+    expect(brann?.voiceId).not.toBe('v_b1_brann');
+    expect(brann?.notLinkedTo).toEqual([{ bookId: BOOK1, characterId: 'brann' }]);
   });
 
   it('narrator rename: the locked narrator keeps its voice and renamed name; a same-name real row inherits neither', async () => {
