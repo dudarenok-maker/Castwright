@@ -423,8 +423,12 @@ export async function forkDeclinedVoiceUuidIfShared(
    emotion variants) to `qwen-<U'>`, then stamp U' onto this character (and
    same-book rows sharing its voiceId ?? id) only. Copy first, stamp second: a
    crash between them leaves stray copies, never a row pointing at a missing
-   .pt. The copies happen outside the cast lock (like promote-voice); the stamp
-   re-decides inside it. NEVER walks the series (forEachMatchingCastCharacter
+   .pt. The stamp also drops the row's qwen `variants` map (render re-derives
+   `<key>__<emotion>` from the uuid and only the base family is copied). The
+   copies happen outside the cast lock (like promote-voice); the stamp
+   re-decides inside it. A no-uuid row that shares a designed legacy key with an
+   unlinked earlier-book row mints a uuid of its own the same way (book-scoped,
+   legacy family copied) instead of taking the series mint. NEVER walks the series (forEachMatchingCastCharacter
    matches by voiceId, which a declined row still shares with the earlier book). */
 export async function ensureCharacterVoiceUuid(
   bookDir: string,
@@ -892,7 +896,9 @@ qwenVoiceRouter.post(
        key). A VARIANT must NOT mint: it doesn't write the base `.pt`, so a fresh
        uuid would flip the base's storage key while its embedding stays at the
        old key — orphaning it (#1057). A variant reuses the character's existing
-       voiceUuid and anchors on the base's current key. */
+       voiceUuid (first forking a declined, shared one so it never lands on the
+       earlier book's variant files, but never minting) and anchors on the base's
+       current key. */
     const voiceUuid = emotion
       ? await forkDeclinedVoiceUuidIfShared(bookDir, characterId)
       : await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
