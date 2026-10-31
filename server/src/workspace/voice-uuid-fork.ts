@@ -5,11 +5,15 @@
    purpose (series-reuse-link.ts), so both books share one `qwen-<uuid>.pt`.
    When the user declines that link, redux clears `matchedFrom` but the uuid
    survives on disk. A redesign would then overwrite the earlier book's file.
-   The server cannot see the click, so the decision is made from disk state:
+   The decline is recorded server-side as `declinedVoiceFrom`, so the decision is
+   made from disk state:
 
    A character X (book B, id cX, uuid U) forks when ALL hold:
-   1. X has a uuid and NO `matchedFrom` at all (a bookId-less one, as written
-      by a manual Assign, still counts as an active link).
+   1. X has a uuid, NO `matchedFrom` at all (a bookId-less one, as written
+      by a manual Assign, still counts as an active link) AND a non-empty
+      `declinedVoiceFrom` (the durable "Don't reuse" marker, #3992). A row
+      declined before the marker shipped has none and never forks (it behaves as
+      it did before #3992); a row nobody declined never forks.
    2. At least one character in ANOTHER book has `voiceUuid === U` (a holder).
    3. No other-book holder Y links to X: Y has no `matchedFrom` that is
       bookId-less, or that names B's bookId with a characterId absent or
@@ -69,11 +73,21 @@ async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNRE
    re-fork the row on every design for as long as the file stays unreadable. */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
-  character: { id: string; voiceUuid?: string | null; matchedFrom?: unknown },
+  character: {
+    id: string;
+    voiceUuid?: string | null;
+    matchedFrom?: unknown;
+    declinedVoiceFrom?: string[] | null;
+  },
 ): Promise<boolean> {
   const uuid = character.voiceUuid;
   if (!uuid) return false;
   if (character.matchedFrom) return false;
+  /* Only a row the user DECLINED forks. `declinedVoiceFrom` is the durable
+     record; "no matchedFrom" alone is also what a never-linked row looks like
+     (a book confirmed before the earlier one, a null seriesPosition), and a
+     series-minted shared uuid on such a row is intentional. */
+  if (!character.declinedVoiceFrom?.length) return false;
 
   const selfDir = resolve(bookDir);
   const linksToSelf = await makeLinksToSelf(bookDir, character);
@@ -111,6 +125,7 @@ export async function shouldMintApartFromLegacyKey(
   character: LegacyRow,
 ): Promise<boolean> {
   if (character.voiceUuid || character.matchedFrom) return false;
+  if (!character.declinedVoiceFrom?.length) return false; // not declined: shares by design
   if (!character.overrideTtsVoices?.qwen?.name) return false;
   const linkId = character.voiceId ?? character.id;
 
@@ -142,6 +157,7 @@ interface LegacyRow {
   voiceId?: string | null;
   voiceUuid?: string | null;
   matchedFrom?: unknown;
+  declinedVoiceFrom?: string[] | null;
   overrideTtsVoices?: { qwen?: { name?: string } } | null;
 }
 

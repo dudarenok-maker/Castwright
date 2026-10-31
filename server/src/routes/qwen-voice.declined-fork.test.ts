@@ -135,7 +135,7 @@ function seed(bookTwoExtra: Record<string, unknown>) {
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
   writeBook('Book One', 1, bookOneId, { ...baseRow });
-  writeBook('Book Two', 2, bookTwoId, { ...baseRow, ...bookTwoExtra });
+  writeBook('Book Two', 2, bookTwoId, { ...baseRow, declinedVoiceFrom: [bookOneId], ...bookTwoExtra });
   mkdirSync(qwenDir(), { recursive: true });
   writeFileSync(join(qwenDir(), 'qwen-u_shared.pt'), ORIG_PT);
   writeFileSync(join(qwenDir(), 'qwen-u_shared.json'), ORIG_JSON);
@@ -706,7 +706,7 @@ describe('#3992 — fork internals', () => {
       castPath('Book Two'),
       JSON.stringify({
         characters: [
-          row('wren', {}),
+          row('wren', { declinedVoiceFrom: [bookOneId] }),
           row('wren_b', {}),
           row('other_voice', { voiceId: 'v_other' }),
           row('other_uuid', { voiceUuid: 'u_other' }),

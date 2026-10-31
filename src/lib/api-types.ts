@@ -2920,6 +2920,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/{characterId}/decline-voice-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record that a series voice link was declined ("Don't reuse") —
+         * @description Appends `fromBookId` to the character's `declinedVoiceFrom` marker so the
+         *     decline survives re-analysis and a later redesign forks the shared voice
+         *     instead of overwriting the earlier book's. Single-book write; `fromBookId`
+         *     need not be resolvable (a deleted book's id is still a valid decline).
+         *     Idempotent — an already-recorded book is a no-op. The client calls it from
+         *     the match drawer's Don't reuse, alongside clearing `matchedFrom`.
+         */
+        post: operations["declineVoiceLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/reject-orphan-match": {
         parameters: {
             query?: never;
@@ -6157,6 +6182,20 @@ export interface components {
                 bookId: string;
                 characterId: string;
             }[];
+            /**
+             * @description Ids of the earlier books whose series voice link this character was
+             *     DECLINED from ("Don't reuse"), #3992. Deliberately narrower than
+             *     `notLinkedTo`: it records only "not THIS voice", never "not the same
+             *     person", so it does not feed the same-book join gates or the
+             *     duplicate detector. Server-owned: written only by
+             *     `POST /api/books/:bookId/cast/:characterId/decline-voice-link` (the
+             *     whole-roster cast PUT takes it from disk and cannot set or clear it);
+             *     a manual re-link to the book clears its entry. Honoured by the series
+             *     linker and the analysis merge (never re-linked to a declined book) and
+             *     by the voice-design fork (only a marked row forks the shared
+             *     `voiceUuid`).
+             */
+            declinedVoiceFrom?: string[];
             tone?: {
                 warmth?: number;
                 pace?: number;
@@ -12768,6 +12807,58 @@ export interface operations {
                 content?: never;
             };
             /** @description Source or other book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    declineVoiceLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    fromBookId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The marker after the write */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        declinedVoiceFrom: string[];
+                    };
+                };
+            };
+            /** @description Missing `fromBookId`, or it names the book itself */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The book has no cast on disk yet */
             409: {
                 headers: {
                     [name: string]: unknown;

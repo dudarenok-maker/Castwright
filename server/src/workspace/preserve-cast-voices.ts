@@ -102,6 +102,28 @@ export function preserveNotLinkedToOnCastWrite<T extends { id: string }>(
   });
 }
 
+/* #3992 — `declinedVoiceFrom` ("Don't reuse") is server-owned, exactly like
+   `notLinkedTo` above: the decline route is its only writer, so the whole-roster
+   cast PUT takes it from disk unconditionally. The client's redux row never
+   carries it (declineMatch only clears `matchedFrom`), so without this a routine
+   autosave would erase the decline the route just recorded. A row the write is
+   introducing has no on-disk value and passes through. */
+export function preserveDeclinedVoiceFromOnCastWrite<T extends { id: string }>(
+  existing: ReadonlyArray<{ id: string } & Record<string, unknown>>,
+  incoming: T[],
+): T[] {
+  if (!existing.length) return incoming;
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  return incoming.map((inc) => {
+    const old = byId.get(inc.id);
+    if (!old) return inc;
+    const merged = { ...(inc as Record<string, unknown>) };
+    if (old.declinedVoiceFrom === undefined) delete merged.declinedVoiceFrom;
+    else merged.declinedVoiceFrom = old.declinedVoiceFrom;
+    return merged as T;
+  });
+}
+
 /** [#1899] — reject a client-supplied clone-capable engine slot that would
     redirect rendering to an artifact this exact character didn't already
     own on disk. `voice-mapping.ts`'s `pickVoiceForEngine` resolves the

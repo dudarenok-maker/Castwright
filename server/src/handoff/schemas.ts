@@ -54,6 +54,10 @@ export const characterSchema = z
           .strict(),
       )
       .optional(),
+    /* #3992 — ids of earlier books this character's series voice link was
+     declined from ("Don't reuse"). Server-owned, written by POST
+     /:bookId/cast/:characterId/decline-voice-link. Optional + additive. */
+    declinedVoiceFrom: z.array(z.string().min(1)).optional(),
     tone: toneSchema.optional(),
     /* Optional voice-shaping hints. The skill prompt asks for these so the
      TTS picker doesn't have to scrape pronouns out of the description. Kept

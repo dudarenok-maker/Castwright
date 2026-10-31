@@ -243,9 +243,17 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
       source.ageRange !== mergedAgeRange ||
       JSON.stringify(source.tone ?? null) !== JSON.stringify(mergedTone ?? null);
 
-    if (voiceIdChanged || shouldDenormaliseVoice || profileChanged) {
+    /* #3992 — an explicit manual link to a book supersedes an earlier "Don't
+       reuse" of it. The marker is server-owned (the cast PUT takes it from disk),
+       so this is the only place the client's re-link can clear it. */
+    const declinedFrom = (source as { declinedVoiceFrom?: string[] }).declinedVoiceFrom ?? [];
+    const declineCleared = declinedFrom.includes(targetBookId);
+    const remainingDeclined = declinedFrom.filter((b) => b !== targetBookId);
+
+    if (voiceIdChanged || shouldDenormaliseVoice || profileChanged || declineCleared) {
       const mergedSource: PersistedCharacter = {
         ...source,
+        ...(declineCleared ? { declinedVoiceFrom: remainingDeclined.length ? remainingDeclined : undefined } : {}),
         voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
         evidence: mergedEvidence,
         attributes: mergedAttributes,

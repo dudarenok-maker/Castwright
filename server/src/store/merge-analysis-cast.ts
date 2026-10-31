@@ -42,6 +42,7 @@ export const PRESERVED_VOICE_FIELDS = [
   'ttsEngine',
   'voiceStyle',
   'notLinkedTo',
+  'declinedVoiceFrom',
 ] as const;
 
 type CastRecord = { id: string } & Record<string, unknown>;
@@ -64,6 +65,9 @@ export interface Retirement {
     Coalfall voice-strip incident: `fresh` set the merge's prior to `[]` and so
     overwrote cast.json voiceless). */
 const REUSE_CONTINUITY_FIELDS = ['voiceId', 'matchedFrom', 'notLinkedTo'] as const;
+/* #3992: `declinedVoiceFrom` is deliberately NOT in this list. "Don't reuse" is a
+   durable record of a user decision, not a re-derivable link, so Start fresh keeps
+   it (the linker would otherwise re-link the declined book on the next run). */
 
 /** Strip reuse continuity from a prior cast while KEEPING each character's
     bespoke designed voice — the transform applied to the prior cast before a
@@ -469,8 +473,20 @@ function mergeCore<T extends { id: string }>(
     // different Book One character — and an unpinned overlay copies only the
     // keys the prior row has, so that foreign link's designed-voice fields
     // would graft onto the prior row's own link.
+    // #3992: a fresh link to a book the prior row DECLINED ("Don't reuse") is
+    // never grafted on. The linker and the seed already honour the marker, so
+    // this is the backstop for a join they did not see (roster dedup moved it);
+    // the prior row's own voice is then taken whole, exactly like a pinned row.
+    const freshLinkBookId = (f as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId;
+    const declinedFreshLink =
+      typeof freshLinkBookId === 'string' &&
+      Array.isArray(old.declinedVoiceFrom) &&
+      (old.declinedVoiceFrom as unknown[]).includes(freshLinkBookId);
     const takesVoiceWhole =
-      old.voiceState === 'locked' || old.voiceState === 'tuned' || old.matchedFrom !== undefined;
+      old.voiceState === 'locked' ||
+      old.voiceState === 'tuned' ||
+      old.matchedFrom !== undefined ||
+      declinedFreshLink;
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];
       else if (takesVoiceWhole) delete merged[key];
@@ -608,7 +624,7 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     from the UNIQUE prior narrator-id row by id class, whatever either is named
     (two or more prior narrator-id rows are ambiguous: nothing is bridged). */
 export function seedReuseGuardsFromPriorCast<
-  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
+  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown; declinedVoiceFrom?: unknown },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
   if (!existing.length) return;
   const byId = new Map(existing.map((c) => [c.id, c]));
@@ -667,6 +683,10 @@ export function seedReuseGuardsFromPriorCast<
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    // #3992: "Don't reuse" fails safe like notLinkedTo (a spurious copy only
+    // prevents a link), so it takes the same loose candidate set.
+    if (f.declinedVoiceFrom === undefined && nlFrom?.declinedVoiceFrom !== undefined)
+      f.declinedVoiceFrom = nlFrom.declinedVoiceFrom as T['declinedVoiceFrom'];
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
       f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }
