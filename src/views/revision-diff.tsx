@@ -161,6 +161,10 @@ export function RevisionDiffPlayer({
      card, Reject draft, Commit selection...) can end it for good. Without that,
      the pause such an action causes reads as "this take ended" and the run
      starts the next take. */
+  /* A take that becomes unavailable mid-run (B starts rendering again, A's
+     original is gone) must not be played by the steps still to come. */
+  const availRef = useRef({ aUnavailable, bAvailable });
+  availRef.current = { aUnavailable, bAvailable };
   const runRef = useRef<{ end: () => void } | null>(null);
   function endRun() {
     runRef.current?.end();
@@ -190,7 +194,7 @@ export function RevisionDiffPlayer({
         if (cancelled) return;
         /* A take with no URL is skipped: play() on an element with no src stays
            pending in a browser, which would hang the run on that take. */
-        if (audioARef.current?.url) {
+        if (audioARef.current?.url && !availRef.current.aUnavailable) {
           /* Whole takes start from 0: a take paused earlier would otherwise resume. */
           const start = seg
             ? audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.start
@@ -205,7 +209,7 @@ export function RevisionDiffPlayer({
           await waitForVersionEnd(wholeTake);
           if (cancelled) return;
         }
-        if (audioBRef.current?.url) {
+        if (audioBRef.current?.url && availRef.current.bAvailable) {
           const startB = seg
             ? audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.start
             : 0;
@@ -364,9 +368,11 @@ export function RevisionDiffPlayer({
               sub={
                 aUnavailable
                   ? 'Original audio not preserved — review by metadata only'
-                  : recovered
-                    ? "The take kept before this chapter's last render"
-                    : 'Already in your audiobook'
+                  : audioAFailed
+                    ? 'Original audio could not be loaded'
+                    : recovered
+                      ? "The take kept before this chapter's last render"
+                      : 'Already in your audiobook'
               }
               duration={revision.oldDuration}
               variant="current"
