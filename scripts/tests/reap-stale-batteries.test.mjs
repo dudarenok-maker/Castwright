@@ -899,34 +899,55 @@ test(
     // is exactly two timed-out attempts) OR a census query that is itself too
     // slow for its own bound, which in production is a census that always
     // returns [] and a reaper that never reaps. A skip cannot tell those apart,
-    // so a timeout is told apart by measurement before anything is excused:
-    //   1. a cheap control spawn (one filtered Win32_Process row). If the host
-    //      answers THAT quickly, the full query timing out is a defect: FAIL.
-    //   2. only on a slow control, rerun the real collector through the `spawn`
-    //      seam with a 120s timeout and assert rows/dates on that.
+    // so a timeout is told apart by measurement before anything is excused.
+    // A cheap control spawn (one filtered Win32_Process row) is timed on EVERY
+    // run, and with the full-query time both go to the CI log via
+    // t.diagnostic, so thresholds can be set from CI figures, not one dev box.
+    //   1. fast control + a timed-out full query: the host is responsive, so
+    //      the query is too slow for its bound: FAIL.
+    //   2. slow control: rerun the real collector through the `spawn` seam
+    //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
+    //      slow control must NOT excuse a slow query, so the rerun is timed:
+    //      more than 15s AND more than RERUN_RATIO_MAX x the control FAILS.
+    //      Both calls are dominated by PowerShell startup, not the ~400-row
+    //      enumeration: measured locally the control costs 0.4-0.5s against
+    //      0.5s for the full query (ratio ~1.1-1.3), and a uniformly slow host
+    //      keeps that ratio. A 16s census regression against a 5s control is
+    //      ~3.2, and against a responsive 0.5s control ~30. 3 sits well above
+    //      the healthy ~1.3 and below the defect.
     //   3. skip only when the host is shown unresponsive: slow control AND the
     //      extended collector still timed out (docs/testing/flaky-register.md).
+    //      Residual: a query that hangs outright on a slow-control host still
+    //      lands here and skips; that is the gap the register row records.
     // Any OTHER empty result (empty rows, unparseable output, a permanent
     // failure — the pass-1 date bug lands here as 'empty Win32_Process result
     // after retry') still fails.
     const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
+    const CONTROL_FAST_MS = 5000;
+    const RERUN_SLOW_MS = 15000;
+    const RERUN_RATIO_MAX = 3;
+    const tFull = Date.now();
     let snapshot = collectProcessSnapshot();
+    const fullMs = Date.now() - tFull;
+    const tCtl = Date.now();
+    const control = spawnSync(
+      'powershell',
+      ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process -Filter "ProcessId=$PID" | Select-Object -ExpandProperty ProcessId'],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    );
+    const controlMs = Date.now() - tCtl;
+    t.diagnostic(`C3 timing: full query ${fullMs}ms, one-row control ${controlMs}ms`);
     if (isTimeout(snapshot)) {
-      const CONTROL_FAST_MS = 5000;
-      const t0 = Date.now();
-      const control = spawnSync(
-        'powershell',
-        ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process -Filter "ProcessId=$PID" | Select-Object -ExpandProperty ProcessId'],
-        { encoding: 'utf8', timeout: 15000, windowsHide: true },
-      );
-      const controlMs = Date.now() - t0;
       const controlFast = !control.error && control.status === 0 && controlMs < CONTROL_FAST_MS;
       assert.ok(
         !controlFast,
         `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
           'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
       );
+      const tRerun = Date.now();
       snapshot = collectProcessSnapshot({ spawn: (c, a, o) => spawnSync(c, a, { ...o, timeout: 120000 }) });
+      const rerunMs = Date.now() - tRerun;
+      t.diagnostic(`C3 slow-control rerun: ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)})`);
       if (isTimeout(snapshot)) {
         t.skip(
           `host unresponsive: the one-row control took ${controlMs}ms (>= ${CONTROL_FAST_MS}ms or failed) and the full query ` +
@@ -934,6 +955,11 @@ test(
         );
         return;
       }
+      assert.ok(
+        !(rerunMs > RERUN_SLOW_MS && rerunMs / controlMs > RERUN_RATIO_MAX),
+        `the full query took ${rerunMs}ms against a ${controlMs}ms one-row control (ratio ${(rerunMs / controlMs).toFixed(1)} > ${RERUN_RATIO_MAX}) — ` +
+          'a slow control does not explain a query this much slower than one spawn: the census query itself is too slow (Castwright#3917)',
+      );
     }
     assert.ok(
       snapshot.length > 0,

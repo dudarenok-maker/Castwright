@@ -275,8 +275,8 @@ async function withInstantCensus(fn) {
 // a synchronous runCensus (a PowerShell CIM spawn, 0.8-3.5s measured on a real
 // one), which is variance unrelated to the budget under test. withInstantCensus
 // stubs that spawn in this helper, so the figure no longer includes census time
-// here. The fixture dies at the kill, so the span ends when the budget fires and
-// excludes the kill and the census; the `[timeout]` figure still includes
+// here. The fixture keeps beating until killTreeFn lands, so the span ends at
+// the kill, not when the budget fires: it excludes the census but still includes
 // taskkill latency (a few hundred ms), which the tolerances allow for. The span
 // is only returned when the log shows the budget ended the
 // step (a fixture that exits on its own would otherwise be measured as a cut),
