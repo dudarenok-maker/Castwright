@@ -840,9 +840,37 @@ recite:
     defect injected and see whether the guard still fails, or compare against a
     same-run reference over an absolute line. A bare ratio is not enough when
     the healthy ratio itself sits near the bound (C3's measured 1821ms vs
-    607ms is ~3.0 against a bound of 3): prefer the excess over the measured
-    healthy ratio (`t - k x reference > margin`), which stays near 0 under
-    uniform slowdown and grows by the defect's cost.
+    607ms is ~3.0 against a bound of 3). An excess over the reference
+    (`t - k x reference > margin`) only helps if the slowdown is uniform
+    across spawns; C3's CI spread (full query 1.7-8.4s against a 350-750ms
+    control, healthy excess up to +6.2s) showed it is query-specific, so
+    the excess false-reds too. C3 shipped gating on the production
+    contract's own bound instead (#4005, PR #4012): when the reference does
+    not track the slowdown, gate on the absolute bound the code under test
+    already enforces.
+
+65. **A fixture timestamp taken before harness setup, compared against a
+    timestamp the code under test takes at spawn** — PR #4012 pass 1 (#4005):
+    `T = Date.now() + 100` was captured before the harness wrote its fixture
+    files and spawned the step, then compared (`live.startedAt >= spawnedAt`)
+    against the `spawnedAt` that `runStepProcess` stamps at spawn. On an idle
+    box setup took a few ms and the margin held; once setup plus spawn passed
+    the constant the root read as recycled and nothing was swept (reproduced
+    with a busy-wait, never seen on CI). The CI failure (#4005) was the
+    sibling `now + 50` test, where NEW was filtered out as predating
+    `spawnedAt`. The `T` test sits just above it (a different spelling, so a
+    grep for the reported spelling missed one of them). Checkable: for every fixture time offset by a
+    small constant that must postdate (or predate) a timestamp the code takes
+    itself, add a 200 ms busy-wait to the harness setup and rerun; a test
+    that now fails only because of the delay has the race. Fix by stamping
+    from a time taken after the spawn (`const p = h.run(); afterSpawn =
+    Date.now(); await p;`, rows built lazily from it), not at callback time,
+    which would stop distinguishing a spawn-time bound from a kill-time one.
+    Precondition: stamping `afterSpawn` right after `h.run()` is only
+    correct because `runStepProcess` takes `spawnedAt` and spawns
+    synchronously before its first `await` (`scripts/verify-cache.mjs`
+    :1793-1794, first await at :1909); an await ahead of the spawn would
+    break it, so check for one.
 
 ### Keeping the catalogue current
 
