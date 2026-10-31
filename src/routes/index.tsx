@@ -733,7 +733,9 @@ export function ConfirmRoute() {
      #3916 (owner decision, 2026-10-30) — the read follows the rule that a book
      read is never issued while one of its saves is queued or in flight (#3395
      S3): it sends and waits for queued saves first, bounded at 15 s (on expiry
-     it gives up quietly and does not read). It is stamped with beginFullRead;
+     it reads anyway: a stalled save must not mean no read at all, and
+     castWrittenSince below still refuses to hydrate over a cast save in
+     flight). It is stamped with beginFullRead;
      if a cast save could post-date what it read (castWrittenSince) it does NOT
      put that older cast over the slice, it reads again — at most 3 reads in
      all — and after the last one it keeps the slice as it is. */
@@ -743,7 +745,10 @@ export function ConfirmRoute() {
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const attempt = (n: number): void => {
       const writes = dispatch(flushBookPersistence(bookId)) as unknown;
-      const ready = writes instanceof Promise ? within(writes, BOOK_READ_TIMEOUT_MS, timers) : Promise.resolve();
+      const ready =
+        writes instanceof Promise
+          ? within(writes, BOOK_READ_TIMEOUT_MS, timers).catch(() => undefined)
+          : Promise.resolve();
       ready
         .then(() => {
           if (cancelled) return undefined;
