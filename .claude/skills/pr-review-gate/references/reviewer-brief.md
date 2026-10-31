@@ -727,7 +727,7 @@ recite:
     and asserting the action does not run again and the edit stays on screen
     and on disk.
 
-45. **An exact comparison against a value re-derived from a producer that has
+62. **An exact comparison against a value re-derived from a producer that has
     changed since the stored copy was made** — PR #3835 passes 1-4 (#3829,
     `workspace/restructure.ts` `parseTitlesPairWithState`): state.json holds
     chapter titles as the parser wrote them at import; the check compared each
@@ -742,7 +742,7 @@ recite:
     a new caller widens who is exposed to that drift, so measure it on a book
     in an older producer's form before reusing it. Four rounds of rule changes
     did not settle which weaker test is safe; that design is tracked in #3837.
-46. **An app-made placeholder compared as identity evidence** — PR #3835 passes
+63. **An app-made placeholder compared as identity evidence** — PR #3835 passes
     2-3 (#3829, same function): the parser's fallback title for an untitled
     section is `Chapter N` (a position number), and a real heading elsewhere can
     carry the same text, so an untouched import was read as a reorder. A
@@ -756,7 +756,7 @@ recite:
     where a real value of that same text sits on the placeholder's position
     (must still be caught), before trusting any exemption.
 
-47. **A skip honoured where a value is tested as the subject, but not where the
+64. **A skip honoured where a value is tested as the subject, but not where the
     same value is read as evidence about another item** — PR #3835 pass 4
     (#3829, `parseTitlesPairWithState`): `titleOverridden` (the user's own
     wording) exempted a chapter from being checked, but that chapter's title
