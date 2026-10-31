@@ -188,10 +188,11 @@ export interface LayoutContext {
    doubling backoff (2 s, 4 s, 8 s, … capped at 30 s) until it lands, showing
    one deduped notice meanwhile. Each read is bounded at 15 s
    (BOOK_READ_TIMEOUT_MS), and an expired read is handled as a rejection
-   (#3426). ConfirmRoute, the Analysing view, the prosody trigger, the
-   far-book read, the rebaseline modal and the restructure re-reads are bounded
-   the same way (#3967); the bulk duplicate review, the Voices foreign-cast read
-   and the analysis-stream middleware's read are not. */
+   (#3426). Every other book-state reader is bounded the same way (#3967):
+   ConfirmRoute, the Analysing view, the prosody trigger, the far-book read, the
+   rebaseline modal, the restructure re-reads, the bulk duplicate review, the
+   Voices foreign-cast read and the analysis-stream middleware's read. The
+   helpers live in lib/book-read.ts. */
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 
 /* Plan 286, OD2 — the unreadable-revisions.json toast fires at most once per
@@ -939,8 +940,10 @@ export function Layout() {
        the prosody trigger, the far-book and rebaseline reads) bounds its own
        read the same way and aborts it on cleanup, so leaving one of those views
        leaves no read open (#3967). Exceptions: the prosody read is aborted on
-       Layout unmount only, not on a book switch, and the callers listed at
-       BOOK_READ_TIMEOUT_MS are neither bounded nor aborted. */
+       Layout unmount only, not on a book switch; the Restructure library
+       re-read is bounded but not aborted (api.getLibrary takes no signal); and
+       the analysis-stream middleware's read is aborted on expiry but not
+       retried. */
     let readCtrl: AbortController | null = null;
     const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
