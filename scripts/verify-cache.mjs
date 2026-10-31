@@ -1610,8 +1610,9 @@ function killStepChildTree(child, { windows = process.platform === 'win32', tree
 // seconds; the wedged worst case is minutes, not the grace arithmetic alone.
 // That pre-kill delay is accepted deliberately (#3952, owner decision
 // 2026-10-31): it only hits a step that has already timed out, and a shorter or
-// post-kill snapshot would weaken this re-sweep. Tests stub the snapshot
-// (withInstantCensus, #3917) rather than time it.
+// post-kill snapshot would weaken this re-sweep. The span-measuring budget
+// tests stub it (withInstantCensus, #3917); the real-process timeout tests run
+// it under KILL_PATH_BOUND_MS, and C3 times the query itself.
 export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
 export const TIMEOUT_RESWEEP_MAX = 3;
 // Whether the step root's pid can be trusted comes from Node itself, not from
@@ -1838,6 +1839,8 @@ export async function runStepProcess(
         // snapshot lists), so a walk from the root pid alone cannot reach it.
         // The pre-kill closure supplies the intermediate pids to seed the
         // re-sweep's walk. The normal path never reaches this timer's body.
+        // The kill delay this costs is accepted (#3952); see the note above
+        // TIMEOUT_RESWEEP_GRACE_MS.
         const known = windows ? snapshotTree(snapshotFn, child.pid, spawnedAt, exitedAt) : null;
         // Windows: once the root has exited its pid may be an unrelated
         // process's, and `/T` from a dead pid reaches none of its orphans; the
