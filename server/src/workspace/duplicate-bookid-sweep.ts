@@ -18,7 +18,8 @@
    startup retries. One twin's cast.json failing for any reason but absence skips
    just that group. */
 
-import { relative, sep } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
 import {
   BOOK_GONE,
   bookDirsInWalkOrder,
@@ -28,8 +29,8 @@ import {
   withBookPathClaim,
 } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
-import { BOOKS_ROOT, castJsonPath } from './paths.js';
-import { readJson } from './state-io.js';
+import { BOOKS_ROOT, bookExportManifestsDir, castJsonPath } from './paths.js';
+import { readJson, writeJsonAtomic } from './state-io.js';
 
 export interface DuplicateBookIdGroup {
   bookId: string;
@@ -154,6 +155,39 @@ function relFolder(dir: string): string {
   return relative(BOOKS_ROOT, dir).split(sep).join('/');
 }
 
+/** The loser's export manifests embed the old bookId (and a download URL built from
+ *  it), and routes/export.ts filters on it, so left alone its exports vanish while
+ *  the artifact stays on disk. Called AFTER the state write, inside the same
+ *  withBookOp span. Best-effort PER manifest: the state write is the authoritative
+ *  one and the book is already reachable under its new id, so a manifest that
+ *  cannot be rewritten is logged and left byte-for-byte as it was (its artifact
+ *  stays on disk; the sweep does not retry it, the group is no longer a duplicate). */
+async function rewriteExportManifests(loserDir: string, oldId: string, newId: string): Promise<void> {
+  const dir = bookExportManifestsDir(loserDir);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return; // no exports dir (the common case)
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const file = join(dir, name);
+    try {
+      const job = JSON.parse(await readFile(file, 'utf8')) as { bookId?: unknown; downloadUrl?: unknown };
+      if (job.bookId !== oldId) continue;
+      const oldUrl = `/api/books/${encodeURIComponent(oldId)}/`;
+      const downloadUrl =
+        typeof job.downloadUrl === 'string' && job.downloadUrl.startsWith(oldUrl)
+          ? `/api/books/${encodeURIComponent(newId)}/${job.downloadUrl.slice(oldUrl.length)}`
+          : job.downloadUrl;
+      await writeJsonAtomic(file, { ...job, bookId: newId, downloadUrl });
+    } catch (err) {
+      console.warn(`[duplicate-bookid] could not re-point an export manifest of ${loserDir}; leaving it as is`, err);
+    }
+  }
+}
+
 /** Never throws: one failing loser is logged (raw error, server log only) and the rest continue. */
 export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]> {
   const done: DuplicateBookIdRepair[] = [];
@@ -177,14 +211,16 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
               );
               return null;
             }
-            return withBookPathClaim(async () => {
+            const newId = await withBookPathClaim(async () => {
               const [author, series, title] = relative(BOOKS_ROOT, loserDir).split(sep);
-              const newId = await mintBookId(author, series, title);
+              const minted = await mintBookId(author, series, title);
               const wrote = await updateStateAtDir(loserDir, (fresh) =>
-                fresh.bookId === group.bookId ? { ...fresh, bookId: newId } : null,
+                fresh.bookId === group.bookId ? { ...fresh, bookId: minted } : null,
               );
-              return wrote ? newId : null;
+              return wrote ? minted : null;
             });
+            if (newId !== null) await rewriteExportManifests(loserDir, group.bookId, newId);
+            return newId;
           },
           { hintDir: loserDir },
         );
