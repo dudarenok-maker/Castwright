@@ -47,7 +47,7 @@ describe('DuplicateBookRepairBanner (#3713)', () => {
     render(<DuplicateBookRepairBanner />);
     const banner = screen.getByTestId('duplicate-book-repair-banner');
     expect(banner).toHaveAttribute('role', 'status');
-    expect(banner.textContent).toMatch(/A\/S\/T2, the one with more of your work, kept its ID/);
+    expect(banner.textContent).toMatch(/A\/S\/T2 kept its ID/);
     expect(banner.textContent).toMatch(/A\/S\/T has a new ID and starts with an empty queue/);
   });
 

@@ -51,8 +51,7 @@ export function DuplicateBookRepairBanner() {
           {repairs.map((r) => (
             <p key={r.newBookId}>
               Two books were sharing one ID, so Castwright gave one of them its own.{' '}
-              <strong>{r.keptFolder}</strong>, the one with more of your work, kept its ID, along with its queue and
-              backups. <strong>{r.reassignedFolder}</strong> has a new ID and starts with an empty queue and no backups.
+              <strong>{r.keptFolder}</strong> kept its ID, along with its queue and backups. <strong>{r.reassignedFolder}</strong> has a new ID and starts with an empty queue and no backups.
             </p>
           ))}
         </div>

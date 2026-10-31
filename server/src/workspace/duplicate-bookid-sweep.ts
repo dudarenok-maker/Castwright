@@ -1,4 +1,5 @@
-/* #3713 step 3 -- DETECTION half of the duplicate-bookId sweep (read-only).
+/* #3713 step 3 -- DETECTION half of the duplicate-bookId sweep (its reads write nothing;
+   the REPAIR half further down does the writes).
    Plan: docs/features/288-book-op-lock.md, "Repair of existing duplicate bookIds
    (#3713)".
 
@@ -9,13 +10,14 @@
      3. then the older `createdAt` (missing / unparseable ranks after any valid);
      4. then walk order (the sorted path, dir-order.ts).
 
-   This writes nothing; child 4 adds the repair and re-checks `bookId` under the
+   Detection writes nothing; the repair half below re-checks `bookId` under the
    `state-json` lock before writing. The reads here are unlocked on purpose: the
    sweep runs before the server listens.
 
    FAIL CLOSED: an unreadable state.json anywhere means its id is unknown (it
    could be a twin with more work), so the whole result is `[]` and the next
-   startup retries. One twin's cast.json failing for any reason but absence skips
+   startup retries. So does a directory that exists but cannot be listed (a hidden
+   folder could hold a twin or the next id). One twin's cast.json failing for any reason but absence skips
    just that group. */
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -134,8 +136,9 @@ export async function findDuplicateBookIdGroups(): Promise<DuplicateBookIdGroup[
   return groups;
 }
 
-/* ---- #3713 step 4 -- REPAIR half. Re-mints each loser's bookId; touches nothing
-   else (no manuscriptId, no reference remap -- owner decision 2). ---- */
+/* ---- #3713 step 4 -- REPAIR half. Re-mints each loser's bookId and re-points its
+   export manifests; touches nothing else (no manuscriptId, no reference remap --
+   owner decision 2). ---- */
 
 export interface DuplicateBookIdRepair {
   previousBookId: string;
@@ -242,7 +245,7 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
         }
         console.warn(
           `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
-            `${group.winnerDir} keeps it (more work), ${loserDir} is now "${result}"`,
+            `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${result}"`,
         );
         done.push({
           previousBookId: group.bookId,

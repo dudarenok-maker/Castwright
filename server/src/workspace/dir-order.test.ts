@@ -42,11 +42,10 @@ describe('walk order is sorted regardless of readdirSync order', () => {
   beforeAll(async () => {
     workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-dir-order-test-'));
     process.env.WORKSPACE_DIR = workspaceRoot;
-    [lock, scan, paths] = await Promise.all([
-      import('./book-op-lock.js'),
-      import('./scan.js'),
-      import('./paths.js'),
-    ]);
+    /* Sequential imports -- a Promise.all of dynamic imports races vi.mock factories (#2083). */
+    lock = await import('./book-op-lock.js');
+    scan = await import('./scan.js');
+    paths = await import('./paths.js');
   });
   afterAll(() => {
     rev.on = false;

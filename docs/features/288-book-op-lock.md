@@ -841,8 +841,8 @@ owner's two rulings of 2026-10-31 and the disposition of every reference class. 
    (rename `A/S/T` to `A/S/T2`, then re-import `A/S/T`) the first match is the fresh import, yet every id-keyed
    reference from before the duplicate was written by the original, so the original must keep the id.
 2. **A one-time startup sweep, with no reference remap.** The sweep detects duplicates and re-mints the loser's id
-   via `mintBookId` (`book-op-lock.ts:699`). It rewrites the loser's `state.json` under `withBookOp` +
-   `withBookPathClaim` (`book-op-lock.ts:400`, `:482`), logs both paths, and raises a user-visible notification
+   via `mintBookId` (`book-op-lock.ts:709`). It rewrites the loser's `state.json` under `withBookOp` +
+   `withBookPathClaim` (`book-op-lock.ts:410`, `:492`), logs both paths, and raises a user-visible notification
    naming both folders. Id-keyed references stay with the winner.
    **Owner's caveat:** id-keyed state written *after* the duplicate appeared was resolved to the first match, so
    it may belong to the twin that loses, and it still stays with whichever twin keeps the id.
@@ -854,27 +854,33 @@ cast, so **the renamed original `A/S/T2` keeps `a__s__t` and the fresh import `A
 
 ### Walk order
 
-`resolveBook` (`book-op-lock.ts:286`) and `findBookBy` (`scan.ts:1060`) pick the first match in tree-walk order,
-which matters until the sweep runs and for any group it has to skip. Neither walk sorts today: `walkBookDirs`
-(`book-op-lock.ts:191`) and `listDirs` (`scan.ts:504`) return raw `readdirSync` order, which NTFS returns
-case-insensitively sorted and ext4 returns in hash order. Both walks get one shared comparator: upper-case both
+`resolveBook` (`book-op-lock.ts:296`) and `findBookBy` (`scan.ts:1075`) pick the first match in tree-walk order,
+which matters until the sweep runs and for any group it has to skip. Before child 2 neither walk sorted:
+`walkBookDirs` (`book-op-lock.ts:194`) and `listDirs` (`scan.ts:517`) returned raw `readdirSync` order, which NTFS
+returns case-insensitively sorted and ext4 returns in hash order. Both walks now share one comparator
+(`sortDirNames`, `dir-order.ts`): upper-case both
 names and compare them by UTF-16 code unit, then break ties by the raw names. That approximates NTFS's own
 directory order, so the walk order on the operator's Windows box does not change. It is **not** `localeCompare`,
 which depends on ICU and differs between machines. A test pins it (child 2). It is also ranking criterion 4.
 
 ### Sweep mechanics
 
-- **When:** awaited in `main()` (`server/src/index.ts:170`) after `sweepStaleStaging()` and before either listen
-  call, so no request can race it.
+- **When:** awaited in `main()` (`await bootRepairDuplicateBookIds()`, `server/src/index.ts`) after the upgrade
+  coordinator (its contract is that nothing is migrated until a backup exists, and the sweep rewrites `state.json`)
+  and before either listen call, so no request can race it. The fire-and-forget `fsckAllBooks()` is started after
+  it, so the two never touch a `state.json` together; `index.test.ts` pins the order.
 - **Idempotent:** a second run finds no duplicates and writes nothing.
 - **Unreadable input fails closed:** if any `state.json` in the walk cannot be read (EBUSY / EPERM / EIO), no
-  group is repaired this boot, because that folder's id is unknown and it could be a twin with more work. If one
+  group is repaired this boot, because that folder's id is unknown and it could be a twin with more work. The same
+  holds for a directory that exists but cannot be listed: the sweep's walk (`bookDirsInWalkOrder`) is strict, since a
+  hidden folder could hold a twin or the id `mintBookId` would pick next (every other caller of the walker stays
+  lenient). If one
   twin's `cast.json` fails to read for any reason other than being absent, that group is skipped. Each case logs
   a warning, and the next startup retries.
 - **Locking:** the ranking reads happen unlocked, before the server listens; the repair re-checks `bookId` under
   the `state-json` leaf lock.
 - **The rewrite:** the loser's new id is `mintBookId(<its author dir>, <its series dir>, <its title dir>)`. The
-  rewrite changes only `bookId`.
+  rewrite changes `bookId` in `state.json` and in the loser's export manifests (see "Reference classes").
 
 ### Notification
 
@@ -891,9 +897,9 @@ None is remapped (decision 2). Each is classified by where it is actually keyed.
 |---|---|---|
 | `queue.json` entries | Workspace-root `.queue.json` (`queueJsonPath`, `paths.ts:409-411`); each `QueueEntry` carries `bookId` (`queue-io.ts:41`) | id-keyed: stays with the twin that keeps the id |
 | Per-book backups | `<WORKSPACE_ROOT>/.backups/<bookId>/` (`bookBackupsDir`, `paths.ts:429`), outside the book folder | id-keyed: stays with the twin that keeps the id |
-| Series / library references | Series are the `<author>/<series>` directories (`scan.ts:407`); series memory is computed on each scan from the scanned books' own `cast.json` (`scan.ts:561-568`, `:951`) and persists no bookId | folder-local: unaffected, each twin keeps its own |
+| Series / library references | Series are the `<author>/<series>` directories (`scan.ts:407`); series memory is computed on each scan from the scanned books' own `cast.json` (`scan.ts:561-568`, `:951`), but `cast.json` itself does persist bookIds: `matchedFrom.bookId` and `notLinkedTo[].bookId` on its characters (`series-memory.ts:15`, `cast-reject-orphan.ts:795-800`, `handoff/schemas.ts:51`), and voice-clone sample scopes are named `char-<bookId>__<id>` (`purge-clone-artifacts.ts:385`) | the files are folder-local, each twin keeps its own. The ids inside them are **not** rewritten (decision 2): a cross-book reference to the shared id resolves to the winner, and a same-book reject edge (`notLinkedTo` with the old id) in the loser's `cast.json` keeps the old id, so the reject-orphan Undo route (`removeNotLinked(character, bookId, ...)`) will not match it after the re-mint; that edge needs an owner call (rewrite vs. leave), because a loser edge carrying the old id can equally be a legitimate cross-book edge to the winner |
 | Share links | `<workspace>/.audiobook/share-links.json`, slug to `bookId` (`routes/share.ts:45-50`), resolved with `findBookByBookId` (`share.ts:171`) | id-keyed: stays with the twin that keeps the id |
-| `ManuscriptRecord.bookId` heal | Live record keyed by `manuscriptId`, healed in `healIndexAndRecord` only when `rec.bookId === bookId` (`book-op-lock.ts:248-260`) | id-keyed: stays with the twin that keeps the id |
+| `ManuscriptRecord.bookId` heal | Live record keyed by `manuscriptId`, healed in `healIndexAndRecord` only when `rec.bookId === bookId` (`book-op-lock.ts:261`) | id-keyed: stays with the twin that keeps the id |
 | Listen progress | `.audiobook/listen-progress.json` inside the book folder (`listenProgressJsonPath(bookDir)`, `paths.ts:247`; read and written by bookDir at `routes/book-state.ts:2645`, `:2742`); the frontend copy `byBook[bookId]` in `src/store/listen-progress-slice.ts:121` is a client cache keyed by id | server file: folder-local, unaffected, each twin keeps its own; frontend cache: id-keyed, stays with the twin that keeps the id |
 | cast-id-history | `<bookDir>/.audiobook/cast-id-history.json` (`castIdHistoryPath`, `store/cast-id-history.ts:197-198`); its write lock is keyed by `bookDir`, not `bookId` (`:546`) | folder-local: unaffected, each twin keeps its own |
 | Export manifests | `<bookDir>/.audiobook/export-manifests/<exportId>.json` (`bookExportManifestsDir`); each manifest embeds `bookId` and a `downloadUrl` built from it, and `routes/export.ts` filters on `job.bookId` (`rehydrateBook`, `revokeStaleSameFormat`) | folder-local data holding an id: **rewritten** for the re-minted loser (old id to new id, `downloadUrl` re-pointed) inside the same `withBookOp` span as its `state.json` write, after it. Per manifest best-effort: a manifest that cannot be rewritten is logged and left untouched with its artifact, and the book stays reachable under the new id (the `state.json` write is authoritative); that one export is then not listed |
