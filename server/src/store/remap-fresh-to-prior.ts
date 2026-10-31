@@ -28,6 +28,7 @@
 import { normaliseForMatch } from '../util/text-match.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
+import { notLinkedToId } from './not-linked-to-scope.js';
 
 type PriorCastRow = { id: string } & Record<string, unknown>;
 
@@ -62,47 +63,6 @@ function isReservedId(id: string): boolean {
    rejects the call despite the property being safely readable at runtime. */
 function nameKeyOf(c: Record<string, unknown>): string {
   return typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
-}
-
-/** True when `row.notLinkedTo` names `targetId` in either entry shape the
-    field is written in: a bare string (a hypothetical within-book edge this
-    module accepts defensively, though nothing mints it today) or the real
-    on-disk `{ bookId, characterId }` shape `POST /not-linked-to` writes
-    (`server/src/routes/cast-not-linked-to.ts:238`; typed in `voices.ts:104`
-    / `voice-override-linked.ts:65`).
-
-    Book scoping (#3965, owner decision 2026-10-31): an OBJECT entry whose
-    `bookId` names a DIFFERENT book than `currentBookId` is a cross-book
-    "not the same person" decision and says nothing about a same-book join,
-    so it is ignored. The earlier bookId-blind trade ("a false 'not linked'
-    only costs a remap the user can do by hand") failed its own premise: the
-    seed copies a prior row's cross-book edge onto its id-drifted twin, and
-    honouring it here split that locked character and cost its voice.
-    Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
-    writes) and bare strings still block. `currentBookId` omitted (a record
-    with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe. */
-function notLinkedToId(
-  row: Record<string, unknown>,
-  targetId: string,
-  currentBookId?: string,
-): boolean {
-  const nl = row.notLinkedTo;
-  if (!Array.isArray(nl)) return false;
-  return nl.some((entry) => {
-    if (typeof entry === 'string') return entry === targetId;
-    if (entry && typeof entry === 'object') {
-      const e = entry as { characterId?: unknown; bookId?: unknown };
-      if (
-        typeof currentBookId === 'string' &&
-        typeof e.bookId === 'string' &&
-        e.bookId !== currentBookId
-      ) {
-        return false;
-      }
-      return e.characterId === targetId;
-    }
-    return false;
-  });
 }
 
 /** Rewrite this run's fresh character/sentence ids onto the existing cast's

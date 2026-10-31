@@ -30,6 +30,7 @@ import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { notLinkedToId } from './not-linked-to-scope.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -121,48 +122,6 @@ function unionAliases(a: unknown, b: unknown): string[] | undefined {
     }
   }
   return out.length ? out : undefined;
-}
-
-/** True when `row.notLinkedTo` names `targetId`, in either shape the field is
-    written in: a bare string (defensive; nothing mints this shape today) or
-    the real on-disk `{ bookId, characterId }` shape `POST /not-linked-to`
-    writes (`server/src/routes/cast-not-linked-to.ts:238`; typed in
-    `voices.ts:104`/`voice-override-linked.ts:65`).
-
-    Book scoping (#3965, owner decision 2026-10-31): an OBJECT entry whose
-    `bookId` names a DIFFERENT book than `currentBookId` is a cross-book
-    "not the same person" decision and says nothing about a same-book join,
-    so it is ignored. The earlier bookId-blind trade ("a false 'not linked'
-    only costs a match a user can still do by hand") failed its own premise:
-    the seed copies a prior row's cross-book edge onto its id-drifted twin,
-    and honouring it here split that locked character and cost its voice.
-    Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
-    writes) and bare strings still block. `currentBookId` omitted (a record
-    with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe.
-    Twin of `notLinkedToId` in `remap-fresh-to-prior.ts` - keep the two in
-    step. */
-function notLinkedToId(
-  row: Record<string, unknown>,
-  targetId: string,
-  currentBookId?: string,
-): boolean {
-  const nl = row.notLinkedTo;
-  if (!Array.isArray(nl)) return false;
-  return nl.some((entry) => {
-    if (typeof entry === 'string') return entry === targetId;
-    if (entry && typeof entry === 'object') {
-      const e = entry as { characterId?: unknown; bookId?: unknown };
-      if (
-        typeof currentBookId === 'string' &&
-        typeof e.bookId === 'string' &&
-        e.bookId !== currentBookId
-      ) {
-        return false;
-      }
-      return e.characterId === targetId;
-    }
-    return false;
-  });
 }
 
 /** Voiced/reused characters present in `existing` but dropped by the fresh
@@ -717,15 +676,18 @@ function priorVoiceRank(c: CastRecord): number {
 
 /** True when any two rows in the group are explicitly marked not-the-same-person
     via notLinkedTo (by the other member's id). Conservative: any such edge blocks
-    collapsing the whole group, mirroring Tier-1's gender-conflict skip. */
-function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
-  const ids = new Set(group.map((g) => g.id));
+    collapsing the whole group, mirroring Tier-1's gender-conflict skip. Goes
+    through the shared book-scoped `notLinkedToId` (#3965): a cross-book edge
+    copied onto an id-drifted twin is not a decision between these two rows, but
+    a same-book edge (reject-orphan's) still blocks. */
+function groupHasNotLinkedEdge(
+  group: ReadonlyArray<CastRecord>,
+  currentBookId: string | undefined,
+): boolean {
   for (const c of group) {
-    const nl = c.notLinkedTo;
-    if (!Array.isArray(nl)) continue;
-    for (const entry of nl) {
-      const cid = (entry as { characterId?: unknown })?.characterId;
-      if (typeof cid === 'string' && ids.has(cid)) return true;
+    for (const other of group) {
+      if (other === c) continue;
+      if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
     }
   }
   return false;
@@ -741,6 +703,7 @@ function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
     the survivor's id). Input is not mutated. */
 export function dedupePriorCastByName<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
+  currentBookId: string | undefined,
 ): {
   cast: T[];
   dropped: Array<{ id: string; name?: string; voiceState?: string }>;
@@ -767,7 +730,7 @@ export function dedupePriorCastByName<T extends CastRecord>(
   const collapsedKeys = new Set<string>();
 
   for (const [key, group] of groups) {
-    if (group.length < 2 || groupHasNotLinkedEdge(group)) continue;
+    if (group.length < 2 || groupHasNotLinkedEdge(group, currentBookId)) continue;
     collapsedKeys.add(key);
 
     let best = group[0];

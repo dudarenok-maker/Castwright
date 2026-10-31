@@ -4820,7 +4820,7 @@ export async function runMainAnalyzerJob(
        single load point, so all cast.json write sites AND
        seedReuseGuardsFromPriorCast below see one prior row per name. */
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      const reconciled = dedupePriorCastByName(priorCastForMerge, recordRef.bookId ?? undefined);
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(
@@ -8488,7 +8488,7 @@ export async function runSubsetAnalyzerJob(
        the subset re-analysis path's writes + seed also see one prior row per name. */
     let dedupRetirements: Retirement[] = [];
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      const reconciled = dedupePriorCastByName(priorCastForMerge, record.bookId ?? undefined);
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(

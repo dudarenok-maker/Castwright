@@ -1204,7 +1204,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
       { id: 'антон', name: 'Антон', voiceState: 'generated', lines: 2 },
     ];
-    const { cast, retirements } = dedupePriorCastByName(prior);
+    const { cast, retirements } = dedupePriorCastByName(prior, undefined);
     expect(cast.map((c) => c.id)).toEqual(['anton']); // stronger voiceState survives
     expect(retirements).toEqual([{ from: 'антон', to: 'anton' }]);
   });
@@ -1214,7 +1214,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
       { id: 'антон', name: 'Антон', voiceState: 'generated', lines: 2 },
     ];
-    const { cast, dropped } = dedupePriorCastByName(prior);
+    const { cast, dropped } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(1);
     expect(cast[0].id).toBe('anton'); // stronger voiceState survives
     expect(cast[0].voiceUuid).toBe('U1');
@@ -1231,7 +1231,7 @@ describe('dedupePriorCastByName', () => {
         overrideTtsVoices: { qwen: { name: 'q-sveta' } },
       },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(1);
     expect(cast[0].id).toBe('a-bespoke'); // bespoke beats reuse despite weaker voiceState
     expect(cast[0].overrideTtsVoices).toEqual({ qwen: { name: 'q-sveta' } });
@@ -1242,7 +1242,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'boris', name: 'Борис Игнатьевич', voiceState: 'tuned', lines: 30, aliases: ['шеф'] },
       { id: 'boris-2', name: 'Борис Игнатьевич', voiceState: 'generated', lines: 1, aliases: ['Гесер'] },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(1);
     expect(cast[0].aliases).toEqual(expect.arrayContaining(['шеф', 'Гесер']));
     // survivor's own name is NOT folded in as a redundant alias
@@ -1254,8 +1254,26 @@ describe('dedupePriorCastByName', () => {
       { id: 'john-a', name: 'John', voiceState: 'tuned', notLinkedTo: [{ bookId: 'b', characterId: 'john-b' }] },
       { id: 'john-b', name: 'John', voiceState: 'tuned' },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(2);
+  });
+
+  it('collapses a pair whose only notLinkedTo edge was recorded in ANOTHER book (#3965)', () => {
+    const prior: C[] = [
+      { id: 'tom', name: 'Old Tom', voiceState: 'locked', notLinkedTo: [{ bookId: 'book-1', characterId: 'tom' }] },
+      { id: 'tom-2', name: 'Old Tom', voiceState: 'generated', notLinkedTo: [{ bookId: 'book-1', characterId: 'tom' }] },
+    ];
+    const { cast, retirements } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast.map((r) => r.id)).toEqual(['tom']);
+    expect(retirements).toEqual([{ from: 'tom-2', to: 'tom' }]);
+  });
+
+  it('still refuses to collapse a pair separated by a SAME-book notLinkedTo edge (#3965)', () => {
+    const prior: C[] = [
+      { id: 'john-a', name: 'John', voiceState: 'tuned', notLinkedTo: [{ bookId: 'book-2', characterId: 'john-b' }] },
+      { id: 'john-b', name: 'John', voiceState: 'tuned' },
+    ];
+    expect(dedupePriorCastByName(prior, 'book-2').cast).toHaveLength(2);
   });
 
   it('never collapses narrator rows sharing a name', () => {
@@ -1263,7 +1281,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'narrator', name: 'Narrator', voiceState: 'tuned' },
       { id: 'char-narrator', name: 'Narrator', voiceState: 'generated' },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(2);
   });
 
@@ -1278,7 +1296,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'char-narrator', name: 'Sasha', voiceState: 'tuned' },
       { id: 'sasha-2', name: 'Sasha', voiceState: 'generated' },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast.map((c) => c.id).sort()).toEqual(['char-narrator', 'sasha-2']);
   });
 
@@ -1287,7 +1305,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'a', name: 'Alice', voiceState: 'tuned' },
       { id: 'b', name: 'Bob', voiceState: 'tuned' },
     ];
-    const { cast, dropped } = dedupePriorCastByName(prior);
+    const { cast, dropped } = dedupePriorCastByName(prior, undefined);
     expect(cast.map((c) => c.id)).toEqual(['a', 'b']);
     expect(dropped).toEqual([]);
   });
@@ -1297,7 +1315,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'cafe', name: 'Cafe', voiceState: 'generated', voiceUuid: 'U2' },
       { id: 'café', name: 'Café', voiceState: 'generated' },
     ];
-    const { cast } = dedupePriorCastByName(prior);
+    const { cast } = dedupePriorCastByName(prior, undefined);
     expect(cast).toHaveLength(1);
   });
 
@@ -1309,7 +1327,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'антон', name: 'Антон', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'q2' } }, lines: 2 },
     ];
     const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 55 }]; // fresh survivor id
-    const collapsed = dedupePriorCastByName(prior).cast;
+    const collapsed = dedupePriorCastByName(prior, undefined).cast;
     const { characters: merged } = mergeAnalysisResultWithExistingCast(collapsed, fresh);
     expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
     expect(merged[0].voiceUuid).toBe('U1'); // strongest bespoke voice rode onto the fresh survivor
@@ -1325,7 +1343,7 @@ describe('dedupePriorCastByName', () => {
       { id: 'антон-old', name: 'Антон', voiceState: 'reused', voiceId: 'lib-1', lines: 1 },
     ];
     const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 50 }]; // id differs from both prior rows
-    const collapsed = dedupePriorCastByName(prior).cast;
+    const collapsed = dedupePriorCastByName(prior, undefined).cast;
     expect(collapsed[0].id).toBe('anton'); // voiceUuid (rank 3) beats reused (rank 2)
     const { characters: merged } = mergeAnalysisResultWithExistingCast(collapsed, fresh);
     expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
