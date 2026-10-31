@@ -48,6 +48,10 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
        re-carries any refused key, e.g. additional_drop_params), and a plain string target replaces the protected `model`.
        Always refused; fallback config belongs in the proxy, which this does not affect. */
     'fallbacks', 'context_window_fallbacks', 'content_policy_fallbacks',
+    /* #3921 — LiteLLM treats `output_config` as a native carrier of both `effort` and `format` that outranks
+       `reasoning_effort` (router.py), so it can replace the reasoning control and the structured output. Always
+       refused, not style-gated. (`reasoning`, the sibling carrier, is already refused above.) */
+    'output_config',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
   /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */
