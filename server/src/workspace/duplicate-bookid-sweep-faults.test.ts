@@ -38,9 +38,9 @@ vi.mock('./book-op-lock.js', async (importOriginal) => {
       const o = hooks.dropHint ? { ...opts, hintDir: undefined } : opts;
       return (actual.withBookOp as (...a: unknown[]) => unknown)(bookId, fn, o);
     }) as typeof actual.withBookOp,
-    mintBookId: async (...args: Parameters<typeof actual.mintBookId>) => {
+    takenBookIds: async (...args: Parameters<typeof actual.takenBookIds>) => {
       hooks.onMint?.();
-      return actual.mintBookId(...args);
+      return actual.takenBookIds(...args);
     },
   };
 });

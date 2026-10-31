@@ -110,7 +110,7 @@ or a walk that found exactly one folder and read every other one. A caller's `hi
 pass 1). **(coordinator call)**
 
 A live `ManuscriptRecord` is healed only when `rec.bookId === bookId` **(coordinator call)**. Twin books can
-share a `manuscriptId`: twins that predate #3823 (a bundle import now mints a fresh id whenever its write would add a
+share a `manuscriptId` (the sweep re-mints the loser's, see "Shared `manuscriptId`" below): twins that predate #3823 (a bundle import now mints a fresh id whenever its write would add a
 carrier of an id another book holds; an overwrite of a target that already carries the bundle's id keeps
 it), or a hand-copied folder.
 
@@ -909,11 +909,35 @@ A bookmarked or open route, queue entry, share link or backup history for the id
 re-minted loser starts with a new id, an empty server-side queue and share table, and no backup history under the
 new id (its old snapshots remain under the old id, with the winner).
 
-### Residual: shared `manuscriptId`
+### Shared `manuscriptId` (owner decision, PR #4004 pass 1)
 
-Twins that predate #3823 may share a `manuscriptId`. The sweep does **not** change `manuscriptId`.
-`healIndexAndRecord` already refuses to repoint another twin's record (`book-op-lock.ts:255-260`). This is out of
-scope for #3713.
+Twins that predate #3823 (a hand-copied folder, the #3711 split, a pre-#3823 bundle re-import) may share a
+`manuscriptId` as well as the `bookId`. One `ManuscriptRecord` lives per manuscriptId and `hydrateFromDisk` /
+`findBookByManuscriptId` take the first match, so once the sweep made the loser reachable by its own id, every
+manuscript-keyed operation started from it (Analyse, restructure) landed in the walk-first twin. `healIndexAndRecord`
+guards a repoint, not a hydrate, so it did not prevent this. **Decision: the sweep re-mints the loser's
+`manuscriptId`** in the same `updateStateAtDir` write as its `bookId`, only when another member of the group carries
+the same id (a differing id changes nothing; an unreadable twin counts as sharing). The new id is `mns_` + `nanoid(10)`,
+checked against `takenBookIds().takenManuscriptIds` under the path claim, like every other creator.
+
+What follows the loser (rekeyed in its own folder, after the state write, inside the same `withBookOp` span, per file
+best-effort: an absent file is skipped, an unreadable or unwritable one is logged and left byte-for-byte):
+
+| Store | Keyed at | Outcome |
+|---|---|---|
+| `manuscript-hints.json` | each `entries[].manuscriptId`; `hintsFromEntry` rejects a mismatch with `state.manuscriptId` | rekeyed; if it cannot be, the loser re-parses its manuscript and loses its restructure bodies |
+| `script-review-pending.json` | each `entries[chapterId].manuscriptId`; `readLedger` prunes a mismatch | rekeyed; if it cannot be, the pending findings are pruned at read time |
+| `dropped-quotes.json` | envelope `manuscriptId` (informational) | rekeyed |
+| `analysis-state.json`, `analysis-last-outcome.json` | top-level `manuscriptId` (the library scan reports it) | rekeyed |
+| `state.json` | `manuscriptId`, also the revision salt (`book-state.ts`) | rewritten; an open tab's `baseRevision` no longer matches, which is wanted |
+| **Analysis cache** `server/handoff/cache/{manuscriptId}.json` | global, outside the book folder, one file per id shared by both twins | **not carried**: it stays with the winner under the old id. The loser loses its saved partial-analysis cache; its next Analyse starts from the first chapter, with no resume |
+| `manuscript-edits.json`, `cast.json`, audio | folder-local, hold no manuscriptId | unaffected |
+| Auto-backup snapshots of the loser | contain the old manuscriptId (and old bookId) | not rewritten: restoring one re-creates the share, and the next start's sweep re-mints it again |
+
+A crash between the state write and the rekey leaves the files on the old id; no later start repairs them, because the
+group is no longer a duplicate. That degrades as the "cannot be rekeyed" column says rather than aliasing the other twin.
+The sweep stays idempotent: a second start finds no duplicate group and changes nothing. Books that share a
+`manuscriptId` but have different `bookId`s are not touched (not a duplicate-bookId group).
 
 ## Out of scope
 

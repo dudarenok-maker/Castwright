@@ -22,16 +22,27 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { nanoid } from 'nanoid';
 import {
   BOOK_GONE,
   bookDirsInWalkOrder,
-  mintBookId,
+  mintBookIdFrom,
   readBookStateOrThrow,
+  takenBookIds,
   withBookOp,
   withBookPathClaim,
 } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
-import { BOOKS_ROOT, bookExportManifestsDir, castJsonPath } from './paths.js';
+import {
+  BOOKS_ROOT,
+  analysisLastOutcomeJsonPath,
+  analysisStateJsonPath,
+  bookExportManifestsDir,
+  castJsonPath,
+  droppedQuotesJsonPath,
+  manuscriptHintsJsonPath,
+  scriptReviewLedgerJsonPath,
+} from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 
 export interface DuplicateBookIdGroup {
@@ -137,8 +148,9 @@ export async function findDuplicateBookIdGroups(): Promise<DuplicateBookIdGroup[
 }
 
 /* ---- #3713 step 4 -- REPAIR half. Re-mints each loser's bookId and re-points its
-   export manifests; touches nothing else (no manuscriptId, no reference remap --
-   owner decision 2). ---- */
+   export manifests; when the loser shares its manuscriptId with a twin it also
+   gets a fresh manuscriptId and its own folder's files are rekeyed (PR #4004
+   owner decision). No other reference remap -- owner decision 2. ---- */
 
 export interface DuplicateBookIdRepair {
   previousBookId: string;
@@ -199,6 +211,79 @@ async function rewriteExportManifests(loserDir: string, oldId: string, newId: st
   }
 }
 
+/** Rewrite one JSON file in place when `mutate` reports a change. Best-effort:
+ *  absent is skipped; unparseable or unwritable is logged and left byte-for-byte as
+ *  it was. The state write already landed, so the book is reachable under its new
+ *  ids and a file left behind degrades (hints re-parse, ledger entries prune at read
+ *  time) rather than aliasing the other twin. */
+async function rekeyJsonFile(file: string, mutate: (json: unknown) => boolean): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch {
+    return; // absent (the common case)
+  }
+  try {
+    const json = JSON.parse(raw) as unknown;
+    if (mutate(json)) await writeJsonAtomic(file, json);
+  } catch (err) {
+    console.warn(`[duplicate-bookid] could not rekey manuscriptId in ${file}; leaving it as is`, err);
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Swap `manuscriptId` on `node` when it is `oldId`. */
+function swapId(node: unknown, oldId: string, newId: string): boolean {
+  if (!isRecord(node) || node.manuscriptId !== oldId) return false;
+  node.manuscriptId = newId;
+  return true;
+}
+
+/** Everything in the loser's OWN folder keyed on its manuscriptId. NOT carried: the
+ *  analysis cache (`handoff/cache/{manuscriptId}.json`) is global and shared by
+ *  both twins under the old id, so it stays with the winner. Called AFTER the state
+ *  write, inside the same withBookOp span. */
+async function rekeyManuscriptId(loserDir: string, oldId: string, newId: string): Promise<void> {
+  await rekeyJsonFile(manuscriptHintsJsonPath(loserDir), (j) => {
+    const entries = isRecord(j) ? j.entries : null;
+    if (!Array.isArray(entries)) return false;
+    return entries.map((e) => swapId(e, oldId, newId)).some(Boolean);
+  });
+  await rekeyJsonFile(scriptReviewLedgerJsonPath(loserDir), (j) => {
+    const entries = isRecord(j) ? j.entries : null;
+    if (!isRecord(entries)) return false;
+    return Object.values(entries).map((e) => swapId(e, oldId, newId)).some(Boolean);
+  });
+  for (const file of [
+    droppedQuotesJsonPath(loserDir),
+    analysisStateJsonPath(loserDir),
+    analysisLastOutcomeJsonPath(loserDir),
+  ]) {
+    await rekeyJsonFile(file, (j) => swapId(j, oldId, newId));
+  }
+}
+
+/** True when another member of the group carries `manuscriptId`. One ManuscriptRecord
+ *  lives per id and hydrate takes the first match, so a shared id aliases the twins.
+ *  An unreadable twin counts as sharing: a spare id costs a cache, an alias costs data. */
+async function twinSharesManuscriptId(
+  group: DuplicateBookIdGroup,
+  loserDir: string,
+  manuscriptId: string,
+): Promise<boolean> {
+  for (const dir of [group.winnerDir, ...group.loserDirs]) {
+    if (dir === loserDir) continue;
+    try {
+      if ((await readBookStateOrThrow(dir))?.manuscriptId === manuscriptId) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Never throws: one failing loser is logged (raw error, server log only) and the rest continue. */
 export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]> {
   const done: DuplicateBookIdRepair[] = [];
@@ -222,16 +307,31 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
               );
               return null;
             }
-            const newId = await withBookPathClaim(async () => {
+            const wrote = await withBookPathClaim(async () => {
               const [author, series, title] = relative(BOOKS_ROOT, loserDir).split(sep);
-              const minted = await mintBookId(author, series, title);
-              const wrote = await updateStateAtDir(loserDir, (fresh) =>
-                fresh.bookId === group.bookId ? { ...fresh, bookId: minted } : null,
+              const ids = await takenBookIds();
+              const newBookId = mintBookIdFrom(ids, author, series, title);
+              const oldMs = book.state.manuscriptId;
+              let newMs: string | null = null;
+              if (oldMs && (await twinSharesManuscriptId(group, loserDir, oldMs))) {
+                do newMs = `mns_${nanoid(10)}`;
+                while (ids.takenManuscriptIds.has(newMs));
+              }
+              const written = await updateStateAtDir(loserDir, (fresh) =>
+                fresh.bookId === group.bookId
+                  ? {
+                      ...fresh,
+                      bookId: newBookId,
+                      ...(newMs && fresh.manuscriptId === oldMs ? { manuscriptId: newMs } : {}),
+                    }
+                  : null,
               );
-              return wrote ? minted : null;
+              return written ? { newBookId, oldMs, newMs } : null;
             });
-            if (newId !== null) await rewriteExportManifests(loserDir, group.bookId, newId);
-            return newId;
+            if (wrote === null) return null;
+            await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
+            if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
+            return wrote.newBookId;
           },
           { hintDir: loserDir },
         );

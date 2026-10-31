@@ -192,7 +192,7 @@ describe('repairDuplicateBookIds', () => {
     expect(await lock.withBookOp('a__s__t-2', async (b) => b.bookDir)).toBe(loser);
   });
 
-  it('2. the winner is byte-identical; the loser differs only in bookId', async () => {
+  it('2. the winner is byte-identical; the loser differs only in bookId and the manuscriptId it shared', async () => {
     const { winner, loser } = canonical();
     const winState = readFileSync(paths.stateJsonPath(winner));
     const winCast = readFileSync(paths.castJsonPath(winner));
@@ -202,7 +202,10 @@ describe('repairDuplicateBookIds', () => {
     expect(readFileSync(paths.castJsonPath(winner)).equals(winCast)).toBe(true);
     const loserAfter = JSON.parse(readFileSync(paths.stateJsonPath(loser), 'utf8'));
     expect(loserAfter.bookId).toBe('a__s__t-2');
-    expect({ ...loserAfter, bookId: 'a__s__t' }).toEqual(loserBefore);
+    /* The seeded twins share m_T, so the loser is given a fresh manuscriptId too; see
+       duplicate-bookid-sweep-manuscript.test.ts. Nothing else changes. */
+    expect(loserAfter.manuscriptId).toMatch(/^mns_/);
+    expect({ ...loserAfter, bookId: 'a__s__t', manuscriptId: loserBefore.manuscriptId }).toEqual(loserBefore);
   });
 
   it('3. a second run is a no-op and empties the record', async () => {
