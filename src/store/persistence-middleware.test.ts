@@ -2757,4 +2757,30 @@ describe('castWrittenSince (#3916)', () => {
     expect(written(store, 'b1', seq)).toBe(true);
     expect(written(store, 'b2', seq)).toBe(false);
   });
+
+  /* A save given up on after its retries is KEPT: an idle outbox entry, no
+     timer and no flight. It is the only thing the outbox clause sees. */
+  it('is true for a cast save kept after its retries ran out (idle outbox entry)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(20000);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(true);
+    err.mockRestore();
+  });
+
+  it('is false once the full read let go of the kept save (dropRetainedSaves onFullRead)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(20000);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(true);
+    store.dispatch(dropRetainedSaves('b1', true) as never);
+    expect(written(store, 'b1', seq)).toBe(false);
+    err.mockRestore();
+  });
 });
