@@ -95,6 +95,38 @@ describe('AST opaque ranges', () => {
     expect(isOpaque(opaque, src.indexOf('// historical'))).toBe(true);
   });
 
+  it('an end-of-line comment is opaque and the next line is live code', () => {
+    const src = 'foo(); // withCastLock(\nbar();\n';
+    const opaque = computeAstOpaqueRanges(src);
+    expect(isOpaque(opaque, src.indexOf('// withCastLock('))).toBe(true);
+    expect(isOpaque(opaque, src.indexOf('withCastLock('))).toBe(true);
+    expect(isOpaque(opaque, src.indexOf('foo'))).toBe(false);
+    expect(isOpaque(opaque, src.indexOf('bar'))).toBe(false);
+  });
+
+  it('an own-line comment before a literal is opaque and the surrounding code is live', () => {
+    const src = "f(\n  // withCastLock(\n  'x',\n);\n";
+    const opaque = computeAstOpaqueRanges(src);
+    expect(isOpaque(opaque, src.indexOf('// withCastLock('))).toBe(true);
+    expect(isOpaque(opaque, src.indexOf('withCastLock('))).toBe(true);
+    expect(isOpaque(opaque, src.indexOf('f('))).toBe(false);
+    expect(isOpaque(opaque, src.indexOf(');'))).toBe(false);
+  });
+
+  it('comments and literals in one file merge into ascending disjoint ranges', () => {
+    const src = "a(); // one\nb('two'); /* three */\n// four\nc();\n";
+    const opaque = computeAstOpaqueRanges(src);
+    for (let i = 1; i < opaque.length; i++) {
+      expect(opaque[i].start).toBeGreaterThan(opaque[i - 1].end - 1);
+    }
+    for (const word of ['one', 'two', 'three', 'four']) {
+      expect(isOpaque(opaque, src.indexOf(word))).toBe(true);
+    }
+    for (const word of ['a()', 'b(', 'c()']) {
+      expect(isOpaque(opaque, src.indexOf(word))).toBe(false);
+    }
+  });
+
   it('string content is opaque, surrounding code is not', () => {
     const src = "const s = 'not code';\n";
     const opaque = computeAstOpaqueRanges(src);

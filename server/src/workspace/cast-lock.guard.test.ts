@@ -509,6 +509,24 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(collectLockRanges(src, computeAstOpaqueRanges(src))).toEqual([]);
   });
 
+  /* The END-OF-LINE shape: the prose trails live code on the same line, so it is
+     the TRAILING trivia of `;` (leading trivia skips a comment before the first
+     newline). Without `getTrailingCommentRanges` in the tokenizer the comment
+     stays live code and fabricates the lock range. */
+  it('prose on the END OF A CODE LINE does not fabricate a lock range', () => {
+    const src = [
+      'await run(async () => {',
+      '  await doSomething(); // historical: this used to be withCastLock(dir, async () => {',
+      '  await writeJsonAtomic(castJsonPath(dir), cast);',
+      '});',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 3');
+    expect(collectLockRanges(src, computeAstOpaqueRanges(src))).toEqual([]);
+  });
+
   /* #3427: the ordered spelling of the same write must be seen too. */
   it('an unlocked writeJsonAtomicOrdered(castJsonPath(...)) is reported like a bare writeJsonAtomic', () => {
     const src = 'await writeJsonAtomicOrdered(castJsonPath(dir), cast);';
