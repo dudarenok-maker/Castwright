@@ -837,8 +837,12 @@ recite:
     the leg that enforces it (recent green CI runs, a `t.diagnostic` line)
     and confirm the threshold sits clear of their spread; if it was only
     measured locally, force the "slow" side (set the threshold to 0) with the
-    defect injected and see whether the guard still fails, or prefer a ratio
-    to a same-run reference over an absolute line.
+    defect injected and see whether the guard still fails, or compare against a
+    same-run reference over an absolute line. A bare ratio is not enough when
+    the healthy ratio itself sits near the bound (C3's measured 1821ms vs
+    607ms is ~3.0 against a bound of 3): prefer the excess over the measured
+    healthy ratio (`t - k x reference > margin`), which stays near 0 under
+    uniform slowdown and grows by the defect's cost.
 
 ### Keeping the catalogue current
 

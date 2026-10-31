@@ -908,16 +908,19 @@ test(
     //   2. slow control: rerun the real collector through the `spawn` seam
     //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
     //      slow control must NOT excuse a slow query, so each attempt is timed
-    //      through the seam and the attempt that SUCCEEDED is gated: more than
-    //      15s AND more than RERUN_RATIO_MAX x the control FAILS. (A stalled
-    //      attempt that the retry recovers from is host load, not query cost.)
-    //      Both calls are dominated by PowerShell startup, not the ~400-row
-    //      enumeration: measured locally the control costs 0.4-0.5s against
-    //      0.5s for the full query (ratio ~1.1-1.3), and a uniformly slow host
-    //      keeps that ratio. A 16s census regression against a 0.5s control is
-    //      ~30; against a uniformly slowed host the ratio is ~3.9 at a 5s
-    //      control (measured, pass 3) and the gate flips at a control of about
-    //      8s. 3 sits well above the healthy ~1.3 and below the defect.
+    //      through the seam and the attempt that SUCCEEDED is gated on its
+    //      EXCESS over the healthy ratio: rerunMs - RERUN_HEALTHY_RATIO x
+    //      controlMs > RERUN_EXCESS_MAX_MS FAILS. (A stalled attempt that the
+    //      retry recovers from is host load, not query cost.) The healthy
+    //      ratio is NOT small: the real Windows CI runner (job 124421578873)
+    //      measured `full query 1821ms, one-row control 607ms`, a ratio of
+    //      ~3.0, because both calls are dominated by PowerShell startup. A
+    //      bare ratio bound of 3 therefore sat ON the healthy figure and could
+    //      false-red under the load this test exists to survive. The excess
+    //      does not: a uniformly slowed host scales both calls, so the excess
+    //      stays near 0 whatever the slowdown, while a fixed 16s census defect
+    //      adds ~16s of excess to any host. 10s sits clear of both. No
+    //      separate floor is kept: excess > 10s already implies rerunMs > 10s.
     //   3. skip only when the control ITSELF failed or timed out AND the rerun
     //      still timed out (docs/testing/flaky-register.md). A control that
     //      succeeded, even slowly, with both rerun attempts timing out FAILS:
@@ -929,8 +932,8 @@ test(
     // after retry') still fails.
     const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
     const CONTROL_FAST_MS = 5000;
-    const RERUN_SLOW_MS = 15000;
-    const RERUN_RATIO_MAX = 3;
+    const RERUN_HEALTHY_RATIO = 3;
+    const RERUN_EXCESS_MAX_MS = 10000;
     const tFull = Date.now();
     let snapshot = collectProcessSnapshot();
     const fullMs = Date.now() - tFull;
@@ -960,7 +963,10 @@ test(
       });
       // The collector's result comes from its last attempt.
       const rerunMs = attemptMs[attemptMs.length - 1];
-      t.diagnostic(`C3 slow-control rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)})`);
+      const excessMs = rerunMs - RERUN_HEALTHY_RATIO * controlMs;
+      t.diagnostic(
+        `C3 slow-control rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)}, excess over ${RERUN_HEALTHY_RATIO}x control ${excessMs}ms)`,
+      );
       if (isTimeout(snapshot)) {
         const controlFailed = Boolean(control.error) || control.status !== 0;
         assert.ok(
@@ -975,8 +981,9 @@ test(
         return;
       }
       assert.ok(
-        !(rerunMs > RERUN_SLOW_MS && rerunMs / controlMs > RERUN_RATIO_MAX),
-        `the full query took ${rerunMs}ms against a ${controlMs}ms one-row control (ratio ${(rerunMs / controlMs).toFixed(1)} > ${RERUN_RATIO_MAX}) — ` +
+        excessMs <= RERUN_EXCESS_MAX_MS,
+        `the full query took ${rerunMs}ms against a ${controlMs}ms one-row control: ${excessMs}ms over the healthy ${RERUN_HEALTHY_RATIO}x ratio ` +
+          `(> ${RERUN_EXCESS_MAX_MS}ms; healthy CI measured 1821ms vs 607ms) — ` +
           'a slow control does not explain a query this much slower than one spawn: the census query itself is too slow (Castwright#3917)',
       );
     }
