@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   assertHintsPairWithState,
   parseTitlesPairWithState,
+  titlePairsAt,
   HintsOutOfSyncError,
 } from './restructure.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -62,6 +63,19 @@ describe('assertHintsPairWithState', () => {
       { id: 2, title: 'Alpha' },
     ]);
     expect(parseTitlesPairWithState(s, ['Beta', 'Alpha'])).toBe(true);
+  });
+});
+
+describe('titlePairsAt (#3837): the per-position title test, shared with the hints-proof check', () => {
+  it('pairs on an equal title, a made-up parse title, or a titleOverridden chapter', () => {
+    expect(titlePairsAt({ title: 'Alpha' }, 'Alpha')).toBe(true);
+    expect(titlePairsAt({ title: 'Alpha' }, null)).toBe(true);
+    expect(titlePairsAt({ title: 'Alpha', titleOverridden: true }, 'Beta')).toBe(true);
+  });
+
+  it('does not pair a disagreeing title', () => {
+    expect(titlePairsAt({ title: 'Alpha' }, 'Beta')).toBe(false);
+    expect(titlePairsAt({ title: 'Alpha', titleOverridden: false }, 'Beta')).toBe(false);
   });
 });
 

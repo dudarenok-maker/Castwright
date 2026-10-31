@@ -32,6 +32,7 @@ import type { Request, Response } from '../http.js';
 import {
   applyMerge,
   HintsOutOfSyncError,
+  assertHintsPairWithState,
   parseTitlesPairWithState,
   applySplit,
   applyReorder,
@@ -75,7 +76,9 @@ import {
   manuscriptEditsJsonPath,
   stateJsonPath,
 } from '../workspace/paths.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { writeJsonAtomic } from '../workspace/state-io.js';
+import { checkParseHintsPairing } from '../workspace/hints-proof.js';
+import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import {
   buildHintsEntry,
   composeHintsFile,
@@ -88,8 +91,8 @@ import { safeSegment } from '../util/safe-path.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { getOrHydrateManuscript, putManuscript } from '../store/manuscripts.js';
-import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { getOrHydrateManuscript, putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
+import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
 import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
@@ -187,6 +190,72 @@ async function prepareRestructure(
   return { fingerprint, legacyParse, peeked };
 }
 
+/** #3837 (plan 290) -- how a parse-fallback record's pairing with state.json was
+    judged before the leaf. `main`: the check could not run, and the leaf applies
+    today's rule (count/id plus the positional title check). `checked`: the
+    sentence check ran, and the leaf re-checks that its inputs are unchanged. */
+type ParsePairing =
+  | { mode: 'main' }
+  | {
+      mode: 'checked';
+      paired: boolean;
+      chapterIds: number[];
+      manuscriptId: string | undefined;
+      editsKind: 'ok' | 'absent';
+      editsSha: string | null;
+    };
+
+/** Runs under the `book` lock, BEFORE `withStateJsonLock` (A6): the check takes
+    up to about a second on the largest books, and the 10-second leaf must not
+    wait on it. It writes nothing, and the edits read here never throws (a corrupt
+    or unreadable file falls back to main's rule; the leaf's own read fails as
+    today). `null` for a record that is not a parse fallback. */
+async function judgeParsePairing(bookDir: string, record: ManuscriptRecord): Promise<ParsePairing | null> {
+  if (record.hintsSource !== 'parse') return null;
+  /* Absent: the leaf's own read answers 404. Unreadable throws the curated
+     BookStateUnreadableError, which the route answers verbatim, as today. */
+  const state = await readBookStateOrThrow(bookDir);
+  if (!state) return { mode: 'main' };
+  try {
+    assertHintsPairWithState(state, record.chapterHints);
+  } catch {
+    return { mode: 'main' };
+  }
+  /* The check pairs by index and the transforms by id; the two agree only on
+     ids 1..n in order on both sides (archived plan 51 invariant 1). An impure
+     record (hints a restructure transformed in memory without persisting them)
+     is judged by main's rule and never re-hydrated (A1). With the stale-evidence
+     marker set the saved sentences predate this chapter list, so they are no
+     evidence. */
+  const { chapterHints, parseTitles } = record;
+  const pure =
+    parseTitles !== undefined &&
+    chapterHints.length === parseTitles.length &&
+    chapterHints.every((h, i) => h.parseIndex === i);
+  const positional =
+    state.chapters.every((c, i) => c.id === i + 1) && chapterHints.every((h, i) => h.id === i + 1);
+  if (!pure || !positional || state.sentencesPredateChapters === true) return { mode: 'main' };
+  const edits = await readEditsForHintsCheck(bookDir);
+  if (edits.kind !== 'ok' && edits.kind !== 'absent') return { mode: 'main' };
+  const result = checkParseHintsPairing({
+    stateChapters: state.chapters,
+    sentences: edits.kind === 'ok' ? sentencesOf(edits.value) : [],
+    parse: chapterHints.map((h, i) => ({ title: parseTitles[i] ?? null, body: h.body })),
+    evidenceLess: 'title',
+  });
+  if (!result.paired) {
+    console.warn(`[chapters-restructure] ${record.manuscriptId}: parse-fallback hints do not pair with state`, result);
+  }
+  return {
+    mode: 'checked',
+    paired: result.paired,
+    chapterIds: state.chapters.map((c) => c.id),
+    manuscriptId: state.manuscriptId,
+    editsKind: edits.kind,
+    editsSha: edits.kind === 'ok' ? edits.sha256 : null,
+  };
+}
+
 /** Shared "load → transform → write" body. Runs INSIDE the route's `withBookOp`
     (the lock is taken at the handler, one level only), then takes the
     restructure gate and main's per-book `book` lock itself (#3594), in the
@@ -208,9 +277,13 @@ async function applyRestructure(
     hintsSource: 'persisted' | 'parse' | undefined,
     parseChapterCount: number | undefined,
   ) => RestructureResult,
-  /* Rename and refresh-titles rewrite the very titles the pairing check reads, so on a
-     book it already flags they would hide the mispairing from the next merge (#3791). */
-  refuseWhenMispaired = false,
+  /* Every operation but exclude/include refuses a mispaired book up front. Rename
+     and refresh-titles rewrite the very titles the pairing check reads, so they
+     would hide the mispairing from the next merge (#3791); merge, split and
+     reorder no longer title-check in the transform once the sentence check has
+     judged the book (#3837). Exclude/include is never refused on a toggle; see
+     the write rule in `applyRestructureClaimed`. */
+  opKind: 'restructure' | 'exclude' = 'restructure',
 ): Promise<{
   status: number;
   body: unknown;
@@ -256,7 +329,7 @@ async function applyRestructure(
   }
   try {
     return await withBookLock(book.bookId, () =>
-      applyRestructureClaimed(book, prep, manuscriptId, transform, refuseWhenMispaired),
+      applyRestructureClaimed(book, prep, manuscriptId, transform, opKind),
     );
   } finally {
     endRestructure(manuscriptId);
@@ -276,7 +349,7 @@ async function applyRestructureClaimed(
     hintsSource: 'persisted' | 'parse' | undefined,
     parseChapterCount: number | undefined,
   ) => RestructureResult,
-  refuseWhenMispaired: boolean,
+  opKind: 'restructure' | 'exclude',
 ): Promise<{
   status: number;
   body: unknown;
@@ -301,6 +374,10 @@ async function applyRestructureClaimed(
   );
   const legacyParse = advisoryValid ? prep.legacyParse : null;
 
+  /* #3837 -- the parse-fallback pairing check, here under `book` and never
+     inside the state-json leaf below (A6). */
+  const pairing = await judgeParsePairing(bookDir, record);
+
   /* #3700 -- state.json is read, transformed and rewritten as one span under
      the per-book state-json lock (leaf: nothing inside takes another lock; this
      function already runs inside the book lock, which is OUTSIDE it), and the
@@ -317,6 +394,41 @@ async function applyRestructureClaimed(
        process after it was resolved. Writing the stale snapshot back would resurrect
        it; refuse and write nothing. */
     if (!freshState) return { early: { status: 404, body: { error: 'Book not found.' } } };
+
+    // Read current sentences from manuscript-edits.json (may be empty/missing
+    // for a fresh book -- that's fine, transform handles it). Each transform
+    // requires sentences for split when it needs to locate the body offset.
+    const editsPath = manuscriptEditsJsonPath(bookDir);
+    const editsRead = await readEditsForHintsCheck(bookDir);
+
+    /* #3837 -- the check judged the state and edits it read before this leaf.
+       Every writer of either takes `book` or runs only under `book-op`, both held
+       here, so this is expected never to fire: a fail-closed backstop that keeps
+       the check's inputs exactly the transform's. */
+    if (
+      pairing?.mode === 'checked' &&
+      !(
+        freshState.manuscriptId === pairing.manuscriptId &&
+        freshState.chapters.length === pairing.chapterIds.length &&
+        freshState.chapters.every((c, i) => c.id === pairing.chapterIds[i]) &&
+        freshState.sentencesPredateChapters !== true &&
+        editsRead.kind === pairing.editsKind &&
+        (editsRead.kind !== 'ok' || editsRead.sha256 === pairing.editsSha)
+      )
+    ) {
+      console.warn(`[chapters-restructure] ${manuscriptId}: pairing inputs changed under the book lock`);
+      const e = new HintsOutOfSyncError();
+      return { early: { status: 409, body: { error: e.message, code: e.code } } };
+    }
+    /* The same outcomes `readJson` gave here before: absent is null, and a
+       corrupt or unreadable file throws its own error. */
+    if (editsRead.kind === 'corrupt' || editsRead.kind === 'unreadable') throw editsRead.error;
+    const edits =
+      editsRead.kind === 'ok'
+        ? (editsRead.value as { sentences?: RestructureSentence[]; mergedAwayKeys?: string[] } | null)
+        : null;
+    const sentences = edits?.sentences ?? [];
+
     state = legacyParse
       ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
       : freshState;
@@ -330,13 +442,6 @@ async function applyRestructureClaimed(
       const sc = state.chapters.find((c) => c.id === h.id);
       return sc ? { ...h, title: sc.title } : h;
     });
-
-    // Read current sentences from manuscript-edits.json (may be empty/missing
-    // for a fresh book -- that's fine, transform handles it). Each transform
-    // requires sentences for split when it needs to locate the body offset.
-    const editsPath = manuscriptEditsJsonPath(bookDir);
-    const edits = await readJson<{ sentences?: RestructureSentence[]; mergedAwayKeys?: string[] }>(editsPath);
-    const sentences = edits?.sentences ?? [];
 
     /* srv-35 -- ensure the OLD chapters carry uuids before the transform so
        buildNewStateChapters can inherit them by identity (a book that has
@@ -358,15 +463,34 @@ async function applyRestructureClaimed(
         ? record.chapterHints.length
         : undefined);
 
-    /* Read before the transform, which may rewrite `state`. */
+    /* Whether a parse-fallback record's bodies are known not to pair with state
+       (#3791, #3837). Checked mode: the sentence check's verdict (evidence-less
+       positions title-checked). Main mode: today's positional title check, read
+       here because the transform may rewrite `state`. A persisted record, or one
+       built alongside state.json in this process, is never mispaired. */
     const hintsMispaired =
-      record.hintsSource === 'parse' &&
-      record.parseTitles !== undefined &&
-      !parseTitlesPairWithState(state, record.parseTitles);
-    /* Nothing is written yet: the refusal is the same 409 merge, split and reorder answer. */
-    if (refuseWhenMispaired && hintsMispaired) {
+      pairing === null
+        ? false
+        : pairing.mode === 'checked'
+          ? !pairing.paired
+          : record.parseTitles !== undefined && !parseTitlesPairWithState(state, record.parseTitles);
+    /* Nothing is written yet: the refusal is the same 409 the transforms' own
+       count/id assert answers. */
+    if (opKind !== 'exclude' && hintsMispaired) {
       const e = new HintsOutOfSyncError();
       return { early: { status: 409, body: { error: e.message, code: e.code } } };
+    }
+    /* #3837 fix round 1 (owner round 9) -- a parse-fallback record whose ids do
+       not pair with state's (split drift, a pre-#3703 merge or split). Read before
+       the transform: exclude's prune keeps only the hints whose ids survive, which
+       can leave hints and state the same length afterwards. */
+    let parseCountIdFails = false;
+    if (record.hintsSource === 'parse') {
+      try {
+        assertHintsPairWithState(state, record.chapterHints);
+      } catch {
+        parseCountIdFails = true;
+      }
     }
     let result: RestructureResult;
     try {
@@ -375,7 +499,9 @@ async function applyRestructureClaimed(
         alignedHints,
         sentences,
         advisoryValid,
-        record.hintsSource === 'parse' ? record.parseTitles : undefined,
+        /* Main mode only: in checked mode the check already applied the title
+           rule where it applies, and the transform's assert keeps count/id. */
+        pairing?.mode === 'main' ? record.parseTitles : undefined,
         record.hintsSource,
         parseChapterCount,
       );
@@ -390,6 +516,21 @@ async function applyRestructureClaimed(
           body: { error: (e as Error).message || 'Invalid restructure operation.' },
         },
       };
+    }
+
+    /* #3837, round 8 decision 2 -- exclude/include. A toggle (the chapter count
+       is unchanged) moves no id or uuid, so it writes no hints file for any
+       record: a persisted entry still validates, and a parse book stays one, so a
+       mispairing is never laundered into `persisted`. A prune (an empty chapter
+       dropped and the rest renumbered) decides "empty" from the hint bodies, so
+       on a parse book whose bodies do not pair it can drop the wrong chapter,
+       and its result could be persisted as if they did. It is refused, with
+       nothing written, unless the book pairs: count/id (owner round 9) and then
+       the sentence check, or the title rule where the check cannot run. */
+    const excludeToggle = opKind === 'exclude' && result.state.chapters.length === oldChapters.length;
+    if (opKind === 'exclude' && !excludeToggle && (parseCountIdFails || hintsMispaired)) {
+      const e = new HintsOutOfSyncError();
+      return { early: { status: 409, body: { error: e.message, code: e.code } } };
     }
 
     /* #3703 -- persist the restructured bodies so a restart does not rebuild
@@ -423,23 +564,23 @@ async function applyRestructureClaimed(
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
-       the restructure itself is still valid -- skip rather than fail it. Only
-       exclude, rename and refresh-titles get here with such a book: they hand the
-       hints back unchanged (so the counts still differ). Merge, split and reorder
+       the restructure itself is still valid -- skip rather than fail it. Only an
+       exclude/include toggle, rename and refresh-titles get here with such a
+       book: they hand the hints back unchanged (so the counts still differ, or,
+       at the same count with ids that do not pair, `parseCountIdFails` skips the
+       write -- #3953); a prune on it was refused above. Merge, split and reorder
        rebuild state from the hints and refuse it with a 409 before this point
-       (#3791), including a same-count book whose parse-fallback titles disagree
-       with state (`hintsMispaired`). That second case is skipped as well: a file
-       written here would make the mispaired bodies `persisted`, which no later
-       check looks at. A file written here persists whatever pairing the
-       in-memory record already had: a pre-upgrade restructure is not repaired. */
+       (#3791). A mispaired book (`hintsMispaired`) reaches here only through an
+       exclude/include toggle, which writes nothing (above): every other
+       operation refused it. A file written here persists whatever pairing the
+       in-memory record already had: a pre-upgrade restructure the check let
+       through is not repaired (#3837 round 7). */
     const aligned = result.hints.length === result.state.chapters.length;
     if (bodiesCurrent && !aligned) {
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
     }
-    if (bodiesCurrent && aligned && hintsMispaired) {
-      console.warn(`[chapters-restructure] ${manuscriptId}: parsed titles do not pair with state; skipping manuscript-hints.json`);
-    }
-    const hintsWritten = bodiesCurrent && aligned && !hintsMispaired;
+    const hintsWritten =
+      bodiesCurrent && aligned && !hintsMispaired && !excludeToggle && !parseCountIdFails;
     if (hintsWritten) {
       /* An unreadable previous file just means no previous entry to keep. */
       const previousFile = await readManuscriptHints(bookDir).catch(() => null);
@@ -539,7 +680,9 @@ async function applyRestructureClaimed(
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
   // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
-  await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
+  // Plan 290 — called with the result state, which carries the stale-evidence
+  // marker forward: while it is set the cache is cleared instead of rebuilt.
+  await refreshCacheFromEdits(result.state, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 
@@ -672,7 +815,6 @@ chaptersRestructureRouter.post(
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,
           }),
-          true,
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -706,8 +848,11 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences) =>
-          applyExclude(state, hints, sentences, op),
+        applyRestructure(
+          book,
+          prep,
+          (state, hints, sentences) => applyExclude(state, hints, sentences, op),
+          'exclude',
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -746,7 +891,6 @@ chaptersRestructureRouter.post(
       const result = await withBookOp(req.params.bookId, (book) =>
         applyRestructure(book, prep, (state, hints, sentences) =>
           applyRename(state, hints, sentences, op),
-          true,
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });

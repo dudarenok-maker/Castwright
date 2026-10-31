@@ -18,6 +18,8 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
+import { readEditsForHintsCheck } from './hints-proof-io.js';
+import { swapLeavesStaleEvidence } from './stale-evidence.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { withLocatedBook } from './book-state-update.js';
 import { writeJsonAtomic } from './state-io.js';
@@ -26,6 +28,8 @@ import { withStateJsonLock } from './file-lock.js';
 import { mintEditEpoch } from './slice-revision.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
+import { removeManuscript } from '../store/manuscripts.js';
+import { clearAnalysisCacheWithRetry } from '../store/analysis-cache.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
    chronological, and human-readable in File Explorer. */
@@ -234,27 +238,69 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
        prior local override of 5). Three slots cover the realistic recovery
        window: the last completed write, the one before it, and one earlier. */
     const parsed = value as BookStateJson;
-    /* #3700 — a whole-file overwrite that renames over state.json; it takes the
-       per-book state-json leaf lock (inside the book lock) so it can't
-       interleave with a render's stamp. */
-    await withStateJsonLock(stateJsonPath(bookDir), async () => {
-      /* #3700 review pass 3 — the book may have been deleted or moved after
-         `bookDir` was resolved above. The write below would recreate the old
-         folder with the same bookId, so an absent state.json is "book not
-         found": write nothing. A stranded main (absent, `.bak.1` beside it:
-         a write died between its renames, #3625) is still the book, so the
-         restore goes ahead. */
-      const sp = stateJsonPath(bookDir);
-      if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
-      await writeStateJsonAtomic(stateJsonPath(bookDir), {
-        ...parsed,
-        language: parsed.language ?? null,
-        /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
-           own epoch must not come back, or a save based on a read taken under
-           it would pass the revision check against rewound state. */
-        editEpoch: mintEditEpoch(),
+    /* Plan 290 (#3837, round 10) -- a restore swaps state.json only, so the local
+       manuscript-edits.json stays. Read here, under the book lock every edits
+       writer takes (or under book-op, which the route holds). */
+    const edits = await readEditsForHintsCheck(bookDir);
+    /* The manuscript id the book carried before the restore, read under the
+       state-json lock below. */
+    let currentManuscriptId: string | undefined;
+    /* Whether the restored state.json landed carrying the marker. */
+    let stamped = false;
+    try {
+      /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+         per-book state-json leaf lock (inside the book lock) so it can't
+         interleave with a render's stamp. */
+      await withStateJsonLock(stateJsonPath(bookDir), async () => {
+        /* #3700 review pass 3 — the book may have been deleted or moved after
+           `bookDir` was resolved above. The write below would recreate the old
+           folder with the same bookId, so an absent state.json is "book not
+           found": write nothing. A stranded main (absent, `.bak.1` beside it:
+           a write died between its renames, #3625) is still the book, so the
+           restore goes ahead. */
+        const sp = stateJsonPath(bookDir);
+        if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
+        /* Plan 290 (#3837, round 10) -- the book's current state, read under this
+           leaf lock: the snapshot's chapters are compared with it to decide the
+           stale-evidence marker. Unreadable counts as a different list. */
+        const current = await readStateJsonWithRecovery(sp).catch(() => null);
+        const currentId = (current as { manuscriptId?: unknown } | null)?.manuscriptId;
+        if (typeof currentId === 'string' && currentId) currentManuscriptId = currentId;
+        const stale = swapLeavesStaleEvidence(edits, parsed.chapters, current);
+        await writeStateJsonAtomic(stateJsonPath(bookDir), {
+          ...parsed,
+          /* Never the snapshot's own marker: only the rule above decides
+             (undefined is not serialised). */
+          sentencesPredateChapters: stale ? true : undefined,
+          language: parsed.language ?? null,
+          /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
+             own epoch must not come back, or a save based on a read taken under
+             it would pass the revision check against rewound state. */
+          editEpoch: mintEditEpoch(),
+        });
+        stamped = stale;
       });
-    });
+      /* Plan 290 (#3837, owner round 11) -- the analysis cache is keyed by
+         manuscriptId, not by chapter list, so after a stamping restore it still
+         holds takes keyed to the chapter list just replaced; a main run would
+         replay them as current and clear the marker over them. Clear it, as a
+         restructure does while the marker is set (refreshCacheFromEdits). The
+         cache file is not under the state-json lock, so this runs after it,
+         still under the book lock. A restore that stamps nothing keeps it. */
+      if (stamped && typeof parsed.manuscriptId === 'string' && parsed.manuscriptId) {
+        await clearAnalysisCacheWithRetry(parsed.manuscriptId);
+      }
+    } finally {
+      /* PR #3966 review pass 1 -- the restored state.json describes another
+         chapter list, so a warm ManuscriptRecord built from the state it
+         replaced is stale: a main run would rebuild state.chapters from it and
+         undo the restore. Drop the record for the id the book carried and for
+         the snapshot's id, and the next reader re-hydrates from disk -- as the
+         bundle overwrite does (scan-import-folder.ts). In a `finally`, like
+         there: dropping a warm record is harmless if the write did not land. */
+      if (currentManuscriptId) removeManuscript(currentManuscriptId);
+      if (typeof parsed.manuscriptId === 'string' && parsed.manuscriptId) removeManuscript(parsed.manuscriptId);
+    }
   });
   if (!located) throw new BackupRestoreError('book not found');
 }

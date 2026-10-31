@@ -52,7 +52,7 @@ import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tt
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
-import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
   canonicalModelKeyForEngine,
   engineForModelKey,
@@ -1095,8 +1095,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
   const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
-    /* Plan 287 — overlay: keeps a `[]` take and an excluded chapter's take. */
-    await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
+    /* Plan 287 — overlay: keeps a `[]` take and an excluded chapter's take.
+       Plan 290 — skipped while the edits predate the chapter list. */
+    await refreshCacheFromEdits(state, editsPath, {
       excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
     }).catch((e) => {
       console.error('[generation] rebuild cache from edits failed', e);
