@@ -165,3 +165,29 @@ describe('restoreBackup — the analysis cache (owner round 11)', () => {
   });
 });
 
+/* PR #3966 review pass 1 — the restore drops the warm ManuscriptRecord for the
+   id the book carried AND the snapshot's id. With the two ids differing, each
+   call is load-bearing on its own. */
+describe('restoreBackup — warm manuscript records', () => {
+  it("drops both the current and the snapshot's record when their manuscriptIds differ", async () => {
+    const store = await import('../store/manuscripts.js');
+    const record = (manuscriptId: string) =>
+      ({
+        manuscriptId,
+        format: 'txt',
+        title: 'Test Book',
+        wordCount: 2,
+        byteSize: 11,
+        uploadedAt: '2026-01-01T00:00:00.000Z',
+        sourceText: 'chapter one',
+        chapterHints: [],
+      }) as unknown as Parameters<typeof store.putManuscript>[0];
+    const snapId = 'mns_restore_snapshot_id';
+    const liveId = 'mns_restore_current_id';
+    store.putManuscript(record(snapId));
+    store.putManuscript(record(liveId));
+    await restoreOnto('two-ids', { manuscriptId: snapId }, { manuscriptId: liveId }, null);
+    expect(store.getManuscript(liveId)).toBeUndefined();
+    expect(store.getManuscript(snapId)).toBeUndefined();
+  });
+});
