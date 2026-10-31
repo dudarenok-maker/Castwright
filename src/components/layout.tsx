@@ -61,6 +61,7 @@ import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
 import type { Character, BookExportJob, Revision } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { renderedChaptersForCharacter } from '../lib/stale-chapters';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
 import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
 import { isNotAFailureHaltCode } from '../lib/analysis-phase-state';
@@ -2950,11 +2951,7 @@ export function Layout() {
                     JSON.stringify(prior.overrideTtsVoices ?? {}) !==
                       JSON.stringify(updated.overrideTtsVoices ?? {});
                   if (voiceChanged) {
-                    const affectedChapters = chapters
-                      .filter(
-                        (ch) => ch.state === 'done' && ch.characters && updated.id in ch.characters,
-                      )
-                      .map((ch) => ch.id);
+                    const affectedChapters = renderedChaptersForCharacter(updated.id, chapters);
                     if (affectedChapters.length > 0) {
                       dispatch(
                         uiActions.setStaleAudio({

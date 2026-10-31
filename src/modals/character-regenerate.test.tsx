@@ -97,6 +97,13 @@ describe('CharacterRegenerateModal', () => {
     expect(screen.getByText('≈50 min')).toBeInTheDocument();
   });
 
+  it('says the character speaks only in excluded chapters, not that they never speak (#3919)', () => {
+    const onlyExcluded = [{ ...ch(1, { marlow: 'done' }), excluded: true } as Chapter];
+    render(<CharacterRegenerateModal character={marlow} chapters={onlyExcluded} onClose={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByText(/only in excluded chapters/)).toBeInTheDocument();
+    expect(screen.queryByText(/doesn't speak in any chapter/)).toBeNull();
+  });
+
   it('shows "—" for the ETA when the character speaks in no chapters', () => {
     render(
       <CharacterRegenerateModal

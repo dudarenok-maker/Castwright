@@ -37,9 +37,10 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
      whole-chapter — there is no per-character synthesis server-side, so a
      voice change is applied by re-rendering each affected chapter in full.
      The first chapter is the A/B preview sample. */
-  const speakingChapters = chapters.filter(
-    (ch) => !ch.excluded && ch.characters[character.id] && ch.characters[character.id] !== 'skipped',
-  );
+  const speaks = (ch: Chapter) =>
+    ch.characters[character.id] && ch.characters[character.id] !== 'skipped';
+  const speakingChapters = chapters.filter((ch) => !ch.excluded && speaks(ch));
+  const speaksOnlyInExcluded = speakingChapters.length === 0 && chapters.some(speaks);
   const chapterIds = speakingChapters.map((ch) => ch.id);
   const previewChapter = speakingChapters[0] ?? null;
   const n = speakingChapters.length;
@@ -79,7 +80,9 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
               </p>
               {n === 0 ? (
                 <p className="text-sm text-ink/60">
-                  {character.name} doesn't speak in any chapter yet — nothing to regenerate.
+                  {speaksOnlyInExcluded
+                    ? `${character.name} speaks only in excluded chapters — nothing to regenerate.`
+                    : `${character.name} doesn't speak in any chapter yet — nothing to regenerate.`}
                 </p>
               ) : (
                 <>

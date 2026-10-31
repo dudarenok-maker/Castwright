@@ -10,9 +10,13 @@ import { uiActions } from '../store/ui-slice';
 import { stripAudioTags } from './audio-tags';
 import type { Chapter, ChangeLogEvent } from './types';
 
+/* Excluded chapters never render (the server drops them), so the stale-audio
+   banner must not name one — its Regenerate opens a modal that ignores them. */
 export function renderedChaptersForCharacter(characterId: string, chapters: Chapter[]): number[] {
   return chapters
-    .filter((ch) => ch.state === 'done' && ch.characters && characterId in ch.characters)
+    .filter(
+      (ch) => ch.state === 'done' && !ch.excluded && ch.characters && characterId in ch.characters,
+    )
     .map((ch) => ch.id);
 }
 
