@@ -41,6 +41,7 @@
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
+import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { AnalysisEngine } from '../lib/model-id';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
@@ -122,7 +123,30 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         return;
       }
       if (server.state !== 'running') {
-        const book = bookId ? await api.getBookState(bookId) : null;
+        /* #3967 — bounded and aborted at BOOK_READ_TIMEOUT_MS, and NOT retried: this is a
+           one-off with no mount lifecycle to cancel a retry loop, and a hang only holds up
+           this restore (nothing else in the handler waits on it). When the read fails or
+           expires, whether the book's cast is confirmed is unknown, and showing a
+           non-running snapshot on a confirmed book is what the gate below exists to stop;
+           but the local `running` is already denied by the server and its handle is closed,
+           so no tick would correct it — clear it (Layout's cold-boot read restores a
+           genuine pill on the next arrival at the book). */
+        const readCtrl = new AbortController();
+        const readTimers = new Set<ReturnType<typeof setTimeout>>();
+        let book: Awaited<ReturnType<typeof api.getBookState>> = null;
+        if (bookId) {
+          try {
+            book = await within(api.getBookState(bookId, readCtrl.signal), BOOK_READ_TIMEOUT_MS, readTimers, () =>
+              readCtrl.abort(),
+            );
+          } catch (err) {
+            console.warn('[analysis-state] refusal re-read failed:', (err as Error)?.message);
+            if (current() === atStart) dispatch(analysisActions.clearActiveStream());
+            return;
+          } finally {
+            readTimers.forEach(clearTimeout);
+          }
+        }
         if (current() !== atStart) return;
         if (!shouldSurfaceColdBootAnalysisPill(book?.state.castConfirmed ?? false, server.state)) {
           dispatch(analysisActions.clearActiveStream());

@@ -9,6 +9,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { castSlice } from '../store/cast-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
@@ -27,13 +28,14 @@ vi.mock('../store', async () => {
 });
 
 import { RestructureView } from './restructure';
+import { BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
 
 /* `guard` installs the real restructure guard (first in the chain, as in the app store):
    a user edit made mid-request is refused. Without it the store models a writer that
    bypasses the guard (a non-UI writer, or a write queued before the flag went up). */
 function makeStore(guard = false) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer },
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer, bookMeta: bookMetaSlice.reducer },
     middleware: (g) => (guard ? g().prepend(restructureGuardMiddleware) : g()),
   });
   holder.store = store;
@@ -95,7 +97,7 @@ describe('RestructureView — #3400 cross-book guard', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     // The user switches to book B (cache seeded) while A's re-read is in flight.
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
@@ -123,7 +125,7 @@ describe('RestructureView — #3400 cross-book slices', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
       manuscriptSlice.actions.hydrateFromBookState({
@@ -464,6 +466,74 @@ describe('RestructureView — #3400 restructure flag', () => {
     resolvers[1]({ sentenceRemap: [], warnings: [] });
     await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(flag(store)).toBeNull());
+  });
+
+  /* #3967 — the re-reads run with the flag up; one that never settles must not hold it. */
+  it.each(['getBookState', 'getLibrary'] as const)('is cleared when the %s re-read never settles', async (hung) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      apiMock[hung].mockReturnValue(new Promise(() => {}));
+      render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+      await startRefresh();
+      await waitFor(() => expect(apiMock[hung]).toHaveBeenCalled());
+      expect(flag(store)).toBe('b1');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BOOK_READ_TIMEOUT_MS * 2);
+      });
+      await waitFor(() => expect(flag(store)).toBeNull());
+      /* The expired book-state read is aborted too, not left open. */
+      if (hung === 'getBookState') {
+        expect((apiMock.getBookState.mock.calls[0] as unknown[])[1]).toHaveProperty('aborted', true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3967 pass 2 — the re-read expiring must not leave the panel on the pre-restructure
+     list: the merge would stay armed and a second click would send the same ids again. */
+  it('applies the response chapters when the book-state re-read expires, so the merge is not armed on a stale list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      const OLD = [1, 2, 3, 4].map((id) => ({ id, title: `Old ${id}`, slug: `old-${id}`, duration: '', state: 'done' }));
+      const NEW = [
+        { id: 1, title: 'Old 1', slug: 'old-1' },
+        { id: 2, title: 'Old 2', slug: 'old-2' },
+        { id: 3, title: 'Old 4', slug: 'old-4' },
+      ];
+      store.dispatch(
+        chaptersSlice.actions.hydrateFromBookState({ bookId: 'b1', chapters: OLD as never, completedSlugs: [], characters: [] } as never),
+      );
+      apiMock.mergeChapters.mockResolvedValue({ chapters: NEW, sentenceRemap: [], warnings: [] });
+      apiMock.getBookState.mockImplementation(
+        (_id: string, signal?: AbortSignal) =>
+          new Promise((res, rej) => {
+            const t = setTimeout(() => res({ state: { chapters: NEW }, completedSlugs: [], revisions: null }), 16_000);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              rej(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      );
+      render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+      fireEvent.click(screen.getByLabelText('Select chapter Old 2 for merge'));
+      fireEvent.click(screen.getByLabelText('Select chapter Old 3 for merge'));
+      fireEvent.click(screen.getByTestId('restructure-merge-button'));
+      fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+      await waitFor(() => expect(apiMock.mergeChapters).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(flag(store)).toBeNull());
+      expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+      expect(screen.getByTestId('restructure-merge-button').textContent).not.toMatch(/\(2\)/);
+      /* The rest of the book's state is repaired by Layout's retrying full read. */
+      expect(store.getState().bookMeta.needsFullRead?.['b1']).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("book A's request ending does not lower book B's flag (pass-6 cross-book)", async () => {

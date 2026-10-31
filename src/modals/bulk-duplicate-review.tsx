@@ -23,6 +23,7 @@ import {
   type DuplicateResolution,
 } from './duplicate-review-modal';
 import { api } from '../lib/api';
+import { readWithRetry } from '../lib/book-read';
 import { findCharacterForVoice } from '../lib/voice-character-link';
 import type { DuplicateCandidate } from '../lib/cross-book-duplicates';
 import type { Character } from '../lib/types';
@@ -64,6 +65,21 @@ export function BulkDuplicateReviewModal({
      dep on a fresh-each-render Set would re-run the effect on every state
      update and its cleanup would abort the still-pending getBookState. */
   const inFlightRef = useRef<Set<string>>(new Set());
+  /* #3967 — the reads are bounded and retried on expiry (readWithRetry), so a stall
+     that clears is picked up, but a server that stays stalled keeps the pair on
+     "Loading" for as long as it does: the retries are not capped, and Skip still works.
+     Only unmounting aborts them — never a dependency change (see the hydrate effect). */
+  const readLifeRef = useRef<AbortController | null>(null);
+  const readTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const ctrl = new AbortController();
+    readLifeRef.current = ctrl;
+    const timers = readTimersRef.current;
+    return () => {
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+    };
+  }, []);
 
   /* Reset the walk every time the modal opens with a fresh queue. */
   useEffect(() => {
@@ -99,16 +115,19 @@ export function BulkDuplicateReviewModal({
       ) {
         continue;
       }
+      const life = readLifeRef.current;
+      if (!life) continue;
       inFlightRef.current.add(bookId);
       setFetching((prev) => new Set(prev).add(bookId));
-      api
-        .getBookState(bookId)
+      readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, readTimersRef.current)
         .then((res) => {
           const cast = res?.cast?.characters ?? [];
           if (cast.length === 0) throw new Error('book state has no cast');
           setForeignCasts((prev) => new Map(prev).set(bookId, cast));
         })
         .catch((err) => {
+          /* Unmounted: a silent cancel, not a failed load. */
+          if ((err as { name?: string })?.name === 'AbortError') return;
           console.warn('[bulk-duplicate] foreign cast hydrate failed', (err as Error).message);
           setFailed((prev) => new Set(prev).add(bookId));
         })
@@ -121,9 +140,9 @@ export function BulkDuplicateReviewModal({
           });
         });
     }
-    /* No cleanup-abort: the fetches are idempotent (guarded by the ref +
-       foreignCasts/failed) and short-lived; aborting on every dep change
-       would cancel an in-flight resolve and wedge the loading state. */
+    /* No cleanup-abort here: the fetches are idempotent (guarded by the ref +
+       foreignCasts/failed); aborting on every dep change would cancel an in-flight
+       resolve and wedge the loading state. Unmount aborts them (readLifeRef). */
   }, [open, current, currentBookId, foreignCasts, failed]);
 
   /* Resolve the current candidate into a live pair + loading/error state. A

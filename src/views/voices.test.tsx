@@ -1,6 +1,6 @@
 // Pairs with docs/features/archive/22-voice-library.md
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -23,6 +23,8 @@ const setVoiceOverride = vi.fn();
 const getBookState = vi.fn<(bookId: string) => Promise<BookStateResponse | null>>(() =>
   Promise.resolve(null),
 );
+/* #3967 — the signal each getBookState call was handed, in call order. */
+const bookStateSignals: Array<AbortSignal | undefined> = [];
 const seriesPatchCharacter =
   vi.fn<
     (args: {
@@ -94,7 +96,10 @@ vi.mock('../lib/api', () => ({
     setVoicePin: (voiceId: string, pinned: boolean) => setVoicePin(voiceId, pinned),
     getBaseVoices: () => getBaseVoices(),
     setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...args),
-    getBookState: (bookId: string) => getBookState(bookId),
+    getBookState: (bookId: string, signal?: AbortSignal) => {
+      bookStateSignals.push(signal);
+      return getBookState(bookId);
+    },
     /* The rebaseline modal (mounted by this view) fetches the series cast on
        open; no series-mates in this test workspace. */
     getSeriesCast: (_bookId: string) => Promise.resolve({ characters: [] as Character[] }),
@@ -215,6 +220,7 @@ beforeEach(() => {
   getBaseVoices.mockResolvedValue({ voices: [] });
   setVoiceOverride.mockClear();
   getBookState.mockReset();
+  bookStateSignals.length = 0;
   getBookState.mockResolvedValue(null);
   seriesPatchCharacter.mockReset();
   mergeCharactersMock.mockReset();
@@ -766,6 +772,99 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       /* Still only one fetch — the second Compare click is served from the
          hydrate loader's cache and short-circuits the fetch path. */
       expect(getBookState).toHaveBeenCalledTimes(1);
+    });
+
+    function selectBothAndCompare() {
+      for (const name of ['Narrator', 'Garrow']) {
+        fireEvent.click(
+          screen
+            .getByText(name)
+            .closest('div.group')!
+            .querySelector('[aria-label="Select voice for compare"]')!,
+        );
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    }
+
+    describe('a foreign-cast read that never settles (#3967)', () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      it('is aborted at 15 s and retried, and the retry lands the dialog', async () => {
+        getBookState.mockImplementationOnce(() => new Promise(() => {}));
+        getBookState.mockResolvedValueOnce(buildBookState('b1', charactersB1));
+        renderCompare(libraryB1, null);
+        selectBothAndCompare();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(bookStateSignals).toHaveLength(1);
+        expect(bookStateSignals[0]!.aborted).toBe(false);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15000);
+        });
+        expect(bookStateSignals[0]!.aborted).toBe(true);
+        /* The retry waits retryDelayMs(0) = 2 s. */
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+        expect(getBookState).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      function renderCompareWithStore() {
+        const store = makeReadyStore(null);
+        const view = render(
+          <Provider store={store}>
+            <LibraryView library={libraryB1} />
+          </Provider>,
+        );
+        return { ...view, store };
+      }
+
+      it('aborts the in-flight read when the view unmounts, with no failure toast', async () => {
+        getBookState.mockImplementation(() => new Promise(() => {}));
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const { unmount, store } = renderCompareWithStore();
+          selectBothAndCompare();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+          });
+          expect(bookStateSignals).toHaveLength(1);
+          unmount();
+          expect(bookStateSignals[0]!.aborted).toBe(true);
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+          });
+          expect(store.getState().notifications.toasts).toHaveLength(0);
+          expect(error).not.toHaveBeenCalledWith('[voices] foreign cast fetch failed', expect.anything());
+        } finally {
+          error.mockRestore();
+        }
+      });
+
+      it('leaving while a retry is pending issues no further read and raises no toast', async () => {
+        getBookState.mockImplementation(() => new Promise(() => {}));
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const { unmount, store } = renderCompareWithStore();
+          selectBothAndCompare();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(15500);
+          });
+          expect(getBookState).toHaveBeenCalledTimes(1);
+          unmount();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(300000);
+          });
+          expect(getBookState).toHaveBeenCalledTimes(1);
+          expect(store.getState().notifications.toasts).toHaveLength(0);
+          expect(error).not.toHaveBeenCalledWith('[voices] foreign cast fetch failed', expect.anything());
+        } finally {
+          error.mockRestore();
+        }
+      });
     });
   });
 

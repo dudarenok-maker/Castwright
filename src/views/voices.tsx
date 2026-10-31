@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createKeyedLoader, type KeyedLoader } from '../lib/keyed-loader';
+import { readWithRetry } from '../lib/book-read';
 import {
   SectionLabel,
   MixedHeading,
@@ -176,6 +177,19 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      not-linked, gender/age/tone) don't update the loader's cache, so the
      cast it returns can lag `globalCastCache`; callers only null-check it. */
   const castLoaderRef = useRef<KeyedLoader<Character[]> | null>(null);
+  /* #3967 — the foreign-cast reads are bounded and retried on expiry; leaving the
+     view aborts the in-flight one and clears the retry timers. */
+  const castReadLife = useRef<AbortController | null>(null);
+  const castReadTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const ctrl = new AbortController();
+    castReadLife.current = ctrl;
+    const timers = castReadTimers.current;
+    return () => {
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+    };
+  }, []);
   /* Plan 101 — DuplicateReviewModal state. We hold the candidate's two
      voice ids (stable) rather than a frozen pair snapshot, then derive
      the live pair (+ hydration status) from `duplicateCandidates` below.
@@ -901,7 +915,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       return next;
     });
     try {
-      const res = await api.getBookState(bookId);
+      const life = castReadLife.current;
+      if (!life) throw new DOMException('aborted', 'AbortError');
+      const res = await readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, castReadTimers.current);
       const cast = res?.cast?.characters ?? null;
       if (!cast || cast.length === 0) {
         throw new Error('book state has no cast');
@@ -919,6 +935,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       });
       return cast;
     } catch (err) {
+      /* The view was left: a silent cancel, not a failed load. */
+      if ((err as { name?: string })?.name === 'AbortError') return null;
       console.error('[voices] foreign cast fetch failed', err);
       setGlobalCastFailed((prev) => {
         if (prev.has(bookId)) return prev;

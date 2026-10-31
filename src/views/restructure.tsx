@@ -18,12 +18,14 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { revisionsActions } from '../store/revisions-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { flushBookPersistence, type BookFlushOutcome } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
+import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import type { Chapter } from '../lib/types';
@@ -87,7 +89,13 @@ export function RestructureView({ bookId }: Props) {
       // manuscript-edits.json. The book-state GET handler runs the same
       // reconciliation that surface code expects on a normal page open.
       const requestSeq = store.getState().revisions.adoptSeq;
-      const fresh = await api.getBookState(bookId).catch(() => null);
+      /* #3967 — both re-reads run with the book's edit lock up, so each is bounded:
+         one that never settles must not keep manuscript edits refused until reload. */
+      const timers = new Set<ReturnType<typeof setTimeout>>();
+      const readCtrl = new AbortController();
+      const fresh = await within(api.getBookState(bookId, readCtrl.signal), BOOK_READ_TIMEOUT_MS, timers, () =>
+        readCtrl.abort(),
+      ).catch(() => null);
       /* The user may have opened another book while the re-read was in flight;
          the hydrate's sequence guard only orders same-book reads, so adopt only
          while this book is still the open one (same guard as refetchActiveRevisions). */
@@ -108,6 +116,24 @@ export function RestructureView({ bookId }: Props) {
             characterIdAliases: fresh.characterIdAliases,
           }),
         );
+      }
+      /* #3967 — the re-read expired or came back empty, but the response above
+         already carries the new chapter list. Leaving the pre-restructure list on
+         screen would keep the same selection armed, and a second click would send
+         those ids again and swallow the next chapter. Adopt the response's list
+         (audio on disk is what `audioRenderedAt` records) and mark the book so
+         Layout's retrying full read repairs the rest of its state. */
+      if (!fresh && res.chapters && activeBookId(store.getState()) === bookId) {
+        dispatch(
+          chaptersActions.hydrateFromBookState({
+            bookId,
+            /* The response types audioModelKey as a bare string; the slice's is the key union. */
+            chapters: res.chapters as Parameters<typeof chaptersActions.hydrateFromBookState>[0]['chapters'],
+            completedSlugs: res.chapters.filter((c) => c.audioRenderedAt).map((c) => c.slug),
+            characters: store.getState().cast.characters,
+          }),
+        );
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
       }
       /* Same cross-book rule for the remap: it rewrites (and drops unmapped)
          whatever sentences the slice holds, so apply it only while the slice
@@ -133,7 +159,8 @@ export function RestructureView({ bookId }: Props) {
       }
       // Refresh library so the Listen view's chapter card and the
       // generation queue pick up the new structure on next render.
-      const lib = await api.getLibrary().catch(() => null);
+      const lib = await within(api.getLibrary(), BOOK_READ_TIMEOUT_MS, timers).catch(() => null);
+      timers.forEach(clearTimeout);
       if (lib) dispatch(libraryActions.hydrate(lib));
       // Plan 70b — surface server-emitted advisories (orphan recovery,
       // empty-chapter prune, generic-title renumber from plan 70a).
