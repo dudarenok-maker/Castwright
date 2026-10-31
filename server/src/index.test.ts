@@ -10,6 +10,8 @@
    merely because this test imports the module). */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /* #3174 (G4) — bootWarmUserSettings() calls the real (module-level)
    readUserSettings import, so forcing its malformed-file throw needs the
@@ -254,6 +256,30 @@ describe('bootRepairDuplicateBookIds (#3713)', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('main() boot order (#3713, PR #4004)', () => {
+  /* main() cannot run here (it binds a port), so pin the order in its source: the
+     sweep rewrites state.json, so it must follow the upgrade coordinator's backup,
+     precede listen, and precede the fire-and-forget fsck that reads state.json. */
+  const source = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+  const at = (needle: string): number => {
+    const i = source.indexOf(needle);
+    expect(i, `${needle} not found in index.ts`).toBeGreaterThan(-1);
+    return i;
+  };
+
+  it('runs the duplicate-bookId sweep after the upgrade coordinator and before listen', () => {
+    const coordinator = at('await runUpgradeCoordinator(');
+    const sweep = at('await bootRepairDuplicateBookIds();');
+    const listen = at('listenWithAutoRebind(server, {');
+    expect(coordinator).toBeLessThan(sweep);
+    expect(sweep).toBeLessThan(listen);
+  });
+
+  it('starts the fsck only after the sweep, so the two never touch a state.json together', () => {
+    expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void fsckAllBooks()'));
   });
 });
 

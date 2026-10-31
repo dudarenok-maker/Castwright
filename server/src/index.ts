@@ -182,7 +182,8 @@ export async function bootRepairDuplicateBookIds(
       );
     }
   } catch (err) {
-    console.warn('[duplicate-bookid] startup repair failed', err);  }
+    console.warn('[duplicate-bookid] startup repair failed', err);
+  }
 }
 
 async function main(): Promise<void> {
@@ -197,11 +198,6 @@ async function main(): Promise<void> {
   if (sweptStaging.length > 0) {
     console.log(`[staging] removed ${sweptStaging.length} stale portable-import staging dir(s).`);
   }
-
-  /* #3713 — give each losing twin of a duplicated bookId a fresh id. AWAITED, and
-     before either listenWithAutoRebind() call below, so no request can see a twin
-     mid-repair. Never throws (see bootRepairDuplicateBookIds). */
-  await bootRepairDuplicateBookIds();
 
   /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
      onnxruntime-gpu (or another swap package) provides `onnxruntime`, so a
@@ -240,30 +236,6 @@ async function main(): Promise<void> {
       }
     })
     .catch((err) => console.warn('[changelog] migration skipped:', err));
-
-  /* Plan 20 — sibling fsck for the rollback-preservation pair. The
-     preserve helper (`workspace/preserve-previous-audio.ts`) renames two
-     files (audio + segments) sequentially; a crash between them leaves a
-     half-preserved state. On startup we walk every book's audio root,
-     promote any `.previous.mp3` back to live when the live counterpart
-     is missing (regen crash recovery), and drop orphan
-     `.previous.segments.json` files. Fire-and-forget: never blocks
-     listen, never throws. */
-  void fsckAllBooks()
-    .then((r) => {
-      if (r.recovered.length > 0) {
-        console.log(
-          `[fsck] reconciled ${r.recovered.length} rollback-pair half-state(s) on startup ` +
-            `(see workspace/fsck-orphan-audio.ts).`,
-        );
-      }
-      if (r.errors.length > 0) {
-        for (const e of r.errors) {
-          console.warn(`[fsck] ${e.action} failed for ${e.slug}: ${e.message}`);
-        }
-      }
-    })
-    .catch((err) => console.warn('[fsck] sweep skipped:', err));
 
   /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
      listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
@@ -530,6 +502,38 @@ async function main(): Promise<void> {
       }
     })
     .catch((err) => console.warn('[upgrade] coordinator skipped:', err));
+
+  /* #3713 — give each losing twin of a duplicated bookId a fresh id. AWAITED, and
+     before either listenWithAutoRebind() call below, so no request can see a twin
+     mid-repair. Placed AFTER the upgrade coordinator above: its contract is that
+     nothing is migrated until a backup exists, and this rewrites state.json.
+     Never throws (see bootRepairDuplicateBookIds). */
+  await bootRepairDuplicateBookIds();
+
+  /* Plan 20 — sibling fsck for the rollback-preservation pair. The
+     preserve helper (`workspace/preserve-previous-audio.ts`) renames two
+     files (audio + segments) sequentially; a crash between them leaves a
+     half-preserved state. On startup we walk every book's audio root,
+     promote any `.previous.mp3` back to live when the live counterpart
+     is missing (regen crash recovery), and drop orphan
+     `.previous.segments.json` files. Fire-and-forget: never blocks
+     listen, never throws. Started AFTER the #3713 duplicate-bookId sweep above, so
+     the fsck never reads a state.json (withBookOpAtDir) while the sweep rewrites one. */
+  void fsckAllBooks()
+    .then((r) => {
+      if (r.recovered.length > 0) {
+        console.log(
+          `[fsck] reconciled ${r.recovered.length} rollback-pair half-state(s) on startup ` +
+            `(see workspace/fsck-orphan-audio.ts).`,
+        );
+      }
+      if (r.errors.length > 0) {
+        for (const e of r.errors) {
+          console.warn(`[fsck] ${e.action} failed for ${e.slug}: ${e.message}`);
+        }
+      }
+    })
+    .catch((err) => console.warn('[fsck] sweep skipped:', err));
 
   const warn = lanExposureWarning();
   if (warn) console.warn(warn);
