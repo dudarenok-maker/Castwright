@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
@@ -28,9 +29,23 @@ const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
 /* Fails the copy of one source file with a non-ENOENT error (an EBUSY from a
    scanner holding the file), to prove a failed copy is not read as "absent". */
 const failCopyOf = vi.hoisted(() => ({ suffix: null as string | null }));
+/* Runs once, just before the next copy: lets a test change cast.json in the window
+   between the fork's copies and its stamp. */
+const beforeCopy = vi.hoisted(() => ({ fn: null as (() => void) | null }));
+/* Pins the next minted uuid, to land a copy on a destination that already exists. */
+const forcedNanoid = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock('nanoid', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('nanoid')>();
+  return { ...actual, nanoid: (...a: Parameters<typeof actual.nanoid>) => forcedNanoid.value ?? actual.nanoid(...a) };
+});
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const copyFile = async (src: unknown, dest: unknown, mode?: number) => {
+    if (beforeCopy.fn) {
+      const run = beforeCopy.fn;
+      beforeCopy.fn = null;
+      run();
+    }
     if (failCopyOf.suffix && String(src).endsWith(failCopyOf.suffix)) {
       throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${String(src)}'`), {
         code: 'EBUSY',
@@ -151,6 +166,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   failCopyOf.suffix = null;
+  beforeCopy.fn = null;
+  forcedNanoid.value = null;
   requestedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
@@ -511,6 +528,21 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
   });
 
+  it('the mint is book-scoped: a same-voiceId sibling in Book Two follows, other voices do not', async () => {
+    seedLegacy();
+    const rows = JSON.parse(readFileSync(castPath('Book Two'), 'utf8')).characters as Array<Record<string, unknown>>;
+    const sibling = { ...rows[0], id: 'wren_b' };
+    const stranger = { ...rows[0], id: 'other', voiceId: 'v_other' };
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [rows[0], sibling, stranger] }));
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    const after = JSON.parse(readFileSync(castPath('Book Two'), 'utf8')).characters as Array<Record<string, unknown>>;
+    expect(after[0].voiceUuid).toBeTruthy();
+    expect(after[1].voiceUuid).toBe(after[0].voiceUuid);
+    expect(after[2].voiceUuid).toBeUndefined();
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+  });
+
   it('Linked (Book Two names Book One): the series mint still stamps both rows with one uuid', async () => {
     seedLegacy({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } });
     const res = await design(() => bookTwoId);
@@ -606,6 +638,7 @@ describe('#3992 — a failed copy aborts the fork', () => {
     failCopyOf.suffix = null;
 
     expect(res.status).toBe(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
     expect(JSON.stringify(res.body)).not.toMatch(/EBUSY|copyfile|qwen-u_shared/);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(requestedVoiceIds).toEqual([]);
@@ -630,6 +663,138 @@ describe('#3992 — a failed copy aborts the fork', () => {
     const res = await design(() => bookTwoId);
     expect(res.status).toBe(200);
     expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+  });
+});
+
+/* Review pass 1, minor — pin what the fork copies, how the stamp is scoped, and
+   that it re-decides on a fresh read inside the cast lock. */
+describe('#3992 — fork internals', () => {
+  const family = {
+    'qwen-u_shared.pt': ORIG_PT,
+    'qwen-u_shared.json': ORIG_JSON,
+    'qwen-u_shared__1.7b.pt': Buffer.from('ONE-1.7B'),
+    'qwen-u_shared__master.wav': Buffer.from('ONE-MASTER'),
+  };
+  const seedFamily = () => {
+    seed({});
+    for (const [name, bytes] of Object.entries(family)) writeFileSync(join(qwenDir(), name), bytes);
+    writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('ONE-ANGRY'));
+  };
+  const files = () => readdirSync(qwenDir()).sort();
+  const rowsOf = (title: string): Array<Record<string, unknown>> =>
+    JSON.parse(readFileSync(castPath(title), 'utf8')).characters;
+
+  it('copies .pt, .json, __1.7b.pt and __master.wav, and never an emotion variant', async () => {
+    seedFamily();
+    const res = await design(() => bookTwoId, { preview: true });
+    expect(res.status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    for (const [name, bytes] of Object.entries(family)) {
+      const copy = name.replace('u_shared', fresh);
+      expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+    }
+    expect(existsSync(join(qwenDir(), `qwen-${fresh}__angry.pt`))).toBe(false);
+    for (const [name, bytes] of Object.entries(family)) {
+      expect(readFileSync(join(qwenDir(), name)).equals(bytes)).toBe(true);
+    }
+  });
+
+  it('stamps same-book rows that share the voiceId and uuid, and only those', async () => {
+    seed({});
+    const row = (id: string, extra: Record<string, unknown>) => ({ ...baseRow, id, ...extra });
+    writeFileSync(
+      castPath('Book Two'),
+      JSON.stringify({
+        characters: [
+          row('wren', {}),
+          row('wren_b', {}),
+          row('other_voice', { voiceId: 'v_other' }),
+          row('other_uuid', { voiceUuid: 'u_other' }),
+        ],
+      }),
+    );
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    const rows = rowsOf('Book Two');
+    const fresh = rows[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(rows[1].voiceUuid).toBe(fresh);
+    expect(rows[2].voiceUuid).toBe('u_shared');
+    expect(rows[3].voiceUuid).toBe('u_other');
+  });
+
+  describe('re-decides on a fresh read inside the cast lock', () => {
+    const edit = (change: (rows: Array<Record<string, unknown>>) => void, title = 'Book Two') => () => {
+      const rows = rowsOf(title);
+      change(rows);
+      writeFileSync(castPath(title), JSON.stringify({ characters: rows }));
+    };
+
+    it('a link that appears after the copies abort the stamp and leave no stray copies', async () => {
+      seedFamily();
+      const before = files();
+      beforeCopy.fn = edit((rows) => {
+        rows[0].matchedFrom = { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 };
+      });
+      const res = await design(() => bookTwoId);
+      expect(res.status).toBe(200);
+      expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+      expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
+      expect(files()).toEqual(before);
+    });
+
+    it('the earlier holder vanishing after the copies aborts the stamp', async () => {
+      seedFamily();
+      const before = files();
+      beforeCopy.fn = edit((rows) => {
+        delete rows[0].voiceUuid;
+      }, 'Book One');
+      const res = await design(() => bookTwoId);
+      expect(res.status).toBe(200);
+      expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+      expect(files()).toEqual(before);
+    });
+
+    it('another writer’s uuid that is itself held elsewhere is still used, never forked a second time', async () => {
+      seedFamily();
+      writeFileSync(
+        castPath('Book One'),
+        JSON.stringify({ characters: [readRow('Book One'), { ...baseRow, id: 'wren_old', voiceUuid: 'u_other' }] }),
+      );
+      beforeCopy.fn = edit((rows) => {
+        rows[0].voiceUuid = 'u_other';
+      });
+      const res = await design(() => bookTwoId);
+      expect(res.status).toBe(200);
+      expect(readRow('Book Two').voiceUuid).toBe('u_other');
+      expect(requestedVoiceIds).toEqual(['qwen-u_other']);
+    });
+
+    it('another writer minting a different uuid wins: it is used, nothing is stamped over it', async () => {
+      seedFamily();
+      const before = files();
+      beforeCopy.fn = edit((rows) => {
+        rows[0].voiceUuid = 'u_other';
+      });
+      const res = await design(() => bookTwoId);
+      expect(res.status).toBe(200);
+      expect(readRow('Book Two').voiceUuid).toBe('u_other');
+      expect(requestedVoiceIds).toEqual(['qwen-u_other']);
+      expect(files().filter((f) => f.endsWith('.pt'))).toEqual(
+        [...before.filter((f) => f.endsWith('.pt')), 'qwen-u_other.pt'].sort(),
+      );
+    });
+  });
+
+  it('never overwrites: a destination that already exists fails the fork and is left alone', async () => {
+    seed({});
+    forcedNanoid.value = 'u_taken';
+    const SENTINEL = Buffer.from('SOMEONE-ELSES-FILE');
+    writeFileSync(join(qwenDir(), 'qwen-u_taken.pt'), SENTINEL);
+    const res = await design(() => bookTwoId, { preview: true });
+    expect(res.status).toBe(500);
+    expect(readFileSync(join(qwenDir(), 'qwen-u_taken.pt')).equals(SENTINEL)).toBe(true);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 });
 

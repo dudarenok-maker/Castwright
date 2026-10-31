@@ -938,6 +938,64 @@ describe('scope + variantTasks (fs-25)', () => {
     expect(marlow?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
   });
 
+  /* #3992 — the bulk variant path forks a declined, shared uuid before it
+     anchors, exactly as the single route does: the design must be asked for the
+     fork's uuid and the earlier book's row must keep the shared one. */
+  it('#3992: scope:variants on a declined row designs under a forked uuid, not the earlier book’s', async () => {
+    const prequelDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'The Prequel');
+    try {
+      const shared = { ...charWithBase, voiceUuid: 'u_marlow_shared' };
+      writeBookOnDisk([...characters, shared]);
+      mkdirSync(join(prequelDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(prequelDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'prequel-id',
+          manuscriptId: 'm_prequel',
+          title: 'The Prequel',
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: 0,
+          isStandalone: false,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          language: 'en',
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(
+        join(prequelDir, '.audiobook', 'cast.json'),
+        JSON.stringify({ characters: [{ ...shared }] }),
+      );
+      const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+        voiceId: 'qwen-x__angry',
+        url: '/u',
+      });
+
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({
+          modelKey: QWEN_KEY,
+          scope: 'variants',
+          characterIds: [],
+          variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
+        });
+      expect(res.status).toBe(200);
+
+      const designedUuid = spy.mock.calls[0][0].character.voiceUuid;
+      expect(designedUuid).toBeTruthy();
+      expect(designedUuid).not.toBe('u_marlow_shared');
+      expect(charById('marlow')?.voiceUuid).toBe(designedUuid);
+      const prequel = JSON.parse(readFileSync(join(prequelDir, '.audiobook', 'cast.json'), 'utf8'));
+      expect(prequel.characters[0].voiceUuid).toBe('u_marlow_shared');
+    } finally {
+      rmSync(prequelDir, { recursive: true, force: true });
+    }
+  });
+
   it('scope:variants skips a variant whose base voice is missing', async () => {
     const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
       voiceId: 'qwen-v_maerin__angry',

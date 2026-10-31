@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 let root: string;
 let shouldFork: typeof import('./voice-uuid-fork.js').shouldForkSharedVoiceUuid;
+let shouldMintApart: typeof import('./voice-uuid-fork.js').shouldMintApartFromLegacyKey;
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -31,7 +32,7 @@ function reset() {
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'voice-uuid-fork-test-'));
   process.env.WORKSPACE_DIR = root;
-  ({ shouldForkSharedVoiceUuid: shouldFork } = await import('./voice-uuid-fork.js'));
+  ({ shouldForkSharedVoiceUuid: shouldFork, shouldMintApartFromLegacyKey: shouldMintApart } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
   delete process.env.WORKSPACE_DIR;
@@ -102,5 +103,68 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
       { id: 'c1b', voiceUuid: U },
     ]);
     expect(await shouldFork(one, { id: 'c1', voiceUuid: U })).toBe(false);
+  });
+  it('source side: a link that names a RETIRED id of this character still protects it', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
+    writeFileSync(
+      join(one, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { c1_old: 'c1' } }),
+    );
+    book('Two', TWO_ID, [
+      { id: 'c2', voiceUuid: U, matchedFrom: { bookId: ONE_ID, characterId: 'c1_old' } },
+    ]);
+    expect(await shouldFork(one, { id: 'c1', voiceUuid: U })).toBe(false);
+  });
+
+  it('an unreadable cast.json in another book is skipped, not thrown (and holds nothing)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U })).toBe(false);
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U })).toBe(true);
+  });
+});
+
+describe('shouldMintApartFromLegacyKey (#3992)', () => {
+  const slot = { qwen: { name: 'qwen-v_x' } };
+  const x = { id: 'c2', voiceId: 'v_x', overrideTtsVoices: slot };
+
+  it('true: no uuid, no link, both designed at the shared legacy key', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c1', voiceId: 'v_x', overrideTtsVoices: slot }]);
+    const two = book('Two', TWO_ID, [x]);
+    expect(await shouldMintApart(two, x)).toBe(true);
+  });
+
+  it('false: the row itself has a link, a uuid, or no designed slot', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c1', voiceId: 'v_x', overrideTtsVoices: slot }]);
+    const two = book('Two', TWO_ID, [x]);
+    expect(await shouldMintApart(two, { ...x, matchedFrom: { bookId: ONE_ID } })).toBe(false);
+    expect(await shouldMintApart(two, { ...x, voiceUuid: 'u' })).toBe(false);
+    expect(await shouldMintApart(two, { id: 'c2', voiceId: 'v_x' })).toBe(false);
+  });
+
+  it('false: the other book has a uuid, no designed slot, or another voiceId', async () => {
+    reset();
+    book('One', ONE_ID, [
+      { id: 'c1', voiceId: 'v_x', voiceUuid: 'u', overrideTtsVoices: slot },
+      { id: 'c3', voiceId: 'v_x' },
+      { id: 'c4', voiceId: 'v_y', overrideTtsVoices: slot },
+    ]);
+    const two = book('Two', TWO_ID, [x]);
+    expect(await shouldMintApart(two, x)).toBe(false);
+  });
+
+  it('false: the other book links back to this one (source side of a live pair)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [x]);
+    book('One', ONE_ID, [
+      { id: 'c1', voiceId: 'v_x', overrideTtsVoices: slot, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } },
+    ]);
+    expect(await shouldMintApart(two, x)).toBe(false);
   });
 });
