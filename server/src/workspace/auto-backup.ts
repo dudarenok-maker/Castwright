@@ -28,6 +28,7 @@ import { withStateJsonLock } from './file-lock.js';
 import { mintEditEpoch } from './slice-revision.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
+import { removeManuscript } from '../store/manuscripts.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
    chronological, and human-readable in File Explorer. */
@@ -240,35 +241,52 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
        manuscript-edits.json stays. Read here, under the book lock every edits
        writer takes (or under book-op, which the route holds). */
     const edits = await readEditsForHintsCheck(bookDir);
-    /* #3700 — a whole-file overwrite that renames over state.json; it takes the
-       per-book state-json leaf lock (inside the book lock) so it can't
-       interleave with a render's stamp. */
-    await withStateJsonLock(stateJsonPath(bookDir), async () => {
-      /* #3700 review pass 3 — the book may have been deleted or moved after
-         `bookDir` was resolved above. The write below would recreate the old
-         folder with the same bookId, so an absent state.json is "book not
-         found": write nothing. A stranded main (absent, `.bak.1` beside it:
-         a write died between its renames, #3625) is still the book, so the
-         restore goes ahead. */
-      const sp = stateJsonPath(bookDir);
-      if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
-      /* Plan 290 (#3837, round 10) -- the book's current state, read under this
-         leaf lock: the snapshot's chapters are compared with it to decide the
-         stale-evidence marker. Unreadable counts as a different list. */
-      const current = await readStateJsonWithRecovery(sp).catch(() => null);
-      const stale = swapLeavesStaleEvidence(edits, parsed.chapters, current);
-      await writeStateJsonAtomic(stateJsonPath(bookDir), {
-        ...parsed,
-        /* Never the snapshot's own marker: only the rule above decides
-           (undefined is not serialised). */
-        sentencesPredateChapters: stale ? true : undefined,
-        language: parsed.language ?? null,
-        /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
-           own epoch must not come back, or a save based on a read taken under
-           it would pass the revision check against rewound state. */
-        editEpoch: mintEditEpoch(),
+    /* The manuscript id the book carried before the restore, read under the
+       state-json lock below. */
+    let currentManuscriptId: string | undefined;
+    try {
+      /* #3700 — a whole-file overwrite that renames over state.json; it takes the
+         per-book state-json leaf lock (inside the book lock) so it can't
+         interleave with a render's stamp. */
+      await withStateJsonLock(stateJsonPath(bookDir), async () => {
+        /* #3700 review pass 3 — the book may have been deleted or moved after
+           `bookDir` was resolved above. The write below would recreate the old
+           folder with the same bookId, so an absent state.json is "book not
+           found": write nothing. A stranded main (absent, `.bak.1` beside it:
+           a write died between its renames, #3625) is still the book, so the
+           restore goes ahead. */
+        const sp = stateJsonPath(bookDir);
+        if (!existsSync(sp) && !existsSync(`${sp}.bak.1`)) throw new BackupRestoreError('book not found');
+        /* Plan 290 (#3837, round 10) -- the book's current state, read under this
+           leaf lock: the snapshot's chapters are compared with it to decide the
+           stale-evidence marker. Unreadable counts as a different list. */
+        const current = await readStateJsonWithRecovery(sp).catch(() => null);
+        const currentId = (current as { manuscriptId?: unknown } | null)?.manuscriptId;
+        if (typeof currentId === 'string' && currentId) currentManuscriptId = currentId;
+        const stale = swapLeavesStaleEvidence(edits, parsed.chapters, current);
+        await writeStateJsonAtomic(stateJsonPath(bookDir), {
+          ...parsed,
+          /* Never the snapshot's own marker: only the rule above decides
+             (undefined is not serialised). */
+          sentencesPredateChapters: stale ? true : undefined,
+          language: parsed.language ?? null,
+          /* Plan 289 Invariant 4 — a restore is a wipe-class event: the snapshot's
+             own epoch must not come back, or a save based on a read taken under
+             it would pass the revision check against rewound state. */
+          editEpoch: mintEditEpoch(),
+        });
       });
-    });
+    } finally {
+      /* PR #3966 review pass 1 -- the restored state.json describes another
+         chapter list, so a warm ManuscriptRecord built from the state it
+         replaced is stale: a main run would rebuild state.chapters from it and
+         undo the restore. Drop the record for the id the book carried and for
+         the snapshot's id, and the next reader re-hydrates from disk -- as the
+         bundle overwrite does (scan-import-folder.ts). In a `finally`, like
+         there: dropping a warm record is harmless if the write did not land. */
+      if (currentManuscriptId) removeManuscript(currentManuscriptId);
+      if (typeof parsed.manuscriptId === 'string' && parsed.manuscriptId) removeManuscript(parsed.manuscriptId);
+    }
   });
   if (!located) throw new BackupRestoreError('book not found');
 }
