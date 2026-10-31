@@ -89,7 +89,7 @@ describe('a backup restore refuses while a book job is registered', () => {
       const busy = await request(app).post(`/api/books/${bookId}/backups/restore`).send({ backupFile: SNAPSHOT });
       expect(busy.status, JSON.stringify(busy.body)).toBe(409);
       expect(busy.body.code).toBe('book_busy');
-      expect(typeof busy.body.error).toBe('string');
+      expect(busy.body.error).toMatch(/^This book is busy \(.+\)\. Stop it or wait for it to finish, then restore the backup\.$/);
       expect(busy.body.error).not.toContain(workspaceRoot);
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(readFileSync(cacheFile, 'utf8')).toBe(cacheBefore);
