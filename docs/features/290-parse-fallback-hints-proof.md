@@ -533,11 +533,11 @@ Changes:
   - marker set + overlay leaves a seeded cache byte-identical;
   - no marker rebuilds exactly as today, in both modes;
   - route level, one per overlay caller: `generation.test.ts` (slow config), `chapter-qa-repair.test.ts` and `chapter-splice.test.ts` — a marker-set book leaves the analysis cache file byte-unchanged, a marker-free book overlays the edits.
-- **re-parse → exclude → Start → Start (M26), Task 5**, in this file:
+- **re-parse → exclude → Start → restart → Start #2 (M26), Task 5**, in this file:
   - re-parse (marker set) → exclude a chapter (a toggle) → assert the analysis cache file is absent;
   - Start #1 (stubbed analyzer counting `runStage2Chapter` calls) → assert it attributed **every** non-excluded chapter (no "cached, skipping") and cleared the marker;
-  - Start #2 → assert it is **not** refused with `hints_out_of_sync`.
-  - With the rebuild instead of the clear (the mutant), Start #1 replays the old-keyed takes as cached, persists them, and clears the marker over stale evidence; Start #2 is then refused on score.
+  - a restart (re-parse left a record with no `hintsSource`, which the seam never checks) → Start #2 → assert it is **not** refused with `hints_out_of_sync`.
+  - With the rebuild instead of the clear (the mutant), Start #1 replays the old-keyed takes as cached, persists them, and clears the marker over stale evidence; after the restart, Start #2 is then refused on score.
 - **survives the client:** a `PUT /state` slice save from a stale client copy keeps the marker.
 - `r5-reparse-marker.ts` shows the real-book version: without the marker the re-parsed Unlocked is refused at 78 chapters and Keeper #1 at 1. With the marker both proceed at Start and at restructure, beyond count/id, which they now pass.
 
@@ -594,7 +594,7 @@ No Playwright spec and no frontend test: there is no UI, client or SSE change. T
 | M23 | `applyReparse` does not set the marker | `sentencesPredateChapters === true` after re-parse and replace |
 | M24 | the seams ignore the marker | re-parse → restart → Start answers 200 |
 | M25 | clear the marker on the subset persist (or never clear it) | subset leaves it set; main clears it (Task 3); a later reorder is refused (Task 5) |
-| M26 | a restructure on a marker-set book rebuilds the cache instead of clearing it | re-parse → exclude → Start → Start: Start #2 refused, Start #1 skipped chapters as cached |
+| M26 | a restructure on a marker-set book rebuilds the cache instead of clearing it | re-parse → exclude → Start → restart → Start #2: Start #2 refused, Start #1 skipped chapters as cached |
 | M27 | the overwrite / restore does not stamp the marker, stamps on same chapters, ignores the current marker, or carries the bundle's / snapshot's own marker; or `swapLeavesStaleEvidence` treats an absent / unreadable current state as matching | overwrite-marker test ("… a retitled / renumbered chapter lands the marker", "a same-chapters overwrite … stamps nothing", "… already-marked book … keeps the marker", "a marker carried in the bundle's own state.json is stripped"); `auto-backup.stale-evidence.test.ts` ("chapters differing in …: marker", "same chapters + saved sentences: no marker", "… already marked …: marker", "a snapshot carrying the marker …"); `stale-evidence.test.ts` ("… current state null -> true") |
 | M28 | the overlay callers re-seed (or clear) the cache on a marker-set book, or a caller drops the marker from the state it passes | cache refresh helper test; the route-level "on a marker-set book, leaves the analysis cache file byte-unchanged" tests in `generation.test.ts`, `chapter-qa-repair.test.ts` and `chapter-splice.test.ts` |
 | M29 | evidence floor `>= 24` → `> 24`, `>= 25` or `>= 26` | the exactly-24-character swap pairs |

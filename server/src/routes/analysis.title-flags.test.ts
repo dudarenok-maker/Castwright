@@ -516,6 +516,88 @@ describe.each(['main', 'subset'] as const)(
     expect(res.body.code).toBe('hints_out_of_sync');
   }, 60_000);
 
+  it('state ids out of order (a permutation of 1..n) take the count/id rule, not the check', async () => {
+    /* Count/id compares sets, so [1, 3, 2] passes it; the sentences keyed by id would be
+       refused if the check paired them by index (state position 2 holds id 3). No API path
+       makes such a book (archived plan 51 invariant 1), so the seam falls back. */
+    const ms = `# Alpha
+
+It began.
+
+${lineFor(1)}
+
+# Beta
+
+It began.
+
+${lineFor(2)}
+
+# Gamma
+
+It began.
+
+${lineFor(3)}
+`;
+    const { manuscriptId } = await seedBook(`perm-${kind}`, ms, [
+      { id: 1, title: 'Alpha' },
+      { id: 3, title: 'Gamma' },
+      { id: 2, title: 'Beta' },
+    ]);
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.body?.code).not.toBe('hints_out_of_sync');
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('a legacy state.json with no bookId is still refused on count/id', async () => {
+    // Same count mismatch as the 409 case above (3 state chapters, 4 headings), but the
+    // state predates bookId: nothing backfills it, so the record carries no bookId.
+    const ms = `# Prologue
+
+It began.
+
+${lineFor(1)}
+
+# Alpha
+
+It began.
+
+${lineFor(2)}
+
+# Beta
+
+It began.
+
+${lineFor(3)}
+
+# Gamma
+
+It began.
+
+${lineFor(4)}
+`;
+    const { manuscriptId, bookDir } = await seedBook(`legacy-${kind}`, ms, [
+      { title: 'Prologue' },
+      { title: 'Part Two', titleOverridden: true },
+      { title: 'Gamma' },
+    ]);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const { bookId: _dropped, ...legacy } = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify(legacy));
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const rec = (await getOrHydrateManuscript(manuscriptId))!;
+    expect(rec.bookId).toBeUndefined();
+    expect(rec.bookDir).toBe(bookDir);
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+  }, 60_000);
+
   describe('fails open where main does', () => {
     it("a state.json whose manuscriptId changed after hydrate is not refused", async () => {
       const { manuscriptId, bookDir } = await seedReordered(`foreign-${kind}`);
@@ -527,6 +609,7 @@ describe.each(['main', 'subset'] as const)(
       writeFileSync(statePath, JSON.stringify({ ...state, manuscriptId: `${manuscriptId}_other` }));
       const res = await start(await analysisApp(), manuscriptId);
       expect(res.body?.code).not.toBe('hints_out_of_sync');
+      expect(res.status).toBe(200);
     }, 60_000);
 
     it('an edits path that is a directory (EISDIR) is not refused', async () => {
@@ -538,6 +621,7 @@ describe.each(['main', 'subset'] as const)(
       removeManuscript(manuscriptId);
       const res = await start(await analysisApp(), manuscriptId);
       expect(res.body?.code).not.toBe('hints_out_of_sync');
+      expect(res.status).toBe(200);
     }, 60_000);
 
     it('a record with a bookId but no bookDir is not refused', async () => {
@@ -549,6 +633,7 @@ describe.each(['main', 'subset'] as const)(
       rec.bookDir = undefined;
       const res = await start(await analysisApp(), manuscriptId);
       expect(res.body?.code).not.toBe('hints_out_of_sync');
+      expect(res.status).toBe(200);
     }, 60_000);
   });
 
