@@ -5,7 +5,7 @@
    analysis.title-flags.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -32,6 +32,9 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       const g = globalThis as Record<string, unknown>;
       if (opts.phase === 'phase1' && g.__analyzer_device_test_phase1_selection) {
         return g.__analyzer_device_test_phase1_selection;
+      }
+      if (opts.phase === 'phase0' && g.__analyzer_device_test_phase0_selection) {
+        return g.__analyzer_device_test_phase0_selection;
       }
       return actual.selectAnalyzerForPhase(
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
@@ -66,6 +69,7 @@ afterAll(() => {
 
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase0_selection;
 });
 
 /* Records the stage-2 prompt per chapter id; each sentence's text is the first
@@ -258,6 +262,41 @@ describe('#3703 — a restructure survives a restart + re-analysis', () => {
     const bodies = record.chapterHints.map((h) => h.body).join('\n');
     expect(bodies).toContain('Omega plan is set.');
     expect(bodies).not.toContain('Gamma plan is set.');
+  }, 60_000);
+
+  it('A1 (#3837): a Start after a merge that skipped its hints write is not refused, and keeps the in-memory record', async () => {
+    /* The merge below cannot persist its hints (the file changed after hydrate), so the
+       record it leaves in memory is impure: 3 transformed hints, hintsSource still 'parse'.
+       The start seam judges it by main's count/id rule and never re-hydrates it; a
+       re-hydrate would swap in a fresh 4-chapter parse against the 3-chapter state. */
+    const { manuscriptId, bookId, bookDir } = await seedBook('a1-impure', ['Delta', 'Alpha', 'Beta', 'Gamma']);
+    const { removeManuscript, getOrHydrateManuscript, getManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    await getOrHydrateManuscript(manuscriptId);
+    const file = join(bookDir, 'manuscript.md');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('Gamma', 'Omega'));
+    const merge = await request(await restructureApp())
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(merge.status).toBe(200);
+    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+    const record = getManuscript(manuscriptId)!;
+    expect(record.hintsSource).toBe('parse');
+    expect(record.chapterHints).toHaveLength(3);
+
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+    const prompts = new Map<number, string>();
+    const g = globalThis as Record<string, unknown>;
+    g.__analyzer_device_test_phase0_selection = phase1Selection(prompts);
+    g.__analyzer_device_test_phase1_selection = phase1Selection(prompts);
+    const res = await request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({});
+    expect(res.body?.code).not.toBe('hints_out_of_sync');
+    expect(res.status).toBe(200);
+    expect(getManuscript(manuscriptId)).toBe(record);
+    expect(getManuscript(manuscriptId)!.chapterHints).toHaveLength(3);
   }, 60_000);
 
   it('a stale hints file (uuid changed) is ignored and the fresh parse is used', async () => {

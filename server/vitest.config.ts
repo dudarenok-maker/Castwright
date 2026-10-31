@@ -262,6 +262,17 @@ export default defineConfig({
          same constant the guard itself imports, so the two can never
          independently drift. */
       '{**/server/src/routes/generation.ts,**/.*/**/server/src/routes/generation.ts}',
+      /* version.guard.test.ts (#3837, M17): reads server/src/routes/book-state.ts
+         at RUNTIME (readFileSync + a tokenizer pass) to look for a real
+         checkParseHintsPairing( call, the same #1847 runtime-read trap as the
+         entries above - the guard imports parsers/version.ts but not
+         book-state.ts, so there is no module-graph edge for
+         `vitest run --changed` to follow, and a book-state.ts-only diff would
+         select zero tests from this guard. This entry's literal text is
+         checked against server/src/parsers/version.guard-targets.ts's
+         PARSER_VERSION_GUARD_SCAN_GLOB, the same constant the guard itself
+         imports, so the two can never independently drift. */
+      '{**/server/src/routes/book-state.ts,**/.*/**/server/src/routes/book-state.ts}',
       /* registry-knob-read.guard.test.ts (#3139/#3146): imports registry.ts
          directly, so a new/changed knob there is already selected by the
          normal module graph — no trigger needed for that. Its

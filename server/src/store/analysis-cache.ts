@@ -13,6 +13,7 @@ import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/s
 import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
 import { readJson, enqueuePathOp } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
+import { jitteredDelayMs } from '../workspace/atomic-rename.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 
 /* fs-25 — absorb any legacy inline audio-tag in a freshly-analysed sentence
@@ -255,4 +256,25 @@ export async function clearAnalysisCache(manuscriptId: string): Promise<void> {
      called before it, and a later save lands after it. */
   const path = cachePath(manuscriptId);
   await enqueuePathOp(path, () => rm(path, { force: true }));
+}
+
+/* PR #3966 pass 3 -- clearAnalysisCache for the two callers that clear AFTER a
+   state.json swap already landed (backup restore, bundle overwrite): a transient
+   fs fault (AV / sync-client lock) there would answer 500 with the stale cache
+   kept for a later non-fresh analysis to replay. Up to 3 attempts with a short
+   jittered backoff on lock-class codes only; the last error is rethrown so the
+   request still fails loud. */
+const CLEAR_RETRY_DELAYS_MS = [25, 75];
+const CLEAR_RETRYABLE_CODES: ReadonlySet<string> = new Set(['EBUSY', 'EPERM', 'EACCES', 'EMFILE']);
+
+export async function clearAnalysisCacheWithRetry(manuscriptId: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await clearAnalysisCache(manuscriptId);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (attempt >= CLEAR_RETRY_DELAYS_MS.length || !code || !CLEAR_RETRYABLE_CODES.has(code)) throw e;
+      await new Promise((r) => setTimeout(r, jitteredDelayMs(CLEAR_RETRY_DELAYS_MS[attempt])));
+    }
+  }
 }

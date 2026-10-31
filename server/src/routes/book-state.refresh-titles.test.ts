@@ -604,9 +604,33 @@ describe('title refresh pairs by recorded parse origin (#3828 pass 1)', () => {
     expect(r.status).toBe(200);
   }
   const NEW_TITLES = ['Chapter 1 — The Beginning', 'Chapter 2 — A Manifest'];
+  /* The manuscript-hints.json main's exclude wrote, built from the same helpers
+     and the record and state.json that exclude just left. */
+  async function seedExcludeHintsFile(): Promise<void> {
+    const [{ getManuscript }, mh] = await Promise.all([
+      import('../store/manuscripts.js'),
+      import('../workspace/manuscript-hints.js'),
+    ]);
+    const record = getManuscript('m_refresh_test')!;
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      manuscriptId: string;
+      manuscriptFile: string;
+      chapters: Array<{ id: number; title: string; uuid?: string }>;
+    };
+    const entry = mh.buildHintsEntry({
+      manuscriptId: state.manuscriptId,
+      manuscriptFile: state.manuscriptFile,
+      sourceSha256: record.sourceSha256!,
+      hints: record.chapterHints,
+      parseChapterCount: record.parseChapterCount,
+      stateChapters: state.chapters,
+    });
+    await mh.writeManuscriptHints(bookDir, mh.composeHintsFile(entry, null, state, record.sourceSha256!));
+  }
 
   it('GET: an exclude-only book whose hint bodies are from the OLD parser still adopts the new titles', async () => {
     await seedAndRestructure(MANUSCRIPT_BODY, NEW_TITLES, 'exclude', { chapterIds: [2], excluded: true });
+    await seedExcludeHintsFile(); // plan 290: a toggle no longer writes hints; an older release's file is seeded
     oldParserBodies();
     backToOwing(['Chapter 1', 'Chapter 2']);
     await dropRecord();
@@ -619,6 +643,7 @@ describe('title refresh pairs by recorded parse origin (#3828 pass 1)', () => {
 
   it('POST: the same old-parser book adopts the new titles', async () => {
     await seedAndRestructure(MANUSCRIPT_BODY, NEW_TITLES, 'exclude', { chapterIds: [2], excluded: true });
+    await seedExcludeHintsFile(); // plan 290: a toggle no longer writes hints; an older release's file is seeded
     oldParserBodies();
     backToOwing(['Chapter 1', 'Chapter 2']);
     await dropRecord();

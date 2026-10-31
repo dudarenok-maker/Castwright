@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-10-31
 owner: null
 ---
 
 # Parse-fallback chapter hints: check the pairing against saved sentences (#3837)
 
-> Status: draft. The design follows the owner decisions on #3837 through round 8 (2026-10-31): round 5 narrowed the scope to **check only, never persist**; round 6 set the restructure seam to **sentences plus titles** and kept **Start fresh** on count/id only; round 7 accepted the one remaining durable-miss class; round 8 added the **stale-evidence marker** after re-parse and limited **exclude/include** hints writes to a count-changing prune; the implementation decisions after checker round 5 (2026-10-31) extend the marker to a restructure's analysis-cache rebuild and to a bundle overwrite. The rule was calibrated read-only on every analysed book in the operator's workspace (see "Calibration"). This revision answers the fourth `assumption-checker` pass and the round-5 targeted checker, and needs a fresh pass before approval.
+> Status: stable; shipped via PR #3966 (branch `feat/server-3837-hints-proof`, 2026-10-31). The design follows the owner decisions on #3837 through round 11 (2026-10-31): round 5 narrowed the scope to **check only, never persist**; round 6 set the restructure seam to **sentences plus titles** and kept **Start fresh** on count/id only; round 7 accepted the one remaining durable-miss class; round 8 added the **stale-evidence marker** after re-parse and limited **exclude/include** hints writes to a count-changing prune; the implementation decisions after checker round 5 (2026-10-31) extend the marker to a restructure's analysis-cache rebuild and to a bundle overwrite; round 9 made that prune **refuse** on an unpaired parse book; round 10 added the **backup restore** as a third marker producer and stamps the overwrite and the restore only when the chapter list changed (or the book is already marked); round 11 has the overwrite and the restore clear the analysis cache whenever they stamp the marker. The rule was calibrated read-only on every analysed book in the operator's workspace (see "Calibration"). This revision answers the fourth `assumption-checker` pass and the round-5 targeted checker, and was approved by the owner on 2026-10-31 (plan PR #3922).
 > Key files: `server/src/workspace/hints-proof.ts` (new, pure), `server/src/workspace/hints-proof-io.ts` (new, the edits read), `server/src/routes/analysis.ts` (`hintsOutOfSyncRefusal`, about line 3982; call sites about lines 4066 and 7887; the main persist's edits write, about line 7305), `server/src/routes/chapters-restructure.ts` (`applyRestructure` / `applyRestructureClaimed`), `server/src/routes/book-state.ts` (`applyReparse`, about line 1623), `server/src/workspace/restructure.ts` (`parseTitlesPairWithState`, `assertHintsPairWithState`), `server/src/workspace/scan.ts` (`BookStateJson`), `server/src/store/manuscripts.ts` (`hydrateFromDisk`, `hintsFromParse`, the `hintsSource` / `parseTitles` docs about lines 66–78), `server/src/parsers/audio-tags.ts` (`AUDIO_TAGS`), `openapi.yaml`.
 > URL surface: indirect. The routes are `#/books/<id>/...` restructure actions, Start analysis and re-parse / replace-manuscript.
 > OpenAPI ops: no shape change. The descriptions of the analysis-start and restructure 409s are rewritten (Task 6), and `src/lib/api-types.ts` is regenerated. `hints_out_of_sync` stays a pre-stream 409 only; it is never sent as an SSE event.
@@ -28,6 +28,8 @@ Implementation decisions after checker round 5 (2026-10-31, on #3837). Both exte
 
 1. **A restructure on a marker-set book clears the analysis cache instead of rebuilding it.** `chapters-restructure.ts` (about line 531) rebuilds the cache from `manuscript-edits.json` (`rebuildCacheFromEdits`, `mode: 'replace'`), and exclude reaches it too (about line 698). On a marker-set book those edits are keyed to the old chapters. A later non-fresh main run replays them as current takes (`analysis.ts` about lines 6170–6181, `hasCurrentTake` in `store/analysis-cache.ts` about line 167), then clears the marker over stale evidence. This is also a **pre-existing `main` defect**: after a re-parse that changes the chapter list, a restructure re-seeds stale takes.
 2. **A bundle overwrite that keeps a local `manuscript-edits.json` stamps the marker** (a third producer), because a portable bundle never carries edits (`export/build-portable-book.ts` about lines 349–354), while an overwrite leaves files the bundle lacks in place (`import/scan-import-folder.ts` about lines 15–19 and 449–454).
+
+Round 11 (2026-10-31, PR #3966 review pass 1): **the bundle overwrite and the backup restore clear the analysis cache whenever they stamp the marker**, the same rule a restructure follows while the marker is set. The cache is keyed by manuscriptId, not by chapter list, so after a stamping swap it still held takes keyed to the replaced chapter list; a non-fresh main run replayed them as current, saved one chapter's sentence under another's id and cleared the marker, after which Start answered 409 `hints_out_of_sync`. A swap that stamps nothing (same chapters, or no saved sentences) keeps the cache. Accepted cost: a title-only difference also clears. Consequence: the next analysis re-runs every chapter, and generation halts with "No analysed sentences cached — re-run analysis" until it does.
 
 Round 8 (2026-10-31):
 
@@ -89,10 +91,11 @@ For a record with `hintsSource: 'parse'`:
 ### The stale-evidence marker (round 8, decision 1)
 
 - **Field:** `BookStateJson.sentencesPredateChapters?: true` in `server/src/workspace/scan.ts`. It means "the saved sentences in `manuscript-edits.json` are keyed to a chapter structure older than `state.chapters`". It is an additive optional field, so `CURRENT_STATE_SCHEMA` does not bump (archived plan 27, rename-vs-add policy). It is never written as `false`: `true` or absent. It is server-only (not in `openapi.yaml`, not on the PUT `/state` whitelist), like `editEpoch`. The PUT `/state` merge spreads the locked fresh read (`...state`), so a client save cannot drop it.
-- **Who sets it** (two producers):
+- **Who sets it** (three producers):
   1. `applyReparse` (`routes/book-state.ts`), the shared core of re-parse and replace-manuscript. It goes inside its existing `updateStateJsonLocked` mutation, the one that already rebuilds `chapters` and rotates `editEpoch` (about lines 1830–1855). It is set when `preservedEditCount > 0`, the count `applyReparse` already reads before the destructive arms; with no saved sentences there is nothing stale to mark. **Lock rules:** no new lock. The mutation already runs under `book-op` (the handlers hold it across the whole commit, #3711) → `book` (`withLocatedBook`) → the `state-json` leaf.
-  2. **The bundle overwrite** (`import/scan-import-folder.ts` `commitOverwrite`). A portable bundle never carries `manuscript-edits.json`, and an overwrite leaves a file the bundle lacks in place, so a local edits file ends up beside the bundle's new chapter list. Before `writeStagedState(bookId, baseTitle, manuscriptId)` (about line 476), `commitOverwrite` reads the target's edits with `readEditsForHintsCheck(targetDir)`. It passes a flag so `writeStagedState` adds `sentencesPredateChapters: true` to the staged state when the result is `ok` with ≥1 sentence, or `corrupt` / `unreadable` (unknown content is treated as stale, the conservative reading). `absent` or `ok` with no sentences stamps nothing. The rename path and a fresh folder have no local edits and never stamp. **Lock rules:** no new lock. The read runs inside `commitOverwrite`'s existing hold: `book-op` for the existing book id (taken before the claim, with the busy refusal) → `book-path-claim`. Every edits writer either takes `book` or `book-op`, or runs as a long job, which the busy refusal excludes. The stamped state then lands through the existing promotion under `state-json(target)`. A target with no `bookId` (`commitOverwrite(targetDir, null)`) has no `book-op` to take, exactly as today; its read is unlocked, like the rest of that path.
-- **Who clears it:** the **main** analysis persist only, in the same persist block that wrote `manuscript-edits.json` from `reconciled.sentences` (`analysis.ts` about line 7305). The marker is deleted inside that block's existing `state.json` write (the `updateStateAtDir` mutation under `book` → `state-json`). That write is reached only after the edits write in the same `try` succeeded, and is skipped on `attribution_drift` (which then leaves the marker, conservatively, set). A main run re-analyses every chapter after a re-parse, because re-parse wipes the analysis cache, so its sentences are all keyed to the current chapters.
+  2. **The bundle overwrite** (`import/scan-import-folder.ts` `commitOverwrite`). A portable bundle never carries `manuscript-edits.json`, and an overwrite leaves a file the bundle lacks in place, so a local edits file ends up beside the bundle's new chapter list. Before `writeStagedState(bookId, baseTitle, manuscriptId)` (about line 476), `commitOverwrite` reads the target's edits with `readEditsForHintsCheck(targetDir)`. It passes a flag so `writeStagedState` adds `sentencesPredateChapters: true` to the staged state only when **both** hold (owner round 10): (a) the edits result is `ok` with ≥1 sentence, or `corrupt` / `unreadable` (unknown content is treated as stale, the conservative reading); and (b) the bundle's chapter list (ids and titles, in order) differs from the target's **current** `state.json` chapter list, or the target's live `state.json` already carries the marker. The current state is the `live` read `commitOverwrite` already makes under the same hold; an absent or unreadable target state counts as "differs". `absent` or `ok` with no sentences stamps nothing, and a same-chapters restore leaves the marker absent, so generation, QA repair and splice overlay the saved corrections as `main` does. `writeStagedState` never carries a marker the bundle's own `state.json` holds: only this rule decides. The rename path and a fresh folder have no local edits and never stamp. The predicate is `swapLeavesStaleEvidence` (`workspace/stale-evidence.ts`), shared with the backup restore. The chapters compared are the target's `state.json` as read at the top of `commitOverwrite` (`live`), under `book-op` and the path claim. That excludes every writer that changes the chapter list, but not the GET `/state` title refresh (`refreshChapterTitles`, `book` → `state-json`, no `book-op`), which can still rewrite chapter **titles** between that read and the promotion. That narrow, title-only race is accepted by ruling: at worst it mis-stamps (or misses) the marker, and a mis-stamp lasts until the next main analysis run clears it. **Lock rules:** no new lock. The read runs inside `commitOverwrite`'s existing hold: `book-op` for the existing book id (taken before the claim, with the busy refusal) → `book-path-claim`. Every edits writer either takes `book` or `book-op`, or runs as a long job, which the busy refusal excludes. The stamped state then lands through the existing promotion under `state-json(target)`. A target with no `bookId` (`commitOverwrite(targetDir, null)`) has no `book-op` to take, exactly as today; its read is unlocked, like the rest of that path. **The analysis cache (owner round 11):** once the stamped `state.json` has landed, `commitOverwrite` clears the analysis cache of the manuscriptId the book ends up with (the kept id, or the freshly minted one) with `clearAnalysisCache`, the removal `refreshCacheFromEdits` uses for a restructure. It runs after the `state-json(target)` hold (the cache file is not under it), still under `book-op` → `book-path-claim`, in the promotion's `finally` after the record drops, so a later rename failing does not skip it. An overwrite that stamps nothing keeps the cache.
+  3. **A backup restore** (`workspace/auto-backup.ts` `restoreBackup`, route `routes/backup.ts`; owner round 10). A restore swaps `state.json` for a snapshot and leaves `manuscript-edits.json` in place, so it applies the same rule as the overwrite, comparing the **snapshot's** chapter list with the book's current `state.json` chapter list (plus the current marker), against the local edits. The snapshot's own marker is never carried: it is stripped, then stamped per the rule. **Lock rules:** no new lock. The route holds `book-op` and, inside it and before `restoreBackup` runs, refuses with 409 `book_busy` while ANY long job is registered for the book (`bookJobKinds`), exactly as the overwrite does (PR #3966 review pass 2); `restoreBackup` reads the edits under `withLocatedBook`'s `book` lock, and reads the current state (`readStateJsonWithRecovery`, unreadable counting as "differs") inside the existing `state-json` leaf lock, right before its `writeStateJsonAtomic`. **The analysis cache (owner round 11):** when the restored state landed with the marker, `restoreBackup` clears the analysis cache of the restored state's manuscriptId (the snapshot's) with `clearAnalysisCache`, after the `state-json` leaf lock and still under `book-op` → `book`. A restore that stamps nothing keeps the cache.
+- **Who clears it:** the **main** analysis persist only, in the same persist block that wrote `manuscript-edits.json` from `reconciled.sentences` (`analysis.ts` about line 7305). The marker is deleted inside that block's existing `state.json` write (the `updateStateAtDir` mutation under `book` → `state-json`). That write is reached only after the edits write in the same `try` succeeded, and is skipped on `attribution_drift` (which then leaves the marker, conservatively, set). A main run re-analyses every chapter after any producer, because each one leaves no cache behind: re-parse wipes the analysis cache, and the bundle overwrite and the backup restore clear it when they stamp (owner round 11). Every producer refuses with 409 `book_busy` while a long job is registered for the book (re-parse and replace-manuscript, #3717; the overwrite; the restore, PR #3966 review pass 2), so no in-flight run saves its in-memory cache back behind the clear. So its sentences are all keyed to the current chapters.
   - **Not cleared by the subset persist** (`analysis.ts` about line 9496). A subset run rewrites some chapters' sentences and may leave the others keyed to the old structure. Leaving the marker set keeps those books on `main`'s rule until a main run, which is the conservative outcome.
   - **Not cleared by any other edits writer** (cast merge, script review, generation, QA repair, splice). None of them re-keys sentences to chapters.
   - **Not cleared by a restructure.** Its result state spreads the old state, so the marker survives, and its sentence remap applies to whatever ids the sentences carry.
@@ -109,7 +112,7 @@ For a record with `hintsSource: 'parse'`:
   ```
 
   - **Marker set, `mode: 'replace'`** (the restructure, `chapters-restructure.ts` about line 531, reached by every op including exclude through about line 698): `clearAnalysisCache(manuscriptId)` instead of the rebuild → `'cleared'`. The restructure's ids are renumbered, so the old keys are no use anyway. It is called with the result state, which spreads the marker forward. It runs where the rebuild runs today: inside `applyRestructureClaimed`, after the leaf, still under `book-op` → restructure gate → `book`. `clearAnalysisCache` removes the file through the same per-path queue as `saveAnalysisCache` (#3427), so it lands after any save issued before it. The restructure gate and the busy refusal already exclude a running or draining analysis, so no in-flight run saves behind it.
-  - **Marker set, overlay mode** (`generation.ts` about line 1099, `chapter-qa-repair.ts` about line 421, `chapter-splice.ts` about line 275): leave the cache untouched → `'skipped'`. Those callers keep chapter ids, so the cache holds nothing they would renumber, and only the edits are stale. Not re-seeding is enough, and it keeps any takes a partial run wrote under the current structure. Re-parse sets `castConfirmed: false` and removes audio, so these three are not normally reachable on a marker-set book. They take the same helper so no producer can re-seed stale takes.
+  - **Marker set, overlay mode** (`generation.ts` about line 1099, `chapter-qa-repair.ts` about line 421, `chapter-splice.ts` about line 275): leave the cache untouched → `'skipped'`. Those callers keep chapter ids, so the cache holds nothing they would renumber, and only the edits are stale. Not re-seeding is enough, and it keeps any takes a partial run wrote under the current structure. Re-parse sets `castConfirmed: false` and removes audio, so after a re-parse these three are not normally reachable on a marker-set book. After a stamping bundle overwrite or backup restore they are (a confirmed cast and audio can survive the swap), but the swap cleared the cache (owner round 11), so generation halts with "No analysed sentences cached — re-run analysis" until a main run. They take the same helper so no producer can re-seed stale takes.
   - **No marker:** the existing `rebuildCacheFromEdits` call, unchanged → `'rebuilt'`.
   - **Interaction with `hasCurrentTake`:** after a clear, `loadAnalysisCache` answers an empty cache (no `stage1`, no `chapters` keys). So `hasCurrentTake` is false for every chapter, the replay loop (`analysis.ts` about lines 6170–6181) replays nothing, and `analysisCompleteFor` is false. The next main run re-runs stage 1 and attributes every non-excluded chapter before its persist clears the marker. The cost: takes a paused main run wrote after the re-parse, before the restructure, are re-done. That is the conservative outcome. Generation on such a book halts with today's "No analysed sentences cached" until it is analysed, which is correct while the marker says the sentences are stale.
   - This also fixes the **pre-existing `main` defect** above; the PR body declares it under "Also fixed, found in passing".
@@ -195,14 +198,14 @@ That last case analyses on the mispaired parse, as `main` does today, and nothin
    - **Refusal:** `refuseWhenMispaired` becomes `true` for merge, split and reorder as well as rename and refresh-titles. In `checked` mode the transform no longer title-checks, so the early refusal must cover all five. In `main` mode the early refusal and the transform's own title assert reach the same verdict on the same inputs, so behaviour is unchanged.
    - **Exclude / include (round 8, decision 2):** never refused on a toggle. After the transform, compare `result.state.chapters.length` with the pre-transform count:
      - **same count (a toggle):** write **no** hints file, for every record source. A toggle changes no id or uuid, so a persisted entry still validates and a parse book stays a parse book. Nothing is laundered into `persisted`.
-     - **count changed (the prune that drops a chapter with no sentences and an empty body and renumbers, `pruneEmptyChaptersInResult`):** a `persisted` record writes as today. **A record with no `hintsSource`** writes as today too. That is the in-session record a re-parse, replace-manuscript, import or sample builds alongside `state.json` from one parse (`book-state.ts` about lines 1887–1903 for re-parse), so its bodies are the chapters' own and there is nothing to check. A `parse` record writes only when the book pairs, meaning `paired` in `checked` mode, or `!hintsMispaired` (the title rule) in `main` mode, as `main` does. **Otherwise the operation answers 409 `hints_out_of_sync` and writes nothing** (Q1). The prune decides which chapter has "an empty body" from the hint bodies. On a book whose bodies are not paired with its chapters, it can drop the wrong chapter and renumber the rest. `main` writes that result (`state.json`, edits, audio) with no hints file, and the book is then refused on count at every later seam. Refusing writes nothing.
+     - **count changed (the prune that drops a chapter with no sentences and an empty body and renumbers, `pruneEmptyChaptersInResult`):** a `persisted` record writes as today. **A record with no `hintsSource`** writes as today too. That is the in-session record a re-parse, replace-manuscript, import or sample builds alongside `state.json` from one parse (`book-state.ts` about lines 1887–1903 for re-parse), so its bodies are the chapters' own and there is nothing to check. A `parse` record writes only when the book pairs. "Pairs" includes count/id (owner round 9, Task 4 fix round 1): the record's ids must pair with state's **before the transform**, and then the book must be `paired` in `checked` mode, or `!hintsMispaired` (the title rule) in `main` mode. **Otherwise the operation answers 409 `hints_out_of_sync` and writes nothing** (Q1). A toggle on such a book still succeeds and writes no hints. The prune decides which chapter has "an empty body" from the hint bodies. On a book whose bodies are not paired with its chapters, it can drop the wrong chapter and renumber the rest. `main` writes that result (`state.json`, edits, audio). It writes no hints file when the result's hints and chapters differ in number, and the book is then refused on count at later seams. But the prune keeps only the hints whose ids survive, so a count/id-failing book (split drift with more parse pieces than chapters, or a parse whose surplus pieces are dropped with the pruned one) can come out with equal counts: `main` then writes a hints file whose bodies are not the chapters', and after a restart the book hydrates `persisted` and passes count/id at every later seam. Refusing writes nothing.
 
 The `excluded` / `titleSynthesized` completion of earlier revisions stays moot: the transform receives `record.chapterHints` as built by `hintsFromParse`. The `isLikelyFrontMatterTitle` default in `hintsFromParse` still reads the parse title, unchanged.
 
 ### What is written, and what is not
 
 - The check writes nothing at either seam.
-- `applyReparse` and the bundle overwrite write one more state field (the marker), inside their existing state writes. The main analysis persist deletes it, inside its existing locked state write. While the marker is set, a restructure removes the analysis cache instead of rebuilding it, and the overlay rebuilds leave it alone (`refreshCacheFromEdits`).
+- `applyReparse`, the bundle overwrite and a backup restore write one more state field (the marker), inside their existing state writes. The main analysis persist deletes it, inside its existing locked state write. While the marker is set, a restructure removes the analysis cache instead of rebuilding it, and the overlay rebuilds leave it alone (`refreshCacheFromEdits`).
 - **A restructure that the check lets through still writes its own result**, through the existing `hintsWritten` branch, as `main` does for any parse-fallback book that passes its title check. Because evidence-less positions keep the title check (round 6), it persists only what `main`'s title rule would also accept at evidence-less positions. At evidence positions it can persist a pairing the title rule would refuse. That is the title-drift unblock, and the durable miss the owner accepted in round 7.
 - An exclude/include toggle writes no hints file. A prune writes only on a paired or persisted book.
 
@@ -345,7 +348,7 @@ Because duplicates are separate items, one line saved three times that the parse
 | Exclude/include toggle on any book | — | proceeds; **writes no hints file** (today: writes when titles pair) |
 | Exclude/include that prunes, record with no `hintsSource` (in-session after re-parse / replace / import) | — | proceeds and writes hints, as today |
 | Exclude/include that prunes, on a paired or persisted book | — | proceeds and writes hints, as today |
-| Exclude/include that prunes, on an unpaired parse book | — | **409**, nothing written (today: writes state, no hints) (Q1) |
+| Exclude/include that prunes, on an unpaired parse book, including one whose count/id fails | — | **409**, nothing written (today: writes state, and on a count/id failure can write a hints file and make the book `persisted`) (Q1) |
 | `state.json` unreadable, foreign `manuscriptId`, or book gone at start | starts (fail-open, as today) | today's 404 / curated unreadable answer |
 
 ### Accepted blind spots (stated honestly)
@@ -490,7 +493,9 @@ Changes:
 - **prune (M20b):**
   - an exclude whose prune drops an empty chapter, on a paired book: 200, the hints file is written, and a restart hydrates `persisted`;
   - the same prune on an unpaired book: 409 and every file byte-identical;
-  - the same prune on a book with no evidence whose titles pair: 200 and written, as `main` does.
+  - the same prune on a book with no evidence whose titles pair: 200 and written, as `main` does;
+  - the same prune in `main` mode (stale-evidence marker set) on a title-mispaired book: 409 and every file byte-identical;
+  - a prune on a parse book whose count/id fails (3 state chapters against a 4-piece parse, m > n; and m < n): 409 and every file byte-identical. A toggle on the m > n book answers 200 and writes no hints.
 - a book with no evidence and a title mismatch: merge answers 409 (M12 at the restructure seam).
 - orphans: the analysed fixture plus 24+-character orphan sentences (`chapterId: 99`). Merge answers 200, and the orphans are recovered onto a surviving chapter.
 - the gate (M19): an impure record, ids out of order (`state.chapters` ids `[2, 1, 3]` with matching parse count), a BOM'd edits file (checked as `ok`) and a corrupt edits file all take `main`'s path. The corrupt file answers exactly what `main` answers for the same book, which the test pins by running the same op with the check stubbed off.
@@ -517,19 +522,31 @@ Changes:
 - **re-parse then restart, then Start:** `removeManuscript` (a restart) → POST Start answers 200, as `main` does after a re-parse (M24: ignoring the marker gives the 409 loop, because the old-keyed evidence fails the score).
 - **re-parse then restart, then restructure:** merge answers 200 and writes its hints file, as `main` does (title rule over parse-equal titles).
 - **clear (M25), Task 3:** a main analysis run (stubbed analyzer, as `analysis.title-flags.test.ts` does) clears the marker. A subset run leaves it set. An `attribution_drift` main run (state write skipped) leaves it set. **Task 5 adds** the assertion that, after the main run has cleared it, a hand-made reorder of two analysed chapters is refused at Start. That needs the start seam, so it is listed among Task 5's flips.
-- **bundle overwrite (M27), Task 3:** in `server/src/import/scan-import-folder.overwrite-marker.test.ts` (new):
-  - an overwrite import onto a book whose folder holds a `manuscript-edits.json` with sentences lands `sentencesPredateChapters: true`, and the local edits file is untouched;
-  - an overwrite onto a book with no edits file stamps nothing; nor does one with an empty `sentences` array, a rename import, or an import into a fresh folder;
+- **bundle overwrite (M27), Task 3:** in `server/src/import/scan-import-folder.overwrite-marker.test.ts` (new), per the round-10 rule:
+  - an overwrite import onto a book whose folder holds a `manuscript-edits.json` with sentences (or a corrupt one) lands `sentencesPredateChapters: true` when the target's chapter list differs from the bundle's (a title, an id or the count), and the local edits file is untouched;
+  - a **same-chapters** overwrite onto a book with sentences stamps nothing; one onto a target that is already marked keeps the marker;
+  - an overwrite onto a book with no edits file stamps nothing; nor does one with an empty `sentences` array (both with differing chapters), a rename import, or an import into a fresh folder;
+  - a marker the bundle's own `state.json` carries is never carried (fresh, rename, and overwrite onto empty edits);
+- **backup restore (M27), Task 3:** in `server/src/workspace/auto-backup.stale-evidence.test.ts` (new): the same rule against the snapshot's chapter list — same chapters with sentences → absent; a title, an id or the count differing → marker; corrupt edits with differing chapters → marker; current state already marked → marker; a snapshot carrying the marker onto the same chapters → absent; absent or empty edits → absent.
+- **the analysis cache on a stamping swap (M30), owner round 11:**
+  - `server/src/import/scan-import-folder.overwrite-marker.test.ts`: a structure-changing overwrite (marker stamped) removes the cache of the kept manuscriptId; a same-chapters overwrite leaves it byte-identical;
+  - `server/src/workspace/auto-backup.stale-evidence.test.ts`: a restore with differing chapters and saved sentences removes the cache; a same-chapters restore leaves it byte-identical;
+  - `server/src/routes/backup.restore-clears-cache.test.ts` (new): analyse a 3-chapter parse book, back it up, reorder `[2,1,3]`, restore through the real route → the cache file is absent; after a restart a main analysis calls stage 2 for every chapter before the marker clears, and each saved sentence sits under its own chapter;
+  - `auto-backup.stale-evidence.test.ts` also pins that the restore drops the warm records of both the current and the snapshot's manuscriptId when they differ.
+  - `server/src/import/scan-import-folder.overwrite-marker.test.ts`: a structure-changing overwrite whose `state.json` rename fails (injected EBUSY) surfaces the error and leaves the cache byte-identical (the clear is gated on `stateLanded`; PR #3966 review pass 2);
+  - `server/src/routes/backup.restore-busy.test.ts` (new, PR #3966 review pass 2): with an `analysis` job registered through `runBookJob`, a stamping restore answers 409 `book_busy` and leaves `state.json`, the analysis cache file and the warm `ManuscriptRecord` untouched; once the job is released the same restore answers 200, stamps the marker and clears the cache.
+- **the shared predicate, Task 3:** `server/src/workspace/stale-evidence.test.ts` (new) covers every arm of `swapLeavesStaleEvidence` and `chaptersMatchForEvidence`: edits absent / empty / ok / corrupt / unreadable × chapters same / differing by id / by title / by count × current marked or not × current state absent or unreadable (`null`, which counts as differing).
   - after the stamped overwrite and a restart, Start is not refused with `hints_out_of_sync` (asserted in Task 5, through the start seam).
 - **cache refresh helper (M28), Task 3:** `server/src/store/analysis-cache-rebuild.test.ts` (extend):
   - marker set + `replace` removes the cache file;
   - marker set + overlay leaves a seeded cache byte-identical;
-  - no marker rebuilds exactly as today, in both modes.
-- **re-parse → exclude → Start → Start (M26), Task 5**, in this file:
+  - no marker rebuilds exactly as today, in both modes;
+  - route level, one per overlay caller: `generation.test.ts` (slow config), `chapter-qa-repair.test.ts` and `chapter-splice.test.ts` — a marker-set book leaves the analysis cache file byte-unchanged, a marker-free book overlays the edits.
+- **re-parse → exclude → Start → restart → Start #2 (M26), Task 5**, in this file:
   - re-parse (marker set) → exclude a chapter (a toggle) → assert the analysis cache file is absent;
   - Start #1 (stubbed analyzer counting `runStage2Chapter` calls) → assert it attributed **every** non-excluded chapter (no "cached, skipping") and cleared the marker;
-  - Start #2 → assert it is **not** refused with `hints_out_of_sync`.
-  - With the rebuild instead of the clear (the mutant), Start #1 replays the old-keyed takes as cached, persists them, and clears the marker over stale evidence; Start #2 is then refused on score.
+  - a restart (re-parse left a record with no `hintsSource`, which the seam never checks) → Start #2 → assert it is **not** refused with `hints_out_of_sync`.
+  - With the rebuild instead of the clear (the mutant), Start #1 replays the old-keyed takes as cached, persists them, and clears the marker over stale evidence; after the restart, Start #2 is then refused on score.
 - **survives the client:** a `PUT /state` slice save from a stale client copy keeps the marker.
 - `r5-reparse-marker.ts` shows the real-book version: without the marker the re-parsed Unlocked is refused at 78 chapters and Keeper #1 at 1. With the marker both proceed at Start and at restructure, beyond count/id, which they now pass.
 
@@ -578,15 +595,21 @@ No Playwright spec and no frontend test: there is no UI, client or SSE change. T
 | M19 | re-hydrate an impure record, or drop the positional-id assertion | restart-restructure A1 regression; ids-out-of-order gate test |
 | M20a | an exclude/include toggle writes hints (as `main` does when titles pair) | toggle-writes-nothing tests |
 | M20b | a prune on an unpaired parse book writes (as `main` does) instead of refusing | prune-unpaired 409 test |
+| M20b-a | drop `parseCountIdFails \|\|` from the prune refusal | the m > n and m < n prune tests |
+| M20b-b | restrict the prune refusal to `pairing?.mode === 'checked'` | the main-mode title-mispaired prune test |
+| M20c | drop `&& !parseCountIdFails` from `hintsWritten` (#3953) | the `[1,2,4]` rename and refresh-titles tests (500) |
 | M21 | count distinct texts instead of every saved sentence | refrain ×8 pairs; dup ×3 displaced is refused |
 | M22 | drop the BOM strip in `readEditsForHintsCheck` | BOM'd file reads `ok` |
 | M23 | `applyReparse` does not set the marker | `sentencesPredateChapters === true` after re-parse and replace |
 | M24 | the seams ignore the marker | re-parse → restart → Start answers 200 |
 | M25 | clear the marker on the subset persist (or never clear it) | subset leaves it set; main clears it (Task 3); a later reorder is refused (Task 5) |
-| M26 | a restructure on a marker-set book rebuilds the cache instead of clearing it | re-parse → exclude → Start → Start: Start #2 refused, Start #1 skipped chapters as cached |
-| M27 | the bundle overwrite does not stamp the marker | overwrite-marker test |
-| M28 | the overlay callers re-seed (or clear) the cache on a marker-set book | cache refresh helper test |
+| M26 | a restructure on a marker-set book rebuilds the cache instead of clearing it | re-parse → exclude → Start → restart → Start #2: Start #2 refused, Start #1 skipped chapters as cached |
+| M27 | the overwrite / restore does not stamp the marker, stamps on same chapters, ignores the current marker, or carries the bundle's / snapshot's own marker; or `swapLeavesStaleEvidence` treats an absent / unreadable current state as matching | overwrite-marker test ("an overwrite onto a book with saved sentences and %s lands the marker; the edits file is untouched", an `it.each` over "a retitled chapter" / "a renumbered chapter"; "a same-chapters overwrite … stamps nothing", "… already-marked book … keeps the marker", "a marker carried in the bundle's own state.json is stripped"); `auto-backup.stale-evidence.test.ts` ("chapters differing in …: marker", "same chapters + saved sentences: no marker", "… already marked …: marker", "a snapshot carrying the marker …"); `stale-evidence.test.ts` ("… current state null -> true") |
+| M28 | the overlay callers re-seed (or clear) the cache on a marker-set book, or a caller drops the marker from the state it passes | cache refresh helper test; the route-level tests in `chapter-qa-repair.test.ts` and `chapter-splice.test.ts` ("on a marker-set book, leaves the analysis cache file byte-unchanged") and `generation.test.ts` ("on a marker-set book, leaves a seeded cache byte-unchanged") |
 | M29 | evidence floor `>= 24` → `> 24`, `>= 25` or `>= 26` | the exactly-24-character swap pairs |
+| M30 | the overwrite / restore stamps the marker but keeps the analysis cache | overwrite-marker test ("a structure-changing overwrite (marker stamped) removes the cache of the kept manuscriptId"); `auto-backup.stale-evidence.test.ts` ("chapters differing + saved sentences (marker stamped): the cache is removed"); `backup.restore-clears-cache.test.ts` |
+| M31 | the restore route does not check `bookJobKinds` (runs while a long job is registered) | `backup.restore-busy.test.ts` (200 instead of 409) |
+| M32 | the overwrite clears the cache without `stateLanded` (also when the `state.json` rename failed) | overwrite-marker test ("a structure-changing overwrite whose state.json rename fails surfaces the error and leaves the cache byte-identical") |
 
 The task-reviewer re-applies at least one mutation itself (an implementer's own mutant is not proof).
 
@@ -632,19 +655,19 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
      - the set, clear, subset, `attribution_drift` and PUT-survival cases of `book-state.reparse.stale-evidence.test.ts`. The Start and restructure cases are written here but asserted against today's seams: Start after re-parse answers 200 already on `main` (count/id passes), which pins the baseline. M25's reorder-refused assertion waits for Task 5;
      - `import/scan-import-folder.overwrite-marker.test.ts` (new, M27);
      - the `analysis-cache-rebuild.test.ts` helper cases (M28).
-   - Acceptance: those files green, plus `npx vitest run src/store/analysis-cache-rebuild.test.ts src/routes/generation.test.ts src/routes/chapter-qa-repair.test.ts src/routes/chapter-splice.test.ts` and the existing `scan-import-folder` tests green (no marker, so no behaviour change). M23, M25 (clear), M27 and M28 red when applied. The 14-file set green.
+   - Acceptance: those files green, plus `npx vitest run src/store/analysis-cache-rebuild.test.ts src/routes/chapter-qa-repair.test.ts src/routes/chapter-splice.test.ts`, `npx vitest run -c vitest.config.slow.ts src/routes/generation.test.ts` (it is in `SLOW_FILES`, so the default config skips it) and the existing `scan-import-folder` tests green (no marker, so no behaviour change). M23, M25 (clear), M27 and M28 red when applied. The 14-file set green.
 4. **Restructure seam.**
    - Edit `server/src/routes/chapters-restructure.ts` as specified: the pre-leaf gate and check under `book`, `readEditsForHintsCheck` in the leaf with the leaf semantics, the leaf re-check, the `hintsMispaired` / `parseTitles` mapping, `refuseWhenMispaired = true` for merge, split and reorder, and the exclude/include toggle and prune rule.
    - Rewrite the doc comments of `parseTitlesPairWithState` / `assertHintsPairWithState` (`workspace/restructure.ts`), the `hintsMispaired` comment block in `applyRestructureClaimed`, and the `hintsSource` / `parseTitles` docs in `store/manuscripts.ts` (about lines 66–78; "Merge, split and reorder title-check a `parse` record" is now false). These are comments the change makes false, so they are owed.
    - Reword the about-line-532 exclude test.
    - Tests: `chapters-restructure.hints-proof.test.ts` (new).
-   - Acceptance: that file green; `npx vitest run src/routes/book-state.refresh-titles.test.ts` green, unmodified; the `book-op-lock`, `state-json-lock`, `state-lock` and `state-json-read` guards green; M12, M15, M16, M19 (ids), M20a and M20b red when applied; the 14-file set green with the plan 70a and `#3791` blocks unmodified.
+   - Acceptance: that file green; `npx vitest run src/routes/book-state.refresh-titles.test.ts` green, unmodified except that its two "#3828 pass 1" exclude-only tests now seed their `manuscript-hints.json` directly (a toggle no longer writes one, round 8 decision 2); the `book-op-lock`, `state-json-lock`, `state-lock` and `state-json-read` guards green; M12, M15, M16, M19 (ids), M20a and M20b red when applied; the 14-file set green with the plan 70a and `#3791` blocks unmodified.
 5. **Analysis-start seam.**
    - Edit `server/src/routes/analysis.ts`: replace `hintsOutOfSyncRefusal` with `parseHintsStartCheck` at both call sites, passing `fresh: requestedFresh` on the main route. Rewrite its doc comment: its "design owed in #3837" sentence becomes false.
    - Tests (Task 5's flips and additions):
      - the `analysis.title-flags.test.ts` Task 5 changes (the renamed reorder test and the new cases);
      - the `analysis.restructure-restart.test.ts` A1 regression;
-     - in `book-state.reparse.stale-evidence.test.ts`: the Start-after-re-parse case now runs through the new seam; **M25's** "after the main run clears the marker, a hand-made reorder is refused at Start"; and **M26**, re-parse → exclude → Start → Start;
+     - in `book-state.reparse.stale-evidence.test.ts`: the Start-after-re-parse case now runs through the new seam; **M25's** "after the main run clears the marker, a hand-made reorder is refused at Start"; and **M26**, re-parse → exclude → Start → restart → Start #2;
      - in `scan-import-folder.overwrite-marker.test.ts`: the stamped overwrite → restart → Start not refused.
    - Acceptance: those files plus `src/routes/analysis.edits-routing.guard.test.ts` green; M11, M18, M19 (impure), M24, M25 (reorder) and M26 red when applied; the 14-file set green.
 6. **Contract, tripwire and the full suites.**
@@ -667,7 +690,7 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
    - (a) Release notes: an entry in `docs/release-notes-next.md` (technical, PR-refed), and a brand-voice line in the in-progress section of `RELEASE_NOTES.md`. For example: an analysed book whose chapter titles changed under a parser update can be edited again without a re-parse, and a book whose chapters were reordered long ago is caught before re-analysis.
    - (b) A `docs/features/INDEX.md` entry for plan 290.
    - (c) Archived plan 51 (`docs/features/archive/51-restructure-chapters.md`), invariant 2: rewrite the "what pair means" passage for `parse` records (the sentence check for chapters with evidence, the title check for chapters without, at restructure). Replace "exclude only sets a flag, so it still succeeds, but writes no hints file there" with the round-8 rule: a toggle never writes; a prune writes on a paired or persisted book and is refused otherwise.
-   - (d) CLAUDE.md chore: the "`git grep requestFailureMessage` … enumerates all seventy-eight call sites" sentence and its per-file counts no longer match the tree (the third checker pass found it stale on `main`). Recount call sites, not imports, with `git grep -n requestFailureMessage -- server/src ':!*.test.ts'`, and fix the number and the list. This plan adds no call site; the fix is owed because the sentence is false.
+   - (d) CLAUDE.md chore: the "`git grep requestFailureMessage` … enumerates all seventy-eight call sites" sentence. Recounted at implementation (call lines, not imports): 78, with the per-file split already in CLAUDE.md; the sentence is current and was left unchanged. No CLAUDE.md edit is owed. This plan adds no call site.
 
 ## Before-shipping items
 
@@ -682,10 +705,12 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
   - **surfaces:** `docs/testing/onbox-acceptance-register.md`, the live view `docs/testing/onbox-acceptance-register-live-view.html` (`npm run register:build`, `npm run check:onbox-register`, then publish to the register's recorded URL after `--against-published`), and a run sheet if one is created.
 - **INDEX.md:** a new entry under the server/workspace area.
 - **Release notes:** both documents (Task 8a). User-visible delta: title-drifted analysed books are no longer refused at restructure, same-count reorders are refused at analysis start, and a re-parsed book is no longer judged by its old sentences.
-- **CLAUDE.md:** the `requestFailureMessage` enumeration chore (Task 8d).
+- **CLAUDE.md:** none owed: the `requestFailureMessage` enumeration was recounted (Task 8d) and is current.
 - **Issue:** the PR body says `Closes #3837` and `Refs #3879`. Under "Also fixed, found in passing" it lists:
   - the **pre-existing `main` defect** that a restructure after a re-parse re-seeds the analysis cache from old-keyed edits, which a later run replays as current takes (fixed by `refreshCacheFromEdits`, M26 / M28);
-  - every test fixture changed to fix a stale fixture rather than for the feature.
+  - every test fixture changed to fix a stale fixture rather than for the feature;
+  - the **pre-existing `main` defect** (#3953) that a rename or refresh-titles on a parse book with the parse's chapter count but non-positional state ids answered 500 (`manuscript-hints: no hint for chapter id N`) instead of skipping the hints write;
+  - the **pre-existing `main` defect** that an exclude/include prune on a parse-fallback book whose count/id fails can come out with equal hint and chapter counts and write `manuscript-hints.json`, laundering the mispaired bodies into `persisted` (refused 409 now, owner round 9).
 - **Review gate:** `pr-review-gate`, depth `high` (multi-scope: routes, workspace, contract).
 - **Verify:** `npm run verify:fast:branch` by hand; cloud `verify.yml` is the required gate.
 
@@ -767,4 +792,62 @@ None. The last one, what an exclude/include prune does on an unpaired parse book
 
 ## Ship notes
 
-(Filled in when status flips to `stable`, including Task 7's real-book table.)
+- **Shipped:** 2026-10-31 via PR #3966 (branch head at PR open: `ca09df12`, not the final head; the merge commit is recorded on #3837 after merge).
+- **Delta vs plan:**
+  - Owner round 10: the bundle overwrite and the backup restore stamp the stale-evidence marker only when the chapter list changed (`swapLeavesStaleEvidence`); backup restore was added as a third producer.
+  - Owner round 11: the bundle overwrite and the backup restore clear the analysis cache when they stamp the stale-evidence marker.
+  - PR review pass 3: the post-swap analysis-cache clear in the backup restore and the bundle overwrite retries up to 3 attempts on EBUSY/EPERM/EACCES/EMFILE (`clearAnalysisCacheWithRetry`), rethrowing the last error so the request still fails loud.
+  - The backup restore now drops the in-memory manuscript record(s) for the current and the snapshot's manuscriptId (a pre-existing defect, found by PR review pass 1).
+  - The backup restore now refuses with 409 `book_busy` while any long job is registered for the book, as the overwrite does (controller ruling, PR review pass 2): a running analysis re-saved the cache the restore had cleared, rebuilt the chapters from the record it had dropped and deleted the marker. `busySentence` gained a `'restore'` action; `openapi.yaml` documents the 409.
+  - The prune refusal includes the count/id failure (controller ruling under owner round 9; pinned by M20b-a).
+  - The two `#3828 pass 1` refresh-titles tests now seed their hints file directly.
+  - #3953 was fixed in passing.
+  - The CLAUDE.md `requestFailureMessage` enumeration was current; no edit was made.
+
+### Task 7 real-book acceptance (2026-10-31)
+
+Run read-only against `C:\AudiobookWorkspace\books` (25 analysed books) on branch HEAD `582e4907` with the shipped `checkParseHintsPairing` (`server/src/workspace/hints-proof.ts`) and `sentencesOf` (`hints-proof-io.ts`); no workspace file was modified (mtime and size of every `state.json` / `manuscript-edits.json` unchanged across the run). Command: `server/node_modules/.bin/tsx <scratch>/calib/task7-acceptance.ts` (scratch script outside the repo). The count/id step runs first, as the seams do; same-count books then run in both `evidenceLess` modes. Check ms excludes parsing; the slowest check was 442 ms (Stellarlune) on a loaded box.
+
+| Book | n / m | `count-id` mode | `title` mode | Check ms |
+|---|---|---|---|---|
+| A21 Clone Readiness Gate QA (throwaway) | 1/1 | pair(ev=1) | pair(ev=1) | 1 |
+| A21 Clone Readiness Gate QA v2 (throwaway) | 1/1 | pair(ev=1) | pair(ev=1) | 0 |
+| Der Auftrag von Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 4 |
+| El Encargo de Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| La Commande de Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| The Coalfall Commission | 4/4 | pair(ev=2) | pair(ev=2) | 2 |
+| Заказ Коалфолла | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| コールフォールの依頼 | 3/3 | pair(ev=2) | pair(ev=2) | 1 |
+| 煤落的委托 | 3/3 | pair(ev=2) | pair(ev=2) | 16 |
+| A16 Row Test - Delo o Koalfolle | 2/2 | pair(ev=2) | pair(ev=2) | 1 |
+| Playing with Fire | 51/51 | pair(ev=42) | pair(ev=42) | 98 |
+| Scepter of the Ancients | 40/40 | pair(ev=31) | pair(ev=31) | 153 |
+| The Lost Art of World Domination | 7/7 | pair(ev=1) | pair(ev=1) | 3 |
+| QA2937 Coalfall RU Throwaway | 2/2 | pair(ev=2) | pair(ev=2) | 1 |
+| Bonus Keefe Story | 7/7 | pair(ev=7) | pair(ev=7) | 2 |
+| Everblaze | 77/77 | pair(ev=70) | pair(ev=70) | 293 |
+| Exile | 70/70 | pair(ev=63) | pair(ev=63) | 346 |
+| Keeper of the Lost Cities | 59/57 | refused by count/id | refused by count/id | - |
+| Neverseen | 88/88 | pair(ev=79) | pair(ev=79) | 399 |
+| Stellarlune | 57/57 | pair(ev=51) | pair(ev=51) | 442 |
+| Unlocked | 82/167 | refused by count/id | refused by count/id | - |
+| Unraveled | 53/53 | pair(ev=44) | pair(ev=44) | 195 |
+| Юный дрессировщик | 15/15 | pair(ev=12) | pair(ev=12) | 89 |
+| Ночной дозор (C2C3 run 2) | 9/9 | pair(ev=9) | pair(ev=9) | 351 |
+| Ночной дозор | 9/9 | pair(ev=9) | pair(ev=9) | 364 |
+
+Positive controls (in memory; identical in both modes):
+
+| Control | Result |
+|---|---|
+| Everblaze, pieces 10 and 11 swapped | refused (`score`: chapter 11, own 0 of 134) |
+| Bonus Keefe Story, pieces 3 and 4 swapped | refused (`score`: chapter 4, own 0 of 28) |
+| Stellarlune, pieces 20 and 21 swapped | refused (`score`: chapter 21, own 0 of 151) |
+| Ночной дозор (C2C3 run 2), pieces 4 and 5 swapped | refused (`score`: chapter 5, own 1 of 1118) |
+| Ночной дозор, pieces 4 and 5 swapped | refused (`score`: chapter 5, own 1 of 1114) |
+| Ночной дозор (C2C3 run 2), SHIFT 3:3 | refused (`displaced-block`: chapter 4 into chapter 5) |
+| Ночной дозор, SHIFT 3:3 | refused (`displaced-block`: chapter 4 into chapter 5) |
+
+Post-re-parse marker simulation (state replaced by the fresh parse, ids 1..m, no evidence seen as the marker implies): Unlocked (167 chapters) and Keeper of the Lost Cities #1 (57) both pair in both modes, so start and restructure proceed.
+
+Acceptance: every same-count book pairs in both modes (pass); Unlocked and Keeper #1 refused by count/id (pass); all controls refused (pass); marker simulation proceeds for both (pass).
