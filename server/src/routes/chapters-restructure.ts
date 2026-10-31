@@ -89,7 +89,7 @@ import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript, putManuscript } from '../store/manuscripts.js';
-import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
 import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
@@ -539,7 +539,9 @@ async function applyRestructureClaimed(
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
   // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
-  await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
+  // Plan 290 — called with the result state, which carries the stale-evidence
+  // marker forward: while it is set the cache is cleared instead of rebuilt.
+  await refreshCacheFromEdits(result.state, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 

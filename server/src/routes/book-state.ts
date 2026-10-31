@@ -1851,6 +1851,9 @@ async function applyReparse(
             /* Plan 289 — a wipe: every revision token of the book moves, so a kept
                or retrying save built before it is refused. */
             editEpoch: mintEditEpoch(),
+            /* Plan 290 -- the preserved sentences are keyed to the old chapter
+               list; mark them stale until the next main analysis persist. */
+            ...(preservedEditCount > 0 ? { sentencesPredateChapters: true as const } : {}),
             updatedAt: new Date().toISOString(),
           };
         },

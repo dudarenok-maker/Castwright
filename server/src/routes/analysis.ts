@@ -7634,6 +7634,10 @@ export async function runMainAnalyzerJob(
                 },
                 updatedAt: new Date().toISOString(),
               };
+              /* Plan 290 — this run re-keyed every saved sentence to the current
+                 chapters (the edits write above landed), so the stale-evidence
+                 marker goes. Only the main persist clears it. */
+              delete next.sentencesPredateChapters;
               return next;
             }, {
               /* Re-verified inside the book lock (a rename holds it) but BEFORE
