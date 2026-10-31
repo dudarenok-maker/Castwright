@@ -894,24 +894,46 @@ test(
   { skip: process.platform !== 'win32' ? 'Windows-only: Get-CimInstance Win32_Process' : false },
   (t) => {
     // collectProcessSnapshot gives up after two 15s spawnSync timeouts and
-    // returns [] with a `snapshotError` naming the timeout (#3331). On a loaded
-    // runner that is the OS not answering, not the collector being broken
-    // (Castwright#3917: the 31.9s test body is exactly two timed-out attempts),
-    // so a timeout-caused empty result is retried here and, if every try times
-    // out, the test is skipped as inconclusive. Any OTHER empty result (empty
-    // rows, unparseable output, a permanent failure — the pass-1 date bug
-    // lands here as 'empty Win32_Process result after retry') still fails.
-    const TRIES = 3;
-    let snapshot = [];
-    let timeouts = 0;
-    for (let i = 0; i < TRIES; i++) {
-      snapshot = collectProcessSnapshot();
-      if (snapshot.length > 0 || !/timed out/.test(String(snapshot.snapshotError))) break;
-      timeouts++;
-    }
-    if (timeouts === TRIES) {
-      t.skip(`Win32_Process query timed out on all ${TRIES} collector calls — the host is too loaded to answer (Castwright#3917)`);
-      return;
+    // returns [] with a `snapshotError` naming the timeout (#3331). That is
+    // EITHER a host too loaded to answer (Castwright#3917: the 31.9s test body
+    // is exactly two timed-out attempts) OR a census query that is itself too
+    // slow for its own bound, which in production is a census that always
+    // returns [] and a reaper that never reaps. A skip cannot tell those apart,
+    // so a timeout is told apart by measurement before anything is excused:
+    //   1. a cheap control spawn (one filtered Win32_Process row). If the host
+    //      answers THAT quickly, the full query timing out is a defect: FAIL.
+    //   2. only on a slow control, rerun the real collector through the `spawn`
+    //      seam with a 120s timeout and assert rows/dates on that.
+    //   3. skip only when the host is shown unresponsive: slow control AND the
+    //      extended collector still timed out (docs/testing/flaky-register.md).
+    // Any OTHER empty result (empty rows, unparseable output, a permanent
+    // failure — the pass-1 date bug lands here as 'empty Win32_Process result
+    // after retry') still fails.
+    const isTimeout = (s) => s.length === 0 && /timed out/.test(String(s.snapshotError));
+    let snapshot = collectProcessSnapshot();
+    if (isTimeout(snapshot)) {
+      const CONTROL_FAST_MS = 5000;
+      const t0 = Date.now();
+      const control = spawnSync(
+        'powershell',
+        ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process -Filter "ProcessId=$PID" | Select-Object -ExpandProperty ProcessId'],
+        { encoding: 'utf8', timeout: 15000, windowsHide: true },
+      );
+      const controlMs = Date.now() - t0;
+      const controlFast = !control.error && control.status === 0 && controlMs < CONTROL_FAST_MS;
+      assert.ok(
+        !controlFast,
+        `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
+          'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
+      );
+      snapshot = collectProcessSnapshot({ spawn: (c, a, o) => spawnSync(c, a, { ...o, timeout: 120000 }) });
+      if (isTimeout(snapshot)) {
+        t.skip(
+          `host unresponsive: the one-row control took ${controlMs}ms (>= ${CONTROL_FAST_MS}ms or failed) and the full query ` +
+            'timed out even at 120s (Castwright#3917)',
+        );
+        return;
+      }
     }
     assert.ok(
       snapshot.length > 0,
