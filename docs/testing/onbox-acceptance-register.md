@@ -6540,14 +6540,17 @@ Ollama accepts a reasoning level only on a model that thinks, so the Test must r
 
 ### B108 · Re-analysis keeps a locked or tuned character's voice whole, and no fresh row inherits a link it was not joined to ([#3920](https://github.com/dudarenok-maker/Castwright/issues/3920), PR [#3934](https://github.com/dudarenok-maker/Castwright/pull/3934)) · **a real local Ollama analyzer; a real two-book series in the workspace**
 
-Re-analysis used to let a series-continuity match overwrite a locked or tuned character's own voice, and a new, similarly-named character could pick up a lock or link it was never joined to. The automated tests use fixtures. Only a real analyzer on a real series shows the matcher's actual candidates. The claim is for a character with an assigned voice (not one still on the default pick, [#3954](https://github.com/dudarenok-maker/Castwright/issues/3954)). In a two-book series, open Book Two and lock one character's voice (pick one that also appears in Book One with a different voice). Preconditions: the locked character shows no "Continuity preserved" footer on Confirm before re-analysis (if it already carries a Book One link, the check proves nothing), and Book Two's manuscript also holds a similarly-named character (for example "Brann" and "Brann Weir"). Re-analyse Book Two. Observe:
-- the character keeps its own locked voice, not Book One's;
-- it shows no "Continuity preserved" footer;
-- the similarly-named character did not pick up the lock or the link.
+Re-analysis used to let a series-continuity match overwrite a locked or tuned character's own voice, and Start fresh used to drop a locked character's voice. The automated tests use fixtures. Only a real analyzer on a real series shows the matcher's actual candidates. The claim is for a character with an assigned voice (not one still on the default pick, [#3954](https://github.com/dudarenok-maker/Castwright/issues/3954)).
 
-Then lock a voice again, choose Start fresh and re-analyse. Observe the locked voice is kept and the "Continuity preserved" footer is gone.
+**Setup A: a declined link, then locked.** In a two-book series, open Book Two and pick a character that also appears in Book One with a different voice, and that the Continuity matcher linked (its Cast row shows a "From <Book One> · NN%" line). Click that line, choose **Don't reuse** in the match drawer (this clears the link and writes no `notLinkedTo`, so on main the linker is free to re-link it). Open the character's profile drawer and press **Lock**. Reload, and confirm the Cast row has no "From" line and the Confirm cast card has no "Continuity preserved" footer (if either is still there, the decline did not stick and the check proves nothing). Do not use **Different on purpose** (the duplicate-review modal) to set this up: it records `notLinkedTo`, which keeps the linker off on main too. Then **Re-analyse manuscript** on Book Two. Observe:
+- the character keeps its own locked voice, not Book One's (on main it is overwritten by Book One's);
+- its Confirm card shows no "Continuity preserved" footer and the Cast row has no "From <Book One>" line.
 
-*Needs:* a real local Ollama analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all four are recorded against a real series.
+**Setup B: reused, then locked, then Start fresh.** Take a Book Two character that Confirm cast shows as reused from Book One ("Continuity preserved" footer present), press **Lock** in its profile drawer, then give it a voice that differs from Book One's through the profile drawer's voice picker and check it still reads **Locked** and still shows the footer (if picking a voice drops the Book One link, this precondition cannot be built through the UI: record that instead of passing it). Re-analyse and, on the analysing screen, choose **Start fresh**. Observe the character still has the voice you picked (not Book One's, on main it falls back to Book One's) and the "Continuity preserved" footer is gone.
+
+The similarly-named-character case ("Brann" and "Brann Weir") is not a bullet here: roster dedup collapses that shape on a real run, and where a distinct survivor remains the linker may legitimately link it to Book One, which would read as a failure on correct code. It is pinned by the `series-reuse-link.test.ts` and `merge-analysis-cast.test.ts` fixtures instead.
+
+*Needs:* a real local Ollama analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all three observations (A twice, B once) are recorded against a real series.
 
 ---
 
