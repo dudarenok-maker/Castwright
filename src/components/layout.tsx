@@ -187,7 +187,7 @@ export interface LayoutContext {
    doubling backoff (2 s, 4 s, 8 s, … capped at 30 s) until it lands, showing
    one deduped notice meanwhile. Each read is bounded at 15 s
    (BOOK_READ_TIMEOUT_MS), and an expired read is handled as a rejection
-   (#3426). */
+   (#3426). The same bound applies to the other book-state readers (#3967). */
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
@@ -959,7 +959,11 @@ export function Layout() {
        A read that has not settled in 15 s is treated as a failed read (#3426). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     /* The attempt's request, aborted on expiry and on cleanup so the hydrate
-       never leaves two of its own reads of this book open (#3426). */
+       never leaves two of its own reads of this book open (#3426). Every other
+       mounted reader of the book (Confirm's entry re-read, the Analysing view,
+       the prosody trigger, the far-book and rebaseline reads) bounds and
+       aborts its own read the same way, so leaving a view never leaves a read
+       open (#3967). */
     let readCtrl: AbortController | null = null;
     const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
