@@ -18,8 +18,17 @@
    startup retries. One twin's cast.json failing for any reason but absence skips
    just that group. */
 
-import { bookDirsInWalkOrder, readBookStateOrThrow } from './book-op-lock.js';
-import { castJsonPath } from './paths.js';
+import { relative, sep } from 'node:path';
+import {
+  BOOK_GONE,
+  bookDirsInWalkOrder,
+  mintBookId,
+  readBookStateOrThrow,
+  withBookOp,
+  withBookPathClaim,
+} from './book-op-lock.js';
+import { updateStateAtDir } from './book-state-update.js';
+import { BOOKS_ROOT, castJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 
 export interface DuplicateBookIdGroup {
@@ -114,4 +123,90 @@ export async function findDuplicateBookIdGroups(): Promise<DuplicateBookIdGroup[
     groups.push({ bookId, winnerDir: winner.dir, loserDirs: losers.map((l) => l.dir) });
   }
   return groups;
+}
+
+/* ---- #3713 step 4 -- REPAIR half. Re-mints each loser's bookId; touches nothing
+   else (no manuscriptId, no reference remap -- owner decision 2). ---- */
+
+export interface DuplicateBookIdRepair {
+  previousBookId: string;
+  newBookId: string;
+  /** RELATIVE to BOOKS_ROOT, '/'-separated. Never an absolute path: this reaches the client. */
+  keptFolder: string;
+  reassignedFolder: string;
+}
+
+let repairs: DuplicateBookIdRepair[] = [];
+
+export function getDuplicateBookIdRepairs(): readonly DuplicateBookIdRepair[] {
+  return repairs;
+}
+
+export function __resetDuplicateBookIdRepairsForTest(): void {
+  repairs = [];
+}
+
+function relFolder(dir: string): string {
+  return relative(BOOKS_ROOT, dir).split(sep).join('/');
+}
+
+/** Never throws: one failing loser is logged (raw error, server log only) and the rest continue. */
+export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]> {
+  const done: DuplicateBookIdRepair[] = [];
+  let groups: DuplicateBookIdGroup[] = [];
+  try {
+    groups = await findDuplicateBookIdGroups();
+  } catch (err) {
+    console.warn('[duplicate-bookid] detection failed; skipping the repair until next startup', err);
+  }
+  for (const group of groups) {
+    for (const loserDir of group.loserDirs) {
+      try {
+        /* One withBookOp per loser, never nested. The hint is the only thing that
+           aims the resolve at THIS twin rather than the walk-first one. */
+        const result = await withBookOp(
+          group.bookId,
+          async (book) => {
+            if (book.bookDir !== loserDir) {
+              console.warn(
+                `[duplicate-bookid] "${group.bookId}" resolved to ${book.bookDir}, not ${loserDir}; leaving it alone`,
+              );
+              return null;
+            }
+            return withBookPathClaim(async () => {
+              const [author, series, title] = relative(BOOKS_ROOT, loserDir).split(sep);
+              const newId = await mintBookId(author, series, title);
+              const wrote = await updateStateAtDir(loserDir, (fresh) =>
+                fresh.bookId === group.bookId ? { ...fresh, bookId: newId } : null,
+              );
+              return wrote ? newId : null;
+            });
+          },
+          { hintDir: loserDir },
+        );
+        if (result === BOOK_GONE) {
+          console.warn(`[duplicate-bookid] ${loserDir} is gone; nothing to repair`);
+          continue;
+        }
+        if (result === null) {
+          console.warn(`[duplicate-bookid] ${loserDir} was not rewritten for "${group.bookId}"`);
+          continue;
+        }
+        console.warn(
+          `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
+            `${group.winnerDir} keeps it (more work), ${loserDir} is now "${result}"`,
+        );
+        done.push({
+          previousBookId: group.bookId,
+          newBookId: result,
+          keptFolder: relFolder(group.winnerDir),
+          reassignedFolder: relFolder(loserDir),
+        });
+      } catch (err) {
+        console.warn(`[duplicate-bookid] repair of "${group.bookId}" failed for one twin; continuing`, err);
+      }
+    }
+  }
+  repairs = done;
+  return done;
 }
