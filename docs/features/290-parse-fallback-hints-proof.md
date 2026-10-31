@@ -644,7 +644,7 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
    - Rewrite the doc comments of `parseTitlesPairWithState` / `assertHintsPairWithState` (`workspace/restructure.ts`), the `hintsMispaired` comment block in `applyRestructureClaimed`, and the `hintsSource` / `parseTitles` docs in `store/manuscripts.ts` (about lines 66–78; "Merge, split and reorder title-check a `parse` record" is now false). These are comments the change makes false, so they are owed.
    - Reword the about-line-532 exclude test.
    - Tests: `chapters-restructure.hints-proof.test.ts` (new).
-   - Acceptance: that file green; `npx vitest run src/routes/book-state.refresh-titles.test.ts` green, unmodified; the `book-op-lock`, `state-json-lock`, `state-lock` and `state-json-read` guards green; M12, M15, M16, M19 (ids), M20a and M20b red when applied; the 14-file set green with the plan 70a and `#3791` blocks unmodified.
+   - Acceptance: that file green; `npx vitest run src/routes/book-state.refresh-titles.test.ts` green, unmodified except that its two "#3828 pass 1" exclude-only tests now seed their `manuscript-hints.json` directly (a toggle no longer writes one, round 8 decision 2); the `book-op-lock`, `state-json-lock`, `state-lock` and `state-json-read` guards green; M12, M15, M16, M19 (ids), M20a and M20b red when applied; the 14-file set green with the plan 70a and `#3791` blocks unmodified.
 5. **Analysis-start seam.**
    - Edit `server/src/routes/analysis.ts`: replace `hintsOutOfSyncRefusal` with `parseHintsStartCheck` at both call sites, passing `fresh: requestedFresh` on the main route. Rewrite its doc comment: its "design owed in #3837" sentence becomes false.
    - Tests (Task 5's flips and additions):
