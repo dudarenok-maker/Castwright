@@ -20,7 +20,7 @@ export function createKeyedLoader<T>(fetchOne: (key: string) => Promise<T | null
       if (failed.has(key)) return Promise.resolve(null);
       const pending = inflight.get(key);
       if (pending) return pending;
-      const started = fetchOne(key)
+      const started = new Promise<T | null>((resolve) => resolve(fetchOne(key)))
         .then(
           (value) => value,
           () => null,

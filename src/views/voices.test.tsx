@@ -1598,13 +1598,14 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     );
   });
 
-  /* #3991 — a second open while the first foreign fetches are in flight
-     enters the waiter branch of `hydrateForeignCast`. It used to poll
-     render-time state from a stale closure, so it never saw the fetch land
-     and re-armed a 25 ms timer for the life of the page. The waiter's
-     outcome is only observable through its timer (callers are
-     fire-and-forget here), so these count the 25 ms polls. What the
-     sharing hands each caller is unit-tested in lib/keyed-loader.test.ts. */
+  /* #3991 — a second open while the first foreign fetches are in flight is
+     a concurrent caller of `hydrateForeignCast`. It used to wait in a poll
+     over render-time state from a stale closure, so it never saw the fetch
+     land and re-armed a 25 ms timer for the life of the page. It now shares
+     the first caller's in-flight promise through the keyed loader
+     (lib/keyed-loader.ts). Callers are fire-and-forget here, so these count
+     the 25 ms polls and the reads sent; what the sharing hands each caller
+     is unit-tested in lib/keyed-loader.test.ts. */
   describe('concurrent foreign-cast waiter (#3991)', () => {
     const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 150))));
     const pollTimers = (spy: { mock: { calls: unknown[][] } }) =>
@@ -1617,7 +1618,8 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       fireEvent.click(pill);
       await act(async () => {});
       /* The first click's in-flight state has re-rendered the view; this
-         second call sees `globalCastFetching` and becomes a waiter. */
+         second call is a concurrent caller for the same books and must
+         share the first reads. */
       fireEvent.click(pill);
       await act(async () => {});
       return view;

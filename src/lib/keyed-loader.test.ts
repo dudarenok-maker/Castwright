@@ -64,6 +64,16 @@ describe('createKeyedLoader (#3991)', () => {
     expect(fetchOne).toHaveBeenCalledTimes(1);
   });
 
+  it('records a synchronously-throwing read as failed instead of throwing', async () => {
+    const fetchOne = vi.fn((): Promise<string[]> => {
+      throw new Error('sync boom');
+    });
+    const loader = createKeyedLoader(fetchOne);
+    expect(await loader.load('b1')).toBeNull();
+    expect(await loader.load('b1')).toBeNull();
+    expect(fetchOne).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a failure sticky: a retry after it sends no new read', async () => {
     const fetchOne = vi.fn(() => Promise.reject(new Error('boom')));
     const loader = createKeyedLoader(fetchOne);
