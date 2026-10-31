@@ -1278,8 +1278,10 @@ async function deriveSegmentsHeal(
     disk via writeJsonAtomic when any chapter actually changed, so steady-
     state callers pay no I/O.
 
-    Skips excluded chapters. Tolerates missing segments files (chapter
-    not rendered yet) and malformed JSON (skip silently — the next scan
+    Excluded chapters are healed too (a backup restore can drop their
+    `audioRenderedAt`, and restructure builds no audio op without it, #3919)
+    but their seconds do not count toward the returned total. Tolerates
+    missing segments files (chapter not rendered yet) and malformed JSON (skip silently — the next scan
     will retry). updatedAt is intentionally not bumped because the
     backfill is a lossless metadata migration, not a user-driven change. */
 export async function backfillAudioModelKeysFromSegments(
@@ -1291,11 +1293,10 @@ export async function backfillAudioModelKeysFromSegments(
   const next: BookStateJson['chapters'] = [...state.chapters];
   for (let i = 0; i < state.chapters.length; i++) {
     const ch = state.chapters[i];
-    if (ch.excluded) continue;
     try {
       const heal = await deriveSegmentsHeal(bookDir, ch);
       if (!heal) continue;
-      totalSec += heal.durationSec;
+      if (!ch.excluded) totalSec += heal.durationSec;
       if (Object.keys(heal.set).length > 0) {
         next[i] = { ...ch, ...heal.set };
         backfillNeeded = true;

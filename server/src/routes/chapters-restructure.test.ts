@@ -1198,6 +1198,45 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     );
   });
 
+  it('reorder [1,3,2,4,5] moves a stamp-less excluded chapter\'s audio with it (#3919, probe P5)', async () => {
+    seedDigitTitledBook();
+    // Only the excluded chapter 2 has audio on disk; chapter 3 is unrendered.
+    seedAudio('02-chapter-2');
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    st.chapters.forEach((c: { uuid?: string }, i: number) => {
+      c.uuid = `00000000-0000-4000-8000-00000000000${i + 1}`;
+    });
+    // Excluded and stamp-less: a backup restore can drop both render stamps.
+    st.chapters[1].excluded = true;
+    delete st.chapters[1].audioRenderedAt;
+    delete st.chapters[1].audioModelKey;
+    writeFileSync(stPath, JSON.stringify(st));
+    const excludedUuid = st.chapters[1].uuid as string;
+    const unrenderedUuid = st.chapters[2].uuid as string;
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [1, 3, 2, 4, 5] });
+    expect(res.status).toBe(200);
+
+    const after = readState();
+    type Ch = (typeof after.chapters)[number];
+    const moved = after.chapters.find((c: Ch) => c.uuid === excludedUuid)!;
+    const inheritor = after.chapters.find((c: Ch) => c.uuid === unrenderedUuid)!;
+    // Old chapter 2 was healed, kept its audio and carries it to its new slug.
+    expect(moved.slug).not.toBe('02-chapter-2');
+    expect(moved.audioRenderedAt).toBeDefined();
+    expect(readFileSync(join(audioRoot, `${moved.slug}.mp3`), 'utf8')).toBe('audio-02-chapter-2');
+    // Old chapter 3 now sits at 02-chapter-2 and must not inherit that audio.
+    expect(inheritor.slug).toBe('02-chapter-2');
+    expect(inheritor.audioRenderedAt).toBeUndefined();
+    const inheritedPath = join(audioRoot, '02-chapter-2.mp3');
+    if (existsSync(inheritedPath)) {
+      expect(readFileSync(inheritedPath, 'utf8')).not.toBe('audio-02-chapter-2');
+    }
+  });
+
   function seedRenderedChapters(slugs: string[]): void {
     for (const slug of slugs) {
       seedAudio(slug);
