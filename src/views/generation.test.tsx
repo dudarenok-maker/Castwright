@@ -5232,3 +5232,56 @@ describe('GenerationView — instruct selector is stable before hydrate (#3722)'
     }
   });
 });
+
+describe('GenerationView — runtime so far ignores excluded chapters (#3919)', () => {
+  /* The server heal now stamps `duration` on an excluded chapter that has
+     audio on disk, and hydrate marks any chapter with audio `done`. The
+     "Runtime so far" sum must still cover only the included chapters. */
+  it('does not add the seconds of an excluded chapter that has audio on disk', () => {
+    const store = configureStore({
+      reducer: {
+        analysis: analysisSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a', duration: '01:40' },
+          { id: 2, title: 'Chapter 2', slug: '02-b', duration: '00:50', excluded: true },
+        ],
+        completedSlugs: ['01-a', '02-b'],
+        characters,
+      } as any),
+    );
+    const hydrated = store.getState().chapters.chapters;
+    expect(hydrated.map((c) => c.state)).toEqual(['done', 'done']);
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={hydrated}
+          characters={characters}
+          paused
+          title="Runtime Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    const label = screen.getByText(/Runtime so far:/);
+    expect(label.textContent).toContain('1:40');
+    expect(label.textContent).not.toContain('2:30');
+  });
+});

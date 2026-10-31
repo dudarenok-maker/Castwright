@@ -1497,7 +1497,7 @@ export function GenerationView({
 
   /* Honest "runtime so far" — sum of completed chapter durations. Replaces
      the hardcoded "4h 38m". */
-  const runtimeSec = chapters
+  const runtimeSec = activeChapters
     .filter((c) => c.state === 'done')
     .reduce((s, c) => s + parseDuration(c.duration), 0);
 
