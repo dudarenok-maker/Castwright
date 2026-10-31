@@ -1,7 +1,9 @@
 // server/src/test-utils/guard-scan.test.ts
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   collectSourceFiles,
@@ -149,5 +151,52 @@ describe('token-skipping opaque ranges', () => {
     // ...and just past its end: both agree it is live code.
     expect(isOpaqueInTokenRanges(ranges, end ?? -1)).toBe(false);
     expect(opaqueRangeAt(ranges, end ?? -1)).toBeUndefined();
+  });
+});
+
+/* Replaces the four retired byte-identical drift tests (#3685). Those compared
+   per-guard copies of the tokenizer; the copies are gone, so the failure they
+   guarded against is a guard growing a PRIVATE scanner again. Parsed, not
+   regexed: guards quote these names in comments. */
+const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // server/src
+const SHARED_SCANNER_NAMES = new Set([
+  'collectSourceFiles',
+  'collectTestFiles',
+  'computeOpaqueRanges',
+  'computeAstOpaqueRanges',
+  'isOpaque',
+  'opaqueEnd',
+  'findMatchingClose',
+  'lineOf',
+  'skipOpaqueToken',
+]);
+
+/** `<relative file>: <name>` for each top-level function declaration in `root`'s
+    `*.guard.test.ts` files that re-declares a shared scanner helper. */
+function privateScannerCopies(root: string): { scanned: number; offenders: string[] } {
+  const guards = collectTestFiles(root).filter((f) => f.endsWith('.guard.test.ts'));
+  const offenders: string[] = [];
+  for (const file of guards) {
+    const sf = ts.createSourceFile(
+      file,
+      readFileSync(file, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    for (const stmt of sf.statements) {
+      if (ts.isFunctionDeclaration(stmt) && stmt.name && SHARED_SCANNER_NAMES.has(stmt.name.text)) {
+        offenders.push(`${relative(root, file).split(sep).join('/')}: ${stmt.name.text}`);
+      }
+    }
+  }
+  return { scanned: guards.length, offenders };
+}
+
+describe('guards share the scanner (no private copies)', () => {
+  it('no *.guard.test.ts declares a top-level copy of a shared scanner helper', () => {
+    const { scanned, offenders } = privateScannerCopies(SRC_ROOT);
+    // Floor: a broken walk must not pass by finding nothing.
+    expect(scanned).toBeGreaterThanOrEqual(8);
+    expect(offenders).toEqual([]);
   });
 });
