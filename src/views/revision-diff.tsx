@@ -53,6 +53,12 @@ interface Props {
 }
 
 const LOADING_TAKES_REASON = 'Loading both takes…';
+const NO_TAKE_AUDIO_REASON = 'Neither take has audio to play.';
+
+/* The one rule for the auto-compare mode: segment-by-segment when the revision
+   has changed segments, whole takes otherwise. Used by the copy and the run. */
+const changedSegmentsOf = (revision: Revision) =>
+  revision.segments.filter((s) => s.changed && s.id != null);
 
 export function RevisionDiffPlayer({
   revision,
@@ -151,6 +157,14 @@ export function RevisionDiffPlayer({
   audioARef.current = audioA;
   const audioBRef = useRef(audioB);
   audioBRef.current = audioB;
+  /* Handle on the running auto-compare, so an action from OUTSIDE the run (a take
+     card, Reject draft, Commit selection...) can end it for good. Without that,
+     the pause such an action causes reads as "this take ended" and the run
+     starts the next take. */
+  const runRef = useRef<{ end: () => void } | null>(null);
+  function endRun() {
+    runRef.current?.end();
+  }
 
   /* Auto-compare: walk changed segments, playing A then B for each. With no
      changed segments (every revision the server records today) it compares the
@@ -159,7 +173,17 @@ export function RevisionDiffPlayer({
   useEffect(() => {
     if (!autoCompare) return;
     let cancelled = false;
-    const changedSegments = revision.segments.filter((s) => s.changed && s.id != null);
+    /* Set when something outside the run ended it: the cleanup must then NOT
+       pause, or it would silence a take the user just started from a card. */
+    let endedFromOutside = false;
+    runRef.current = {
+      end: () => {
+        cancelled = true;
+        endedFromOutside = true;
+        setAutoCompare(false);
+      },
+    };
+    const changedSegments = changedSegmentsOf(revision);
     (async () => {
       const wholeTake = changedSegments.length === 0;
       for (const seg of wholeTake ? [null] : changedSegments) {
@@ -167,8 +191,10 @@ export function RevisionDiffPlayer({
         /* A take with no URL is skipped: play() on an element with no src stays
            pending in a browser, which would hang the run on that take. */
         if (audioARef.current?.url) {
-          const start = (seg && audioARef.current.segments?.find((s) => s.sentenceId === seg.id))
-            ?.start;
+          /* Whole takes start from 0: a take paused earlier would otherwise resume. */
+          const start = seg
+            ? audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.start
+            : 0;
           const end = (seg && audioARef.current.segments?.find((s) => s.sentenceId === seg.id))
             ?.end;
           try {
@@ -180,8 +206,9 @@ export function RevisionDiffPlayer({
           if (cancelled) return;
         }
         if (audioBRef.current?.url) {
-          const startB = (seg && audioBRef.current.segments?.find((s) => s.sentenceId === seg.id))
-            ?.start;
+          const startB = seg
+            ? audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.start
+            : 0;
           const endB = (seg && audioBRef.current.segments?.find((s) => s.sentenceId === seg.id))
             ?.end;
           try {
@@ -212,7 +239,8 @@ export function RevisionDiffPlayer({
     }
     return () => {
       cancelled = true;
-      ab.pause();
+      runRef.current = null;
+      if (!endedFromOutside) ab.pause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoCompare]);
@@ -223,8 +251,17 @@ export function RevisionDiffPlayer({
 
   const c = CHAR_COLORS[(character?.color as CharColor) || 'narrator'];
   const totalChanged = revision.segments.filter((s) => s.changed).length;
-  /* Only worth saying when loading is the sole reason the toggle is off. */
-  const showLoadingReason = !autoCompare && audioPending && bAvailable && !aUnavailable;
+  /* Neither take has anything to play (both settled without a URL). */
+  const noTakeAudio = !audioPending && !audioA?.url && !audioB?.url;
+  /* Only worth saying when this is the sole reason the toggle is off. */
+  const disabledReason =
+    !autoCompare && bAvailable && !aUnavailable
+      ? audioPending
+        ? LOADING_TAKES_REASON
+        : noTakeAudio
+          ? NO_TAKE_AUDIO_REASON
+          : null
+      : null;
   const acceptedNew = revision.segments.filter(
     (s) => s.changed && s.id != null && selected[s.id] === 'B',
   ).length;
@@ -244,10 +281,14 @@ export function RevisionDiffPlayer({
     version: AbVersion,
     opts: { segmentId?: number; start?: number; end?: number } = {},
   ) {
+    /* Any take played or paused from here ends a running auto-compare. */
+    endRun();
     if (ab.playing === version && ab.segmentId === (opts.segmentId ?? null)) {
       ab.pause();
       return;
     }
+    /* A take with no audio has nothing to play (play() would stay pending). */
+    if (!(version === 'A' ? audioA : audioB)?.url) return;
     /* Disable B when not playable; disable A when not preserved. */
     if (version === 'A' && aUnavailable) return;
     if (version === 'B' && !bAvailable) return;
@@ -330,6 +371,7 @@ export function RevisionDiffPlayer({
               duration={revision.oldDuration}
               variant="current"
               available={!aUnavailable}
+              noAudio={!audioA?.url}
               isPlaying={ab.playing === 'A' && ab.segmentId === null}
               onPlay={() => handlePlay('A')}
             />
@@ -340,6 +382,7 @@ export function RevisionDiffPlayer({
               variant="new"
               character={character}
               available={bAvailable}
+              noAudio={!audioB?.url}
               error={audioBError ?? undefined}
               isPlaying={ab.playing === 'B' && ab.segmentId === null}
               onPlay={() => handlePlay('B')}
@@ -354,22 +397,24 @@ export function RevisionDiffPlayer({
               <div>
                 <p className="text-sm font-bold text-ink">Auto-compare</p>
                 <p className="text-xs text-ink/55">
-                  {totalChanged > 0
+                  {changedSegmentsOf(revision).length > 0
                     ? 'Plays each changed segment A then B in sequence.'
                     : 'Plays the old take, then the new one, start to finish.'}
                 </p>
-                {showLoadingReason && (
+                {disabledReason && (
                   <p id={loadingReasonId} className="text-xs text-ink/55">
-                    {LOADING_TAKES_REASON}
+                    {disabledReason}
                   </p>
                 )}
               </div>
             </div>
             <button
               onClick={() => setAutoCompare(!autoCompare)}
-              disabled={!autoCompare && (!bAvailable || aUnavailable || audioPending)}
-              title={showLoadingReason ? LOADING_TAKES_REASON : undefined}
-              aria-describedby={showLoadingReason ? loadingReasonId : undefined}
+              disabled={
+                !autoCompare && (!bAvailable || aUnavailable || audioPending || noTakeAudio)
+              }
+              title={disabledReason ?? undefined}
+              aria-describedby={disabledReason ? loadingReasonId : undefined}
               className={`min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
             >
               {autoCompare ? (
@@ -506,6 +551,7 @@ export function RevisionDiffPlayer({
           <span className="ml-auto flex items-center gap-3">
             <button
               onClick={() => {
+                endRun();
                 ab.release();
                 onReject();
               }}
@@ -517,8 +563,10 @@ export function RevisionDiffPlayer({
             {keepNewOnly ? (
               <PrimaryButton
                 variant="dark"
+                className="min-h-[44px] fine-pointer:min-h-0"
                 disabled={busy}
                 onClick={() => {
+                  endRun();
                   ab.release();
                   onKeepNew!();
                 }}
@@ -528,8 +576,10 @@ export function RevisionDiffPlayer({
             ) : (
               <PrimaryButton
                 variant="dark"
+                className="min-h-[44px] fine-pointer:min-h-0"
                 disabled={busy}
                 onClick={() => {
+                  endRun();
                   ab.release();
                   onAccept(selected);
                 }}
@@ -551,6 +601,8 @@ interface ABCardProps {
   variant: 'current' | 'new';
   character?: Character;
   available: boolean;
+  /** The take's metadata has no URL, so there is nothing to play. */
+  noAudio?: boolean;
   isPlaying: boolean;
   error?: string;
   onPlay: () => void;
@@ -562,6 +614,7 @@ function ABCard({
   variant,
   character,
   available,
+  noAudio = false,
   isPlaying,
   error,
   onPlay,
@@ -584,7 +637,7 @@ function ABCard({
       <div className="flex items-center gap-3 mb-3">
         <button
           onClick={onPlay}
-          disabled={!available}
+          disabled={!available || noAudio}
           aria-label={isPlaying ? `Pause ${label}` : `Play ${label}`}
           className={`w-12 h-12 rounded-full grid place-items-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isNew ? 'bg-ink text-canvas hover:bg-ink-soft' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}
         >

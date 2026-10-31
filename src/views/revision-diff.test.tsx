@@ -255,15 +255,30 @@ describe('RevisionDiffPlayer', () => {
     expect(screen.getByRole('button', { name: /Reject draft/i })).toBeDisabled();
   });
   it('plan 286 — preview mode never shows Keep new take', () => {
-    render(<RevisionDiffPlayer revision={makeRevision({ hasPreviousAudio: false })} bookId="book-1" chapter={chapter} character={character}
-      onClose={vi.fn()} onAccept={vi.fn()} onReject={vi.fn()} onKeepNew={vi.fn()} mode="preview" />);
+    render(
+      <RevisionDiffPlayer
+        revision={makeRevision({ hasPreviousAudio: false })}
+        bookId="book-1"
+        chapter={chapter}
+        character={character}
+        onClose={vi.fn()}
+        onAccept={vi.fn()}
+        onReject={vi.fn()}
+        onKeepNew={vi.fn()}
+        mode="preview"
+      />,
+    );
     expect(screen.queryByRole('button', { name: /Keep new take/i })).toBeNull();
     expect(screen.getByRole('button', { name: /Approve.*regenerate the rest/i })).toBeEnabled();
   });
   it('plan 286 — releases both audio elements before calling onReject', () => {
     const order: string[] = [];
-    basePause.mockImplementation(function (this: HTMLMediaElement) { order.push('pause'); });
-    const onReject = vi.fn(() => { order.push('reject'); });
+    basePause.mockImplementation(function (this: HTMLMediaElement) {
+      order.push('pause');
+    });
+    const onReject = vi.fn(() => {
+      order.push('reject');
+    });
     renderPlayer(makeRevision(), { onReject });
     fireEvent.click(screen.getByRole('button', { name: /Reject draft/i }));
     expect(order.filter((o) => o === 'pause').length).toBeGreaterThanOrEqual(2);
@@ -271,11 +286,16 @@ describe('RevisionDiffPlayer', () => {
   });
   it('plan 286 — after a refused reject (player still open), A and B still play from their URLs', async () => {
     const played: Array<string | null> = [];
-    basePlay.mockImplementation(function (this: HTMLMediaElement) { played.push(this.getAttribute('src')); return Promise.resolve(); });
+    basePlay.mockImplementation(function (this: HTMLMediaElement) {
+      played.push(this.getAttribute('src'));
+      return Promise.resolve();
+    });
     renderPlayer(makeRevision());
     await waitFor(() => expect(api.getChapterAudio).toHaveBeenCalled());
     await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
-    await act(async () => { await Promise.resolve(); }); // let setAudioA/setAudioB land so the hook has both URLs
+    await act(async () => {
+      await Promise.resolve();
+    }); // let setAudioA/setAudioB land so the hook has both URLs
     fireEvent.click(screen.getByRole('button', { name: /Reject draft/i })); // release; onReject is a no-op mock = refused
     fireEvent.click(screen.getByLabelText(/Play A · Current/i));
     fireEvent.click(screen.getByLabelText(/Play B · New draft/i));
@@ -283,7 +303,9 @@ describe('RevisionDiffPlayer', () => {
   });
   it('plan 286 (OD20) — a recovered entry is labelled, and its A side is described as the kept take', () => {
     renderPlayer(makeRevision({ recovered: true }));
-    expect(screen.getByTestId('revision-recovered-badge')).toHaveTextContent('Recovered from before the update');
+    expect(screen.getByTestId('revision-recovered-badge')).toHaveTextContent(
+      'Recovered from before the update',
+    );
     expect(screen.getByText("The take kept before this chapter's last render")).toBeInTheDocument();
     expect(screen.queryByText('Already in your audiobook')).toBeNull();
   });
@@ -302,14 +324,20 @@ describe('RevisionDiffPlayer', () => {
     renderPlayer(makeRevision({ segments: [seg(1), seg(2)] }));
     await waitFor(() => expect(api.getChapterAudio).toHaveBeenCalled());
     await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
-    await act(async () => { await Promise.resolve(); }); // let both URLs land in the hook
+    await act(async () => {
+      await Promise.resolve();
+    }); // let both URLs land in the hook
     fireEvent.click(screen.getByRole('button', { name: /Listen back-to-back/i }));
     await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a']));
     /* The first take is still playing: several poll ticks later nothing else may start. */
-    await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
     expect(played.map((p) => p.src)).toEqual(['blob:a']);
     /* It ends, and only then does B start. */
-    await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+    await act(async () => {
+      played[0].el.dispatchEvent(new Event('ended'));
+    });
     await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:b']));
   });
   it('#4002 — Listen back-to-back is held until both segment sets are loaded', async () => {
@@ -325,9 +353,13 @@ describe('RevisionDiffPlayer', () => {
     renderPlayer(makeRevision({ segments: [seg] }));
     const toggle = screen.getByRole('button', { name: /Listen back-to-back/i });
     expect(toggle).toBeDisabled();
-    await act(async () => { resolveA(audioMeta('blob:a')); });
+    await act(async () => {
+      resolveA(audioMeta('blob:a'));
+    });
     expect(toggle).toBeDisabled(); // B still pending
-    await act(async () => { resolveB(audioMeta('blob:b')); });
+    await act(async () => {
+      resolveB(audioMeta('blob:b'));
+    });
     expect(toggle).toBeEnabled();
   });
   it('#4002 — Listen back-to-back stays usable when a take metadata fails to load', async () => {
@@ -377,11 +409,17 @@ describe('RevisionDiffPlayer', () => {
         onReject={view.onReject}
       />,
     );
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      played[0].el.dispatchEvent(new Event('ended'));
+    });
     await waitFor(() => expect(played).toHaveLength(2));
     expect(played[1].at).toBe(20); // B, segment 1, from the re-fetched metadata
-    await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
+    await act(async () => {
+      played[1].el.dispatchEvent(new Event('ended'));
+    });
     await waitFor(() => expect(played).toHaveLength(3));
     expect(played[2].at).toBe(7); // A, segment 2, from the re-fetched metadata
   });
@@ -406,7 +444,9 @@ describe('RevisionDiffPlayer', () => {
         onReject={view.onReject}
       />,
     );
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(toggle).toBeDisabled();
     warn.mockRestore();
   });
@@ -453,7 +493,9 @@ describe('RevisionDiffPlayer', () => {
       await waitFor(() => expect(toggleBtn()).toBeEnabled());
       fireEvent.click(toggleBtn());
       await waitFor(() => expect(played).toHaveLength(1));
-      await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+      await act(async () => {
+        played[0].el.dispatchEvent(new Event('ended'));
+      });
       await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:a']));
     });
 
@@ -474,7 +516,9 @@ describe('RevisionDiffPlayer', () => {
           onReject={view.onReject}
         />,
       );
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
       expect(toggleBtn()).toBeDisabled();
     });
 
@@ -499,7 +543,9 @@ describe('RevisionDiffPlayer', () => {
           onReject={view.onReject}
         />,
       );
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
       expect(toggleBtn()).toBeEnabled();
       fireEvent.click(toggleBtn());
       expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/);
@@ -538,12 +584,18 @@ describe('RevisionDiffPlayer', () => {
       /* Whole takes run for minutes: the 30 s per-segment cap must not apply. */
       const realNow = Date.now.bind(Date);
       const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 120_000);
-      await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 450));
+      });
       nowSpy.mockRestore();
       expect(played.map((p) => p.src)).toEqual(['blob:a']);
-      await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+      await act(async () => {
+        played[0].el.dispatchEvent(new Event('ended'));
+      });
       await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:b']));
-      await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
+      await act(async () => {
+        played[1].el.dispatchEvent(new Event('ended'));
+      });
       await waitFor(() => expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/));
       expect(played).toHaveLength(2);
     });
@@ -557,8 +609,12 @@ describe('RevisionDiffPlayer', () => {
       fireEvent.click(toggleBtn()); // Stop
       expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/);
       /* Even if A's end then arrives, the stopped run must not go on to B. */
-      await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
-      await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
+      await act(async () => {
+        played[0].el.dispatchEvent(new Event('ended'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 350));
+      });
       expect(played.map((p) => p.src)).toEqual(['blob:a']);
     });
 
@@ -574,7 +630,9 @@ describe('RevisionDiffPlayer', () => {
     });
 
     it('stays disabled while the takes load', () => {
-      (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<ChapterAudio>(() => {}));
+      (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise<ChapterAudio>(() => {}),
+      );
       renderPlayer(makeRevision({ segments: [] }));
       expect(toggleBtn()).toBeDisabled();
     });
@@ -590,7 +648,11 @@ describe('RevisionDiffPlayer', () => {
       ...audioMeta('blob:a'),
       segments: [{ sentenceId: 1, start: 1, end: 2 }],
     });
-    renderPlayer(makeRevision({ segments: [{ id: 1, changed: true } as unknown as Revision['segments'][number]] }));
+    renderPlayer(
+      makeRevision({
+        segments: [{ id: 1, changed: true } as unknown as Revision['segments'][number]],
+      }),
+    );
     const toggle = () => screen.getByRole('button', { name: /Listen back-to-back|Stop/i });
     await waitFor(() => expect(toggle()).toBeEnabled());
     fireEvent.click(toggle());
@@ -601,8 +663,167 @@ describe('RevisionDiffPlayer', () => {
     el.dispatchEvent(new Event('timeupdate'));
     expect(basePause.mock.calls.length).toBe(pausesBefore); // before the end: keeps playing
     el.currentTime = 2.1;
-    await act(async () => { el.dispatchEvent(new Event('timeupdate')); });
+    await act(async () => {
+      el.dispatchEvent(new Event('timeupdate'));
+    });
     expect(basePause.mock.calls.length).toBeGreaterThan(pausesBefore); // past the end: paused
     await waitFor(() => expect(played).toHaveLength(2)); // so the run moves on to B
+  });
+  describe('whole-take run vs outside actions (#4002, pass 2)', () => {
+    const toggleBtn = () => screen.getByRole('button', { name: /Listen back-to-back|Stop/i });
+    function track() {
+      const played: Array<{ src: string | null; at: number; el: HTMLMediaElement }> = [];
+      const paused: HTMLMediaElement[] = [];
+      basePlay.mockImplementation(function (this: HTMLMediaElement) {
+        const src = this.getAttribute('src');
+        played.push({ src, at: this.currentTime, el: this });
+        return src ? Promise.resolve() : new Promise<void>(() => {});
+      });
+      basePause.mockImplementation(function (this: HTMLMediaElement) {
+        paused.push(this);
+      });
+      return { played, paused };
+    }
+    const idle = (ms: number) =>
+      act(async () => {
+        await new Promise((r) => setTimeout(r, ms));
+      });
+    it('starts each whole take from 0 even when it was paused partway', async () => {
+      const { played } = track();
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      played[0].el.currentTime = 90; // 1:30 into A
+      fireEvent.click(toggleBtn()); // Stop
+      fireEvent.click(toggleBtn()); // start again
+      await waitFor(() => expect(played).toHaveLength(2));
+      expect(played[1].at).toBe(0);
+      /* Same for B: end A, let B start, park B at 1:10, Stop, run again to B. */
+      await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
+      await waitFor(() => expect(played).toHaveLength(3));
+      played[2].el.currentTime = 70;
+      fireEvent.click(toggleBtn()); // Stop
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(4));
+      await act(async () => { played[3].el.dispatchEvent(new Event('ended')); });
+      await waitFor(() => expect(played).toHaveLength(5));
+      expect(played[4].at).toBe(0);
+    });
+
+    it('pausing the playing take from its card ends the run instead of starting B', async () => {
+      const { played } = track();
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      fireEvent.click(await screen.findByLabelText(/Pause A · Current/i));
+      await idle(350);
+      expect(played.map((p) => p.src)).toEqual(['blob:a']);
+      expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/);
+    });
+
+    it('starting the other take from its card is not paused by the run ending', async () => {
+      const { played, paused } = track();
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      const pausesBefore = paused.length;
+      fireEvent.click(screen.getByLabelText(/Play B · New draft/i));
+      await waitFor(() => expect(played).toHaveLength(2));
+      await idle(350);
+      const bEl = played[1].el;
+      expect(paused.slice(pausesBefore).filter((el) => el === bEl)).toHaveLength(0);
+      expect(played).toHaveLength(2);
+      expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/);
+    });
+
+    for (const [name, action, expectCall] of [
+      ['Reject draft', /Reject draft/i, 'onReject'],
+      ['Commit selection', /Commit selection/i, 'onAccept'],
+    ] as const) {
+      it(`${name} partway through A ends the run before releasing, so no take re-attaches a src`, async () => {
+        const { played } = track();
+        const srcSet = vi.spyOn(HTMLMediaElement.prototype, 'src', 'set');
+        const view = renderPlayer(makeRevision({ segments: [] }));
+        await waitFor(() => expect(toggleBtn()).toBeEnabled());
+        fireEvent.click(toggleBtn());
+        await waitFor(() => expect(played).toHaveLength(1));
+        srcSet.mockClear();
+        fireEvent.click(screen.getByRole('button', { name: action }));
+        await idle(350);
+        expect(view[expectCall]).toHaveBeenCalledTimes(1);
+        expect(played).toHaveLength(1); // B never played
+        expect(srcSet.mock.calls.filter(([v]) => v)).toEqual([]); // nothing re-attached a src
+        srcSet.mockRestore();
+      });
+    }
+
+    it('Stop pauses the playing take', async () => {
+      const { played, paused } = track();
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      const before = paused.length;
+      fireEvent.click(toggleBtn());
+      expect(paused.length).toBeGreaterThan(before);
+      expect(screen.getByLabelText(/Play A · Current/i)).toBeInTheDocument();
+    });
+
+    it('a superseded A fetch resolving late does not replace the newer take', async () => {
+      const { played } = track();
+      const getA = api.getChapterAudioPrevious as ReturnType<typeof vi.fn>;
+      let resolveOld!: (v: ChapterAudio) => void;
+      getA.mockReturnValueOnce(new Promise<ChapterAudio>((r) => (resolveOld = r)));
+      const revision = makeRevision({ segments: [] });
+      const view = renderPlayer(revision);
+      getA.mockResolvedValue(audioMeta('blob:a-new'));
+      view.rerender(
+        <RevisionDiffPlayer
+          revision={revision}
+          bookId="book-1"
+          chapter={{ ...chapter }}
+          character={character}
+          onClose={view.onClose}
+          onAccept={view.onAccept}
+          onReject={view.onReject}
+        />,
+      );
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      await act(async () => {
+        resolveOld(audioMeta('blob:a-old'));
+      });
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      expect(played[0].src).toBe('blob:a-new');
+    });
+
+    it('disables a take card whose take has no audio', async () => {
+      (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (api.getChapterAudio as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() => expect(screen.getByLabelText(/Play A · Current/i)).toBeDisabled());
+      await waitFor(() => expect(screen.getByLabelText(/Play B · New draft/i)).toBeDisabled());
+    });
+
+    it('disables the toggle, with a reason, when neither take has audio', async () => {
+      (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (api.getChapterAudio as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+      renderPlayer(makeRevision({ segments: [] }));
+      await waitFor(() =>
+        expect(screen.getByText(/Neither take has audio to play/i)).toBeInTheDocument(),
+      );
+      expect(toggleBtn()).toBeDisabled();
+    });
+
+    it('uses one rule for the mode: a changed segment without an id compares whole takes (copy and run)', async () => {
+      renderPlayer(
+        makeRevision({ segments: [{ changed: true } as unknown as Revision['segments'][number]] }),
+      );
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      expect(screen.getByText(/old take, then the new one, start to finish/i)).toBeInTheDocument();
+    });
   });
 });
