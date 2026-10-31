@@ -7700,11 +7700,14 @@ export async function runMainAnalyzerJob(
               /* Plan 290 — this run re-keyed every saved sentence to the current
                  chapters (the edits write above landed), so the stale-evidence
                  marker goes. Only the main persist clears it. That holds because
-                 every producer of the marker leaves no stale cache behind: a
-                 restructure, a bundle overwrite and a backup restore each clear
-                 the analysis cache when they stamp it (owner round 11), so no
-                 chapter's take here was replayed from a cache keyed to an older
-                 chapter list. */
+                 every producer of the marker leaves no stale cache behind, and
+                 none runs while this job is registered: re-parse and
+                 replace-manuscript wipe the analysis cache, a bundle overwrite
+                 and a backup restore clear it when they stamp the marker (owner
+                 round 11), a restructure on a marked book clears it, and each
+                 refuses with `book_busy` while a long job holds the book (PR
+                 #3966 review pass 2), so no chapter's take here was replayed
+                 from a cache keyed to an older chapter list. */
               delete next.sentencesPredateChapters;
               return next;
             }, {
