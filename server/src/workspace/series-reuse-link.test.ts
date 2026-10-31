@@ -20,7 +20,10 @@ import {
 import {
   seedReuseGuardsFromPriorCast,
   mergeAnalysisResultWithExistingCast,
+  applyRewriteToPriorCast,
 } from '../store/merge-analysis-cast.js';
+import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
+import { composeRewrites, stripEstablishedAsciiRewrites } from '../analyzer/roster-dedup.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
 
 const AUTHOR = 'A';
@@ -713,5 +716,297 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
     expect(chars[0].overrideTtsVoices).toBeUndefined();
     expect(chars[0].voiceUuid).toBeUndefined();
     expect(chars[0].ttsEngine).toBeUndefined();
+  });
+});
+
+/* #3920 child 3 — pin the analysis route's real re-analysis sequence
+   (server/src/routes/analysis.ts) end to end, seed → link → remap → merge:
+
+     :5860  seedReuseGuardsFromPriorCast(priorCastForMerge, characters)
+     :5861  pruneStaleReuseLinks(recordRef.bookId, characters)
+     :5868  linkSeriesReuseAtAnalysis(recordRef.bookId, characters)
+     :7158  cumulativeForRemap = stripEstablishedAsciiRewrites(
+              composeRewrites(dd.rewrites, folded.rewrites),
+              priorCastForMerge, characters0)
+     :7163  remappedToPrior = remapFreshToPriorIds(
+              characters0, folded.sentences, priorCastForMerge, cumulativeForRemap)
+     :7368  cumulative = stripEstablishedAsciiRewrites(
+              composeRewrites(dd.rewrites, folded.rewrites),
+              priorCastForMerge, characters0)
+     :7373  remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative)
+     :7380  mergedFinal = mergeAnalysisResultWithExistingCast(
+              remapped.priorCast, characters)
+
+   The route feeds seed/prune/link the DEFAULT workspace scanners and composes
+   the rewrite table from the run's real dedup/fold journals; a unit test
+   cannot supply a workspace or journals cheaply, so the same pure functions
+   run with injected scanners (baseOptions()) and an empty journal pair —
+   composeRewrites({}, {}) === {} is exactly what the route computes for a run
+   with no dedup/fold rewrites. folded.sentences is substituted with []: no
+   fixture carries sentence attribution, so the sentence half of the remap is
+   the identity. */
+describe('re-analysis keeps locked/tuned voices — seed → link → remap → merge (#3920)', () => {
+  type PriorRow = { id: string } & Record<string, unknown>;
+
+  /* Drive the SAME call sequence the route drives, on (prior, fresh), and
+     return the merged roster plus a snapshot of the roster right after the
+     link pass (so a test can prove the linker really stamped a link before
+     asserting that the merge stripped it). */
+  const runReAnalysis = async (
+    prior: PriorRow[],
+    fresh: LinkableCharacter[],
+    options: LinkSeriesReuseOptions,
+  ): Promise<{ merged: LinkableCharacter[]; postLink: LinkableCharacter[] }> => {
+    seedReuseGuardsFromPriorCast(prior, fresh);
+    await pruneStaleReuseLinks(BOOK2, fresh, options);
+    await linkSeriesReuseAtAnalysis(BOOK2, fresh, options);
+    const postLink = fresh.map((c) => ({ ...c }));
+    const cumulative = stripEstablishedAsciiRewrites(
+      composeRewrites({}, {}),
+      prior,
+      fresh as unknown as Array<{ id: string } & Record<string, unknown>>,
+    );
+    const remappedToPrior = remapFreshToPriorIds(
+      fresh,
+      [] as Array<{ characterId: string }>,
+      prior,
+      cumulative,
+    );
+    const remapped = applyRewriteToPriorCast(prior, cumulative);
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(
+      remapped.priorCast,
+      remappedToPrior.characters,
+    );
+    return { merged, postLink };
+  };
+
+  /* baseOptions()'s library/positions plus the language/standalone vetoes
+     pinned in-test instead of the route's default disk-walking resolvers, and
+     an extended Book One library per fixture. */
+  const routeOptions = (library: LibraryCharacterRecord[]): LinkSeriesReuseOptions => ({
+    ...baseOptions(),
+    scanLibrary: async () => library,
+    isStandaloneBookId: async () => false,
+    resolveBookLanguage: async () => 'en',
+  });
+
+  const surnameDrift = async (voiceState: 'locked' | 'tuned') => {
+    const prior: PriorRow[] = [{ id: 'wren', name: 'Wren', voiceId: 'v_mine', voiceState }];
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren-ashby', name: 'Wren Ashby', gender: 'female', ageRange: 'teen' },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(PRIOR_LIBRARY));
+
+    /* The link pass really stamped Book One's Wren onto the fresh row —
+       matchedFrom, the unified voiceId and the denormalised qwen voice —
+       before the merge ran. */
+    const linked = postLink[0];
+    expect(linked.matchedFrom?.bookId).toBe(BOOK1);
+    expect(linked.matchedFrom?.characterId).toBe('wren');
+    expect(linked.overrideTtsVoices?.qwen?.name).toBe('voice_wren');
+    expect(linked.voiceState).toBe('reused');
+
+    /* The merge takes the pinned prior voice WHOLE: every preserved field the
+       prior row has is copied, every field it lacks is deleted, so nothing
+       the linker stamped survives the join (merge-analysis-cast.ts, the
+       #3920 child-1 pinned overlay). */
+    const wren = merged.find((c) => c.id === 'wren-ashby');
+    expect(wren).toBeTruthy();
+    expect(wren?.voiceId).toBe('v_mine');
+    expect(wren?.voiceState).toBe(voiceState);
+    expect(wren?.matchedFrom).toBeUndefined();
+    expect(wren?.overrideTtsVoices).toBeUndefined();
+    expect(wren?.voiceUuid).toBeUndefined();
+    expect(wren?.ttsEngine).toBeUndefined();
+    expect(wren?.voiceStyle).toBeUndefined();
+  };
+
+  it('surname drift: a locked prior row keeps its voice whole through the full sequence', async () => {
+    await surnameDrift('locked');
+  });
+
+  it('surname drift, tuned variant: same whole-voice outcome', async () => {
+    await surnameDrift('tuned');
+  });
+
+  it('cousin name: a same-name fresh row never inherits the seeded link of the prior row it was not joined to', async () => {
+    /* Prior mara is locked and linked to Book One's Mara. The fresh roster
+       mints TWO rows in that name family: mara (which claims the prior row by
+       id) and mara-2 (a cousin under a fresh id the merge never joins). */
+    const seededLink = {
+      bookId: BOOK1,
+      characterId: 'mara',
+      bookTitle: 'Book One',
+      confidence: 0.42,
+    };
+    const prior: PriorRow[] = [
+      {
+        id: 'mara',
+        name: 'Mara',
+        voiceId: 'v_mara',
+        voiceState: 'locked',
+        matchedFrom: seededLink,
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'mara', name: 'Mara Vale', gender: 'female', ageRange: 'adult' },
+      { id: 'mara-2', name: 'Mara', gender: 'female', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'mara', name: 'Mara', gender: 'female', ageRange: 'adult' },
+      },
+    ];
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    /* mara keeps the locked prior voice (joined by id). */
+    const mara = merged.find((c) => c.id === 'mara');
+    expect(mara?.voiceId).toBe('v_mara');
+    expect(mara?.voiceState).toBe('locked');
+
+    /* mara-2 was NOT joined to prior mara, so it inherits neither the lock
+       nor the seeded link. The linker DOES legitimately link mara-2 to Book
+       One's Mara on its own exact-name score — that link is stamped fresh
+       this run (voiceState reused, the scorer's confidence) and is
+       distinguishable from the seeded prior-row object by exactly those
+       marks: the seeded path would leave the row pre-linked (the linker
+       skips rows that already carry matchedFrom) with the prior confidence
+       0.42 and NO voiceState. */
+    const mara2 = merged.find((c) => c.id === 'mara-2');
+    expect(mara2).toBeTruthy();
+    expect(mara2?.voiceState).not.toBe('locked');
+    expect(mara2?.voiceState).not.toBe('tuned');
+    expect(mara2?.voiceState).toBe('reused');
+    expect(mara2?.matchedFrom?.bookId).toBe(BOOK1);
+    expect(mara2?.matchedFrom?.characterId).toBe('mara');
+    expect(mara2?.matchedFrom?.confidence).not.toBe(seededLink.confidence);
+  });
+
+  it('narrator rename: the locked narrator keeps its voice and renamed name; a same-name real row inherits neither', async () => {
+    const narrLink = {
+      bookId: 'book-0',
+      characterId: 'narrator',
+      bookTitle: 'Book Zero',
+      confidence: 0.9,
+    };
+    const prior: PriorRow[] = [
+      {
+        id: 'narrator',
+        name: 'Old Tom',
+        voiceId: 'v_narr',
+        voiceState: 'locked',
+        matchedFrom: narrLink,
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+      },
+    ];
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    /* The narrator row keeps the user's locked voice and their RENAME — the
+       narrator-name carry-forward beats the fresh roster's default name. */
+    const narrator = merged.find((c) => c.id === 'narrator');
+    expect(narrator?.voiceId).toBe('v_narr');
+    expect(narrator?.voiceState).toBe('locked');
+    expect(narrator?.name).toBe('Old Tom');
+
+    /* old-tom is a different person who happens to share the narrator's
+       prior display name: no locked state, and no matchedFrom from the
+       narrator. The linker legitimately links it to Book One's Old Tom on
+       its own score — never to the narrator's seeded book-0 link. */
+    const oldTom = merged.find((c) => c.id === 'old-tom');
+    expect(oldTom).toBeTruthy();
+    expect(oldTom?.voiceState).not.toBe('locked');
+    expect(oldTom?.voiceState).not.toBe('tuned');
+    expect(oldTom?.matchedFrom?.bookId).toBe(BOOK1);
+    expect(oldTom?.matchedFrom?.characterId).toBe('old-tom');
+  });
+
+  it('narrator rename, no fresh narrator row: a real Old Tom never takes the seeded narrator link', async () => {
+    /* Strengthened variant for child 2's prior-narrator exclusion: when the
+       fresh roster has NO narrator row this run, the prior narrator is not
+       claimed by any fresh id, so ONLY the narrator exclusion keeps its
+       guards off a real character who happens to share the renamed
+       narrator's display name (the merge side is already covered by
+       mergeCore's own narrator exclusion). In the variant above, with a
+       fresh narrator row present, the freshIds exclusion alone would keep
+       the seed sound — this variant is what actually pins the narrator
+       clause. */
+    const narrLink = {
+      bookId: 'book-0',
+      characterId: 'narrator',
+      bookTitle: 'Book Zero',
+      confidence: 0.9,
+    };
+    const prior: PriorRow[] = [
+      {
+        id: 'narrator',
+        name: 'Old Tom',
+        voiceId: 'v_narr',
+        voiceState: 'locked',
+        matchedFrom: narrLink,
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+      },
+    ];
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    /* The voiced prior narrator is carried forward whole (the fresh roster
+       dropped it), still locked under its own id. */
+    const narrator = merged.find((c) => c.id === 'narrator');
+    expect(narrator?.voiceId).toBe('v_narr');
+    expect(narrator?.voiceState).toBe('locked');
+
+    /* The real Old Tom keeps its own identity: linked to Book One's Old Tom
+       by the linker on its own score — never to the narrator's book-0 link,
+       and never locked. */
+    const oldTom = merged.find((c) => c.id === 'old-tom');
+    expect(oldTom).toBeTruthy();
+    expect(oldTom?.voiceState).not.toBe('locked');
+    expect(oldTom?.voiceState).not.toBe('tuned');
+    expect(oldTom?.matchedFrom?.bookId).toBe(BOOK1);
+    expect(oldTom?.matchedFrom?.characterId).toBe('old-tom');
+  });
+
+  it('control: a generated (unlocked) prior row still receives the Book One link', async () => {
+    /* Fixture 1 with voiceState generated: the pinned overlay does not apply,
+       so today's behaviour stands — re-analysis still links unlocked rows. */
+    const prior: PriorRow[] = [
+      { id: 'wren', name: 'Wren', voiceId: 'v_mine', voiceState: 'generated' },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren-ashby', name: 'Wren Ashby', gender: 'female', ageRange: 'teen' },
+    ];
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(PRIOR_LIBRARY));
+
+    const wren = merged.find((c) => c.id === 'wren-ashby');
+    expect(wren?.matchedFrom?.bookId).toBe(BOOK1);
+    expect(wren?.matchedFrom?.characterId).toBe('wren');
+    expect(wren?.voiceState).not.toBe('locked');
+    expect(wren?.voiceState).not.toBe('tuned');
+    /* The linker's denormalised qwen voice survives too — the prior row had
+       none of those fields to overlay. */
+    expect(wren?.overrideTtsVoices?.qwen?.name).toBe('voice_wren');
   });
 });
