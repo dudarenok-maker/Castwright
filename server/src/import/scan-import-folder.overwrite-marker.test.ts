@@ -17,8 +17,9 @@ import { importPortableBundle } from './scan-import-folder.js';
 import { BOOKS_ROOT, manuscriptEditsJsonPath, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
-function fixtureState(title: string): BookStateJson {
+function fixtureState(title: string, extra: Partial<BookStateJson> = {}): BookStateJson {
   return {
+    ...extra,
     bookId: `demo__standalones__${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
     manuscriptId: `mns_${title.toLowerCase().replace(/[^a-z0-9]+/g, '')}`,
     title,
@@ -158,5 +159,54 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
     } finally {
       rmSync(target, { recursive: true, force: true });
     }
+  });
+
+  describe("a marker carried in the bundle's own state.json is stripped (only the stamp decides)", () => {
+    const carried = (title: string) => fixtureState(title, { sentencesPredateChapters: true });
+
+    it('fresh import', async () => {
+      const state = carried('Marker Carried Fresh');
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      try {
+        await importPortableBundle(await makeBundle(state), { onConflict: 'fail' });
+        expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+
+    it('rename import', async () => {
+      const state = carried('Marker Carried Rename');
+      const bundle = await makeBundle(state);
+      const existing = targetDirFor(state);
+      rmSync(existing, { recursive: true, force: true });
+      let renamed = '';
+      try {
+        await importPortableBundle(bundle, { onConflict: 'fail' });
+        const result = await importPortableBundle(bundle, { onConflict: 'rename' });
+        renamed = result.targetPath;
+        expect(renamed).not.toBe(existing);
+        expect(readState(renamed)).not.toHaveProperty('sentencesPredateChapters');
+      } finally {
+        rmSync(existing, { recursive: true, force: true });
+        if (renamed) rmSync(renamed, { recursive: true, force: true });
+      }
+    });
+
+    it('overwrite onto a target with an empty sentences array', async () => {
+      const state = carried('Marker Carried Overwrite Empty');
+      const bundle = await makeBundle(state);
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      try {
+        await importPortableBundle(bundle, { onConflict: 'fail' });
+        writeFileSync(manuscriptEditsJsonPath(target), JSON.stringify({ sentences: [] }), 'utf8');
+        await importPortableBundle(bundle, { onConflict: 'overwrite' });
+        expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
   });
 });

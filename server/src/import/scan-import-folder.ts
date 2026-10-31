@@ -368,7 +368,10 @@ export async function importPortableBundle(
             manuscriptId,
             language: state.language ?? null,
             editEpoch: mintEditEpoch(),
-            ...(sentencesPredateChapters ? { sentencesPredateChapters: true as const } : {}),
+            /* Plan 290 -- server-only like editEpoch: a marker the bundle's own
+               state.json carries is dropped (undefined is not serialised), so
+               only this import's stamp decides. */
+            sentencesPredateChapters: sentencesPredateChapters ? (true as const) : undefined,
           },
           null,
           2,

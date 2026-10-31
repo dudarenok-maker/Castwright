@@ -350,6 +350,14 @@ describe('plan 290 — clear (M25)', () => {
     await reparse(bookId);
     expect(readState(bookDir).sentencesPredateChapters).toBe(true);
     await runAnalysis(manuscriptId, 'main', driftStage2);
+    /* The drift branch really ran: the persist reached its edits write (which
+       precedes the drift check) with the demoted 120-per-chapter takes, so the
+       skipped state write is not a run that failed earlier. */
+    const edits = JSON.parse(readFileSync(editsPath(bookDir), 'utf8')) as {
+      sentences: Array<{ characterId: string }>;
+    };
+    expect(edits.sentences.length).toBeGreaterThanOrEqual(4 * 120);
+    expect(edits.sentences.some((s) => s.characterId === 'ghost')).toBe(false);
     const after = readState(bookDir);
     /* No persist landed on state.json: no provenance was stamped. */
     expect(after.analysisProvenance).toBeUndefined();
