@@ -48,9 +48,8 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
        re-carries any refused key, e.g. additional_drop_params), and a plain string target replaces the protected `model`.
        Always refused; fallback config belongs in the proxy, which this does not affect. */
     'fallbacks', 'context_window_fallbacks', 'content_policy_fallbacks',
-    /* #3921 — LiteLLM treats `output_config` as a native carrier of both `effort` and `format` that outranks
-       `reasoning_effort` (router.py), so it can replace the reasoning control and the structured output. Always
-       refused, not style-gated. (`reasoning`, the sibling carrier, is already refused above.) */
+    /* #3921 — LiteLLM ranks `output_config.effort` above `reasoning_effort` (router.py), so it can replace the reasoning
+       control. Always refused, not style-gated. (`reasoning`, the sibling carrier, is already refused above.) */
     'output_config',
     /* #3921 — LiteLLM's proxy lifts the three fallback keys out of `router_settings_override` into the request, so it
        carries them one level down. Always refused; settings it would carry belong in the proxy's config. */

@@ -232,13 +232,14 @@ and its stop-token list, `stop_token_ids`. `chat_template_kwargs.enable_thinking
 Reasoning control is Not controllable, because under either of the other two controls the server
 lets an explicit `enable_thinking` override the reasoning control Castwright owns. LiteLLM's
 top-level `thinking` field (for example `{"thinking": {"type": "enabled", "budget_tokens": 16000}}`)
-follows the same rule. Five more LiteLLM request fields are always refused, whatever the Reasoning
+follows the same rule. More LiteLLM request fields are always refused, whatever the Reasoning
 control: `additional_drop_params` can strip any parameter Castwright sends (`response_format`,
 `reasoning_effort`, ...); `drop_params` turns an unsupported-parameter error into a request sent silently
 without it; `extra_body` is copied to the OpenAI SDK, which merges it over the request body, so it can replace
 any of those controls; `fallbacks`, `context_window_fallbacks` and `content_policy_fallbacks` apply their
 target over the request when a call fails, so a target re-carries any refused key or replaces `model`; and
-`output_config` carries `effort` and `format`, which LiteLLM ranks above `reasoning_effort`. If you run
+`output_config.effort` is ranked by LiteLLM above `reasoning_effort`; and `router_settings_override` is
+lifted by the LiteLLM proxy into the request, carrying the three fallback fields above one level down. If you run
 LiteLLM and want unsupported parameters dropped or fallbacks, set that in the proxy's own config instead. This
 list covers the spellings of llama.cpp, vLLM and the LiteLLM fields above; other servers' spellings
 (OpenRouter, LM Studio and others) have not been checked. The LiteLLM behaviour was read from its source at
