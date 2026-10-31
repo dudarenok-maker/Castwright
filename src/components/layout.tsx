@@ -1533,6 +1533,15 @@ export function Layout() {
      first await, so the library trigger and the open trigger never start a
      second, concurrent run for one book. */
   const prosodyInFlight = useRef<Set<string>>(new Set());
+  /* #3967 — the live book-state reads of detached runs; Layout unmounting
+     aborts them (a book-switch does not). */
+  const prosodyReads = useRef<Set<AbortController>>(new Set());
+  useEffect(
+    () => () => {
+      for (const c of prosodyReads.current) c.abort();
+    },
+    [],
+  );
   /* #3435 — the open book the open trigger has already run during this visit
      (or left to a run already in flight), the book it left to an in-flight
      run, and a tick that re-arms it. */
@@ -1580,12 +1589,19 @@ export function Layout() {
     if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
     prosodyInFlight.current.add(id);
     void (async () => {
-      // Detached: not tied to effect cleanup — survives a book-switch.
+      /* Detached: not tied to effect cleanup — survives a book-switch. Its
+         book-state read is bounded (BOOK_READ_TIMEOUT_MS) and aborted when
+         Layout unmounts, never on a book-switch (#3967). */
       let pillActive = false;
       let skippedWork = false;
       let ctrl: AbortController | null = null;
+      const readCtrl = new AbortController();
+      const timers = new Set<ReturnType<typeof setTimeout>>();
+      prosodyReads.current.add(readCtrl);
       try {
-        const st = await api.getBookState(id);
+        const st = await within(api.getBookState(id, readCtrl.signal), BOOK_READ_TIMEOUT_MS, timers, () =>
+          readCtrl.abort(),
+        );
         if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
         if (st.state.prosodyAnnotated) return;               // watermark → no-op
         /* The open trigger re-runs only a book marked unfinished — never one
@@ -1681,6 +1697,9 @@ export function Layout() {
            transition; one that started keeps its mark for the open trigger. */
         if (!pillActive) prosodyConsidered.current.delete(id);
       } finally {
+        timers.forEach(clearTimeout);
+        timers.clear();
+        prosodyReads.current.delete(readCtrl);
         if (ctrl && !background) {
           if (prosodyLibraryRuns.current.get(id) === ctrl) prosodyLibraryRuns.current.delete(id);
           if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
