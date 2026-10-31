@@ -1067,6 +1067,22 @@ export async function applyOverrideToCastFiles(
          this closure, so it uses '(unknown)' — no caller of this function
          reads `skipped[].bookDir` for logic, only `skipped.length`, so this
          is for human/API-consumer legibility, not correctness. */
+      /* #3992 — a declined, forked row keeps the shared `voiceId` but owns a
+         different `voiceUuid` than the earlier book, so a designed-voice name
+         (`qwen-<uuid>`) that names another uuid is not meant for it: decline
+         the match (same reference, not counted) instead of rewriting the earlier
+         book's slot and engine. Linked rows share the uuid and still take the
+         write; a row with no uuid, or a library-assigned slot, is unchanged from
+         before. */
+      const designedUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+      if (
+        designedUuid &&
+        original.voiceUuid &&
+        original.voiceUuid !== designedUuid &&
+        !original.overrideTtsVoices?.qwen?.libraryUuid
+      ) {
+        return original;
+      }
       const cloned = override === null
         ? characterHasClonedSlot(original)
         : CLONE_ENGINE_LIST.some((e) => e !== override.engine && hasClonedProvenance(original, e));

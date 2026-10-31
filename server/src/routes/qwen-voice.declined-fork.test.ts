@@ -122,12 +122,14 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock);
 
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
+  const { voicesRouter } = await import('./voices.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/voices', voicesRouter);
 });
 
 beforeEach(() => {
@@ -145,6 +147,7 @@ beforeEach(() => {
       requestedVoiceIds.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
+      writeFileSync(join(qwenDir(), `${voiceId}.json`), JSON.stringify({ instruct: 'book two persona' }));
     }
     const bytes = pcm();
     return {
@@ -371,6 +374,71 @@ describe('#3992 — a fork leaves no variant the render path cannot resolve', ()
     await design(() => bookTwoId);
     expect(await resolves('Book One', 'angry')).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-u_shared__angry.pt'))).toBe(true);
+  });
+});
+
+/* Review pass 1, finding 4 — the drawer's Save (PUT /api/voices/:id/override,
+   scope series) and the single/bulk design auto-persist funnel through
+   applyOverrideToCastFiles, which matches on the shared `voiceId`. A declined,
+   forked row still shares it, so the write must not land on the earlier book. */
+describe('#3992 — a forked row’s Save cannot write another book’s row', () => {
+  const put = (bookId: string, name: string) =>
+    request(app)
+      .put('/api/voices/v_wren/override')
+      .send({ override: { engine: 'qwen', name }, scope: 'series', bookId });
+  const qwenName = (title: string) =>
+    (readRow(title).overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name;
+  const linkTwoToOne = () => {
+    const row = { ...readRow('Book Two'), matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } };
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+  };
+
+  it('Save after a redesign leaves Book One’s row unchanged', async () => {
+    seed({});
+    writeFileSync(
+      castPath('Book One'),
+      JSON.stringify({ characters: [{ ...readRow('Book One'), ttsEngine: 'kokoro' }] }),
+    );
+    const before = readRow('Book One');
+    expect((await design(() => bookTwoId)).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+
+    const saved = await put(bookTwoId, `qwen-${fresh}`);
+    expect(saved.status).toBe(204);
+    expect(readRow('Book One')).toEqual(before);
+    expect(qwenName('Book Two')).toBe(`qwen-${fresh}`);
+    expect(readRow('Book Two').ttsEngine).toBe('qwen');
+  });
+
+  it('Book One’s designed-persona still answers from Book One’s own sidecar json', async () => {
+    seed({});
+    expect((await design(() => bookTwoId)).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    await put(bookTwoId, `qwen-${fresh}`);
+
+    const got = await request(app).get(`/api/books/${bookOneId}/cast/wren/designed-persona`);
+    expect(got.status).toBe(200);
+    expect(got.body.instruct).toBe('book one');
+  });
+
+  it('Linked rows still propagate: both rows sharing u_shared take the Save', async () => {
+    seed({});
+    linkTwoToOne();
+    const saved = await put(bookTwoId, 'qwen-u_shared');
+    expect(saved.status).toBe(204);
+    expect(qwenName('Book One')).toBe('qwen-u_shared');
+    expect(qwenName('Book Two')).toBe('qwen-u_shared');
+    expect(readRow('Book One').ttsEngine).toBe('qwen');
+  });
+
+  it('A sibling with no uuid of its own still takes the Save, as before', async () => {
+    seed({});
+    const one = { ...readRow('Book One') };
+    delete one.voiceUuid;
+    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
+    const saved = await put(bookTwoId, 'qwen-u_shared');
+    expect(saved.status).toBe(204);
+    expect(qwenName('Book One')).toBe('qwen-u_shared');
   });
 });
 
