@@ -1456,6 +1456,27 @@ describe('AnalysingView — the book-state read is bounded and aborted (#3967)',
     }
   });
 
+  it('(f) a read that fails outright (not a timeout) warns with the reason and is not retried', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let calls = 0;
+      getBookStateImpl = () => {
+        calls++;
+        return Promise.reject(new Error('boom'));
+      };
+      renderView('b1');
+      await advance(100);
+      expect(hydrateWarns(warn)).toHaveLength(1);
+      expect(String(hydrateWarns(warn)[0].join(' '))).toContain('boom');
+      await advance(60_000);
+      expect(calls).toBe(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('(e) unmounting while the retry timer is pending issues no further read', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -987,7 +987,9 @@ export function AnalysingView({
         });
       })
       .catch((err) => {
-        /* An abort from cleanup is a silent cancel; a timeout still warns. */
+        /* An abort from cleanup is a silent cancel. A timeout never lands here
+           (readWithRetry retries it and warns once via onExpire); a read that
+           fails outright still warns. */
         if (err?.name === 'AbortError' || cancelled) return;
         console.warn('[analysing] failed-chapter hydrate skipped:', err.message);
       });
