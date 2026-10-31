@@ -170,7 +170,10 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
   /* #3991 — refs mirror the three structures above for
-     `hydrateForeignCast`, whose callers run from stale render closures. */
+     `hydrateForeignCast`, whose callers run from stale render closures.
+     The state patch paths (merge, not-linked, gender/age/tone) don't update
+     `castCacheRef`, so the cast it returns can lag `globalCastCache`;
+     callers only null-check it. */
   const castCacheRef = useRef(new Map<string, Character[]>());
   const castFailedRef = useRef(new Set<string>());
   const castInflightRef = useRef(new Map<string, Promise<Character[] | null>>());
@@ -959,9 +962,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      `hydrateForeignCast` is the user-facing surface.
 
      Same-bookId pairs (e.g. two voices from one foreign book) dedupe
-     to a single fetch — calling hydrateForeignCast twice in the same
-     microtask tick can't see its own globalCastFetching set update yet,
-     so we collapse upstream. Pairs that are entirely within the open
+     to a single fetch. Since #3991 `hydrateForeignCast` itself shares the
+     in-flight promise per bookId, so collapsing upstream is redundant
+     but harmless. Pairs that are entirely within the open
      book take the synchronous fast-path — no microtask, no await — so
      a Compare click immediately mounts the modal in tests and avoids
      a needless render cycle. */
