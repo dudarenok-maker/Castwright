@@ -342,13 +342,18 @@ test('runStepProcess re-sweep: a stale-ppid process older than its parent is not
   const LATE = 2147480010;
   const STALE = 2147480011; // names LATE's pid but started BEFORE LATE: not its child
   const KID = 2147480012; // genuine child of LATE
-  const T = Date.now() + 100;
+  // The root's recorded start is spawnedAt (approx, empty pre-kill snapshot), so every row that must
+  // postdate the spawn is stamped from a time taken AFTER it, however slow setup was (#4005).
+  // Valid only because runStepProcess stamps spawnedAt and spawns synchronously, before its first await; an await ahead of the spawn would break this.
+  let T;
   const h = resweepStaleHarness(dir, {
     preKill: () => [],
     reSweep: (root) => [row(root, 1, T), row(LATE, root, T + 500), row(STALE, LATE, T + 200), row(KID, LATE, T + 600)],
   });
   try {
-    await h.run();
+    const p = h.run();
+    T = Date.now();
+    await p;
     assert.ok(h.swept.includes(LATE) && h.swept.includes(KID), `genuine later descendants are swept: ${JSON.stringify(h.swept)}`);
     assert.ok(!h.swept.includes(STALE), `a child older than its parent must not be followed (taskkill /T refuses it): ${JSON.stringify(h.swept)}`);
   } finally {
@@ -380,13 +385,18 @@ test('runStepProcess re-sweep: pre-kill snapshot failed => root bounded by spawn
   const OLD = 2147480030;
   const NEW = 2147480031;
   const now = Date.now();
+  // Valid only because runStepProcess stamps spawnedAt and spawns synchronously, before its first await; an await ahead of the spawn would break this.
+  let afterSpawn;
   const h = resweepStaleHarness(dir, {
     preKill: () => null,
     // Root is dead by the re-sweep; OLD predates the step's spawn, NEW postdates it.
-    reSweep: (root) => [row(OLD, root, now - 60_000), row(NEW, root, now + 50)],
+    // NEW is stamped right after the spawn (not at kill time, so a kill-time bound still fails), so it is always >= spawnedAt however slow setup was (#4005).
+    reSweep: (root) => [row(OLD, root, now - 60_000), row(NEW, root, afterSpawn)],
   });
   try {
-    await h.run();
+    const p = h.run();
+    afterSpawn = Date.now();
+    await p;
     assert.ok(!h.swept.includes(OLD), `a process older than the step's spawn must not be swept: ${JSON.stringify(h.swept)}`);
     assert.ok(h.swept.includes(NEW), `a child newer than the spawn is still swept: ${JSON.stringify(h.swept)}`);
   } finally {

@@ -902,38 +902,35 @@ test(
     // so a timeout is told apart by measurement before anything is excused.
     // A cheap control spawn (one filtered Win32_Process row) is timed on EVERY
     // run, and with the full-query time both go to the CI log via
-    // t.diagnostic, so thresholds can be set from CI figures, not one dev box.
-    //   1. fast control + a timed-out full query: the host is responsive, so
-    //      the query is too slow for its bound: FAIL.
-    //   2. slow control: rerun the real collector through the `spawn` seam
-    //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
-    //      slow control must NOT excuse a slow query, so each attempt is timed
-    //      through the seam and the attempt that SUCCEEDED is gated on its
-    //      EXCESS over the healthy ratio: rerunMs - RERUN_HEALTHY_RATIO x
-    //      controlMs > RERUN_EXCESS_MAX_MS FAILS. (A stalled attempt that the
-    //      retry recovers from is host load, not query cost.) The healthy
-    //      ratio is NOT small: the real Windows CI runner (job 124421578873)
-    //      measured `full query 1821ms, one-row control 607ms`, a ratio of
-    //      ~3.0, because both calls are dominated by PowerShell startup. A
-    //      bare ratio bound of 3 therefore sat ON the healthy figure and could
-    //      false-red under the load this test exists to survive. The excess
-    //      does not: a uniformly slowed host scales both calls, so the excess
-    //      stays near 0 whatever the slowdown, while a fixed 16s census defect
-    //      adds ~16s of excess to any host. 10s sits clear of both. No
-    //      separate floor is kept: excess > 10s already implies rerunMs > 10s.
-    //   3. skip only when the control ITSELF failed or timed out AND the rerun
-    //      still timed out (docs/testing/flaky-register.md). A control that
-    //      succeeded, even slowly, with both rerun attempts timing out FAILS:
-    //      the host answered.
-    //      Residual: a query that hangs outright on a host whose control also
-    //      fails still lands here and skips; the register row records that gap.
+    // t.diagnostic. The control is a diagnostic and the skip discriminator
+    // below; it is NOT a yardstick for the full query.
+    // A timed-out full query ALWAYS takes the rerun below, whatever the control
+    // measured (#4005: a 2367ms control on a loaded runner, 4x the 607/523ms
+    // baselines, failed with no rerun under the old fast-control branch).
+    //   1. rerun the real collector through the `spawn` seam (two 120s
+    //      attempts, up to 240s) and assert rows/dates on that. Each attempt is
+    //      timed through the seam, and the attempt that SUCCEEDED must have
+    //      finished within PRODUCTION_ATTEMPT_MS, the census's own per-attempt
+    //      bound. Why the production bound and not a control-relative ratio:
+    //      CI measured healthy full queries at 1.7-8.4s (9 green runs) against 350-750ms
+    //      controls, so the slowdown is specific to the census query, not
+    //      uniform across spawns, and a ratio against the control false-reds.
+    //      A query slower than the production bound is exactly the case where
+    //      production's census returns [] and the reaper never reaps.
+    //   2. what still fails: a successful attempt over PRODUCTION_ATTEMPT_MS,
+    //      or both 120s attempts timing out while the control answered (the
+    //      host responded, so the census query itself hangs).
+    //      Residual: a hang on a host whose control ALSO failed or timed out
+    //      still skips (docs/testing/flaky-register.md); that case cannot be
+    //      told from an unresponsive host.
     // Any OTHER empty result (empty rows, unparseable output, a permanent
     // failure — the pass-1 date bug lands here as 'empty Win32_Process result
     // after retry') still fails.
     const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
-    const CONTROL_FAST_MS = 5000;
-    const RERUN_HEALTHY_RATIO = 3;
-    const RERUN_EXCESS_MAX_MS = 10000;
+    // The collector's per-attempt spawnSync bound: `timeout: 15000` in
+    // collectProcessSnapshot (scripts/reap-stale-batteries.mjs:628). Not
+    // exported, so mirrored here.
+    const PRODUCTION_ATTEMPT_MS = 15000;
     const tFull = Date.now();
     let snapshot = collectProcessSnapshot();
     const fullMs = Date.now() - tFull;
@@ -946,12 +943,6 @@ test(
     const controlMs = Date.now() - tCtl;
     t.diagnostic(`C3 timing: full query ${fullMs}ms, one-row control ${controlMs}ms`);
     if (isTimeout(snapshot)) {
-      const controlFast = !control.error && control.status === 0 && controlMs < CONTROL_FAST_MS;
-      assert.ok(
-        !controlFast,
-        `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
-          'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
-      );
       const attemptMs = [];
       snapshot = collectProcessSnapshot({
         spawn: (c, a, o) => {
@@ -963,9 +954,8 @@ test(
       });
       // The collector's result comes from its last attempt.
       const rerunMs = attemptMs[attemptMs.length - 1];
-      const excessMs = rerunMs - RERUN_HEALTHY_RATIO * controlMs;
       t.diagnostic(
-        `C3 slow-control rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)}, excess over ${RERUN_HEALTHY_RATIO}x control ${excessMs}ms)`,
+        `C3 timeout rerun: attempts ${attemptMs.join('/')}ms, last attempt ${rerunMs}ms (production bound ${PRODUCTION_ATTEMPT_MS}ms, gated only if it succeeded)`,
       );
       if (isTimeout(snapshot)) {
         const controlFailed = Boolean(control.error) || control.status !== 0;
@@ -981,10 +971,9 @@ test(
         return;
       }
       assert.ok(
-        excessMs <= RERUN_EXCESS_MAX_MS,
-        `the full query took ${rerunMs}ms against a ${controlMs}ms one-row control: ${excessMs}ms over the healthy ${RERUN_HEALTHY_RATIO}x ratio ` +
-          `(> ${RERUN_EXCESS_MAX_MS}ms; healthy CI measured 1821ms vs 607ms) — ` +
-          'a slow control does not explain a query this much slower than one spawn: the census query itself is too slow (Castwright#3917)',
+        rerunMs <= PRODUCTION_ATTEMPT_MS,
+        `the census query took ${rerunMs}ms, more than its own ${PRODUCTION_ATTEMPT_MS}ms production bound — ` +
+          'in production the census returns [] and the reaper never reaps (Castwright#3917, #4005)',
       );
     }
     assert.ok(
