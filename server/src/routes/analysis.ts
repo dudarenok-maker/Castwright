@@ -7165,6 +7165,7 @@ export async function runMainAnalyzerJob(
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
+      record.bookId ?? undefined,
     );
     const characters = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -9383,6 +9384,7 @@ export async function runSubsetAnalyzerJob(
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
+      record.bookId ?? undefined,
     );
     const enriched = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;

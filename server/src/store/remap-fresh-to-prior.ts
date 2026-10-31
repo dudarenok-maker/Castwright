@@ -69,21 +69,37 @@ function nameKeyOf(c: Record<string, unknown>): string {
     module accepts defensively, though nothing mints it today) or the real
     on-disk `{ bookId, characterId }` shape `POST /not-linked-to` writes
     (`server/src/routes/cast-not-linked-to.ts:238`; typed in `voices.ts:104`
-    / `voice-override-linked.ts:65`). Matches on `characterId` alone,
-    ignoring `bookId` — so a cross-book "not the same person" decision also
-    blocks a within-book remap sharing that character id. That is
-    deliberately fail-safe, not a bug: `merge-analysis-cast.ts:377-388`
-    (`groupHasNotLinkedEdge`) makes the identical trade for the same
-    reason — a false "linked" is silent data corruption (two people
-    collapsed into one), a false "not linked" only costs a remap that a
-    user can still do by hand. */
-function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
+    / `voice-override-linked.ts:65`).
+
+    Book scoping (#3965, owner decision 2026-10-31): an OBJECT entry whose
+    `bookId` names a DIFFERENT book than `currentBookId` is a cross-book
+    "not the same person" decision and says nothing about a same-book join,
+    so it is ignored. The earlier bookId-blind trade ("a false 'not linked'
+    only costs a remap the user can do by hand") failed its own premise: the
+    seed copies a prior row's cross-book edge onto its id-drifted twin, and
+    honouring it here split that locked character and cost its voice.
+    Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
+    writes) and bare strings still block. `currentBookId` omitted (a record
+    with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe. */
+function notLinkedToId(
+  row: Record<string, unknown>,
+  targetId: string,
+  currentBookId?: string,
+): boolean {
   const nl = row.notLinkedTo;
   if (!Array.isArray(nl)) return false;
   return nl.some((entry) => {
     if (typeof entry === 'string') return entry === targetId;
     if (entry && typeof entry === 'object') {
-      return (entry as { characterId?: unknown }).characterId === targetId;
+      const e = entry as { characterId?: unknown; bookId?: unknown };
+      if (
+        typeof currentBookId === 'string' &&
+        typeof e.bookId === 'string' &&
+        e.bookId !== currentBookId
+      ) {
+        return false;
+      }
+      return e.characterId === targetId;
     }
     return false;
   });
@@ -101,6 +117,10 @@ function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean 
     equals the fresh candidate's own id the pair has already converged via
     the mechanisms that consume the same table, and this remap does nothing.
 
+    `currentBookId` (optional) is the id of the book being analysed; it scopes
+    the `notLinkedTo` gate by book (see `notLinkedToId`). Omit it to keep the
+    bookId-blind behaviour.
+
     Returns new arrays; `fresh`, `sentences` and `priorCast` are not
     mutated. */
 export function remapFreshToPriorIds<
@@ -111,6 +131,7 @@ export function remapFreshToPriorIds<
   sentences: S[],
   priorCast: ReadonlyArray<PriorCastRow>,
   priorRewrites: Readonly<Record<string, string>> = {},
+  currentBookId?: string,
 ): { characters: C[]; sentences: S[]; rewrites: Record<string, string> } {
   if (fresh.length === 0 || priorCast.length === 0) {
     return { characters: [...fresh], sentences: [...sentences], rewrites: {} };
@@ -174,8 +195,8 @@ export function remapFreshToPriorIds<
     // and the prior row's raw id as well as its destination.
     if (isReservedId(freshRow.id) || isReservedId(priorRow.id) || isReservedId(target)) continue;
     if (
-      notLinkedToId(priorRow, freshRow.id) ||
-      notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id)
+      notLinkedToId(priorRow, freshRow.id, currentBookId) ||
+      notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id, currentBookId)
     ) {
       continue;
     }
