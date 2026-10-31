@@ -202,6 +202,13 @@ function* walkBookDirs(): Generator<string> {
   }
 }
 
+/** Every book folder dir, as an array, in the SAME sorted order `resolveBook`
+ *  walks (#3713: the duplicate-bookId sweep ranks twins with this as its last
+ *  tie-break). A thin accessor over the private `walkBookDirs`. */
+export function bookDirsInWalkOrder(): string[] {
+  return [...walkBookDirs()];
+}
+
 /** Log a state.json read failure in full (its message embeds the absolute
  *  path) and return the path-free error to throw instead. */
 function unreadableState(err: unknown): BookStateUnreadableError {
