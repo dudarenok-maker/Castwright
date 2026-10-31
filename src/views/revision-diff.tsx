@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   IconArrowLeft,
   IconAB,
@@ -52,6 +52,8 @@ interface Props {
   onKeepNew?: () => void;
 }
 
+const LOADING_TAKES_REASON = 'Loading both takes…';
+
 export function RevisionDiffPlayer({
   revision,
   bookId,
@@ -91,9 +93,11 @@ export function RevisionDiffPlayer({
   const aUnavailable = !hasPreviousAudio || previousMissing === true;
   const bAvailable = playable && !rendering;
   const recovered = revision.recovered === true;
+  const loadingReasonId = useId();
   /* Both takes' segment windows must be known before back-to-back starts, or
-     the first take would play unbounded. A failed fetch counts as settled
-     (today's behaviour: the toggle stays usable, that take just has no window). */
+     the first take would play unbounded. A fetch that settled WITHOUT a take
+     (rejected, or resolved null on a 404) also counts as settled, so the toggle
+     stays usable; the run then skips that take, since there is nothing to play. */
   const audioPending =
     (hasPreviousAudio && !audioA && !audioAFailed) || (playable && !audioB && !audioBError);
 
@@ -106,7 +110,9 @@ export function RevisionDiffPlayer({
       api
         .getChapterAudioPrevious({ bookId, chapterId: chapter.id, duration: chapter.duration })
         .then((res) => {
-          if (!cancelled) setAudioA(res);
+          if (cancelled) return;
+          setAudioA(res);
+          if (!res) setAudioAFailed(true);
         })
         .catch((err) => {
           console.warn('[revision-diff] previous audio fetch failed:', err);
@@ -138,14 +144,13 @@ export function RevisionDiffPlayer({
      there never sees playback end (#4002). */
   const playingRef = useRef(ab.playing);
   playingRef.current = ab.playing;
-  /* Same for the segment windows (the audio metadata can land after the toggle)
-     and the hook's callbacks. */
+  /* Same for the segment windows: a chapter refetch can replace the metadata
+     while a run is in flight. (The hook's playA/playB/pause are memoized, so
+     they are safe to call from the frozen closure.) */
   const audioARef = useRef(audioA);
   audioARef.current = audioA;
   const audioBRef = useRef(audioB);
   audioBRef.current = audioB;
-  const abRef = useRef(ab);
-  abRef.current = ab;
 
   /* Auto-compare: walk changed segments, playing A then B for each.
      Aborts on stop / unmount / next segment. */
@@ -156,23 +161,29 @@ export function RevisionDiffPlayer({
     (async () => {
       for (const seg of changedSegments) {
         if (cancelled) return;
-        const start = audioARef.current?.segments?.find((s) => s.sentenceId === seg.id)?.start;
-        const end = audioARef.current?.segments?.find((s) => s.sentenceId === seg.id)?.end;
-        try {
-          await abRef.current.playA({ segmentId: seg.id ?? undefined, start, end });
-        } catch {
-          /* ignore */
+        /* A take with no URL is skipped: play() on an element with no src stays
+           pending in a browser, which would hang the run on that take. */
+        if (audioARef.current?.url) {
+          const start = audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.start;
+          const end = audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.end;
+          try {
+            await ab.playA({ segmentId: seg.id ?? undefined, start, end });
+          } catch {
+            /* ignore */
+          }
+          await waitForVersionEnd();
+          if (cancelled) return;
         }
-        await waitForVersionEnd();
-        if (cancelled) return;
-        const startB = audioBRef.current?.segments?.find((s) => s.sentenceId === seg.id)?.start;
-        const endB = audioBRef.current?.segments?.find((s) => s.sentenceId === seg.id)?.end;
-        try {
-          await abRef.current.playB({ segmentId: seg.id ?? undefined, start: startB, end: endB });
-        } catch {
-          /* ignore */
+        if (audioBRef.current?.url) {
+          const startB = audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.start;
+          const endB = audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.end;
+          try {
+            await ab.playB({ segmentId: seg.id ?? undefined, start: startB, end: endB });
+          } catch {
+            /* ignore */
+          }
+          await waitForVersionEnd();
         }
-        await waitForVersionEnd();
       }
       if (!cancelled) setAutoCompare(false);
     })();
@@ -193,7 +204,7 @@ export function RevisionDiffPlayer({
     }
     return () => {
       cancelled = true;
-      abRef.current.pause();
+      ab.pause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoCompare]);
@@ -204,6 +215,9 @@ export function RevisionDiffPlayer({
 
   const c = CHAR_COLORS[(character?.color as CharColor) || 'narrator'];
   const totalChanged = revision.segments.filter((s) => s.changed).length;
+  /* Only worth saying when loading is the sole reason the toggle is off. */
+  const showLoadingReason =
+    !autoCompare && audioPending && bAvailable && !aUnavailable && totalChanged > 0;
   const acceptedNew = revision.segments.filter(
     (s) => s.changed && s.id != null && selected[s.id] === 'B',
   ).length;
@@ -244,7 +258,10 @@ export function RevisionDiffPlayer({
     >
       <header className="sticky top-0 z-10 bg-canvas/90 backdrop-blur-md border-b border-ink/10">
         <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center gap-4">
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
+          <button
+            onClick={onClose}
+            className="p-2 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center rounded-full hover:bg-ink/5 text-ink/60"
+          >
             <IconArrowLeft className="w-4 h-4" />
           </button>
           <span className="w-8 h-8 rounded-full bg-peach/20 grid place-items-center text-magenta">
@@ -275,14 +292,17 @@ export function RevisionDiffPlayer({
             <button
               type="button"
               onClick={onOpenHistory}
-              className="px-3 py-1.5 rounded-full text-xs font-semibold border border-ink/15 text-ink/70 hover:bg-ink/5"
+              className="px-3 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-xs font-semibold border border-ink/15 text-ink/70 hover:bg-ink/5"
               data-testid="revision-diff-open-history"
               aria-label="View revision history"
             >
               History
             </button>
           )}
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
+          <button
+            onClick={onClose}
+            className="p-2 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center rounded-full hover:bg-ink/5 text-ink/60"
+          >
             <IconClose className="w-4 h-4" />
           </button>
         </div>
@@ -329,12 +349,21 @@ export function RevisionDiffPlayer({
                 <p className="text-xs text-ink/55">
                   Plays each changed segment A then B in sequence.
                 </p>
+                {showLoadingReason && (
+                  <p id={loadingReasonId} className="text-xs text-ink/55">
+                    {LOADING_TAKES_REASON}
+                  </p>
+                )}
               </div>
             </div>
             <button
               onClick={() => setAutoCompare(!autoCompare)}
-              disabled={!bAvailable || aUnavailable || totalChanged === 0 || audioPending}
-              className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
+              disabled={
+                !autoCompare && (!bAvailable || aUnavailable || totalChanged === 0 || audioPending)
+              }
+              title={showLoadingReason ? LOADING_TAKES_REASON : undefined}
+              aria-describedby={showLoadingReason ? loadingReasonId : undefined}
+              className={`min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
             >
               {autoCompare ? (
                 <>
@@ -435,13 +464,13 @@ export function RevisionDiffPlayer({
           <div className="bg-white rounded-3xl border border-ink/10 p-5 shadow-card space-y-2">
             <button
               onClick={acceptAllNew}
-              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-semibold transition-colors"
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-semibold transition-colors"
             >
               <IconChecks className="w-4 h-4" /> Accept all changes
             </button>
             <button
               onClick={rejectAll}
-              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 text-sm font-semibold transition-colors"
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 text-sm font-semibold transition-colors"
             >
               <IconReject className="w-4 h-4" /> Reject all changes
             </button>
@@ -454,15 +483,15 @@ export function RevisionDiffPlayer({
           <span className="text-sm">
             {isPreview ? (
               <span className="text-ink/60">
-                Listen to both takes on this chapter, then approve to regenerate the rest — or reject
-                and re-adjust the voice.
+                Listen to both takes on this chapter, then approve to regenerate the rest — or
+                reject and re-adjust the voice.
               </span>
             ) : (
               <>
                 <span className="font-bold text-ink tabular-nums">{acceptedNew}</span>{' '}
                 <span className="text-ink/60">
-                  of <span className="tabular-nums">{totalChanged}</span> changed segments taking the
-                  new take
+                  of <span className="tabular-nums">{totalChanged}</span> changed segments taking
+                  the new take
                 </span>
               </>
             )}
@@ -474,7 +503,7 @@ export function RevisionDiffPlayer({
                 onReject();
               }}
               disabled={busy || keepNewOnly}
-              className="px-4 py-2.5 text-sm font-medium text-ink/70 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm font-medium text-ink/70 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isPreview ? 'Reject & re-adjust' : 'Reject draft'}
             </button>

@@ -364,6 +364,7 @@ describe('RevisionDiffPlayer', () => {
     expect(played[0].at).toBe(1);
     /* The chapter object changes mid-run, so both takes are re-fetched and the
        metadata the effect must use is no longer the one it started with. */
+    getA.mockResolvedValue(withSegs('blob:a2', [5, 7]));
     getB.mockResolvedValue(withSegs('blob:b2', [20, 22]));
     view.rerender(
       <RevisionDiffPlayer
@@ -380,6 +381,9 @@ describe('RevisionDiffPlayer', () => {
     await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
     await waitFor(() => expect(played).toHaveLength(2));
     expect(played[1].at).toBe(20); // B, segment 1, from the re-fetched metadata
+    await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
+    await waitFor(() => expect(played).toHaveLength(3));
+    expect(played[2].at).toBe(7); // A, segment 2, from the re-fetched metadata
   });
   it('#4002 — a stale take-load failure does not enable Listen back-to-back while the chapter refetches', async () => {
     const getA = api.getChapterAudioPrevious as ReturnType<typeof vi.fn>;
@@ -405,5 +409,111 @@ describe('RevisionDiffPlayer', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(toggle).toBeDisabled();
     warn.mockRestore();
+  });
+  describe('a take with no URL (#4002)', () => {
+    /* Chromium leaves play() pending on an element with no src. */
+    function browserLikePlay() {
+      const played: Array<{ src: string | null; at: number; el: HTMLMediaElement }> = [];
+      basePlay.mockImplementation(function (this: HTMLMediaElement) {
+        const src = this.getAttribute('src');
+        played.push({ src, at: this.currentTime, el: this });
+        return src ? Promise.resolve() : new Promise<void>(() => {});
+      });
+      return played;
+    }
+    const seg = (id: number) => ({ id, changed: true }) as unknown as Revision['segments'][number];
+    const getA = () => api.getChapterAudioPrevious as ReturnType<typeof vi.fn>;
+    const getB = () => api.getChapterAudio as ReturnType<typeof vi.fn>;
+    const toggleBtn = () => screen.getByRole('button', { name: /Listen back-to-back|Stop/i });
+
+    it('skips A and plays B when A failed to load', async () => {
+      const played = browserLikePlay();
+      getA().mockRejectedValue(new Error('404'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      renderPlayer(makeRevision({ segments: [seg(1)] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:b']));
+      warn.mockRestore();
+    });
+
+    it('skips A and plays B when A resolves null (its 404 path)', async () => {
+      const played = browserLikePlay();
+      getA().mockResolvedValue(null);
+      renderPlayer(makeRevision({ segments: [seg(1)] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:b']));
+    });
+
+    it('skips B but still plays the next segment when B failed to load', async () => {
+      const played = browserLikePlay();
+      getB().mockRejectedValue(new Error('boom'));
+      renderPlayer(makeRevision({ segments: [seg(1), seg(2)] }));
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      await waitFor(() => expect(played).toHaveLength(1));
+      await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+      await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:a']));
+    });
+
+    it('treats a failed B load as settled, and clears it when the chapter refetches', async () => {
+      getB().mockRejectedValue(new Error('boom'));
+      const revision = makeRevision({ segments: [seg(1)] });
+      const view = renderPlayer(revision);
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      getB().mockReturnValue(new Promise<ChapterAudio>(() => {}));
+      view.rerender(
+        <RevisionDiffPlayer
+          revision={revision}
+          bookId="book-1"
+          chapter={{ ...chapter }}
+          character={character}
+          onClose={view.onClose}
+          onAccept={view.onAccept}
+          onReject={view.onReject}
+        />,
+      );
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(toggleBtn()).toBeDisabled();
+    });
+
+    it('keeps Stop enabled during a run even when a chapter refetch is pending', async () => {
+      browserLikePlay();
+      getA().mockRejectedValue(new Error('404'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const revision = makeRevision({ segments: [seg(1)] });
+      const view = renderPlayer(revision);
+      await waitFor(() => expect(toggleBtn()).toBeEnabled());
+      fireEvent.click(toggleBtn());
+      expect(toggleBtn()).toHaveTextContent(/Stop/);
+      getA().mockReturnValue(new Promise<ChapterAudio>(() => {}));
+      view.rerender(
+        <RevisionDiffPlayer
+          revision={revision}
+          bookId="book-1"
+          chapter={{ ...chapter }}
+          character={character}
+          onClose={view.onClose}
+          onAccept={view.onAccept}
+          onReject={view.onReject}
+        />,
+      );
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(toggleBtn()).toBeEnabled();
+      fireEvent.click(toggleBtn());
+      expect(toggleBtn()).toHaveTextContent(/Listen back-to-back/);
+      warn.mockRestore();
+    });
+
+    it('says why the toggle is disabled while the takes load', async () => {
+      getA().mockReturnValue(new Promise<ChapterAudio>(() => {}));
+      renderPlayer(makeRevision({ segments: [seg(1)] }));
+      const btn = toggleBtn();
+      expect(btn).toBeDisabled();
+      expect(btn).toHaveAttribute('title', 'Loading both takes…');
+      expect(screen.getByText('Loading both takes…')).toBeInTheDocument();
+      expect(btn).toHaveAccessibleDescription('Loading both takes…');
+    });
   });
 });
