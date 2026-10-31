@@ -61,11 +61,13 @@
 
         Durability holds via ONE of the two §4.4 matchers, not both — they
         are not equivalent, and this route only needs (and gets) the one
-        that fires early enough to matter. `remap-fresh-to-prior.ts`'s
+        that fires early enough to matter. `store/not-linked-to-scope.ts`'s
         `notLinkedToId` (fix round 2 review finding) matches on
-        `characterId` alone, ignoring `bookId`, so it reads THIS edge
-        directly off the live character's own `notLinkedTo` array the
-        moment a re-analysis mints a fresh row whose id is `orphanedId`
+        `characterId` and ignores only object entries whose `bookId` names a
+        DIFFERENT book (#3965: cross-book decisions say nothing about a
+        same-book join). This edge's `bookId` is THIS book, so the remap
+        still reads it directly off the live character's own `notLinkedTo`
+        array the moment a re-analysis mints a fresh row whose id is `orphanedId`
         again (the common case — the orphaned id is usually the character's
         own name-derived slug) — that's the by-NAME remap this route exists
         to block, and it's blocked at the point the fresh row is considered

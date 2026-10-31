@@ -4820,7 +4820,7 @@ export async function runMainAnalyzerJob(
        single load point, so all cast.json write sites AND
        seedReuseGuardsFromPriorCast below see one prior row per name. */
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      const reconciled = dedupePriorCastByName(priorCastForMerge, recordRef.bookId ?? undefined);
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(
@@ -7228,6 +7228,7 @@ export async function runMainAnalyzerJob(
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
+      record.bookId ?? undefined,
     );
     const characters = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -7440,7 +7441,7 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined);
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -8487,7 +8488,7 @@ export async function runSubsetAnalyzerJob(
        the subset re-analysis path's writes + seed also see one prior row per name. */
     let dedupRetirements: Retirement[] = [];
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      const reconciled = dedupePriorCastByName(priorCastForMerge, record.bookId ?? undefined);
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(
@@ -9459,6 +9460,7 @@ export async function runSubsetAnalyzerJob(
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
+      record.bookId ?? undefined,
     );
     const enriched = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -9628,7 +9630,7 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined);
           /* #2295 — the authoritative cast.json write; mirrors the main job's
              same-named wrap, including WHY it is wrapped at the write rather
              than at `catch (persistErr)` (which also covers the journals) and
