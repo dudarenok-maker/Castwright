@@ -454,7 +454,10 @@ function mergeCore<T extends { id: string }>(
     // key it lacks is deleted, so nothing the series linker stamped onto the
     // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
     // voiceStyle, voiceId) survives a join to it — under the id, exact-name
-    // or surname-tolerant join alike.
+    // or surname-tolerant join alike. This covers the voice fields only:
+    // aliases are unioned just below regardless of pinning, so the linker's
+    // Book One aliases still reach a pinned row whose link was dropped. That
+    // is out of scope here and unchanged.
     const pinned = old.voiceState === 'locked' || old.voiceState === 'tuned';
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];

@@ -724,32 +724,28 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
   });
 });
 
-/* #3920 child 3 — pin the analysis route's real re-analysis sequence
-   (server/src/routes/analysis.ts) end to end, seed → link → remap → merge:
+/* #3920 child 3 — compose the analysis route's re-analysis steps end to end,
+   seed → prune → link → (dedup) → remap → merge. Steps run, by symbol, in the
+   route's main-job order:
 
-     :5860  seedReuseGuardsFromPriorCast(priorCastForMerge, characters)
-     :5861  pruneStaleReuseLinks(recordRef.bookId, characters)
-     :5868  linkSeriesReuseAtAnalysis(recordRef.bookId, characters)
-     :7158  cumulativeForRemap = stripEstablishedAsciiRewrites(
-              composeRewrites(dd.rewrites, folded.rewrites),
-              priorCastForMerge, characters0)
-     :7163  remappedToPrior = remapFreshToPriorIds(
-              characters0, folded.sentences, priorCastForMerge, cumulativeForRemap)
-     :7368  cumulative = stripEstablishedAsciiRewrites(
-              composeRewrites(dd.rewrites, folded.rewrites),
-              priorCastForMerge, characters0)
-     :7373  remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative)
-     :7380  mergedFinal = mergeAnalysisResultWithExistingCast(
-              remapped.priorCast, characters)
+     seedReuseGuardsFromPriorCast(priorCastForMerge, characters)
+     pruneStaleReuseLinks(bookId, characters)
+     linkSeriesReuseAtAnalysis(bookId, characters)
+     dedupeRosterByName(...)            (only when `sentences` is passed)
+     stripEstablishedAsciiRewrites(composeRewrites(dd.rewrites, {}), ...)
+     remapFreshToPriorIds(...)
+     applyRewriteToPriorCast(priorCastForMerge, cumulative)
+     mergeAnalysisResultWithExistingCast(remapped.priorCast, ...)
 
-   The route feeds seed/prune/link the DEFAULT workspace scanners and composes
-   the rewrite table from the run's real dedup/fold journals; a unit test
-   cannot supply a workspace or journals cheaply, so the same pure functions
-   run with injected scanners (baseOptions()) and an empty journal pair —
-   composeRewrites({}, {}) === {} is exactly what the route computes for a run
-   with no dedup/fold rewrites. folded.sentences is substituted with []: no
-   fixture carries sentence attribution, so the sentence half of the remap is
-   the identity. */
+   Steps the harness OMITS, so it is a composition of the pure functions and
+   not the route: foldMinorCast (folded.rewrites is {} and folded.sentences
+   is []), applyNarratorIdentity, the prior-side pruneStaleReuseLinks /
+   dedupePriorCastByName, and the requestedFresh strip (the Start fresh test
+   calls dropReuseContinuityKeepDesignedVoice itself). The `sentences` option
+   runs dedupeRosterByName; without it dedup is skipped and the journal is
+   empty (composeRewrites({}, {}) === {}), which only a fixture that cannot
+   collapse can honestly use. The route feeds the default workspace scanners;
+   here baseOptions() injects scanners instead. */
 describe('re-analysis keeps locked/tuned voices — seed → link → remap → merge (#3920)', () => {
   type PriorRow = { id: string } & Record<string, unknown>;
 
@@ -894,6 +890,16 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     const fresh: LinkableCharacter[] = [
       { id: 'mara', name: 'Mara Vale', gender: 'female', ageRange: 'adult' },
       { id: 'mara-2', name: 'Mara', gender: 'female', ageRange: 'adult' },
+      { id: 'mara-3', name: 'Mara Cole', gender: 'female', ageRange: 'adult' },
+    ];
+    /* Two distinct longer names make "Mara" an AMBIGUOUS Tier-2a short name
+       (supersets !== 1), so dedupeRosterByName leaves all three rows standing
+       and the cousin genuinely reaches the merge. With only "Mara Vale" it
+       would be collapsed to {mara-2: 'mara'}. */
+    const sentences = [
+      { characterId: 'mara' },
+      { characterId: 'mara-2' },
+      { characterId: 'mara-3' },
     ];
     const library: LibraryCharacterRecord[] = [
       ...PRIOR_LIBRARY,
@@ -903,7 +909,10 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
         character: { id: 'mara', name: 'Mara', gender: 'female', ageRange: 'adult' },
       },
     ];
-    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library));
+    const { merged } = await runReAnalysis(prior, fresh, routeOptions(library), sentences);
+
+    /* dedup left the cousin standing, so it reached the merge. */
+    expect(merged.map((c) => c.id).sort()).toEqual(['mara', 'mara-2', 'mara-3']);
 
     /* mara keeps the locked prior voice (joined by id). */
     const mara = merged.find((c) => c.id === 'mara');
