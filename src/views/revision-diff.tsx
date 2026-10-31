@@ -152,37 +152,44 @@ export function RevisionDiffPlayer({
   const audioBRef = useRef(audioB);
   audioBRef.current = audioB;
 
-  /* Auto-compare: walk changed segments, playing A then B for each.
-     Aborts on stop / unmount / next segment. */
+  /* Auto-compare: walk changed segments, playing A then B for each. With no
+     changed segments (every revision the server records today) it compares the
+     whole takes instead: A start to finish, then B. Aborts on stop / unmount /
+     next segment. */
   useEffect(() => {
     if (!autoCompare) return;
     let cancelled = false;
     const changedSegments = revision.segments.filter((s) => s.changed && s.id != null);
     (async () => {
-      for (const seg of changedSegments) {
+      const wholeTake = changedSegments.length === 0;
+      for (const seg of wholeTake ? [null] : changedSegments) {
         if (cancelled) return;
         /* A take with no URL is skipped: play() on an element with no src stays
            pending in a browser, which would hang the run on that take. */
         if (audioARef.current?.url) {
-          const start = audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.start;
-          const end = audioARef.current.segments?.find((s) => s.sentenceId === seg.id)?.end;
+          const start = (seg && audioARef.current.segments?.find((s) => s.sentenceId === seg.id))
+            ?.start;
+          const end = (seg && audioARef.current.segments?.find((s) => s.sentenceId === seg.id))
+            ?.end;
           try {
-            await ab.playA({ segmentId: seg.id ?? undefined, start, end });
+            await ab.playA({ segmentId: seg?.id ?? undefined, start, end });
           } catch {
             /* ignore */
           }
-          await waitForVersionEnd();
+          await waitForVersionEnd(wholeTake);
           if (cancelled) return;
         }
         if (audioBRef.current?.url) {
-          const startB = audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.start;
-          const endB = audioBRef.current.segments?.find((s) => s.sentenceId === seg.id)?.end;
+          const startB = (seg && audioBRef.current.segments?.find((s) => s.sentenceId === seg.id))
+            ?.start;
+          const endB = (seg && audioBRef.current.segments?.find((s) => s.sentenceId === seg.id))
+            ?.end;
           try {
-            await ab.playB({ segmentId: seg.id ?? undefined, start: startB, end: endB });
+            await ab.playB({ segmentId: seg?.id ?? undefined, start: startB, end: endB });
           } catch {
             /* ignore */
           }
-          await waitForVersionEnd();
+          await waitForVersionEnd(wholeTake);
         }
       }
       if (!cancelled) setAutoCompare(false);
@@ -190,13 +197,14 @@ export function RevisionDiffPlayer({
     /* The end-of-segment signal is the hook's `playing` going back to
        null. Poll because the hook is built around event-driven state
        internally; a 100ms tick is plenty for sentence-length audio. */
-    function waitForVersionEnd(): Promise<void> {
+    function waitForVersionEnd(noCap = false): Promise<void> {
       return new Promise((resolve) => {
         const start = Date.now();
         const tick = () => {
           if (cancelled) return resolve();
           if (playingRef.current === null) return resolve();
-          if (Date.now() - start > 30_000) return resolve();
+          /* Whole takes run for minutes, so only the segment mode has a cap. */
+          if (!noCap && Date.now() - start > 30_000) return resolve();
           setTimeout(tick, 100);
         };
         setTimeout(tick, 100);
@@ -216,8 +224,7 @@ export function RevisionDiffPlayer({
   const c = CHAR_COLORS[(character?.color as CharColor) || 'narrator'];
   const totalChanged = revision.segments.filter((s) => s.changed).length;
   /* Only worth saying when loading is the sole reason the toggle is off. */
-  const showLoadingReason =
-    !autoCompare && audioPending && bAvailable && !aUnavailable && totalChanged > 0;
+  const showLoadingReason = !autoCompare && audioPending && bAvailable && !aUnavailable;
   const acceptedNew = revision.segments.filter(
     (s) => s.changed && s.id != null && selected[s.id] === 'B',
   ).length;
@@ -347,7 +354,9 @@ export function RevisionDiffPlayer({
               <div>
                 <p className="text-sm font-bold text-ink">Auto-compare</p>
                 <p className="text-xs text-ink/55">
-                  Plays each changed segment A then B in sequence.
+                  {totalChanged > 0
+                    ? 'Plays each changed segment A then B in sequence.'
+                    : 'Plays the old take, then the new one, start to finish.'}
                 </p>
                 {showLoadingReason && (
                   <p id={loadingReasonId} className="text-xs text-ink/55">
@@ -358,9 +367,7 @@ export function RevisionDiffPlayer({
             </div>
             <button
               onClick={() => setAutoCompare(!autoCompare)}
-              disabled={
-                !autoCompare && (!bAvailable || aUnavailable || totalChanged === 0 || audioPending)
-              }
+              disabled={!autoCompare && (!bAvailable || aUnavailable || audioPending)}
               title={showLoadingReason ? LOADING_TAKES_REASON : undefined}
               aria-describedby={showLoadingReason ? loadingReasonId : undefined}
               className={`min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
