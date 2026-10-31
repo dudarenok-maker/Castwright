@@ -36,6 +36,10 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
        server that ignores one loses nothing. LiteLLM's `thinking` is refused only under a gated style (STYLE_GATED_KEYS), not
        always. Other servers' spellings (OpenRouter, LM Studio, ...) have not been checked. */
     'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag',
+    /* #3921 — LiteLLM's request-body `additional_drop_params` strips any named parameter (response_format, reasoning_effort, ...)
+       before the provider call and replaces an operator's own list; `drop_params` turns an unsupported-parameter 400 into a
+       silent send without it. Always refused, not style-gated: dropping unsupported parameters belongs in the proxy's config. */
+    'additional_drop_params', 'drop_params',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
   /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */

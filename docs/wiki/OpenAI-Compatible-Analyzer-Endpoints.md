@@ -232,8 +232,12 @@ and its stop-token list, `stop_token_ids`. `chat_template_kwargs.enable_thinking
 Reasoning control is Not controllable, because under either of the other two controls the server
 lets an explicit `enable_thinking` override the reasoning control Castwright owns. LiteLLM's
 top-level `thinking` field (for example `{"thinking": {"type": "enabled", "budget_tokens": 16000}}`)
-follows the same rule. This list covers the spellings of llama.cpp, vLLM and LiteLLM's `thinking`;
-other servers' spellings (OpenRouter, LM Studio and others) have not been checked. Keys named
+follows the same rule. LiteLLM's request-level `additional_drop_params` and `drop_params` are always
+refused: the first can strip any parameter Castwright sends (`response_format`, `reasoning_effort`, ...)
+and the second turns an unsupported-parameter error into a request sent silently without it. If you run
+LiteLLM and want unsupported parameters dropped, set that in the proxy's own config instead. This list
+covers the spellings of llama.cpp, vLLM and LiteLLM's `thinking`, `additional_drop_params` and
+`drop_params`; other servers' spellings (OpenRouter, LM Studio and others) have not been checked. Keys named
 `__proto__`, `constructor` or `prototype` are refused at any depth.
 
 **The output cap.** A payload that sets `max_tokens`, `max_completion_tokens` or llama.cpp's
