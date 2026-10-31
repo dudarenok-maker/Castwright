@@ -418,6 +418,56 @@ describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', ()
     }
   });
 
+  it('(g) a retried read never puts an older cast over a save made while the first attempt was out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const NO_VOICE = { id: 'c1', name: 'Eliza', voiceState: 'generated' } as Character;
+      const MATCHED = { ...NO_VOICE, voiceId: 'v_match', voiceState: 'reused' } as Character;
+      const reply = (c: Character) => ({ state: { bookId: BOOK_ID, chapters: [] }, cast: { characters: [c] } });
+      const store = makeStore([NO_VOICE]);
+      store.dispatch(uiActions.openBook({ id: BOOK_ID, status: 'cast_pending' }));
+      getBookStateMock
+        .mockImplementationOnce((_id: string, signal?: AbortSignal) => hung(signal))
+        .mockResolvedValueOnce(reply(NO_VOICE)) // the retry: read before the save landed on disk
+        .mockResolvedValue(reply(MATCHED));
+      render(
+        <Provider store={store}>
+          <MemoryRouter initialEntries={[`/books/${BOOK_ID}/confirm`]}>
+            <Routes>
+              <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+            </Routes>
+          </MemoryRouter>
+        </Provider>,
+      );
+      await advance(15_500); // the first attempt expired, its retry is pending
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        store.dispatch(
+          castActions.applyVoiceMatches({
+            matches: [
+              {
+                characterId: 'c1',
+                candidates: [
+                  { voiceId: 'v_match', fromBookId: 'b0', fromCharacterId: 'x', fromBookTitle: 'Old', score: 0.9, factors: {} },
+                ],
+              },
+            ],
+          } as never),
+        );
+        await store.dispatch(flushBookPersistence(BOOK_ID) as never);
+      });
+      const voiceOf = () => store.getState().cast.characters.find((c) => c.id === 'c1')?.voiceId;
+      expect(voiceOf()).toBe('v_match');
+      await advance(2_000); // the retry lands with the older cast
+      expect(getBookStateMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(voiceOf()).toBe('v_match'); // not overwritten
+      await advance(60_000);
+      expect(voiceOf()).toBe('v_match');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('(f) a read that takes 16 s on every attempt still lands: the bound grows per attempt', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

@@ -822,7 +822,17 @@ recite:
     and drive a test where the limit expires to see what then runs. Copying the
     retry is not the only acceptable remedy: the shipped one reads anyway on
     expiry, guarded by `castWrittenSince` so a read that post-dates a cast
-    save does not hydrate over it.
+    save does not hydrate over it. Copying the retry has two gaps of its own
+    (PR #4008 pass 2): a retry with a FIXED per-attempt bound never lands a read
+    slower than that bound (every attempt is aborted a second before it would
+    answer, so `readWithRetry` kept 9 reads open-and-aborted where the control
+    needed one), so drive a test where every attempt takes just over the bound,
+    not one that hangs once and then answers at once; and a bound on a re-sync
+    read whose expiry falls back to `null` must have that `null` checked for
+    what the client then acts on (Restructure's expired re-read left the
+    pre-restructure chapter list armed for a second merge; the analysis-stream
+    refusal re-read left a `running` snapshot the server had denied), because
+    the expiry path skips the hydrate the success path ran.
 
 61. **A timing threshold calibrated on a dev box that falls inside the CI
     runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host

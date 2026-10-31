@@ -65,9 +65,10 @@ export function BulkDuplicateReviewModal({
      dep on a fresh-each-render Set would re-run the effect on every state
      update and its cleanup would abort the still-pending getBookState. */
   const inFlightRef = useRef<Set<string>>(new Set());
-  /* #3967 — the reads are bounded and retried on expiry (readWithRetry), so a read
-     that never settles cannot hold a pair on "Loading" forever. Only unmounting
-     aborts them — never a dependency change (see the hydrate effect). */
+  /* #3967 — the reads are bounded and retried on expiry (readWithRetry), so a stall
+     that clears is picked up, but a server that stays stalled keeps the pair on
+     "Loading" for as long as it does: the retries are not capped, and Skip still works.
+     Only unmounting aborts them — never a dependency change (see the hydrate effect). */
   const readLifeRef = useRef<AbortController | null>(null);
   const readTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   useEffect(() => {
