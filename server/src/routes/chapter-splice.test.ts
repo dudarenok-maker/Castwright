@@ -68,12 +68,16 @@ const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
 const MIXED_SPELLING_MANUSCRIPT_ID = 'm_mixed_spelling';
 /* plan 287 T5 — the real, disk-backed cache, so the edits rebuild is observable. */
 const REBUILD_MANUSCRIPT_ID = 'm_splice_rebuild';
+/* plan 290 — the real, disk-backed cache, so the marker-gated overlay is observable. */
+const MARKER_MANUSCRIPT_ID = 'm_splice_marker';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
     ...actual,
     loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
-      if (manuscriptId === REBUILD_MANUSCRIPT_ID) return actual.loadAnalysisCache(manuscriptId);
+      if (manuscriptId === REBUILD_MANUSCRIPT_ID || manuscriptId === MARKER_MANUSCRIPT_ID) {
+        return actual.loadAnalysisCache(manuscriptId);
+      }
       if (manuscriptId === TITLE_LED_MANUSCRIPT_ID) {
         return { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } };
       }
@@ -391,6 +395,56 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — the edits rebu
       rmSync(editsPath, { force: true });
       await clearAnalysisCache(REBUILD_MANUSCRIPT_ID);
     }
+  });
+});
+
+/* Plan 290 (#3837) — the re-record's edits overlay goes through
+   refreshCacheFromEdits with the route's state: while state.json carries the
+   stale-evidence marker the cache is left exactly as it is; with no marker the
+   edits are overlaid. */
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — the stale-evidence marker gates the edits overlay (plan 290)', () => {
+  const line = { id: 1, chapterId: 1, characterId: 'amy', text: 'The first body line.' };
+  const edited = { ...line, characterId: 'narrator' };
+
+  async function rerecordWith(marker: boolean): Promise<{ before: Buffer; after: Buffer; chapter1: unknown }> {
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache, cachePath } = await vi.importActual<
+      typeof import('../store/analysis-cache.js')
+    >('../store/analysis-cache.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const original = readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    state.manuscriptId = MARKER_MANUSCRIPT_ID;
+    if (marker) state.sentencesPredateChapters = true;
+    writeFileSync(statePath, JSON.stringify(state));
+    await saveAnalysisCache(MARKER_MANUSCRIPT_ID, { chapters: { 1: [line] } });
+    writeFileSync(editsPath, JSON.stringify({ sentences: [edited] }));
+    try {
+      const before = readFileSync(cachePath(MARKER_MANUSCRIPT_ID));
+      await request(app)
+        .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+        /* Castor's sentence (id 2) is in neither take: the route refuses after
+           the overlay and before any side effect, so the shared audio fixture
+           is untouched. */
+        .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
+      const after = readFileSync(cachePath(MARKER_MANUSCRIPT_ID));
+      return { before, after, chapter1: (await loadAnalysisCache(MARKER_MANUSCRIPT_ID)).chapters[1] };
+    } finally {
+      writeFileSync(statePath, original);
+      rmSync(editsPath, { force: true });
+      await clearAnalysisCache(MARKER_MANUSCRIPT_ID);
+    }
+  }
+
+  it('on a marker-set book, leaves the analysis cache file byte-unchanged', async () => {
+    const r = await rerecordWith(true);
+    expect(r.after.equals(r.before)).toBe(true);
+  });
+
+  it('on a marker-free book, overlays the edits', async () => {
+    const r = await rerecordWith(false);
+    expect(r.chapter1).toEqual([edited]);
   });
 });
 

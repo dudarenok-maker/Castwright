@@ -288,3 +288,65 @@ test.describe('tablet-range touch targets — narrow-viewport regression gate', 
     expect(height, 'mini-player Next-issue height at 400px under a fine pointer').toBeLessThan(44);
   });
 });
+
+/* #4002 — the revision-diff (A/B audition) view carried several controls under
+   44px on touch: back/close (32px), History (~28px), the Listen back-to-back
+   toggle (36px), Accept all / Reject all / Reject draft (40px) and the footer's
+   PrimaryButton (40px). Same pointer-driven pattern as above: >=44px on a
+   coarse pointer, compact under a fine one. Opened the way
+   e2e/revision-diff.spec.ts does: Solway Bay -> Status pill -> revisions. */
+test.describe('tablet-range touch targets — revision-diff view (#4002)', () => {
+  test('revision-diff controls stay >=44px on any touch device', async ({
+    page,
+  }: {
+    page: Page;
+  }) => {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.goto('/');
+    await page
+      .getByText(/Solway Bay/i)
+      .first()
+      .click({ timeout: 10_000 });
+    await page.getByTestId('status-pill').click();
+    await page
+      .getByTestId('status-popover-revisions')
+      .getByRole('button', { name: /\d+ revisions?/i })
+      .click({ timeout: 10_000 });
+    const player = page.getByTestId('revision-diff-player');
+    await expect(player).toBeVisible({ timeout: 10_000 });
+
+    const headerButtons = player.locator('header button');
+    await assertTouchTarget(headerButtons.first(), 'back button', true);
+    await assertTouchTarget(headerButtons.last(), 'close button', true);
+    await assertTouchTarget(
+      player.getByTestId('revision-diff-open-history'),
+      'History button',
+      false,
+    );
+    await assertTouchTarget(
+      player.getByRole('button', { name: /Listen back-to-back|Stop/i }),
+      'Listen back-to-back toggle',
+      false,
+    );
+    await assertTouchTarget(
+      player.getByRole('button', { name: /Accept all changes/i }),
+      'Accept all',
+      false,
+    );
+    await assertTouchTarget(
+      player.getByRole('button', { name: /Reject all changes/i }),
+      'Reject all',
+      false,
+    );
+    await assertTouchTarget(
+      player.getByRole('button', { name: /Reject draft/i }),
+      'Reject draft',
+      false,
+    );
+    await assertTouchTarget(
+      player.getByRole('button', { name: /Commit selection/i }),
+      'Commit selection',
+      false,
+    );
+  });
+});
