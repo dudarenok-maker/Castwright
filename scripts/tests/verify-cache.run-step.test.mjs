@@ -383,7 +383,8 @@ test('runStepProcess re-sweep: pre-kill snapshot failed => root bounded by spawn
   const h = resweepStaleHarness(dir, {
     preKill: () => null,
     // Root is dead by the re-sweep; OLD predates the step's spawn, NEW postdates it.
-    reSweep: (root) => [row(OLD, root, now - 60_000), row(NEW, root, now + 50)],
+    // NEW is stamped when the callback runs (after the kill), so it is always >= spawnedAt however slow setup was.
+    reSweep: (root) => [row(OLD, root, now - 60_000), row(NEW, root, Date.now())],
   });
   try {
     await h.run();
