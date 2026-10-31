@@ -807,6 +807,23 @@ recite:
     confirm a test goes red; a backstop reached only by a hand-seeded reducer
     test is not coverage of the real ordering.
 
+60. **A time limit copied from a sibling without the sibling's retry** — PR
+    #3930 pass 1, finding 1 (#3916): ConfirmRoute copied Layout's
+    `BOOK_READ_TIMEOUT_MS` bound but not Layout's backoff retry, so a save
+    stalled past 15 s meant the entry re-read was never issued
+    (`src/routes/index.tsx`). Layout's own loop (`src/components/layout.tsx`)
+    retries with backoff after the limit, so there it ends one attempt; in the
+    copy it ended the only attempt, so when the limit expired "later" became
+    "never". (Not every source retries: Layout's revisions-only path gives up
+    without a retry and relies on the 30 s poll to repair it.) Checkable:
+    whenever a bound or timeout is copied from another call site, open the
+    source and read what it does on expiry (retry, backoff, a fallback, a
+    surfaced error); confirm the copy does the same, or names why it need not,
+    and drive a test where the limit expires to see what then runs. Copying the
+    retry is not the only acceptable remedy: the shipped one reads anyway on
+    expiry, guarded by `castWrittenSince` so a read that post-dates a cast
+    save does not hydrate over it.
+
 61. **A timing threshold calibrated on a dev box that falls inside the CI
     runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host
     from a slow query by a "fast control" line of 5 s, set with only a local

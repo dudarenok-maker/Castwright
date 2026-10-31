@@ -4584,6 +4584,120 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
     }
   });
 
+  /* #3916 — a marked full read on Confirm must not put the pre-match roster over
+     a voice match this tab applied (and queued to disk) while the read was out. */
+  describe('#3916: Layout full read keeps a cast written while it was out', () => {
+    const matched = {
+      matches: [{ characterId: 'eliza', candidates: [{ voiceId: 'auto-voice', fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }] }],
+    };
+    const voiceOnDisk = (disk: ReturnType<typeof createBookStateDisk>) =>
+      (disk.books.get('A')!.cast!.characters[0] as { voiceId?: string }).voiceId;
+    function holdReads(): () => void {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        if (id === 'A') await gate;
+        return read(id);
+      });
+      return release;
+    }
+    /* Like holdReads, but the answer is disk AS OF THE ISSUE: a GET that read
+       disk before the match's PUT landed, and is processed after it. */
+    function holdReadsAtIssue(): () => void {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        const snapshot = await read(id);
+        if (id === 'A') await gate;
+        return snapshot;
+      });
+      return release;
+    }
+    function holdMatch(): () => void {
+      let answer!: () => void;
+      matchVoicesMock.mockReturnValue(new Promise((r) => (answer = () => r(matched))));
+      return answer;
+    }
+
+    it('L1: after a Library Edit mark, the reopen match applies while the full read is held', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const store = makeStoreWithScopeAndPersistence();
+      const disk = wireDisk();
+      try {
+        renderWithLibrary(store);
+        await openA(store);
+        act(() => { store.dispatch(uiActions.goHome()); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+        matchVoicesMock.mockClear();
+        const answer = holdMatch();
+        const releaseRead = holdReads();
+        openAt(store as never, 'A');
+        await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+        await act(async () => { answer(); await vi.advanceTimersByTimeAsync(100); });
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        releaseRead();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+        expect(store.getState().ui.stage.kind).toBe('confirm');
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('L3: a match whose PUT landed before the held full read answered survives that read', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const store = makeStoreWithScopeAndPersistence();
+      const disk = wireDisk();
+      try {
+        renderWithLibrary(store);
+        await openA(store);
+        act(() => { store.dispatch(uiActions.goHome()); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+        matchVoicesMock.mockClear();
+        const answer = holdMatch();
+        const releaseRead = holdReadsAtIssue();
+        openAt(store as never, 'A');
+        await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+        await act(async () => { answer(); await vi.advanceTimersByTimeAsync(2000); });
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
+        releaseRead();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+        expect(store.getState().ui.stage.kind).toBe('confirm');
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('L2: a mark made while the entry match is still out, then the match applies and the read lands', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const store = makeStoreWithScopeAndPersistence();
+      const disk = wireDisk();
+      const answer = holdMatch();
+      try {
+        renderWithLibrary(store);
+        await openA(store);
+        await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+        const releaseRead = holdReads();
+        act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+        await act(async () => { answer(); await vi.advanceTimersByTimeAsync(100); });
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        releaseRead();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   /* #3841 (review pass 13, P13-2; pass 14 confirmed) — the delete's mark is not
      enough on its own: a full read of the deleted book (a 404) uses it up, and
      until a reopen's read lands the slices still hold the deleted book, so a

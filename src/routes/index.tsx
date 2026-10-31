@@ -27,7 +27,7 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { dropRetainedSaves } from '../store/persistence-middleware';
+import { beginFullRead, castWrittenSince, dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -36,7 +36,7 @@ import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildAnalyzerPickerGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
-import { Layout, type LayoutContext } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS, Layout, type LayoutContext, within } from '../components/layout';
 import { PairShell } from '../views/pair';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
@@ -729,34 +729,59 @@ export function ConfirmRoute() {
      the slice — so the confirm screen would render "No voice designed yet" for
      a character whose designed voice is safe on disk. Re-reading the merged
      cast.json on entry (the same path that already works on a manual reload)
-     surfaces those voices. Runs once per book; the confirm screen's own edits
-     (match decisions, fresh designs) all post-date this and persist to disk, so
-     a later re-entry re-reads them rather than clobbering. */
+     surfaces those voices. Runs once per book.
+     #3916 (owner decision, 2026-10-30) — the read follows the rule that a book
+     read is never issued while one of its saves is queued or in flight (#3395
+     S3): it sends and waits for queued saves first, bounded at 15 s (on expiry
+     it reads anyway: a stalled save must not mean no read at all, and
+     castWrittenSince below still refuses to hydrate over a cast save in
+     flight). It is stamped with beginFullRead;
+     if a cast save could post-date what it read (castWrittenSince) it does NOT
+     put that older cast over the slice, it reads again — at most 3 reads in
+     all — and after the last one it keeps the slice as it is. */
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
-    api
-      .getBookState(bookId)
-      .then((res) => {
-        if (!cancelled && res?.cast?.characters && res.cast.characters.length > 0) {
-          /* hydrate, not an edit: setCharacters is persisted and would echo
-             this disk snapshot straight back as a cast.json PUT (#3376). */
-          dispatch(castActions.hydrateCharacters(res.cast.characters));
-        }
-        /* #3435 — the same skipped hydrate left the Generate view's analysis
-           gaps as they were before the run; take them from the server (a main
-           result can still carry a flagged chapter, decision B). */
-        if (!cancelled && res) {
-          dispatch(
-            chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
-          );
-        }
-      })
-      .catch(() => {
-        /* non-fatal — fall back to whatever the slice already holds */
-      });
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const attempt = (n: number): void => {
+      const writes = dispatch(flushBookPersistence(bookId)) as unknown;
+      const ready =
+        writes instanceof Promise
+          ? within(writes, BOOK_READ_TIMEOUT_MS, timers).catch(() => undefined)
+          : Promise.resolve();
+      ready
+        .then(() => {
+          if (cancelled) return undefined;
+          const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
+          return api.getBookState(bookId).then((res) => {
+            if (cancelled) return;
+            /* #3435 — the same skipped hydrate left the Generate view's analysis
+               gaps as they were before the run; take them from the server (a main
+               result can still carry a flagged chapter, decision B). */
+            if (res) {
+              dispatch(
+                chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
+              );
+            }
+            if (res?.cast?.characters && res.cast.characters.length > 0) {
+              if ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true) {
+                if (n < 2) attempt(n + 1);
+                return;
+              }
+              /* hydrate, not an edit: setCharacters is persisted and would echo
+                 this disk snapshot straight back as a cast.json PUT (#3376). */
+              dispatch(castActions.hydrateCharacters(res.cast.characters));
+            }
+          });
+        })
+        .catch(() => {
+          /* non-fatal — fall back to whatever the slice already holds */
+        });
+    };
+    attempt(0);
     return () => {
       cancelled = true;
+      timers.forEach(clearTimeout);
     };
   }, [bookId, dispatch]);
 
