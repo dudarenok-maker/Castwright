@@ -25,6 +25,22 @@ import type { BookStateJson } from '../workspace/scan.js';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 
+/* PR #3966 review pass 2 -- fails the FIRST rename whose destination is `path`
+   with EBUSY (the scan-import-folder.test.ts pattern). A pass-through otherwise. */
+const failRename = vi.hoisted(() => ({ path: null as string | null }));
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    rename: (async (from: string, to: string) => {
+      if (failRename.path !== null && to === failRename.path) {
+        failRename.path = null;
+        throw Object.assign(new Error('EBUSY: injected'), { code: 'EBUSY' });
+      }
+      return actual.rename(from, to);
+    }) as typeof actual.rename,
+  };
+});
 vi.mock('../routes/ollama-health.js', () => ({
   detectOllamaDevice: vi.fn(async () => 'cuda'),
   unloadResidentOllama: vi.fn(async () => {}),
@@ -50,6 +66,7 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
 
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__overwrite_marker_test_selection;
+  failRename.path = null;
 });
 
 function fixtureState(title: string, extra: Partial<BookStateJson> = {}): BookStateJson {
@@ -327,7 +344,11 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
   describe('the analysis cache (owner round 11)', () => {
     const CACHE_BYTES = JSON.stringify({ chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Old take.' }] } });
 
-    async function overwriteWithCache(title: string, localState?: (s: BookStateJson) => void) {
+    async function overwriteWithCache(
+      title: string,
+      localState?: (s: BookStateJson) => void,
+      failStateRename = false,
+    ) {
       const state = fixtureState(title);
       const bundle = await makeBundle(state);
       const target = targetDirFor(state);
@@ -343,7 +364,12 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
       const cacheFile = cachePath(state.manuscriptId);
       mkdirSync(dirname(cacheFile), { recursive: true });
       writeFileSync(cacheFile, CACHE_BYTES, 'utf8');
-      await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      if (failStateRename) {
+        failRename.path = stateJsonPath(target);
+        await expect(importPortableBundle(bundle, { onConflict: 'overwrite' })).rejects.toThrow(/EBUSY/);
+      } else {
+        await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      }
       return { target, cacheFile };
     }
 
@@ -354,6 +380,25 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
         expect(readState(paths.target).sentencesPredateChapters).toBe(true);
         expect(readState(paths.target).manuscriptId).toBe(fixtureState('Marker Overwrite Cache Differs').manuscriptId);
         expect(existsSync(paths.cacheFile)).toBe(false);
+      } finally {
+        if (paths) {
+          rmSync(paths.target, { recursive: true, force: true });
+          rmSync(paths.cacheFile, { force: true });
+        }
+      }
+    });
+
+    /* PR #3966 review pass 2 -- the clear is gated on the bundle's state.json
+       having LANDED (`stateLanded`): a structure-changing overwrite whose
+       state.json rename fails leaves the old, unmarked state live, so its cache
+       still matches it and must stay. */
+    it('a structure-changing overwrite whose state.json rename fails surfaces the error and leaves the cache byte-identical', async () => {
+      let paths: { target: string; cacheFile: string } | undefined;
+      try {
+        paths = await overwriteWithCache('Marker Overwrite Cache State Fails', retitleChapter2, true);
+        expect(readState(paths.target)).not.toHaveProperty('sentencesPredateChapters');
+        expect(readState(paths.target).chapters[1]!.title).toBe('Chapter Two (merged)');
+        expect(readFileSync(paths.cacheFile, 'utf8')).toBe(CACHE_BYTES);
       } finally {
         if (paths) {
           rmSync(paths.target, { recursive: true, force: true });
