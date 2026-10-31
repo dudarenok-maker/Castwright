@@ -733,9 +733,9 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
      linkSeriesReuseAtAnalysis(bookId, characters)
      dedupeRosterByName(...)            (only when `sentences` is passed)
      stripEstablishedAsciiRewrites(composeRewrites(dd.rewrites, {}), ...)
-     remapFreshToPriorIds(...)
+     remapFreshToPriorIds(roster, remapSentences, prior, cumulative, BOOK2)
      applyRewriteToPriorCast(priorCastForMerge, cumulative)
-     mergeAnalysisResultWithExistingCast(remapped.priorCast, ...)
+     mergeAnalysisResultWithExistingCast(remapped.priorCast, ..., BOOK2)
 
    Steps the harness OMITS, so it is a composition of the pure functions and
    not the route: foldMinorCast (folded.rewrites is {} and folded.sentences
@@ -762,7 +762,15 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
        sentences, and its rewrites + deduped roster feed the remap and the
        merge, exactly as the route does. Omitted: no dedup, an empty journal. */
     sentences?: Array<{ characterId: string }>,
-  ): Promise<{ merged: LinkableCharacter[]; postLink: LinkableCharacter[] }> => {
+    /* #3965: sentences handed to the remap ONLY (dedup is untouched, so
+       existing callers behave identically). Returned remapped as
+       `remappedSentences`. */
+    remapSentences: Array<{ characterId: string }> = [],
+  ): Promise<{
+    merged: LinkableCharacter[];
+    postLink: LinkableCharacter[];
+    remappedSentences: Array<{ characterId: string }>;
+  }> => {
     seedReuseGuardsFromPriorCast(prior, fresh);
     await pruneStaleReuseLinks(BOOK2, fresh, options);
     await linkSeriesReuseAtAnalysis(BOOK2, fresh, options);
@@ -778,16 +786,18 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     );
     const remappedToPrior = remapFreshToPriorIds(
       roster,
-      [] as Array<{ characterId: string }>,
+      remapSentences,
       prior,
       cumulative,
+      BOOK2,
     );
     const remapped = applyRewriteToPriorCast(prior, cumulative);
     const { characters: merged } = mergeAnalysisResultWithExistingCast(
       remapped.priorCast,
       remappedToPrior.characters,
+      BOOK2,
     );
-    return { merged, postLink };
+    return { merged, postLink, remappedSentences: remappedToPrior.sentences };
   };
 
   /* baseOptions()'s library/positions plus the language/standalone vetoes
@@ -1289,5 +1299,43 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     /* The linker's denormalised qwen voice survives too — the prior row had
        none of those fields to overlay. */
     expect(wren?.overrideTtsVoices?.qwen?.name).toBe('voice_wren');
+  });
+
+  it('#3965: an id-drifted locked character with a Book One decline is not split in two', async () => {
+    const prior: PriorRow[] = [
+      {
+        id: 'old-tom',
+        name: 'Old Tom',
+        voiceId: 'v_tom',
+        voiceState: 'locked',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'old-tom' }],
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'old-tom-2', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult', voiceId: 'v_b1_tom' },
+      },
+    ];
+    const { merged, remappedSentences } = await runReAnalysis(
+      prior,
+      fresh,
+      routeOptions(library),
+      undefined,
+      [{ characterId: 'old-tom-2' }],
+    );
+
+    const toms = merged.filter((c) => c.name.toLowerCase().replace(/\s+/g, ' ').trim() === 'old tom');
+    expect(toms).toHaveLength(1);
+    const tom = toms[0];
+    expect(tom.voiceId).toBe('v_tom');
+    expect(tom.voiceState).toBe('locked');
+    expect(remappedSentences).toHaveLength(1);
+    expect(remappedSentences[0].characterId).toBe(tom.id);
+    expect(tom.matchedFrom).toBeUndefined();
   });
 });
