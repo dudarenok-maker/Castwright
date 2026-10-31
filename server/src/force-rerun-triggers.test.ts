@@ -34,6 +34,7 @@ import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './workspace/state-language.guard
 import { SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS } from './spawn-windows-hide.guard-targets.js';
 import { CAST_LOCK_GUARD_SCAN_GLOB } from './workspace/cast-lock.guard-targets.js';
 import { ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB } from './tts/engine-language-coverage.guard-targets.js';
+import { PARSER_VERSION_GUARD_SCAN_GLOB } from './parsers/version.guard-targets.js';
 
 const SERVER_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(SERVER_ROOT, '..');
@@ -193,6 +194,15 @@ const MAIN_COVERED = [
     file: 'the generation route (resolveEligibleEngines call site)',
     base: REPO_ROOT,
   },
+  /* version.guard.test.ts (#3837, M17): reads this file's source text at
+     RUNTIME for a real checkParseHintsPairing( call - the same #1847
+     runtime-read trap. The rel path is DERIVED from
+     PARSER_VERSION_GUARD_SCAN_GLOB, the constant the guard itself imports. */
+  {
+    rel: PARSER_VERSION_GUARD_SCAN_GLOB,
+    file: 'the book-state route (parser-version tripwire scan target)',
+    base: REPO_ROOT,
+  },
   /* cast-lock.guard.test.ts (#3085): a tree-wide scanner — collectSourceFiles
      (SRC_ROOT) reads every non-test .ts file under server/src/** at RUNTIME,
      no module-graph edge to any of them. The rel path below is DERIVED from
@@ -309,6 +319,13 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
     const expected =
       `{**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB},` +
       `**/.*/**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
+  it('main forceRerunTriggers has the exact entry derived from PARSER_VERSION_GUARD_SCAN_GLOB (#3837)', () => {
+    const expected =
+      `{**/${PARSER_VERSION_GUARD_SCAN_GLOB},` +
+      `**/.*/**/${PARSER_VERSION_GUARD_SCAN_GLOB}}`;
     expect(mainTriggers).toContain(expected);
   });
 
