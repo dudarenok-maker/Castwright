@@ -74,7 +74,6 @@ afterAll(() => {
 describe('a backup restore refuses while a book job is registered', () => {
   it('analysis registered -> 409 book_busy, state.json + cache + warm record untouched; released -> 200', async () => {
     const { runBookJob } = await import('../workspace/book-jobs.js');
-    const { BOOK_GONE } = await import('../workspace/book-op-lock.js');
     const { putManuscript, getManuscript, removeManuscript } = await import('../store/manuscripts.js');
     const statePath = join(bookDir, '.audiobook', 'state.json');
     const record = { manuscriptId: MID, bookDir } as unknown as ManuscriptRecord;
@@ -85,7 +84,7 @@ describe('a backup restore refuses while a book job is registered', () => {
     let open!: () => void;
     const gate = new Promise<void>((r) => (open = r));
     const reg = await runBookJob(bookId, 'analysis', () => gate);
-    if (reg === BOOK_GONE) throw new Error('test setup: book not found');
+    if (typeof reg === 'symbol') throw new Error('test setup: book not found'); // BOOK_GONE
     try {
       const busy = await request(app).post(`/api/books/${bookId}/backups/restore`).send({ backupFile: SNAPSHOT });
       expect(busy.status, JSON.stringify(busy.body)).toBe(409);
