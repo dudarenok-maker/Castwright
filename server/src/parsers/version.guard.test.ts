@@ -11,7 +11,7 @@
 
    If this fails after a version bump, wire the pairing check into
    `refreshChapterTitles` before bumping - see
-   docs/features/290-parse-fallback-hints-proof.md (M17). */
+   docs/features/archive/290-parse-fallback-hints-proof.md (M17). */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -209,7 +209,7 @@ function pinHolds(version: number, bookStateSource: string): boolean {
 const PIN_MESSAGE =
   'CHAPTER_TITLE_PARSER_VERSION moved off 2 but routes/book-state.ts makes no real ' +
   'checkParseHintsPairing( call: refreshChapterTitles would re-title a reordered analysed book ' +
-  'by position. Wire the pairing check in first (#3837, docs/features/290-parse-fallback-hints-proof.md, M17).';
+  'by position. Wire the pairing check in first (#3837, docs/features/archive/290-parse-fallback-hints-proof.md, M17).';
 
 describe('parser-version tripwire (#3837, M17)', () => {
   it('self-test: a call that appears only in a comment fails the pin', () => {

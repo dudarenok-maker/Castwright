@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-10-31
 owner: null
 ---
 
 # Parse-fallback chapter hints: check the pairing against saved sentences (#3837)
 
-> Status: active; implementation in progress on `feat/server-3837-hints-proof`. The design follows the owner decisions on #3837 through round 8 (2026-10-31): round 5 narrowed the scope to **check only, never persist**; round 6 set the restructure seam to **sentences plus titles** and kept **Start fresh** on count/id only; round 7 accepted the one remaining durable-miss class; round 8 added the **stale-evidence marker** after re-parse and limited **exclude/include** hints writes to a count-changing prune; the implementation decisions after checker round 5 (2026-10-31) extend the marker to a restructure's analysis-cache rebuild and to a bundle overwrite. The rule was calibrated read-only on every analysed book in the operator's workspace (see "Calibration"). This revision answers the fourth `assumption-checker` pass and the round-5 targeted checker, and was approved by the owner on 2026-10-31 (plan PR #3922).
+> Status: stable; shipped via PR #3966 (branch `feat/server-3837-hints-proof`, 2026-10-31). The design follows the owner decisions on #3837 through round 8 (2026-10-31): round 5 narrowed the scope to **check only, never persist**; round 6 set the restructure seam to **sentences plus titles** and kept **Start fresh** on count/id only; round 7 accepted the one remaining durable-miss class; round 8 added the **stale-evidence marker** after re-parse and limited **exclude/include** hints writes to a count-changing prune; the implementation decisions after checker round 5 (2026-10-31) extend the marker to a restructure's analysis-cache rebuild and to a bundle overwrite. The rule was calibrated read-only on every analysed book in the operator's workspace (see "Calibration"). This revision answers the fourth `assumption-checker` pass and the round-5 targeted checker, and was approved by the owner on 2026-10-31 (plan PR #3922).
 > Key files: `server/src/workspace/hints-proof.ts` (new, pure), `server/src/workspace/hints-proof-io.ts` (new, the edits read), `server/src/routes/analysis.ts` (`hintsOutOfSyncRefusal`, about line 3982; call sites about lines 4066 and 7887; the main persist's edits write, about line 7305), `server/src/routes/chapters-restructure.ts` (`applyRestructure` / `applyRestructureClaimed`), `server/src/routes/book-state.ts` (`applyReparse`, about line 1623), `server/src/workspace/restructure.ts` (`parseTitlesPairWithState`, `assertHintsPairWithState`), `server/src/workspace/scan.ts` (`BookStateJson`), `server/src/store/manuscripts.ts` (`hydrateFromDisk`, `hintsFromParse`, the `hintsSource` / `parseTitles` docs about lines 66–78), `server/src/parsers/audio-tags.ts` (`AUDIO_TAGS`), `openapi.yaml`.
 > URL surface: indirect. The routes are `#/books/<id>/...` restructure actions, Start analysis and re-parse / replace-manuscript.
 > OpenAPI ops: no shape change. The descriptions of the analysis-start and restructure 409s are rewritten (Task 6), and `src/lib/api-types.ts` is regenerated. `hints_out_of_sync` stays a pre-stream 409 only; it is never sent as an SSE event.
@@ -780,7 +780,13 @@ None. The last one, what an exclude/include prune does on an unpaired parse book
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+- **Shipped:** 2026-10-31 via PR #3966 (branch head `ca09df12`; the merge commit is recorded on #3837 after merge).
+- **Delta vs plan:**
+  - Owner round 10: the bundle overwrite and the backup restore stamp the stale-evidence marker only when the chapter list changed (`swapLeavesStaleEvidence`); backup restore was added as a third producer.
+  - The prune refusal includes the count/id failure (controller ruling under owner round 9; pinned by M20b-a).
+  - The two `#3828 pass 1` refresh-titles tests now seed their hints file directly.
+  - #3953 was fixed in passing.
+  - The CLAUDE.md `requestFailureMessage` enumeration was current; no edit was made.
 
 ### Task 7 real-book acceptance (2026-10-31)
 
