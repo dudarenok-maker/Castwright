@@ -1537,6 +1537,76 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
   });
 });
 
+/* ── plan 290 (#3837) — the overlay goes through refreshCacheFromEdits: while
+   state.json carries the stale-evidence marker, the saved sentences are keyed
+   to an older chapter list, so Generate leaves the analysis cache exactly as it
+   is; with no marker it overlays the edits as before. */
+describe('POST /api/books/:bookId/generation — stale-evidence marker gates the overlay (plan 290)', () => {
+  let editsPath: string;
+  let cacheModule: typeof import('../store/analysis-cache.js');
+  let fsModule: typeof import('node:fs');
+  const CACHED = {
+    chapters: {
+      1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+      2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+    },
+  };
+  /* Reassigns sentence 1 — an overlay would change chapter 1's take. */
+  const EDITS = {
+    sentences: [
+      { id: 1, chapterId: 1, characterId: 'ellie', text: 'Hello.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ],
+  };
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+
+  beforeAll(async () => {
+    cacheModule = await import('../store/analysis-cache.js');
+    fsModule = await import('node:fs');
+    const { manuscriptEditsJsonPath } = await import('../workspace/paths.js');
+    editsPath = manuscriptEditsJsonPath(bookDir);
+  });
+
+  afterEach(async () => {
+    if (fsModule.existsSync(editsPath)) fsModule.rmSync(editsPath);
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, CACHED);
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot)) fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  async function generateWith(marker: boolean): Promise<void> {
+    const original = fsModule.readFileSync(statePath(), 'utf8');
+    const state = JSON.parse(original);
+    if (marker) state.sentencesPredateChapters = true;
+    else delete state.sentencesPredateChapters;
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true });
+      expect(res.status).toBe(200);
+    } finally {
+      fsModule.writeFileSync(statePath(), original);
+    }
+  }
+
+  it('on a marker-set book, leaves a seeded cache byte-unchanged', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, CACHED);
+    fsModule.writeFileSync(editsPath, JSON.stringify(EDITS));
+    const before = fsModule.readFileSync(cacheModule.cachePath(MANUSCRIPT_ID));
+    await generateWith(true);
+    expect(fsModule.readFileSync(cacheModule.cachePath(MANUSCRIPT_ID)).equals(before)).toBe(true);
+  });
+
+  it('on a marker-free book, overlays the edits onto the cache', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, CACHED);
+    fsModule.writeFileSync(editsPath, JSON.stringify(EDITS));
+    await generateWith(false);
+    const after = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    expect(after.chapters[1]).toEqual([{ id: 1, chapterId: 1, characterId: 'ellie', text: 'Hello.' }]);
+  });
+});
+
 /* ── plan 287 — a `[]` take survives the rebuild, and generation names why a
    chapter with no lines produced no audio (decision C). */
 describe('POST /api/books/:bookId/generation — [] takes (plan 287)', () => {

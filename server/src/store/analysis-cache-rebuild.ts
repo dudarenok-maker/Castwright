@@ -23,9 +23,16 @@
    chapter, so replacing the map deleted those keys, and a chapter's own key is
    what makes it "analysed" (`hasCurrentTake`). Overlay never changes the
    pending set, the failure records, `takesPersisted` or `confirmReached`.
-   `'replace'` is today's behaviour, for restructure, which renumbers ids. */
+   `'replace'` is today's behaviour, for restructure, which renumbers ids.
+
+   Plan 290 (#3837) — `refreshCacheFromEdits` is the entry point the four
+   callers use: while state.json carries the stale-evidence marker
+   (`sentencesPredateChapters`), the edits are keyed to an older chapter list,
+   so a restructure (`'replace'`) clears the cache and the overlay callers leave
+   it untouched rather than re-seed it with stale takes. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { readJson } from '../workspace/state-io.js';
 import {
   clearAnalysisCache,
@@ -81,4 +88,21 @@ export async function rebuildCacheFromEdits(
     }
   }
   await saveAnalysisCache(manuscriptId, { ...prior, chapters });
+}
+
+/** Rebuild the cache from manuscript-edits.json unless those edits predate the chapter list. */
+export async function refreshCacheFromEdits(
+  state: Pick<BookStateJson, 'manuscriptId' | 'sentencesPredateChapters'>,
+  editsPath: string,
+  opts: RebuildCacheOptions,
+): Promise<'rebuilt' | 'cleared' | 'skipped'> {
+  if (state.sentencesPredateChapters === true) {
+    if ((opts.mode ?? 'overlay') === 'replace') {
+      await clearAnalysisCache(state.manuscriptId);
+      return 'cleared';
+    }
+    return 'skipped';
+  }
+  await rebuildCacheFromEdits(state.manuscriptId, editsPath, opts);
+  return 'rebuilt';
 }

@@ -13,6 +13,9 @@ interface PrimaryButtonProps {
   icon?: boolean;
   size?: ButtonSize;
   disabled?: boolean;
+  /** Extra classes for a call site that needs more than the default box
+      (e.g. a 44px touch floor). Omitted, the button is unchanged. */
+  className?: string;
 }
 export function PrimaryButton({
   children,
@@ -21,6 +24,7 @@ export function PrimaryButton({
   icon = true,
   size = 'md',
   disabled = false,
+  className = '',
 }: PrimaryButtonProps) {
   const styles: Record<ButtonVariant, string> = {
     dark: 'bg-ink text-canvas hover:bg-ink-soft',
@@ -37,7 +41,7 @@ export function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       aria-disabled={disabled}
-      className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}`}
+      className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}${className ? ` ${className}` : ''}`}
     >
       <span>{children}</span>
       {icon && (

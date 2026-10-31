@@ -8,12 +8,13 @@
    manuscriptId per test and clean up after. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { rebuildCacheFromEdits } from './analysis-cache-rebuild.js';
+import { rebuildCacheFromEdits, refreshCacheFromEdits } from './analysis-cache-rebuild.js';
 import {
+  cachePath,
   clearAnalysisCache,
   loadAnalysisCache,
   saveAnalysisCache,
@@ -212,4 +213,57 @@ describe('rebuildCacheFromEdits — overlay (plan 287 spec 2.2)', () => {
     const cache = await loadAnalysisCache(manuscriptId);
     expect(Object.keys(cache.chapters)).toEqual(['1']);
   });
+});
+
+/* Plan 290 (#3837) — the stale-evidence marker gates the rebuild (M28). */
+describe('refreshCacheFromEdits', () => {
+  const s = (id: number, chapterId: number, text: string) => ({ id, chapterId, characterId: 'narr', text });
+  const seed = { chapters: { 1: [s(1, 1, 'old-a')], 2: [s(1, 2, 'old-b')], 3: [] as never[] } };
+  const edits = { sentences: [s(1, 1, 'new-a'), s(2, 1, 'new-a2')] };
+
+  it('marker set + replace removes the cache file', async () => {
+    await saveAnalysisCache(manuscriptId, seed);
+    writeFileSync(editsPath, JSON.stringify(edits));
+    expect(existsSync(cachePath(manuscriptId))).toBe(true);
+    const out = await refreshCacheFromEdits(
+      { manuscriptId, sentencesPredateChapters: true },
+      editsPath,
+      { mode: 'replace' },
+    );
+    expect(out).toBe('cleared');
+    expect(existsSync(cachePath(manuscriptId))).toBe(false);
+  });
+
+  it('marker set + overlay leaves a seeded cache byte-identical', async () => {
+    await saveAnalysisCache(manuscriptId, seed);
+    writeFileSync(editsPath, JSON.stringify(edits));
+    const before = readFileSync(cachePath(manuscriptId));
+    const out = await refreshCacheFromEdits(
+      { manuscriptId, sentencesPredateChapters: true },
+      editsPath,
+      { mode: 'overlay', excludedChapterIds: [2] },
+    );
+    expect(out).toBe('skipped');
+    expect(readFileSync(cachePath(manuscriptId)).equals(before)).toBe(true);
+  });
+
+  it.each(['overlay', 'replace'] as const)(
+    'no marker rebuilds exactly as rebuildCacheFromEdits does (%s)',
+    async (mode) => {
+      await saveAnalysisCache(manuscriptId, seed);
+      writeFileSync(editsPath, JSON.stringify(edits));
+      await rebuildCacheFromEdits(manuscriptId, editsPath, { mode, excludedChapterIds: [2] });
+      const expected = await loadAnalysisCache(manuscriptId);
+
+      await saveAnalysisCache(manuscriptId, seed);
+      const out = await refreshCacheFromEdits({ manuscriptId }, editsPath, {
+        mode,
+        excludedChapterIds: [2],
+      });
+      expect(out).toBe('rebuilt');
+      const got = await loadAnalysisCache(manuscriptId);
+      expect({ ...got, updatedAt: undefined }).toEqual({ ...expected, updatedAt: undefined });
+      expect(got.chapters[1].map((x) => x.text)).toEqual(['new-a', 'new-a2']);
+    },
+  );
 });

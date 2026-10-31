@@ -82,9 +82,9 @@ vi.mock('../tts/hydrate-reused-voice-workspace.js', () => ({
   hydrateCastReusedVoices: vi.fn(async (chars: unknown[]) => chars),
 }));
 
-// Mock rebuildCacheFromEdits (noop).
+// Mock refreshCacheFromEdits (noop).
 vi.mock('../store/analysis-cache-rebuild.js', () => ({
-  rebuildCacheFromEdits: vi.fn(async () => {}),
+  refreshCacheFromEdits: vi.fn(async () => 'rebuilt'),
 }));
 
 // Mock finalizeChapterAudioWrite so it doesn't need real ffmpeg/encode.

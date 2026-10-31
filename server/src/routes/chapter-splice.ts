@@ -47,7 +47,7 @@ import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
-import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import {
@@ -272,7 +272,8 @@ chapterSpliceRouter.post(
       const editsPath = manuscriptEditsJsonPath(bookDir);
       const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
       if (Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0) {
-        await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
+        /* Plan 290 — skipped while the edits predate the chapter list. */
+        await refreshCacheFromEdits(state, editsPath, {
           excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
         }).catch(() => {});
       }
