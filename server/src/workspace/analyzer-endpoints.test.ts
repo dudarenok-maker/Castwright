@@ -196,6 +196,13 @@ describe('create / update / delete / key decisions', () => {
     expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
     expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: extra_body.' }]);
   });
+  it('refuses LiteLLM fallbacks, whose dict target re-carries a refused key on the retry, under any style, naming it (#3921)', () => {
+    const r = refusal(() =>
+      applyCreate(empty, { ...base, extraParams: { fallbacks: [{ model: 'qwen3-30b', additional_drop_params: ['response_format'] }] } }),
+    );
+    expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: fallbacks.' }]);
+  });
   it('refuses a top-level __proto__ key in the payload instead of silently dropping it', () => {
     const payload = JSON.parse('{"__proto__":{"x":1}}');
     const refused = refusal(() => applyCreate(empty, { ...base, extraParams: payload }));
