@@ -38,6 +38,7 @@ import {
   flushBookPersistence,
   learnSliceRevisions,
   landedFieldsSince,
+  castWrittenSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
@@ -1017,6 +1018,22 @@ export function Layout() {
                (#3784 P2): it stays for the server to judge. Based whole-slice
                saves (cast, manuscript, changeLog) are dropped. */
             dispatch(dropRetainedSaves(bookId, true));
+            /* #3916 — the same skip for a cast write made since this read went out
+               (a voice match applied on Confirm): the roster it read predates that
+               write, and hydrating it would wipe the applied match from the screen
+               while disk holds it. The mark makes the re-read a full one; the tick runs it now
+               (the mark alone can be batched with the clear above into no change).
+               A KEPT cast save is gone by now (dropped above): only a save queued,
+               in flight or landed since the stamp skips, and each re-read needs a
+               fresh one, so this cannot loop. */
+            if (
+              typeof readSeq === 'number' &&
+              (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true
+            ) {
+              dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
+              setFullReadTick((t) => t + 1);
+              return;
+            }
             if (typeof readSeq === 'number') {
               dispatch(learnSliceRevisions(bookId, res.sliceRevisions, readSeq));
             }
@@ -1031,7 +1048,8 @@ export function Layout() {
               }),
             );
             /* Always overwrite the cast slice from disk — including the empty
-               case. A reparse deletes cast.json server-side, and without this
+               case (a read a cast write has overtaken never gets here, #3916).
+               A reparse deletes cast.json server-side, and without this
                the previous run's roster would survive in redux and the
                Analysing view's "Cast so far" pill would start at 24 instead
                of 0 as Phase 0a streams in fresh detections. Through
