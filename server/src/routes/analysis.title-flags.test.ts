@@ -3,7 +3,7 @@
    Same real-workspace harness as analysis.title-source.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -318,16 +318,32 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
   }, 60_000);
 });
 
+/* #3837 -- a same-count reorder made before #3703: four headings, state titles in another
+   order, and the saved sentences remapped as the reorder left them (state chapter 2 holds
+   the parse's fourth piece, 3 the second, 4 the third). */
+const REORDERED_MANUSCRIPT = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Alpha\n\nIt began.\n\n${lineFor(2)}\n\n# Beta\n\nIt began.\n\n${lineFor(3)}\n\n# Gamma\n\nIt began.\n\n${lineFor(4)}\n`;
+const REORDERED_BOOK = [
+  { title: 'Chapter 1', titleSynthesized: true },
+  { title: 'Gamma' },
+  { title: 'Alpha' },
+  { title: 'Beta' },
+];
+const seedReordered = (tag: string) =>
+  seedBook(tag, REORDERED_MANUSCRIPT, REORDERED_BOOK, (i) => lineFor([1, 4, 2, 3][i]!));
+/* A distinct evidence line (>= 24 chars) for chapter `c`, item `k`. */
+const ownLine = (c: number, k: number) =>
+  `Line ${'abcdefghijklmnop'[k]} of the ${['lead', 'first', 'second'][c]} chapter sits right here.`;
+
 describe.each(['main', 'subset'] as const)(
   '#3829 — a %s analysis start is refused on a book whose chapter hints are out of sync with state.json',
   (kind) => {
   /* Both phases get the stub analyzer, so a start that is NOT refused never reaches Ollama. */
-  const start = (app: express.Express, manuscriptId: string) => {
+  const start = (app: express.Express, manuscriptId: string, body: Record<string, unknown> = {}) => {
     const g = globalThis as Record<string, unknown>;
     g.__analyzer_device_test_phase0_selection = phase1Selection();
     g.__analyzer_device_test_phase1_selection = phase1Selection();
     return kind === 'main'
-      ? request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({})
+      ? request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send(body)
       : request(app).post(`/api/manuscripts/${manuscriptId}/analysis/chapters`).send({ chapterIds: [1] });
   };
   const analysisApp = async () => {
@@ -387,22 +403,154 @@ describe.each(['main', 'subset'] as const)(
     expect(res.status).toBe(200);
   }, 60_000);
 
-  it('KNOWN GAP (#3837): a same-count reorder from before #3703 is still analysed', async () => {
-    // Same ids and count as the parse, headings in a different order. Analysis refuses on the
-    // count/id check only; the title arm is deliberately not used (design owed in #3837), so this starts, as on main.
-    const ms = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Alpha\n\nIt began.\n\n${lineFor(2)}\n\n# Beta\n\nIt began.\n\n${lineFor(3)}\n\n# Gamma\n\nIt began.\n\n${lineFor(4)}\n`;
-    const { manuscriptId } = await seedBook(`gap-${kind}`, ms, [
-      { title: 'Chapter 1', titleSynthesized: true },
-      { title: 'Gamma' },
-      { title: 'Alpha' },
-      { title: 'Beta' },
-    ]);
+  it('a same-count reorder from before #3703 is refused on an analysed book', async () => {
+    // Same ids and count as the parse, headings in a different order; the saved sentences
+    // were remapped as the reorder left them, so state chapter 2 holds what the parse has fourth.
+    const { manuscriptId, bookDir } = await seedReordered(`reorder-${kind}`);
     const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
     removeManuscript(manuscriptId);
     expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const before = readFileSync(statePath);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+    expect(readFileSync(statePath).equals(before)).toBe(true);
+    expect(existsSync(join(bookDir, '.audiobook', 'manuscript-hints.json'))).toBe(false);
+  }, 60_000);
+
+  it.runIf(kind === 'main')('Start fresh on the same reordered book is not refused (count/id only)', async () => {
+    const { manuscriptId } = await seedReordered(`reorder-fresh-${kind}`);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId, { fresh: true });
+    expect(res.body?.code).not.toBe('hints_out_of_sync');
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('a reordered book whose saved sentences are all under 24 characters still starts (no evidence)', async () => {
+    const short = (n: number) => ['Rain fell.', 'Snow fell.', 'Wind blew.', 'Fog came.'][n - 1]!;
+    const ms = `# Book\n\nIt began.\n\n${short(1)}\n\n# Alpha\n\nIt began.\n\n${short(2)}\n\n# Beta\n\nIt began.\n\n${short(3)}\n\n# Gamma\n\nIt began.\n\n${short(4)}\n`;
+    const { manuscriptId } = await seedBook(`short-${kind}`, ms, REORDERED_BOOK, (i) => short([1, 4, 2, 3][i]!));
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
     const res = await start(await analysisApp(), manuscriptId);
     expect(res.status).toBe(200);
   }, 60_000);
+
+  it('a paused book (evidence in chapter 1 only) with drifted titles in chapters 2-3 starts', async () => {
+    const ms = `# Alpha\n\nIt began.\n\n${lineFor(1)}\n\n# Beta\n\nIt began.\n\n# Gamma\n\nIt began.\n`;
+    const { manuscriptId } = await seedBook(
+      `paused-${kind}`,
+      ms,
+      [{ title: 'Alpha' }, { title: 'Old Beta' }, { title: 'Old Gamma' }],
+      (i) => (i === 0 ? lineFor(1) : []),
+    );
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('the PR #3835 epigraph swap is refused', async () => {
+    const epigraph = '"All rivers run to the sea, yet the sea is not full."';
+    const ms = `# Epigraph\n\n${epigraph}\n\n# Chapter 1\n\n${ownLine(1, 0)}\n\n${ownLine(1, 1)}\n\n# Chapter 2\n\n${ownLine(2, 0)}\n\n${ownLine(2, 1)}\n`;
+    const { manuscriptId } = await seedBook(
+      `epigraph-${kind}`,
+      ms,
+      [{ title: 'Chapter 1' }, { title: 'Epigraph' }, { title: 'Chapter 2' }],
+      (i) => [[ownLine(1, 0), ownLine(1, 1)], [epigraph], [ownLine(2, 0), ownLine(2, 1)]][i]!,
+    );
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+  }, 60_000);
+
+  it('the lead section swapped with "Chapter 2" is refused', async () => {
+    const ms = `# Book\n\n${ownLine(0, 0)}\n\n${ownLine(0, 1)}\n\n# Chapter 1\n\n${ownLine(1, 0)}\n\n${ownLine(1, 1)}\n\n# Chapter 2\n\n${ownLine(2, 0)}\n\n${ownLine(2, 1)}\n`;
+    const { manuscriptId } = await seedBook(
+      `lead-swap-${kind}`,
+      ms,
+      [{ title: 'Chapter 2' }, { title: 'Chapter 1' }, { title: 'Chapter 3', titleSynthesized: true }],
+      (i) => [2, 1, 0].map((c) => [ownLine(c, 0), ownLine(c, 1)])[i]!,
+    );
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.parseTitles).toEqual([null, 'Chapter 1', 'Chapter 2']);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+  }, 60_000);
+
+  it('a renamed "Chapter N" heading on an evidence chapter starts', async () => {
+    const ms = `# Chapter 1\n\n${ownLine(1, 0)}\n\n${ownLine(1, 1)}\n\n# Chapter Two: The Crossing\n\n${ownLine(2, 0)}\n\n${ownLine(2, 1)}\n`;
+    const { manuscriptId } = await seedBook(
+      `renamed-${kind}`,
+      ms,
+      [{ title: 'Chapter 1' }, { title: 'Chapter 2' }],
+      (i) => [ownLine(i + 1, 0), ownLine(i + 1, 1)],
+    );
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(200);
+  }, 60_000);
+
+  it('a merge-then-split boundary shift that moved 3 evidence lines into the next chapter is refused', async () => {
+    const own1 = Array.from({ length: 12 }, (_, k) => ownLine(1, k));
+    const own2 = Array.from({ length: 5 }, (_, k) => ownLine(2, k));
+    const moved = [0, 1, 2].map((k) => `A displaced line, number ${['one', 'two', 'three'][k]}, now sits later.`);
+    const ms = `# Alpha\n\n${own1.join('\n\n')}\n\n# Beta\n\n${[...moved, ...own2].join('\n\n')}\n`;
+    const { manuscriptId } = await seedBook(
+      `shift-${kind}`,
+      ms,
+      [{ title: 'Alpha' }, { title: 'Beta' }],
+      (i) => (i === 0 ? [...own1, ...moved] : own2),
+    );
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    const res = await start(await analysisApp(), manuscriptId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+  }, 60_000);
+
+  describe('fails open where main does', () => {
+    it("a state.json whose manuscriptId changed after hydrate is not refused", async () => {
+      const { manuscriptId, bookDir } = await seedReordered(`foreign-${kind}`);
+      const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(manuscriptId);
+      expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+      const statePath = join(bookDir, '.audiobook', 'state.json');
+      const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      writeFileSync(statePath, JSON.stringify({ ...state, manuscriptId: `${manuscriptId}_other` }));
+      const res = await start(await analysisApp(), manuscriptId);
+      expect(res.body?.code).not.toBe('hints_out_of_sync');
+    }, 60_000);
+
+    it('an edits path that is a directory (EISDIR) is not refused', async () => {
+      const { manuscriptId, bookDir } = await seedReordered(`eisdir-${kind}`);
+      const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+      rmSync(editsPath);
+      mkdirSync(editsPath);
+      const { removeManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(manuscriptId);
+      const res = await start(await analysisApp(), manuscriptId);
+      expect(res.body?.code).not.toBe('hints_out_of_sync');
+    }, 60_000);
+
+    it('a record with a bookId but no bookDir is not refused', async () => {
+      const { manuscriptId } = await seedReordered(`no-dir-${kind}`);
+      const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(manuscriptId);
+      const rec = (await getOrHydrateManuscript(manuscriptId))!;
+      expect(rec.bookId).toBeTruthy();
+      rec.bookDir = undefined;
+      const res = await start(await analysisApp(), manuscriptId);
+      expect(res.body?.code).not.toBe('hints_out_of_sync');
+    }, 60_000);
+  });
 
   it('does not refuse an unflagged (pre-#3628) fresh import with an untitled lead section before "Chapter 1"', async () => {
     const ms = `# Book\n\nIt began.\n\n${lineFor(1)}\n\n# Chapter 1\n\nIt began.\n\n${lineFor(2)}\n\n# Chapter 2\n\nIt began.\n\n${lineFor(3)}\n`;

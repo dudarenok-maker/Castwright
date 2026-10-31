@@ -7,15 +7,50 @@
 
    Like scan-import-folder.test.ts, this writes into the workspace the test
    process loaded (paths.ts captures WORKSPACE_DIR at module load), with a
-   unique title per case and cleanup after. */
+   unique title per case and cleanup after.
+
+   The last case drives an analysis Start through the start seam (Task 5), so
+   the analyzer is stubbed as in analysis.title-flags.test.ts: a Start that is
+   not refused never reaches a real model. */
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
 import { ZipFile } from 'yazl';
 import { importPortableBundle } from './scan-import-folder.js';
 import { BOOKS_ROOT, manuscriptEditsJsonPath, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
+import type { Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
+
+vi.mock('../routes/ollama-health.js', () => ({
+  detectOllamaDevice: vi.fn(async () => 'cuda'),
+  unloadResidentOllama: vi.fn(async () => {}),
+}));
+vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
+  setLastKnownAnalyzerDevice: vi.fn(),
+}));
+vi.mock('../analyzer/select-analyzer.js', async () => {
+  const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
+    '../analyzer/select-analyzer.js',
+  );
+  return {
+    ...actual,
+    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1' }) => {
+      const g = globalThis as Record<string, unknown>;
+      if (g.__overwrite_marker_test_selection) return g.__overwrite_marker_test_selection;
+      return actual.selectAnalyzerForPhase(opts as Parameters<typeof actual.selectAnalyzerForPhase>[0]);
+    },
+    isPerPhaseModelSelectionActive: () => false,
+  };
+});
+
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>).__overwrite_marker_test_selection;
+});
 
 function fixtureState(title: string, extra: Partial<BookStateJson> = {}): BookStateJson {
   return {
@@ -40,7 +75,7 @@ function fixtureState(title: string, extra: Partial<BookStateJson> = {}): BookSt
 }
 
 /** The bundle layout build-portable-book.ts writes, minus cover and audio. */
-function makeBundle(state: BookStateJson): Promise<Buffer> {
+function makeBundle(state: BookStateJson, manuscript = '# Chapter 1\nbody one\n# Chapter 2\nbody two\n'): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const zip = new ZipFile();
     const chunks: Buffer[] = [];
@@ -56,9 +91,26 @@ function makeBundle(state: BookStateJson): Promise<Buffer> {
     };
     zip.addBuffer(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), 'MANIFEST.json');
     zip.addBuffer(Buffer.from(JSON.stringify(state, null, 2), 'utf8'), 'state.json');
-    zip.addBuffer(Buffer.from('# Chapter 1\nbody one\n# Chapter 2\nbody two\n', 'utf8'), state.manuscriptFile);
+    zip.addBuffer(Buffer.from(manuscript, 'utf8'), state.manuscriptFile);
     zip.end();
   });
+}
+
+function stubSelection(): AnalyzerSelection {
+  const analyzer: Analyzer = {
+    runStage1: () => Promise.reject(new Error('not used')),
+    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+      return { characters: [] } as unknown as Stage1ChapterOutput;
+    },
+    async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+      return { sentences: [] };
+    },
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.resolve(null),
+  };
+  return { analyzer, engine: 'gemini', model: 'stub-model', fallbackModel: null, fallbackEngine: null };
 }
 
 const targetDirFor = (state: BookStateJson, title?: string): string =>
@@ -214,6 +266,58 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it('after a stamped (structure-changing) overwrite and a restart, Start is not refused with hints_out_of_sync', async () => {
+    /* The local edits hold each line under the OTHER chapter: evidence the start seam's
+       sentence check would refuse on score. The overwrite changes the chapter list (the
+       target's chapter 2 was retitled), so it stamps the marker, and the seam uses
+       main's count/id rule instead. */
+    const line = (w: string) => `"${w} is the word," she said, and nothing more.`;
+    const state: BookStateJson = {
+      ...fixtureState('Marker Overwrite Start'),
+      manuscriptFile: 'manuscript.md',
+      language: 'en',
+      chapters: [
+        { id: 1, title: 'Alpha', slug: '01-alpha' },
+        { id: 2, title: 'Beta', slug: '02-beta' },
+      ],
+    };
+    const bundle = await makeBundle(state, `# Alpha\n\n${line('Amber')}\n\n# Beta\n\n${line('Cobalt')}\n`);
+    const target = targetDirFor(state);
+    rmSync(target, { recursive: true, force: true });
+    try {
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const live = readState(target);
+      live.chapters[1]!.title = 'Beta (renamed)';
+      writeFileSync(stateJsonPath(target), JSON.stringify(live), 'utf8');
+      writeFileSync(
+        manuscriptEditsJsonPath(target),
+        JSON.stringify({
+          sentences: [
+            { id: 1, chapterId: 1, characterId: 'nova', text: line('Cobalt') },
+            { id: 1, chapterId: 2, characterId: 'nova', text: line('Amber') },
+          ],
+        }),
+        'utf8',
+      );
+      await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      expect(readState(target).sentencesPredateChapters).toBe(true);
+
+      const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+      removeManuscript(state.manuscriptId); // a restart
+      expect((await getOrHydrateManuscript(state.manuscriptId))!.hintsSource).toBe('parse');
+      (globalThis as Record<string, unknown>).__overwrite_marker_test_selection = stubSelection();
+      const { analysisRouter } = await import('../routes/analysis.js');
+      const app = express();
+      app.use(express.json());
+      app.use('/api/manuscripts', analysisRouter);
+      const res = await request(app).post(`/api/manuscripts/${state.manuscriptId}/analysis`).send({});
+      expect(res.body?.code).not.toBe('hints_out_of_sync');
+      expect(res.status).toBe(200);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   describe("a marker carried in the bundle's own state.json is stripped (only the stamp decides)", () => {
     const carried = (title: string) => fixtureState(title, { sentencesPredateChapters: true });

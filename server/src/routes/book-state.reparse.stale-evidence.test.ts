@@ -11,8 +11,13 @@
    - clear (M25): a main analysis persist clears it; a subset persist and an
      attribution_drift main run leave it set.
    - a stale client's PUT /state slice save keeps it.
-   - re-parse -> restart -> Start / merge answer 200, as main does today (the
-     seams do not read the marker until Tasks 4-5).
+   - re-parse -> restart -> Start / merge answer 200, as main does: with the
+     marker set the seams use main's rule (M24: ignoring it refuses the
+     old-keyed evidence on score, the 409 loop re-parse cannot escape).
+   - once a main run has cleared it, a hand-made reorder is refused at Start
+     (M25).
+   - re-parse -> exclude -> Start -> Start (M26): the restructure clears the
+     analysis cache instead of re-seeding the old-keyed takes.
 
    Analyzer harness copied from analysis.title-flags.test.ts. */
 
@@ -281,7 +286,7 @@ describe('plan 290 — set (M23)', () => {
   }, 60_000);
 });
 
-describe('plan 290 — the seams after re-parse + restart (asserted against today\'s seams)', () => {
+describe('plan 290 — the seams after re-parse + restart (the marker keeps main\'s rule)', () => {
   it('re-parse -> restart -> Start answers 200', async () => {
     const { manuscriptId, bookId, bookDir } = await seedMergedBook('start');
     await reparse(bookId);
@@ -323,6 +328,39 @@ describe('plan 290 — clear (M25)', () => {
     expect(after).not.toHaveProperty('sentencesPredateChapters');
   }, 60_000);
 
+  it('after a main run clears it, a hand-made reorder of two analysed chapters is refused at Start', async () => {
+    const { manuscriptId, bookId, bookDir } = await seedMergedBook('clear-then-reorder');
+    await reparse(bookId);
+    await runAnalysis(manuscriptId, 'main');
+    /* The main persist ran (the clear itself is pinned by the test above); the Start below
+       is what this case asserts, so a marker left set (M25) answers 200 there. */
+    expect(readState(bookDir).analysisProvenance?.scope).toBe('book');
+    /* A reorder made before #3703: Alpha and Beta swapped in state.json, their saved
+       sentences remapped with them, and no hints file. */
+    const state = readState(bookDir);
+    const [c1, c2, c3, c4] = state.chapters;
+    writeFileSync(
+      statePath(bookDir),
+      JSON.stringify({ ...state, chapters: [c1, { ...c3, id: 2 }, { ...c2, id: 3 }, c4] }),
+    );
+    const edits = JSON.parse(readFileSync(editsPath(bookDir), 'utf8')) as { sentences: Array<{ chapterId: number }> };
+    const swap: Record<number, number> = { 2: 3, 3: 2 };
+    writeFileSync(
+      editsPath(bookDir),
+      JSON.stringify({ ...edits, sentences: edits.sentences.map((x) => ({ ...x, chapterId: swap[x.chapterId] ?? x.chapterId })) }),
+    );
+    rmSync(join(bookDir, '.audiobook', 'manuscript-hints.json'), { force: true });
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId); // a restart
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const g = globalThis as Record<string, unknown>;
+    g.__analyzer_device_test_phase0_selection = phase1Selection();
+    g.__analyzer_device_test_phase1_selection = phase1Selection();
+    const res = await request(await appWith()).post(`/api/manuscripts/${manuscriptId}/analysis`).send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('hints_out_of_sync');
+  }, 60_000);
+
   it('a subset analysis persist leaves the marker set', async () => {
     const { manuscriptId, bookId, bookDir } = await seedMergedBook('clear-subset');
     await reparse(bookId);
@@ -362,6 +400,49 @@ describe('plan 290 — clear (M25)', () => {
     /* No persist landed on state.json: no provenance was stamped. */
     expect(after.analysisProvenance).toBeUndefined();
     expect(after.sentencesPredateChapters).toBe(true);
+  }, 60_000);
+});
+
+describe('plan 290 — re-parse -> exclude -> Start -> Start (M26)', () => {
+  it('the exclude clears the cache, Start #1 attributes every chapter and clears the marker, Start #2 is not refused', async () => {
+    const { manuscriptId, bookId, bookDir } = await seedMergedBook('exclude-start');
+    await reparse(bookId);
+    expect(readState(bookDir).sentencesPredateChapters).toBe(true);
+    const app = await appWith();
+    const exclude = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [4], excluded: true });
+    expect(exclude.status).toBe(200);
+    const { cachePath } = await import('../store/analysis-cache.js');
+    expect(existsSync(cachePath(manuscriptId))).toBe(false);
+
+    const attributed: number[] = [];
+    const counting: Stage2 = (chapterId) => {
+      attributed.push(chapterId);
+      return honestStage2(chapterId);
+    };
+    const startOnce = () => {
+      const g = globalThis as Record<string, unknown>;
+      g.__analyzer_device_test_phase0_selection = phase1Selection(counting);
+      g.__analyzer_device_test_phase1_selection = phase1Selection(counting);
+      return request(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({});
+    };
+    const first = await startOnce();
+    expect(first.status).toBe(200);
+    /* Every non-excluded chapter was attributed: none was replayed from a re-seeded take. */
+    expect([...new Set(attributed)].sort()).toEqual([1, 2, 3]);
+    const after = readState(bookDir);
+    expect(after.analysisProvenance?.scope).toBe('book');
+    expect(after).not.toHaveProperty('sentencesPredateChapters');
+
+    /* A restart, so Start #2 judges a fresh-parse record (re-parse put one with no
+       hintsSource, which the seam never checks). */
+    const { removeManuscript, getOrHydrateManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId);
+    expect((await getOrHydrateManuscript(manuscriptId))!.hintsSource).toBe('parse');
+    const second = await startOnce();
+    expect(second.body?.code).not.toBe('hints_out_of_sync');
+    expect(second.status).toBe(200);
   }, 60_000);
 });
 

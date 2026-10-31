@@ -8,6 +8,7 @@ import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
+import type { ManuscriptRecord } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';
@@ -166,7 +167,9 @@ import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import { mintEditEpoch } from '../workspace/slice-revision.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
-import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, BookStateUnreadableError, peekBook } from '../workspace/book-op-lock.js';
+import { checkParseHintsPairing } from '../workspace/hints-proof.js';
+import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import { assertHintsPairWithState, HintsOutOfSyncError } from '../workspace/restructure.js';
 import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
@@ -3966,33 +3969,92 @@ function releaseBusyAndPin(job: AnalysisJob): void {
   }
 }
 
-/** #3829 -- a START on a book whose hints came from a fresh parse that no longer pairs one-to-one
-    with state.json (a different chapter count or an id state lacks) would rebuild `state.chapters` from the parse: chapters reappear, a uuid lands on
+type StartHintsVerdict =
+  | {
+      kind: 'proceed';
+      why: 'not-parse' | 'not-on-disk' | 'book-gone' | 'state-unreadable' | 'foreign-state' | 'fresh' | 'main-rule' | 'checked';
+    }
+  | { kind: 'refuse'; why: 'count-id' | 'score' | 'displaced-block' };
+
+/** #3829 / #3837 -- a START on a book whose hints came from a fresh parse that does not pair with
+    state.json would rebuild `state.chapters` from the wrong bodies: chapters reappear, a uuid lands on
     another chapter and rendered audio is orphaned. Answered before the SSE headers open, with the 409
-    the restructure routes use. Fail-open on an unreadable or foreign state.json, like the `loadState`
-    read in the runners. Persisted hints are not checked here: they carry their own staleness check.
-    A count/id mismatch has two causes: (a) a merge made before #3703 persisted its hints, and (b) a
-    chapter-splitting parser change after import (a4ba11aa, non-English plaintext; 532654fe, CJK
-    plaintext), which makes today's parse split the book differently. Both are refused. Accepted cost:
-    an affected book with no rendered audio needs a re-parse, which discards its cast (analysis used
-    to re-split such a book itself).
-    The count/id check ONLY: `parseTitles` is deliberately not passed. Its title arm cannot tell a
-    same-count reorder from title drift without refusing never-restructured books, so a same-count
-    reorder from before #3703 is still analysed, as on main (design owed in #3837). */
-async function hintsOutOfSyncRefusal(
+    the restructure routes use; the `why` goes only to the log. Persisted hints are not checked here:
+    they carry their own staleness check.
+    1. Count/id (`assertHintsPairWithState`, no `parseTitles`). A mismatch has two causes: (a) a merge
+       made before #3703 persisted its hints, and (b) a chapter-splitting parser change after import
+       (a4ba11aa, non-English plaintext; 532654fe, CJK plaintext). Both are refused. Accepted cost: an
+       affected book with no rendered audio needs a re-parse, which discards its cast.
+    2. Start fresh stops there (plan 290 round 6): a book the sentence check wrongly refuses can still
+       be re-analysed without a destructive re-parse.
+    3. Otherwise the saved sentences judge the pairing (`checkParseHintsPairing`, evidence-less
+       positions on count/id alone), which catches a same-count reorder made before #3703, the PR #3835
+       swaps and a displaced block. It runs only when its pairing by index is the one analysis uses:
+       a pure record (an impure one, hints a restructure transformed without persisting, is never
+       re-hydrated -- A1), ids 1..n in order on both sides, readable edits, and no stale-evidence
+       marker. Else main's count/id rule stands.
+    One lock-free, write-free span: the book is read through `peekBook`, like the `loadState` read in
+    the runners, and an unreadable, foreign or vanished state.json fails open. */
+async function parseHintsStartCheck(
   manuscriptId: string,
-  record: { bookDir?: string | null; hintsSource?: 'persisted' | 'parse'; chapterHints: Parameters<typeof assertHintsPairWithState>[1] },
-): Promise<{ error: string; code: string } | null> {
-  if (record.hintsSource !== 'parse' || !record.bookDir) return null;
-  const state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
-  if (!state || state.manuscriptId !== manuscriptId) return null;
+  record: ManuscriptRecord,
+  opts: { fresh: boolean },
+): Promise<StartHintsVerdict> {
+  if (record.hintsSource !== 'parse') return { kind: 'proceed', why: 'not-parse' };
+  if (!record.bookDir) return { kind: 'proceed', why: 'not-on-disk' };
+  let bookDir = record.bookDir;
+  let state: BookStateJson | null;
+  if (record.bookId) {
+    let peeked: Awaited<ReturnType<typeof peekBook>>;
+    try {
+      peeked = await peekBook(record.bookId, record.bookDir);
+    } catch (e) {
+      if (e instanceof BookStateUnreadableError) return { kind: 'proceed', why: 'state-unreadable' };
+      throw e;
+    }
+    /* The route's later `runBookJob` answers BOOK_GONE, as today. */
+    if (!peeked) return { kind: 'proceed', why: 'book-gone' };
+    ({ bookDir, state } = peeked);
+  } else {
+    // A legacy state.json with no bookId: read it in place, as before.
+    state = await readStateJsonWithRecovery(stateJsonPath(record.bookDir)).catch(() => null);
+    if (!state) return { kind: 'proceed', why: 'state-unreadable' };
+  }
+  if (state.manuscriptId !== manuscriptId) return { kind: 'proceed', why: 'foreign-state' };
   try {
     assertHintsPairWithState(state, record.chapterHints);
   } catch (e) {
-    if (e instanceof HintsOutOfSyncError) return { error: e.message, code: e.code };
+    if (e instanceof HintsOutOfSyncError) return { kind: 'refuse', why: 'count-id' };
     throw e;
   }
-  return null;
+  if (opts.fresh) return { kind: 'proceed', why: 'fresh' };
+  const { chapterHints, parseTitles } = record;
+  const pure =
+    parseTitles !== undefined &&
+    chapterHints.length === parseTitles.length &&
+    chapterHints.every((h, i) => h.parseIndex === i);
+  const positional =
+    state.chapters.every((c, i) => c.id === i + 1) && chapterHints.every((h, i) => h.id === i + 1);
+  const edits = pure && positional && state.sentencesPredateChapters !== true ? await readEditsForHintsCheck(bookDir) : null;
+  if (!edits || (edits.kind !== 'ok' && edits.kind !== 'absent')) {
+    if (edits?.kind === 'unreadable') {
+      console.warn(`[analysis] ${JSON.stringify(manuscriptId)}: manuscript-edits.json unreadable for the hints check`, edits.error);
+    }
+    console.log(
+      `[analysis] hints check not run manuscript=${JSON.stringify(manuscriptId)} ` +
+        `pure=${pure} positional=${positional} marker=${state.sentencesPredateChapters === true} edits=${edits?.kind ?? 'unread'}`,
+    );
+    return { kind: 'proceed', why: 'main-rule' };
+  }
+  const result = checkParseHintsPairing({
+    stateChapters: state.chapters,
+    sentences: edits.kind === 'ok' ? sentencesOf(edits.value) : [],
+    parse: chapterHints.map((h, i) => ({ title: parseTitles![i] ?? null, body: h.body })),
+    evidenceLess: 'count-id',
+  });
+  if (result.paired) return { kind: 'proceed', why: 'checked' };
+  console.warn(`[analysis] ${JSON.stringify(manuscriptId)}: parse-fallback hints do not pair with state`, result);
+  return { kind: 'refuse', why: result.reason === 'displaced-block' ? 'displaced-block' : 'score' };
 }
 
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
@@ -4063,10 +4125,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     const live = inFlightAnalysisByManuscript.get(manuscriptId);
     if (!(live && !live.controller.signal.aborted && !requestedFresh)) {
       const rec = await getOrHydrateManuscript(manuscriptId);
-      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
-      if (refusal) {
-        console.log(`[analysis] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
-        return res.status(409).json(refusal);
+      const verdict = rec ? await parseHintsStartCheck(manuscriptId, rec, { fresh: requestedFresh }) : null;
+      if (verdict?.kind === 'refuse') {
+        console.log(`[analysis] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)} why=${verdict.why}`);
+        const e = new HintsOutOfSyncError();
+        return res.status(409).json({ error: e.message, code: e.code });
       }
     }
   }
@@ -7888,10 +7951,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     const live = inFlightSubsetByManuscript.get(manuscriptId);
     if (!(live && !live.controller.signal.aborted)) {
       const rec = await getOrHydrateManuscript(manuscriptId);
-      const refusal = rec ? await hintsOutOfSyncRefusal(manuscriptId, rec) : null;
-      if (refusal) {
-        console.log(`[analysis-subset] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)}`);
-        return res.status(409).json(refusal);
+      const verdict = rec ? await parseHintsStartCheck(manuscriptId, rec, { fresh: false }) : null;
+      if (verdict?.kind === 'refuse') {
+        console.log(`[analysis-subset] refused hints_out_of_sync manuscript=${JSON.stringify(manuscriptId)} why=${verdict.why}`);
+        const e = new HintsOutOfSyncError();
+        return res.status(409).json({ error: e.message, code: e.code });
       }
     }
   }
