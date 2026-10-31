@@ -60,38 +60,13 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
-import { collectSourceFiles } from '../test-utils/guard-scan.js';
+import { blankOutOpaque, collectSourceFiles } from '../test-utils/guard-scan.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_SRC = join(HERE, '..');
 const REPO = join(SERVER_SRC, '..', '..');
 
 const CALLS = ['buildCastResolver(', 'isAudioCurrent('];
-
-/** Replace every line comment, block comment and string literal with spaces of
- *  the same length, so indices stay stable and quoted code never matches. */
-export function blankOutOpaque(src: string): string {
-  const out = src.split('');
-  let i = 0;
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== '\n') out[k] = ' ';
-  };
-  while (i < src.length) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') { const end = src.indexOf('\n', i); const stop = end < 0 ? src.length : end; blank(i, stop); i = stop; continue; }
-    if (two === '/*') { const end = src.indexOf('*/', i + 2); const stop = end < 0 ? src.length : end + 2; blank(i, stop); i = stop; continue; }
-    const c = src[i];
-    if (c === '"' || c === "'" || c === '`') {
-      let k = i + 1;
-      while (k < src.length && src[k] !== c) { if (src[k] === '\\') k += 1; k += 1; }
-      blank(i, Math.min(k + 1, src.length));
-      i = k + 1;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join('');
-}
 
 /** True when the call starting at `callIndex` passes an object LITERAL as its
  *  history argument (the second top-level argument for `buildCastResolver`, the

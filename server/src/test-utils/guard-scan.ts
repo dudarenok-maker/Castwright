@@ -15,16 +15,15 @@
  *     Built on the TypeScript parser; the block header below records why the
  *     hand-rolled walker it replaced was removed.
  *   - Token-skipping family (`skipOpaqueToken`, `computeTokenOpaqueRanges`,
- *     `isOpaqueInTokenRanges`, `opaqueRangeAt`): state-language and
- *     state-fixture-language. A quote-to-quote walker that does NOT understand
- *     regex literals or nested templates; kept as-is because migrating those
- *     two guards would change what they detect.
- *   - File collector only: state-lock, and
- *     `server/src/store/cast-history-threading.guard.test.ts` (`collectSourceFiles`).
- *     Neither uses a shared tokenizer; cast-history-threading carries its own
- *     comment/string blanker (`blankOutOpaque`), which
- *     `routes/generation-cast-history-seq.guard.test.ts` copies - deliberately
- *     not shared, so neither guard's matching changes.
+ *     `isOpaqueInTokenRanges`, `opaqueRangeAt`, `blankOutOpaque`):
+ *     state-language, state-fixture-language,
+ *     `server/src/store/cast-history-threading.guard.test.ts` and
+ *     `server/src/routes/generation-cast-history-seq.guard.test.ts` (the last
+ *     two use `blankOutOpaque`). A quote-to-quote walker that does NOT
+ *     understand regex literals or nested templates; kept as-is because
+ *     migrating those guards would change what they detect.
+ *   - File collector only: state-lock, and cast-history-threading
+ *     (`collectSourceFiles`, alongside its token-family use above).
  *
  * This is a non-test file under `server/src/**`, so every tree-scanning guard
  * scans it too. It therefore contains no write-primitive text outside a
@@ -340,6 +339,17 @@ export function computeTokenOpaqueRanges(content: string): Array<{ start: number
     i++;
   }
   return ranges;
+}
+
+/** `src` with every string/template/comment span (per `skipOpaqueToken`)
+    replaced by spaces, newlines kept, so indices and line numbers stay stable
+    and quoted/commented code never matches. */
+export function blankOutOpaque(src: string): string {
+  const out = src.split('');
+  for (const { start, end } of computeTokenOpaqueRanges(src)) {
+    for (let k = start; k < end && k < out.length; k++) if (out[k] !== '\n') out[k] = ' ';
+  }
+  return out.join('');
 }
 
 /** The range of `ranges` containing `index`, if any. */

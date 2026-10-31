@@ -36,10 +36,8 @@
      here. That is the safe direction for a guard to be wrong in: a rename
      needs this guard's `castHistorySeq:` check literal updated by hand
      alongside it, never silently.
-   - Comment/string text is stripped before matching (`blankOutOpaque`,
-     copied from `cast-history-threading.guard.test.ts` rather than imported
-     from it, so this guard does not couple to another guard file), so a call
-     quoted inside a doc comment neither fires nor masks a real one.
+   - Comment/string text is stripped before matching (`blankOutOpaque`, the shared token-family blanker in
+     `test-utils/guard-scan.ts`), so a call quoted inside a doc comment neither fires nor masks a real one.
    - FAIL-OPEN GUARD: `extractRouteHandlerBody` THROWS (never returns an
      empty/null slice) when the route registration string isn't found — a
      renamed route or moved file must redden this suite, not pass on zero
@@ -51,52 +49,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { blankOutOpaque } from '../test-utils/guard-scan.js';
 
 const GENERATION_TS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'generation.ts');
 const SRC = readFileSync(GENERATION_TS_PATH, 'utf8');
 const ROUTE = '/:bookId/generation';
-
-/** Copied from `cast-history-threading.guard.test.ts`'s `blankOutOpaque`
- *  (a guard file does not import another guard file's helpers). Replaces every
- *  line comment, block comment and string literal with spaces of the same
- *  length, so indices stay stable and quoted/commented code never matches. */
-export function blankOutOpaque(src: string): string {
-  const out = src.split('');
-  let i = 0;
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== '\n') out[k] = ' ';
-  };
-  while (i < src.length) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') {
-      const end = src.indexOf('\n', i);
-      const stop = end < 0 ? src.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (two === '/*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end < 0 ? src.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    const c = src[i];
-    if (c === '"' || c === "'" || c === '`') {
-      let k = i + 1;
-      while (k < src.length && src[k] !== c) {
-        if (src[k] === '\\') k += 1;
-        k += 1;
-      }
-      blank(i, Math.min(k + 1, src.length));
-      i = k + 1;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join('');
-}
 
 /** The full-render POST handler's source, from its
  *  `generationRouter.post('<routeLiteral>',` registration up to (but not
