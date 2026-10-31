@@ -29,6 +29,7 @@ import { ModelControlPill, type ModelControlState } from '../components/ModelCon
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
 import { FailureFixList } from '../components/failure-fix-list';
+import { BOOK_READ_TIMEOUT_MS, within } from '../components/layout';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
@@ -912,8 +913,11 @@ export function AnalysingView({
        key) never arms castIncomplete, even if the mount read was cancelled
        before it answered. */
     const isMountRead = bookStateRefreshKey === 0;
-    api
-      .getBookState(bookId)
+    /* #3967 — bounded and aborted like Layout's hydrate: cleanup (unmount or a
+       refresh) aborts the read, and one that never answers is given up on. */
+    const ctrl = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort())
       .then((res) => {
         if (cancelled || res === null) return;
         const titles: Record<number, string> = {};
@@ -980,10 +984,15 @@ export function AnalysingView({
         });
       })
       .catch((err) => {
+        /* An abort from cleanup is a silent cancel; a timeout still warns. */
+        if (err?.name === 'AbortError' || cancelled) return;
         console.warn('[analysing] failed-chapter hydrate skipped:', err.message);
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+      timers.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, bookStateRefreshKey]);
