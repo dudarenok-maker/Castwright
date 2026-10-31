@@ -909,7 +909,7 @@ test(
     // Any OTHER empty result (empty rows, unparseable output, a permanent
     // failure — the pass-1 date bug lands here as 'empty Win32_Process result
     // after retry') still fails.
-    const isTimeout = (s) => s.length === 0 && /timed out/.test(String(s.snapshotError));
+    const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
     let snapshot = collectProcessSnapshot();
     if (isTimeout(snapshot)) {
       const CONTROL_FAST_MS = 5000;
