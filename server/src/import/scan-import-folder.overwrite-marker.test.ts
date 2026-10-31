@@ -58,6 +58,7 @@ function fixtureState(title: string, extra: Partial<BookStateJson> = {}): BookSt
     bookId: `demo__standalones__${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
     manuscriptId: `mns_${title.toLowerCase().replace(/[^a-z0-9]+/g, '')}`,
     title,
+    language: 'en',
     author: 'Demo Author',
     series: 'Standalones',
     seriesPosition: null,
