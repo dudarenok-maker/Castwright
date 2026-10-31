@@ -18,6 +18,7 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { revisionsActions } from '../store/revisions-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
@@ -115,6 +116,24 @@ export function RestructureView({ bookId }: Props) {
             characterIdAliases: fresh.characterIdAliases,
           }),
         );
+      }
+      /* #3967 — the re-read expired or came back empty, but the response above
+         already carries the new chapter list. Leaving the pre-restructure list on
+         screen would keep the same selection armed, and a second click would send
+         those ids again and swallow the next chapter. Adopt the response's list
+         (audio on disk is what `audioRenderedAt` records) and mark the book so
+         Layout's retrying full read repairs the rest of its state. */
+      if (!fresh && res.chapters && activeBookId(store.getState()) === bookId) {
+        dispatch(
+          chaptersActions.hydrateFromBookState({
+            bookId,
+            /* The response types audioModelKey as a bare string; the slice's is the key union. */
+            chapters: res.chapters as Parameters<typeof chaptersActions.hydrateFromBookState>[0]['chapters'],
+            completedSlugs: res.chapters.filter((c) => c.audioRenderedAt).map((c) => c.slug),
+            characters: store.getState().cast.characters,
+          }),
+        );
+        dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
       }
       /* Same cross-book rule for the remap: it rewrites (and drops unmapped)
          whatever sentences the slice holds, so apply it only while the slice
