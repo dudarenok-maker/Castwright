@@ -47,7 +47,7 @@ import {
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid, forkDeclinedVoiceUuidIfShared } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -638,7 +638,7 @@ async function runDesignJob(
              loop and halt the whole job on the first contended character
              (#3027 follow-up, N1). */
           const voiceUuid = emotion
-            ? character.voiceUuid
+            ? await forkDeclinedVoiceUuidIfShared(job.bookDir, characterId)
             : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
           const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
 
