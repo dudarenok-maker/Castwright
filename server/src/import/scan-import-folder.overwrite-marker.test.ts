@@ -28,6 +28,8 @@ import type { Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schema
 /* PR #3966 review pass 2 -- fails the FIRST rename whose destination is `path`
    with EBUSY (the scan-import-folder.test.ts pattern). A pass-through otherwise. */
 const failRename = vi.hoisted(() => ({ path: null as string | null }));
+/* PR #3966 pass 3 -- fails the FIRST rm of `path` with EBUSY, then passes through. */
+const failRm = vi.hoisted(() => ({ path: null as string | null }));
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
@@ -39,6 +41,13 @@ vi.mock('node:fs/promises', async () => {
       }
       return actual.rename(from, to);
     }) as typeof actual.rename,
+    rm: (async (p: Parameters<typeof actual.rm>[0], o?: Parameters<typeof actual.rm>[1]) => {
+      if (failRm.path !== null && String(p) === failRm.path) {
+        failRm.path = null;
+        throw Object.assign(new Error("EBUSY: injected"), { code: "EBUSY" });
+      }
+      return actual.rm(p, o);
+    }) as typeof actual.rm,
   };
 });
 vi.mock('../routes/ollama-health.js', () => ({
@@ -348,6 +357,7 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
       title: string,
       localState?: (s: BookStateJson) => void,
       failStateRename = false,
+      failCacheRm = false,
     ) {
       const state = fixtureState(title);
       const bundle = await makeBundle(state);
@@ -368,6 +378,7 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
         failRename.path = stateJsonPath(target);
         await expect(importPortableBundle(bundle, { onConflict: 'overwrite' })).rejects.toThrow(/EBUSY/);
       } else {
+        if (failCacheRm) failRm.path = cacheFile;
         await importPortableBundle(bundle, { onConflict: 'overwrite' });
       }
       return { target, cacheFile };
@@ -400,6 +411,24 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
         expect(readState(paths.target).chapters[1]!.title).toBe('Chapter Two (merged)');
         expect(readFileSync(paths.cacheFile, 'utf8')).toBe(CACHE_BYTES);
       } finally {
+        if (paths) {
+          rmSync(paths.target, { recursive: true, force: true });
+          rmSync(paths.cacheFile, { force: true });
+        }
+      }
+    });
+
+    /* PR #3966 pass 3 -- the clear runs after the state.json swap landed, so one
+       transient EBUSY on the cache rm must not fail the import or keep the cache. */
+    it('a structure-changing overwrite whose cache rm fails once with EBUSY still succeeds and clears the cache', async () => {
+      let paths: { target: string; cacheFile: string } | undefined;
+      try {
+        paths = await overwriteWithCache('Marker Overwrite Cache Rm Transient', retitleChapter2, false, true);
+        expect(failRm.path).toBeNull();
+        expect(readState(paths.target).sentencesPredateChapters).toBe(true);
+        expect(existsSync(paths.cacheFile)).toBe(false);
+      } finally {
+        failRm.path = null;
         if (paths) {
           rmSync(paths.target, { recursive: true, force: true });
           rmSync(paths.cacheFile, { force: true });
