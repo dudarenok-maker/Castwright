@@ -324,7 +324,9 @@ function countRawStateWrites(
    routed the listen-progress GET/PUT's uuid reads through it too, taking
    book-state.ts 11 -> 9 -- reads only; #3829 added routes/analysis.ts's start-route
    refusal read of state.json (now `parseHintsStartCheck`'s no-bookId read), 1 -> 2 -- a read, not a write
-   site. Asserted BOTH
+   site; #3992 then joined workspace/voice-uuid-fork.ts with 1 -- the declined
+   link's fresh-voice fork reads the book's own bookId to exclude itself from the
+   shared-uuid holder scan -- a read, not a write site. Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
@@ -351,6 +353,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/series-full-cast-scan.ts': 1,
   'workspace/series-reuse-link.ts': 1,
   'workspace/voice-library-usage.ts': 1,
+  'workspace/voice-uuid-fork.ts': 1,
 };
 const G3_FLOOR_SITES = 35;
 const G3_FLOOR_FILES = 19;
