@@ -73,7 +73,7 @@ export interface ManuscriptRecord {
       can (`workspace/hints-proof.ts`), else by the positional title check
       (`parseTitles`). An analysis Start judges one too (`parseHintsStartCheck`,
       `routes/analysis.ts`): by the saved sentences where it can, positions
-      without any on count/id alone, else (and on Start fresh) by count/id. */
+      that have no saved sentences pass on count/id alone, else (and on Start fresh) by count/id. */
   hintsSource?: 'persisted' | 'parse';
   /** The parser's own chapter titles, by position, for a `parse` record only;
       `null` where the parser made the title up (`Chapter N`), which says nothing
