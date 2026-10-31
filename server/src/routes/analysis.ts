@@ -9354,10 +9354,10 @@ export async function runSubsetAnalyzerJob(
 
     /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
        re-slugged, before anything derives from the fresh ids. Mirrors the main
-       route's same-named block (currently :4678-4701) — the subset path's
+       route's same-named block (the remapFreshToPriorIds call above) — the subset path's
        second (and last) call site from spec §4.4's five-entry list. Runs AFTER
        the reuse-link block above (§11 — keeps the two paths symmetric: the main
-       route's own reuse-link pass, seedReuseGuardsFromPriorCast at :3737, also
+       route's own reuse-link pass, seedReuseGuardsFromPriorCast, also
        runs long before its remap). Roster and sentences move together:
        subsetValidIds (below) is built from the roster, and
        reconcileSentenceCharacterIds would otherwise demote every renamed
