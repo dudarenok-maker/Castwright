@@ -129,6 +129,14 @@ export function RevisionDiffPlayer({
      there never sees playback end (#4002). */
   const playingRef = useRef(ab.playing);
   playingRef.current = ab.playing;
+  /* Same for the segment windows (the audio metadata can land after the toggle)
+     and the hook's callbacks. */
+  const audioARef = useRef(audioA);
+  audioARef.current = audioA;
+  const audioBRef = useRef(audioB);
+  audioBRef.current = audioB;
+  const abRef = useRef(ab);
+  abRef.current = ab;
 
   /* Auto-compare: walk changed segments, playing A then B for each.
      Aborts on stop / unmount / next segment. */
@@ -139,19 +147,19 @@ export function RevisionDiffPlayer({
     (async () => {
       for (const seg of changedSegments) {
         if (cancelled) return;
-        const start = audioA?.segments?.find((s) => s.sentenceId === seg.id)?.start;
-        const end = audioA?.segments?.find((s) => s.sentenceId === seg.id)?.end;
+        const start = audioARef.current?.segments?.find((s) => s.sentenceId === seg.id)?.start;
+        const end = audioARef.current?.segments?.find((s) => s.sentenceId === seg.id)?.end;
         try {
-          await ab.playA({ segmentId: seg.id ?? undefined, start, end });
+          await abRef.current.playA({ segmentId: seg.id ?? undefined, start, end });
         } catch {
           /* ignore */
         }
         await waitForVersionEnd();
         if (cancelled) return;
-        const startB = audioB?.segments?.find((s) => s.sentenceId === seg.id)?.start;
-        const endB = audioB?.segments?.find((s) => s.sentenceId === seg.id)?.end;
+        const startB = audioBRef.current?.segments?.find((s) => s.sentenceId === seg.id)?.start;
+        const endB = audioBRef.current?.segments?.find((s) => s.sentenceId === seg.id)?.end;
         try {
-          await ab.playB({ segmentId: seg.id ?? undefined, start: startB, end: endB });
+          await abRef.current.playB({ segmentId: seg.id ?? undefined, start: startB, end: endB });
         } catch {
           /* ignore */
         }
@@ -176,7 +184,7 @@ export function RevisionDiffPlayer({
     }
     return () => {
       cancelled = true;
-      ab.pause();
+      abRef.current.pause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoCompare]);

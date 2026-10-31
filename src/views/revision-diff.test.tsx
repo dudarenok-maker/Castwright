@@ -312,4 +312,41 @@ describe('RevisionDiffPlayer', () => {
     await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
     await waitFor(() => expect(played.map((p) => p.src)).toEqual(['blob:a', 'blob:b']));
   });
+  it('#4002 — Listen back-to-back seeks each take to its segment even when the metadata lands after the toggle', async () => {
+    const played: Array<{ src: string | null; at: number; el: HTMLMediaElement }> = [];
+    basePlay.mockImplementation(function (this: HTMLMediaElement) {
+      played.push({ src: this.getAttribute('src'), at: this.currentTime, el: this });
+      return Promise.resolve();
+    });
+    const withSegs = (url: string, starts: number[]): ChapterAudio => ({
+      ...audioMeta(url),
+      segments: starts.map((start, i) => ({ sentenceId: i + 1, start, end: start + 1 })),
+    });
+    let resolveA!: (v: ChapterAudio) => void;
+    let resolveB!: (v: ChapterAudio) => void;
+    (api.getChapterAudioPrevious as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<ChapterAudio>((r) => (resolveA = r)),
+    );
+    (api.getChapterAudio as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<ChapterAudio>((r) => (resolveB = r)),
+    );
+    const seg = (id: number) => ({ id, changed: true }) as unknown as Revision['segments'][number];
+    renderPlayer(makeRevision({ segments: [seg(1), seg(2)] }));
+    await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
+    /* Toggle first: the segment windows are not known yet. */
+    fireEvent.click(screen.getByRole('button', { name: /Listen back-to-back/i }));
+    await waitFor(() => expect(played).toHaveLength(1));
+    await act(async () => {
+      resolveA(withSegs('blob:a', [1, 3]));
+      resolveB(withSegs('blob:b', [10, 12]));
+    });
+    await act(async () => { played[0].el.dispatchEvent(new Event('ended')); });
+    await waitFor(() => expect(played).toHaveLength(2));
+    expect(played[1].src).toBe('blob:b');
+    expect(played[1].at).toBe(10); // B, segment 1, from the metadata that landed after the toggle
+    await act(async () => { played[1].el.dispatchEvent(new Event('ended')); });
+    await waitFor(() => expect(played).toHaveLength(3));
+    expect(played[2].src).toBe('blob:a');
+    expect(played[2].at).toBe(3); // A, segment 2
+  });
 });
