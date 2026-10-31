@@ -454,7 +454,7 @@ describe('exclude/include on a parse book whose count/id fails', () => {
      valid. It used to answer 500 from buildHintsEntry ("no hint for chapter 4"). */
   it.each([
     ['rename', 'chapters/2/rename', { title: 'A New Name' }, 'A New Name'],
-    ['refresh-titles', 'chapters/refresh-titles', {}, 'The Lighthouse'],
+    ['refresh-titles', 'chapters/refresh-titles', {}, undefined],
   ])('%s on same-count, non-positional ids: 200, no hints file (#3953)', async (_name, path, body, title) => {
     seedState([
       { id: 1, title: 'Harbour Lights' },
@@ -466,7 +466,9 @@ describe('exclude/include on a parse book whose count/id fails', () => {
     expect(existsSync(hintsPath())).toBe(false);
     const state = JSON.parse(readFileSync(statePath(), 'utf8'));
     expect(state.chapters.map((c: { id: number }) => c.id)).toEqual([1, 2, 4]);
-    expect(state.chapters[1].title).toBe(title);
+    /* refresh-titles' title is not asserted: a drifted title cannot be seeded
+       here (the title rule would refuse), so it would only echo the seed. */
+    if (title !== undefined) expect(state.chapters[1].title).toBe(title);
   });
 });
 
