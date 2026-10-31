@@ -94,3 +94,40 @@ export async function shouldForkSharedVoiceUuid(
   }
   return hasHolder;
 }
+
+/* #3992 — read-only: does some OTHER character, under a DIFFERENT base
+   `voiceUuid` than `ownUuid`, still name `variantId` among its
+   `overrideTtsVoices.qwen.variants[*].name`? After a fork the declined row keeps
+   the shared variant names, so tearing one down would delete the earlier book's
+   `.pt`. A still-linked pair shares the base uuid, so it does NOT count (their
+   shared variants go stale together and are deleted as before). Scans every
+   book under BOOKS_ROOT, takes no lock, writes nothing. */
+export async function isVariantUsedByOtherVoiceUuid(
+  variantId: string,
+  ownUuid: string | null | undefined,
+): Promise<boolean> {
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const cast = await readJson<VariantCastFile>(castJsonPath(dir));
+        for (const y of cast?.characters ?? []) {
+          if (!y.voiceUuid || y.voiceUuid === ownUuid) continue;
+          const variants = y.overrideTtsVoices?.qwen?.variants;
+          if (!variants) continue;
+          for (const v of Object.values(variants)) {
+            if (v?.name === variantId) return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+interface VariantCastFile {
+  characters?: Array<{
+    voiceUuid?: string | null;
+    overrideTtsVoices?: { qwen?: { variants?: Record<string, { name?: string } | undefined> } };
+  }>;
+}

@@ -305,3 +305,73 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect(requestedVoiceIds).toEqual(['qwen-v_wren__angry']);
   });
 });
+
+describe('#3992 — promote / DELETE keep the earlier book’s variant files', () => {
+  const VAR_BYTES = Buffer.from('BOOK-ONE-ANGRY-VARIANT');
+  const variantFile = () => join(qwenDir(), 'qwen-u_shared__angry.pt');
+  const withVariant = (uuid: string) => ({
+    voiceUuid: uuid,
+    overrideTtsVoices: {
+      qwen: { name: `qwen-${uuid}`, variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    },
+  });
+  /* the mocked sidecar evict re-creates `<voiceId>.pt` with NEW_PT, so "torn
+     down" reads as: absent, or no longer the original bytes */
+  const gone = () => !existsSync(variantFile()) || !readFileSync(variantFile()).equals(VAR_BYTES);
+  const slotOf = (title: string) =>
+    (readRow(title).overrideTtsVoices as { qwen?: { variants?: unknown } } | undefined)?.qwen
+      ?.variants;
+
+  /* Book One holds the shared variant; Book Two is `uuid` with the same map. */
+  function seedBoth(bookTwoUuid: string) {
+    seed({ ...withVariant(bookTwoUuid) });
+    const one = { ...readRow('Book One'), ...withVariant('u_shared') };
+    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
+    writeFileSync(variantFile(), VAR_BYTES);
+  }
+
+  const promote = async (uuid: string) => {
+    const previewId = `qwen-${uuid}-preview`;
+    writeFileSync(join(qwenDir(), `${previewId}.pt`), NEW_PT);
+    return request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: previewId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+  };
+  const del = () =>
+    request(app).delete(`/api/books/${bookTwoId}/cast/wren/emotion-variant/angry`);
+
+  it('Forked promote: Book Two’s variants go, Book One’s variant file is byte-identical', async () => {
+    seedBoth('u_new');
+    const res = await promote('u_new');
+    expect(res.status).toBe(200);
+    expect(slotOf('Book Two')).toBeUndefined();
+    expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
+    expect(slotOf('Book One')).toBeDefined();
+  });
+
+  it('Forked DELETE: Book One’s file byte-identical, Book Two’s slot gone', async () => {
+    seedBoth('u_new');
+    const res = await del();
+    expect(res.status).toBe(200);
+    expect(slotOf('Book Two')).toBeUndefined();
+    expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
+  });
+
+  it('Linked promote: both rows share u_shared, so the shared variant file is deleted', async () => {
+    seedBoth('u_shared');
+    const res = await promote('u_shared');
+    expect(res.status).toBe(200);
+    expect(slotOf('Book Two')).toBeUndefined();
+    expect(gone()).toBe(true);
+  });
+
+  it('Sole owner: no other row names the variant, so it is deleted as before', async () => {
+    seedBoth('u_new');
+    const one = { ...readRow('Book One') };
+    delete one.overrideTtsVoices;
+    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
+    const res = await del();
+    expect(res.status).toBe(200);
+    expect(gone()).toBe(true);
+  });
+});
