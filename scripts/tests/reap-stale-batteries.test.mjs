@@ -903,9 +903,13 @@ test(
     // A cheap control spawn (one filtered Win32_Process row) is timed on EVERY
     // run, and with the full-query time both go to the CI log via
     // t.diagnostic, so thresholds can be set from CI figures, not one dev box.
-    //   1. fast control + a timed-out full query: the host is responsive, so
-    //      the query is too slow for its bound: FAIL.
-    //   2. slow control: rerun the real collector through the `spawn` seam
+    // A timed-out full query ALWAYS takes the rerun below, whatever the control
+    // measured. A "fast control => fail at once" branch was removed (#4005): a
+    // sub-5s control was measured at 2367ms on a loaded runner (4x the 607/523ms
+    // baselines) and failed with no rerun. The excess gate already catches a
+    // slow query on any host, because a fixed census defect adds its cost to
+    // the excess whatever the control measured.
+    //   1. rerun the real collector through the `spawn` seam
     //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
     //      slow control must NOT excuse a slow query, so each attempt is timed
     //      through the seam and the attempt that SUCCEEDED is gated on its
@@ -921,7 +925,7 @@ test(
     //      stays near 0 whatever the slowdown, while a fixed 16s census defect
     //      adds ~16s of excess to any host. 10s sits clear of both. No
     //      separate floor is kept: excess > 10s already implies rerunMs > 10s.
-    //   3. skip only when the control ITSELF failed or timed out AND the rerun
+    //   2. skip only when the control ITSELF failed or timed out AND the rerun
     //      still timed out (docs/testing/flaky-register.md). A control that
     //      succeeded, even slowly, with both rerun attempts timing out FAILS:
     //      the host answered.
@@ -931,7 +935,6 @@ test(
     // failure — the pass-1 date bug lands here as 'empty Win32_Process result
     // after retry') still fails.
     const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
-    const CONTROL_FAST_MS = 5000;
     const RERUN_HEALTHY_RATIO = 3;
     const RERUN_EXCESS_MAX_MS = 10000;
     const tFull = Date.now();
@@ -946,12 +949,6 @@ test(
     const controlMs = Date.now() - tCtl;
     t.diagnostic(`C3 timing: full query ${fullMs}ms, one-row control ${controlMs}ms`);
     if (isTimeout(snapshot)) {
-      const controlFast = !control.error && control.status === 0 && controlMs < CONTROL_FAST_MS;
-      assert.ok(
-        !controlFast,
-        `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
-          'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
-      );
       const attemptMs = [];
       snapshot = collectProcessSnapshot({
         spawn: (c, a, o) => {
