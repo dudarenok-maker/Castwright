@@ -196,7 +196,7 @@ That last case analyses on the mispaired parse, as `main` does today, and nothin
    - **Refusal:** `refuseWhenMispaired` becomes `true` for merge, split and reorder as well as rename and refresh-titles. In `checked` mode the transform no longer title-checks, so the early refusal must cover all five. In `main` mode the early refusal and the transform's own title assert reach the same verdict on the same inputs, so behaviour is unchanged.
    - **Exclude / include (round 8, decision 2):** never refused on a toggle. After the transform, compare `result.state.chapters.length` with the pre-transform count:
      - **same count (a toggle):** write **no** hints file, for every record source. A toggle changes no id or uuid, so a persisted entry still validates and a parse book stays a parse book. Nothing is laundered into `persisted`.
-     - **count changed (the prune that drops a chapter with no sentences and an empty body and renumbers, `pruneEmptyChaptersInResult`):** a `persisted` record writes as today. **A record with no `hintsSource`** writes as today too. That is the in-session record a re-parse, replace-manuscript, import or sample builds alongside `state.json` from one parse (`book-state.ts` about lines 1887–1903 for re-parse), so its bodies are the chapters' own and there is nothing to check. A `parse` record writes only when the book pairs, meaning `paired` in `checked` mode, or `!hintsMispaired` (the title rule) in `main` mode, as `main` does. **Otherwise the operation answers 409 `hints_out_of_sync` and writes nothing** (Q1). The prune decides which chapter has "an empty body" from the hint bodies. On a book whose bodies are not paired with its chapters, it can drop the wrong chapter and renumber the rest. `main` writes that result (`state.json`, edits, audio) with no hints file, and the book is then refused on count at every later seam. Refusing writes nothing.
+     - **count changed (the prune that drops a chapter with no sentences and an empty body and renumbers, `pruneEmptyChaptersInResult`):** a `persisted` record writes as today. **A record with no `hintsSource`** writes as today too. That is the in-session record a re-parse, replace-manuscript, import or sample builds alongside `state.json` from one parse (`book-state.ts` about lines 1887–1903 for re-parse), so its bodies are the chapters' own and there is nothing to check. A `parse` record writes only when the book pairs. "Pairs" includes count/id (owner round 9, Task 4 fix round 1): the record's ids must pair with state's **before the transform**, and then the book must be `paired` in `checked` mode, or `!hintsMispaired` (the title rule) in `main` mode. **Otherwise the operation answers 409 `hints_out_of_sync` and writes nothing** (Q1). A toggle on such a book still succeeds and writes no hints. The prune decides which chapter has "an empty body" from the hint bodies. On a book whose bodies are not paired with its chapters, it can drop the wrong chapter and renumber the rest. `main` writes that result (`state.json`, edits, audio). It writes no hints file when the result's hints and chapters differ in number, and the book is then refused on count at later seams. But the prune keeps only the hints whose ids survive, so a count/id-failing book (split drift with more parse pieces than chapters, or a parse whose surplus pieces are dropped with the pruned one) can come out with equal counts: `main` then writes a hints file whose bodies are not the chapters', and after a restart the book hydrates `persisted` and passes count/id at every later seam. Refusing writes nothing.
 
 The `excluded` / `titleSynthesized` completion of earlier revisions stays moot: the transform receives `record.chapterHints` as built by `hintsFromParse`. The `isLikelyFrontMatterTitle` default in `hintsFromParse` still reads the parse title, unchanged.
 
@@ -346,7 +346,7 @@ Because duplicates are separate items, one line saved three times that the parse
 | Exclude/include toggle on any book | — | proceeds; **writes no hints file** (today: writes when titles pair) |
 | Exclude/include that prunes, record with no `hintsSource` (in-session after re-parse / replace / import) | — | proceeds and writes hints, as today |
 | Exclude/include that prunes, on a paired or persisted book | — | proceeds and writes hints, as today |
-| Exclude/include that prunes, on an unpaired parse book | — | **409**, nothing written (today: writes state, no hints) (Q1) |
+| Exclude/include that prunes, on an unpaired parse book, including one whose count/id fails | — | **409**, nothing written (today: writes state, and on a count/id failure can write a hints file and make the book `persisted`) (Q1) |
 | `state.json` unreadable, foreign `manuscriptId`, or book gone at start | starts (fail-open, as today) | today's 404 / curated unreadable answer |
 
 ### Accepted blind spots (stated honestly)
@@ -491,7 +491,9 @@ Changes:
 - **prune (M20b):**
   - an exclude whose prune drops an empty chapter, on a paired book: 200, the hints file is written, and a restart hydrates `persisted`;
   - the same prune on an unpaired book: 409 and every file byte-identical;
-  - the same prune on a book with no evidence whose titles pair: 200 and written, as `main` does.
+  - the same prune on a book with no evidence whose titles pair: 200 and written, as `main` does;
+  - the same prune in `main` mode (stale-evidence marker set) on a title-mispaired book: 409 and every file byte-identical;
+  - a prune on a parse book whose count/id fails (3 state chapters against a 4-piece parse, m > n; and m < n): 409 and every file byte-identical. A toggle on the m > n book answers 200 and writes no hints.
 - a book with no evidence and a title mismatch: merge answers 409 (M12 at the restructure seam).
 - orphans: the analysed fixture plus 24+-character orphan sentences (`chapterId: 99`). Merge answers 200, and the orphans are recovered onto a surviving chapter.
 - the gate (M19): an impure record, ids out of order (`state.chapters` ids `[2, 1, 3]` with matching parse count), a BOM'd edits file (checked as `ok`) and a corrupt edits file all take `main`'s path. The corrupt file answers exactly what `main` answers for the same book, which the test pins by running the same op with the check stubbed off.
@@ -691,7 +693,8 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
 - **CLAUDE.md:** the `requestFailureMessage` enumeration chore (Task 8d).
 - **Issue:** the PR body says `Closes #3837` and `Refs #3879`. Under "Also fixed, found in passing" it lists:
   - the **pre-existing `main` defect** that a restructure after a re-parse re-seeds the analysis cache from old-keyed edits, which a later run replays as current takes (fixed by `refreshCacheFromEdits`, M26 / M28);
-  - every test fixture changed to fix a stale fixture rather than for the feature.
+  - every test fixture changed to fix a stale fixture rather than for the feature;
+  - the **pre-existing `main` defect** that an exclude/include prune on a parse-fallback book whose count/id fails can come out with equal hint and chapter counts and write `manuscript-hints.json`, laundering the mispaired bodies into `persisted` (refused 409 now, owner round 9).
 - **Review gate:** `pr-review-gate`, depth `high` (multi-scope: routes, workspace, contract).
 - **Verify:** `npm run verify:fast:branch` by hand; cloud `verify.yml` is the required gate.
 

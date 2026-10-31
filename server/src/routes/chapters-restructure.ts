@@ -480,6 +480,18 @@ async function applyRestructureClaimed(
       const e = new HintsOutOfSyncError();
       return { early: { status: 409, body: { error: e.message, code: e.code } } };
     }
+    /* #3837 fix round 1 (owner round 9) -- a parse-fallback record whose ids do
+       not pair with state's (split drift, a pre-#3703 merge or split). Read before
+       the transform: exclude's prune keeps only the hints whose ids survive, which
+       can leave hints and state the same length afterwards. */
+    let parseCountIdFails = false;
+    if (record.hintsSource === 'parse') {
+      try {
+        assertHintsPairWithState(state, record.chapterHints);
+      } catch {
+        parseCountIdFails = true;
+      }
+    }
     let result: RestructureResult;
     try {
       result = transform(
@@ -511,10 +523,12 @@ async function applyRestructureClaimed(
        record: a persisted entry still validates, and a parse book stays one, so a
        mispairing is never laundered into `persisted`. A prune (an empty chapter
        dropped and the rest renumbered) decides "empty" from the hint bodies, so
-       on a parse book whose bodies do not pair it can drop the wrong chapter:
-       that is refused, with nothing written. */
+       on a parse book whose bodies do not pair it can drop the wrong chapter,
+       and its result could be persisted as if they did. It is refused, with
+       nothing written, unless the book pairs: count/id (owner round 9) and then
+       the sentence check, or the title rule where the check cannot run. */
     const excludeToggle = opKind === 'exclude' && result.state.chapters.length === oldChapters.length;
-    if (opKind === 'exclude' && !excludeToggle && hintsMispaired) {
+    if (opKind === 'exclude' && !excludeToggle && (parseCountIdFails || hintsMispaired)) {
       const e = new HintsOutOfSyncError();
       return { early: { status: 409, body: { error: e.message, code: e.code } } };
     }
@@ -550,9 +564,10 @@ async function applyRestructureClaimed(
     }
     /* A book whose state.json chapters never matched the parse (e.g. 2 chapters
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
-       the restructure itself is still valid -- skip rather than fail it. Only
-       exclude, rename and refresh-titles get here with such a book: they hand the
-       hints back unchanged (so the counts still differ). Merge, split and reorder
+       the restructure itself is still valid -- skip rather than fail it. Only an
+       exclude/include toggle, rename and refresh-titles get here with such a
+       book: they hand the hints back unchanged (so the counts still differ); a
+       prune on it was refused above. Merge, split and reorder
        rebuild state from the hints and refuse it with a 409 before this point
        (#3791). A mispaired book (`hintsMispaired`) reaches here only through an
        exclude/include toggle, which writes nothing (above): every other

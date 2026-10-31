@@ -752,8 +752,9 @@ export class HintsOutOfSyncError extends Error {
     reorder that only permutes app-titled chapters among themselves.
 
     Since #3837 (plan 290) this is the restructure seam's fallback rule, applied
-    by `routes/chapters-restructure.ts` when the sentence check cannot run (an
-    impure record, ids out of order, unreadable edits, the stale-evidence marker).
+    by `routes/chapters-restructure.ts` when the sentence check cannot run (a
+    count/id failure, an impure record, ids out of order, corrupt or unreadable
+    edits, the stale-evidence marker).
     When it can, a chapter with saved sentences is judged by
     `workspace/hints-proof.ts` instead, and only the evidence-less positions keep
     this test, through `titlePairsAt`. */

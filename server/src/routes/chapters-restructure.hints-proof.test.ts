@@ -122,7 +122,10 @@ const hintsPath = (): string => join(bookDir, '.audiobook', 'manuscript-hints.js
 /* Already in the shape the library scan's lazy migrations leave (uuid,
    language, schema), so the scan before a refusal does not rewrite state.json
    and the snapshots compare. No audio, so no segments backfill. */
-function seedState(chapters: Array<{ id: number; title: string; titleOverridden?: boolean }>): void {
+function seedState(
+  chapters: Array<{ id: number; title: string; titleOverridden?: boolean; excluded?: boolean }>,
+  extra: object = {},
+): void {
   writeFileSync(
     statePath(),
     JSON.stringify({
@@ -145,6 +148,7 @@ function seedState(chapters: Array<{ id: number; title: string; titleOverridden?
       coverGradient: ['#000', '#fff'],
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
+      ...extra,
     }),
   );
 }
@@ -341,6 +345,108 @@ describe('exclude/include: a prune writes only on a book that pairs (round 8, de
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.chapters).toHaveLength(3);
     expect(existsSync(hintsPath())).toBe(true);
+  });
+
+  it('in main mode (stale-evidence marker set) on a title-mispaired book: 409 and every file byte-identical', async () => {
+    /* The marker keeps the sentence check from running, so the title rule
+       judges the prune. */
+    writeFileSync(join(bookDir, 'manuscript.md'), manuscript({ emptyChapter: true }));
+    seedState(
+      [
+        { id: 1, title: 'Harbour Lights' },
+        { id: 2, title: 'Somewhere Else Entirely' },
+        { id: 3, title: 'Storm Season' },
+        { id: 4, title: 'Dedication' },
+      ],
+      { sentencesPredateChapters: true },
+    );
+    seedEdits(ANALYSED);
+    const before = snapshotDisk();
+    const res = await post('chapters/exclude', { chapterIds: [3], excluded: true });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+    expect(snapshotDisk()).toEqual(before);
+    expect(proof.results).toEqual([]);
+  });
+});
+
+/* #3837 fix round 1 (owner round 9, "Refuse it"): for a prune, "pairs" includes
+   count/id. Without it, the prune keeps only the hints whose ids survive, which
+   can leave hints and state the same length and write a persisted file whose
+   bodies are not the chapters'. */
+describe('exclude/include on a parse book whose count/id fails', () => {
+  /* The parse splits Storm Season in two (split drift, 4 pieces against 3 state
+     chapters). Titles pair at positions 0-2; Dedication has no sentences and an
+     empty body. */
+  const SPLIT_DRIFT = [
+    '# A Lighthouse Book',
+    '',
+    '# Harbour Lights',
+    '',
+    'It began.',
+    ...LINES.harbour,
+    '',
+    '# Dedication',
+    '',
+    'Dedication',
+    '',
+    '# Storm Season',
+    '',
+    'It began.',
+    ...LINES.storm.slice(0, 2),
+    '',
+    '# Storm Season Part Two',
+    '',
+    'It began.',
+    LINES.storm[2],
+    '',
+  ].join('\n');
+
+  it('a prune with more parse pieces than chapters (m > n): 409 and every file byte-identical', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), SPLIT_DRIFT);
+    seedState([
+      { id: 1, title: 'Harbour Lights' },
+      { id: 2, title: 'Dedication' },
+      { id: 3, title: 'Storm Season' },
+    ]);
+    seedEdits([LINES.harbour, null, LINES.storm]);
+    const before = snapshotDisk();
+    const res = await post('chapters/exclude', { chapterIds: [1], excluded: true });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  it('a prune with fewer parse pieces than chapters (m < n): 409 and every file byte-identical', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), manuscript({ emptyChapter: true }));
+    seedState([
+      { id: 1, title: 'Harbour Lights' },
+      { id: 2, title: 'The Lighthouse' },
+      { id: 3, title: 'Storm Season' },
+      { id: 4, title: 'Dedication' },
+      { id: 5, title: 'Afterword' },
+    ]);
+    seedEdits([...ANALYSED, null, ['A short afterword.']]);
+    const before = snapshotDisk();
+    const res = await post('chapters/exclude', { chapterIds: [1], excluded: true });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: REFUSAL, code: 'hints_out_of_sync' });
+    expect(snapshotDisk()).toEqual(before);
+  });
+
+  it('a toggle (no prune) still answers 200 and writes no hints file', async () => {
+    writeFileSync(join(bookDir, 'manuscript.md'), SPLIT_DRIFT);
+    /* Dedication is excluded, so it is not pruned: the exclude is a toggle. */
+    seedState([
+      { id: 1, title: 'Harbour Lights' },
+      { id: 2, title: 'Dedication', excluded: true },
+      { id: 3, title: 'Storm Season' },
+    ]);
+    seedEdits([LINES.harbour, null, LINES.storm]);
+    const res = await post('chapters/exclude', { chapterIds: [1], excluded: true });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.chapters).toHaveLength(3);
+    expect(existsSync(hintsPath())).toBe(false);
   });
 });
 
