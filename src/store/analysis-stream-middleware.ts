@@ -41,6 +41,7 @@
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
+import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { AnalysisEngine } from '../lib/model-id';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
@@ -122,7 +123,17 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         return;
       }
       if (server.state !== 'running') {
-        const book = bookId ? await api.getBookState(bookId) : null;
+        /* #3967 — bounded and aborted at BOOK_READ_TIMEOUT_MS, and NOT retried: this is a
+           one-off with no mount lifecycle to cancel a retry loop, and a hang only holds up
+           this restore (nothing else in the handler waits on it). An expiry is handled as
+           the failed re-read the catch below already treats it as. */
+        const readCtrl = new AbortController();
+        const readTimers = new Set<ReturnType<typeof setTimeout>>();
+        const book = bookId
+          ? await within(api.getBookState(bookId, readCtrl.signal), BOOK_READ_TIMEOUT_MS, readTimers, () =>
+              readCtrl.abort(),
+            ).finally(() => readTimers.forEach(clearTimeout))
+          : null;
         if (current() !== atStart) return;
         if (!shouldSurfaceColdBootAnalysisPill(book?.state.castConfirmed ?? false, server.state)) {
           dispatch(analysisActions.clearActiveStream());

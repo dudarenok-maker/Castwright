@@ -91,7 +91,10 @@ export function RestructureView({ bookId }: Props) {
       /* #3967 — both re-reads run with the book's edit lock up, so each is bounded:
          one that never settles must not keep manuscript edits refused until reload. */
       const timers = new Set<ReturnType<typeof setTimeout>>();
-      const fresh = await within(api.getBookState(bookId), BOOK_READ_TIMEOUT_MS, timers).catch(() => null);
+      const readCtrl = new AbortController();
+      const fresh = await within(api.getBookState(bookId, readCtrl.signal), BOOK_READ_TIMEOUT_MS, timers, () =>
+        readCtrl.abort(),
+      ).catch(() => null);
       /* The user may have opened another book while the re-read was in flight;
          the hydrate's sequence guard only orders same-book reads, so adopt only
          while this book is still the open one (same guard as refetchActiveRevisions). */

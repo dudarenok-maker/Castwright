@@ -96,7 +96,7 @@ describe('RestructureView — #3400 cross-book guard', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     // The user switches to book B (cache seeded) while A's re-read is in flight.
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
@@ -124,7 +124,7 @@ describe('RestructureView — #3400 cross-book slices', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
       manuscriptSlice.actions.hydrateFromBookState({
@@ -481,6 +481,10 @@ describe('RestructureView — #3400 restructure flag', () => {
         await vi.advanceTimersByTimeAsync(BOOK_READ_TIMEOUT_MS * 2);
       });
       await waitFor(() => expect(flag(store)).toBeNull());
+      /* The expired book-state read is aborted too, not left open. */
+      if (hung === 'getBookState') {
+        expect((apiMock.getBookState.mock.calls[0] as unknown[])[1]).toHaveProperty('aborted', true);
+      }
     } finally {
       vi.useRealTimers();
     }

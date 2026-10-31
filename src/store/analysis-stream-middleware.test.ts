@@ -32,6 +32,8 @@ const analyseManuscriptMock = vi.fn();
 const runAnalysisForChaptersMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
 const getBookStateMock = vi.fn();
+/* #3967 — the signal each getBookState call was handed, in call order. */
+const bookStateSignals: Array<AbortSignal | undefined> = [];
 
 vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
@@ -75,7 +77,10 @@ vi.mock('../lib/api', () => {
       runAnalysisForChapters: (manuscriptId: string, chapterIds: number[], opts: unknown) =>
         runAnalysisForChaptersMock(manuscriptId, chapterIds, opts),
       getAnalysisState: (bookId: string) => getAnalysisStateMock(bookId),
-      getBookState: (bookId: string) => getBookStateMock(bookId),
+      getBookState: (bookId: string, signal?: AbortSignal) => {
+        bookStateSignals.push(signal);
+        return getBookStateMock(bookId);
+      },
     },
     AnalysisError,
   };
@@ -131,6 +136,7 @@ beforeEach(() => {
   runAnalysisForChaptersMock.mockReset();
   getAnalysisStateMock.mockReset();
   getBookStateMock.mockReset();
+  bookStateSignals.length = 0;
   getBookStateMock.mockResolvedValue({ state: { castConfirmed: false } });
   captured = [];
   const makeImpl =
@@ -1270,6 +1276,30 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     resolveBook({ state: { castConfirmed: true } });
     await settle();
     expect(store.getState().analysis.activeStream).toEqual(newer);
+  });
+
+  it('#3967 — a book-state read that never settles is aborted at 15 s and given up as a failed re-read (warned, snapshot untouched)', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+      getBookStateMock.mockReturnValueOnce(new Promise(() => {}));
+      const atStart = store.getState().analysis.activeStream;
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bookStateSignals).toHaveLength(1);
+      expect(bookStateSignals[0]!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(bookStateSignals[0]!.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith('[analysis-state] refusal re-read failed:', expect.stringContaining('timed out'));
+      expect(store.getState().analysis.activeStream).toEqual(atStart);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('a non-running server snapshot for a confirmed book is not restored (the cold-boot gate)', async () => {
