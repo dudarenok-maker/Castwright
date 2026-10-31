@@ -31,12 +31,14 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
   if (!character) return null;
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
 
-  /* Chapters the character speaks in, in reading order. Regeneration is
+  /* Chapters the character speaks in, in reading order — excluded chapters
+     never render (the server drops them), so they stay out of the ids and
+     the ETA, and can't become the preview sample. Regeneration is
      whole-chapter — there is no per-character synthesis server-side, so a
      voice change is applied by re-rendering each affected chapter in full.
      The first chapter is the A/B preview sample. */
   const speakingChapters = chapters.filter(
-    (ch) => ch.characters[character.id] && ch.characters[character.id] !== 'skipped',
+    (ch) => !ch.excluded && ch.characters[character.id] && ch.characters[character.id] !== 'skipped',
   );
   const chapterIds = speakingChapters.map((ch) => ch.id);
   const previewChapter = speakingChapters[0] ?? null;

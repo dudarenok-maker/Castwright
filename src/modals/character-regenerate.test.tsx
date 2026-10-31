@@ -34,6 +34,22 @@ describe('CharacterRegenerateModal', () => {
     expect(chips.textContent).toMatch(/CH 01preview/);
   });
 
+  it('leaves an excluded chapter out of the chips, the ETA and the confirmed ids (#3919)', () => {
+    const onConfirm = vi.fn();
+    const withExcluded = [
+      { ...ch(1, { marlow: 'done' }), excluded: true, duration: '50:00' } as Chapter,
+      ...chapters.slice(1),
+    ];
+    render(<CharacterRegenerateModal character={marlow} chapters={withExcluded} onClose={() => {}} onConfirm={onConfirm} />);
+    const chips = screen.getByTestId('regen-affected-chapters');
+    expect(chips.textContent).not.toMatch(/CH 01/);
+    expect(chips.textContent).toMatch(/CH 04preview/);
+    /* Only ch4 (10:00) counts: the 50:00 excluded chapter must not inflate the ETA. */
+    expect(screen.getByText(/speaks in/).textContent).toMatch(/speaks in\s*1\s*chapter\b/);
+    fireEvent.click(screen.getByTestId('regen-character-all'));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ chapterIds: [4] }));
+  });
+
   it('"Regenerate all" fires onConfirm with every affected chapter and preview:false', () => {
     const onConfirm = vi.fn();
     render(<CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
