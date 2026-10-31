@@ -360,7 +360,6 @@ describe('a11y — listen view', () => {
           currentTrack={null}
           setCurrentTrack={vi.fn()}
           onRegenerate={vi.fn()}
-          onEnterPreview={vi.fn()}
           onFixLine={vi.fn()}
           bookMeta={meta}
           bookCoverGradient={['#2C7A4B', '#0F3A23']}

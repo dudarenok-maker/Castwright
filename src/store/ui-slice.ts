@@ -114,7 +114,6 @@ export interface UiState {
       series. Reset to 'book' whenever the modal closes so the next
       top-banner open doesn't silently start scoped to a stale series. */
   driftReportScope: 'book' | 'series';
-  previewMode: boolean;
   selectedModel: string;
   ttsModelKey: TtsModelKey;
   /** Whether the user has explicitly picked an analysis model this session.
@@ -213,7 +212,6 @@ const initialState: UiState = {
   showDriftReport: false,
   driftReportCharacterFilter: null,
   driftReportScope: 'book',
-  previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
   selectedModelExplicit: false,
@@ -490,9 +488,6 @@ export const uiSlice = createSlice({
        the full picture without re-opening. */
     clearDriftReportCharacterFilter: (s) => {
       s.driftReportCharacterFilter = null;
-    },
-    setPreviewMode: (s, a: PayloadAction<boolean>) => {
-      s.previewMode = a.payload;
     },
     setSelectedModel: (s, a: PayloadAction<string>) => {
       s.selectedModel = a.payload;

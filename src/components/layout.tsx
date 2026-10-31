@@ -95,7 +95,6 @@ import { useAccessibilitySettings } from '../lib/use-accessibility-settings';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { useLanguageGuard } from '../hooks/use-language-guard';
 import { MiniPlayer } from './mini-player';
-import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
 import { StartGenerationModal } from '../modals/start-generation';
@@ -1773,18 +1772,6 @@ export function Layout() {
     runAutoProsody(id, { background: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProsodyBookId, completeKey, openProsodyBusy, prosodyRerunTick]);
-
-  if (ui.previewMode) {
-    return (
-      <PreviewListenerView
-        chapters={chapters}
-        characters={characters}
-        onExit={() => dispatch(uiActions.setPreviewMode(false))}
-        currentTrack={ui.currentTrack}
-        setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
-      />
-    );
-  }
 
   /* Top-bar TTS pill — shown whenever a book is in scope (Confirm Cast,
      Analysing, Ready). Books/upload don't render it since TTS only matters

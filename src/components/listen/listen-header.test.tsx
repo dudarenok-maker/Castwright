@@ -22,7 +22,6 @@ const baseProps = {
   onChangeCover: vi.fn(),
   onPlayFromStart: vi.fn(),
   onOpenExportModal: vi.fn(),
-  onEnterPreview: vi.fn(),
   onOpenRestructure: vi.fn(),
   notes: null,
 };
@@ -50,5 +49,13 @@ describe('ListenHeader — fs-2 language badge', () => {
   it('hides the badge when language is absent (legacy)', () => {
     render(<ListenHeader {...baseProps} />);
     expect(screen.queryByTestId('listen-language-badge')).not.toBeInTheDocument();
+  });
+});
+
+describe('ListenHeader — #4014 no listener-preview control', () => {
+  it('renders the primary actions without a "Preview as listener" button', () => {
+    render(<ListenHeader {...baseProps} />);
+    expect(screen.getByTestId('open-export-modal')).toBeInTheDocument();
+    expect(screen.queryByText(/preview as listener/i)).not.toBeInTheDocument();
   });
 });

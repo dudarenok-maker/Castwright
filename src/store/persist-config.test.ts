@@ -48,7 +48,6 @@ describe('UI_PERSIST_WHITELIST', () => {
       'showDriftReport',
       'driftReportCharacterFilter',
       'driftReportScope',
-      'previewMode',
       'reuploadingBookId',
       /* Per-run analyzer-model override — transient by design so it can't
          silently shadow the saved analysisEngine across reloads/books. */

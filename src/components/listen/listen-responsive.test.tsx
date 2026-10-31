@@ -89,7 +89,6 @@ describe('ListenHeader — phone viewport render (plan 81 wave 3)', () => {
         onChangeCover={vi.fn()}
         onPlayFromStart={vi.fn()}
         onOpenExportModal={vi.fn()}
-        onEnterPreview={vi.fn()}
         onOpenRestructure={vi.fn()}
         onReplaceManuscript={vi.fn()}
         notes={null}
@@ -125,7 +124,6 @@ describe('ListenHeader — phone viewport render (plan 81 wave 3)', () => {
         onChangeCover={vi.fn()}
         onPlayFromStart={vi.fn()}
         onOpenExportModal={vi.fn()}
-        onEnterPreview={vi.fn()}
         onOpenRestructure={vi.fn()}
         notes={'First line of notes.\nSecond line stays collapsed.'}
       />,
