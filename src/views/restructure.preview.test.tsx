@@ -27,6 +27,7 @@ vi.mock('../store', async () => {
 });
 
 import { RestructureView } from './restructure';
+import { BOOK_READ_TIMEOUT_MS } from '../components/layout';
 
 /* `guard` installs the real restructure guard (first in the chain, as in the app store):
    a user edit made mid-request is refused. Without it the store models a writer that
@@ -464,6 +465,25 @@ describe('RestructureView — #3400 restructure flag', () => {
     resolvers[1]({ sentenceRemap: [], warnings: [] });
     await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(flag(store)).toBeNull());
+  });
+
+  /* #3967 — the re-reads run with the flag up; one that never settles must not hold it. */
+  it.each(['getBookState', 'getLibrary'] as const)('is cleared when the %s re-read never settles', async (hung) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      apiMock[hung].mockReturnValue(new Promise(() => {}));
+      render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+      await startRefresh();
+      await waitFor(() => expect(apiMock[hung]).toHaveBeenCalled());
+      expect(flag(store)).toBe('b1');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BOOK_READ_TIMEOUT_MS * 2);
+      });
+      await waitFor(() => expect(flag(store)).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("book A's request ending does not lower book B's flag (pass-6 cross-book)", async () => {

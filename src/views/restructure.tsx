@@ -24,6 +24,7 @@ import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { flushBookPersistence, type BookFlushOutcome } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
+import { BOOK_READ_TIMEOUT_MS, within } from '../components/layout';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import type { Chapter } from '../lib/types';
@@ -87,7 +88,10 @@ export function RestructureView({ bookId }: Props) {
       // manuscript-edits.json. The book-state GET handler runs the same
       // reconciliation that surface code expects on a normal page open.
       const requestSeq = store.getState().revisions.adoptSeq;
-      const fresh = await api.getBookState(bookId).catch(() => null);
+      /* #3967 — both re-reads run with the book's edit lock up, so each is bounded:
+         one that never settles must not keep manuscript edits refused until reload. */
+      const timers = new Set<ReturnType<typeof setTimeout>>();
+      const fresh = await within(api.getBookState(bookId), BOOK_READ_TIMEOUT_MS, timers).catch(() => null);
       /* The user may have opened another book while the re-read was in flight;
          the hydrate's sequence guard only orders same-book reads, so adopt only
          while this book is still the open one (same guard as refetchActiveRevisions). */
@@ -133,7 +137,8 @@ export function RestructureView({ bookId }: Props) {
       }
       // Refresh library so the Listen view's chapter card and the
       // generation queue pick up the new structure on next render.
-      const lib = await api.getLibrary().catch(() => null);
+      const lib = await within(api.getLibrary(), BOOK_READ_TIMEOUT_MS, timers).catch(() => null);
+      timers.forEach(clearTimeout);
       if (lib) dispatch(libraryActions.hydrate(lib));
       // Plan 70b — surface server-emitted advisories (orphan recovery,
       // empty-chapter prune, generic-title renumber from plan 70a).
