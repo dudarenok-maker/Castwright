@@ -981,6 +981,79 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(brann?.notLinkedTo).toEqual([{ bookId: BOOK1, characterId: 'brann' }]);
   });
 
+  it('dedup moves the join onto a row the strict seed refused: a linked unpinned prior row takes its voice fields whole, no stamp from another Book One character leaks', async () => {
+    /* Prior brann (unpinned, reused) is linked to Book One's "The Smith". The
+       strict matchedFrom seed gives that link to brann ("Brann Weir") by id and
+       refuses brann-2 ("Brann"); dedup then collapses brann into brann-2, so
+       the rewritten prior joins brann-2 — which the linker stamped with Book
+       One's separate Brann (and its Qwen design). A linked prior row must take
+       its voice fields whole, as a pinned one does. */
+    const smithLink = {
+      bookId: BOOK1,
+      characterId: 'smith',
+      bookTitle: 'Book One',
+      confidence: 1,
+    };
+    const prior: PriorRow[] = [
+      {
+        id: 'brann',
+        name: 'Brann',
+        voiceState: 'reused',
+        voiceId: 'v_b1_smith',
+        matchedFrom: smithLink,
+      },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'brann', name: 'Brann Weir', gender: 'male', ageRange: 'adult' },
+      { id: 'brann-2', name: 'Brann', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'smith', name: 'The Smith', gender: 'male', ageRange: 'adult', voiceId: 'v_b1_smith' },
+      },
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'brann', name: 'Brann', gender: 'male', ageRange: 'adult', voiceId: 'v_b1_brann' },
+      },
+    ];
+    const options: LinkSeriesReuseOptions = {
+      ...routeOptions(library),
+      castLoader: async (bookId: string) =>
+        bookId === BOOK1
+          ? [
+              { id: 'smith' },
+              {
+                id: 'brann',
+                ttsEngine: 'qwen',
+                overrideTtsVoices: { qwen: { name: 'voice_b1_brann' } },
+                voiceStyle: 'gruff young smith',
+              },
+            ]
+          : null,
+    };
+    const sentences = [
+      { characterId: 'brann' },
+      { characterId: 'brann-2' },
+      { characterId: 'brann-2' },
+      { characterId: 'brann-2' },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, options, sentences);
+
+    // the linker really stamped Book One's Brann onto brann-2 (the leak source)
+    expect(postLink.find((c) => c.id === 'brann-2')?.matchedFrom?.characterId).toBe('brann');
+    expect(merged.some((c) => c.id === 'brann')).toBe(false); // dedup really collapsed it
+    const brann = merged.find((c) => c.id === 'brann-2');
+    expect(brann?.matchedFrom?.characterId).toBe('smith');
+    expect(brann?.voiceId).toBe('v_b1_smith');
+    expect(brann?.ttsEngine).toBeUndefined();
+    expect(brann?.overrideTtsVoices).toBeUndefined();
+    expect(brann?.voiceStyle).toBeUndefined();
+  });
+
   it('narrator rename: the locked narrator keeps its voice and renamed name; a same-name real row inherits neither', async () => {
     const narrLink = {
       bookId: 'book-0',

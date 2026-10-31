@@ -461,10 +461,18 @@ function mergeCore<T extends { id: string }>(
     // aliases are unioned just below regardless of pinning, so the linker's
     // Book One aliases still reach a pinned row whose link was dropped. That
     // is out of scope here and unchanged.
-    const pinned = old.voiceState === 'locked' || old.voiceState === 'tuned';
+    // A prior row that already carries its own series link (matchedFrom) is
+    // taken whole the same way: the seed bridges matchedFrom through the
+    // strict candidate set, so when roster dedup moves the join onto a row
+    // the seed refused, the linker has stamped THAT row with a link to a
+    // different Book One character — and an unpinned overlay copies only the
+    // keys the prior row has, so that foreign link's designed-voice fields
+    // would graft onto the prior row's own link.
+    const takesVoiceWhole =
+      old.voiceState === 'locked' || old.voiceState === 'tuned' || old.matchedFrom !== undefined;
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];
-      else if (pinned) delete merged[key];
+      else if (takesVoiceWhole) delete merged[key];
     }
     const aliases = unionAliases(old.aliases, (f as Record<string, unknown>).aliases);
     if (aliases) merged.aliases = aliases;
