@@ -4602,6 +4602,19 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
       });
       return release;
     }
+    /* Like holdReads, but the answer is disk AS OF THE ISSUE: a GET that read
+       disk before the match's PUT landed, and is processed after it. */
+    function holdReadsAtIssue(): () => void {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const read = getBookStateMock.getMockImplementation()!;
+      getBookStateMock.mockImplementation(async (id: string) => {
+        const snapshot = await read(id);
+        if (id === 'A') await gate;
+        return snapshot;
+      });
+      return release;
+    }
     function holdMatch(): () => void {
       let answer!: () => void;
       matchVoicesMock.mockReturnValue(new Promise((r) => (answer = () => r(matched))));
@@ -4625,6 +4638,33 @@ describe('Layout — a save made stale elsewhere is refused, and the book re-rea
         await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
         await act(async () => { answer(); await vi.advanceTimersByTimeAsync(100); });
         expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        releaseRead();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+        expect(store.getState().ui.stage.kind).toBe('confirm');
+        expect(store.getState().cast.characters[0]?.voiceId).toBe('auto-voice');
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('L3: a match whose PUT landed before the held full read answered survives that read', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const store = makeStoreWithScopeAndPersistence();
+      const disk = wireDisk();
+      try {
+        renderWithLibrary(store);
+        await openA(store);
+        act(() => { store.dispatch(uiActions.goHome()); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        act(() => { store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' })); });
+        matchVoicesMock.mockClear();
+        const answer = holdMatch();
+        const releaseRead = holdReadsAtIssue();
+        openAt(store as never, 'A');
+        await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+        await act(async () => { answer(); await vi.advanceTimersByTimeAsync(2000); });
+        expect(voiceOnDisk(disk)).toBe('auto-voice');
         releaseRead();
         await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
         expect(store.getState().ui.stage.kind).toBe('confirm');
