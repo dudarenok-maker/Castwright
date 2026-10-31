@@ -892,8 +892,101 @@ test('C1 DECLARED GAP: pytest IS a recognised invocation but can never enable a 
 test(
   'C3: collectProcessSnapshot returns real, plausibly-shaped rows from a real Win32_Process query',
   { skip: process.platform !== 'win32' ? 'Windows-only: Get-CimInstance Win32_Process' : false },
-  () => {
-    const snapshot = collectProcessSnapshot();
+  (t) => {
+    // collectProcessSnapshot gives up after two 15s spawnSync timeouts and
+    // returns [] with a `snapshotError` naming the timeout (#3331). That is
+    // EITHER a host too loaded to answer (Castwright#3917: the 31.9s test body
+    // is exactly two timed-out attempts) OR a census query that is itself too
+    // slow for its own bound, which in production is a census that always
+    // returns [] and a reaper that never reaps. A skip cannot tell those apart,
+    // so a timeout is told apart by measurement before anything is excused.
+    // A cheap control spawn (one filtered Win32_Process row) is timed on EVERY
+    // run, and with the full-query time both go to the CI log via
+    // t.diagnostic, so thresholds can be set from CI figures, not one dev box.
+    //   1. fast control + a timed-out full query: the host is responsive, so
+    //      the query is too slow for its bound: FAIL.
+    //   2. slow control: rerun the real collector through the `spawn` seam
+    //      (two 120s attempts, up to 240s) and assert rows/dates on that. A
+    //      slow control must NOT excuse a slow query, so each attempt is timed
+    //      through the seam and the attempt that SUCCEEDED is gated on its
+    //      EXCESS over the healthy ratio: rerunMs - RERUN_HEALTHY_RATIO x
+    //      controlMs > RERUN_EXCESS_MAX_MS FAILS. (A stalled attempt that the
+    //      retry recovers from is host load, not query cost.) The healthy
+    //      ratio is NOT small: the real Windows CI runner (job 124421578873)
+    //      measured `full query 1821ms, one-row control 607ms`, a ratio of
+    //      ~3.0, because both calls are dominated by PowerShell startup. A
+    //      bare ratio bound of 3 therefore sat ON the healthy figure and could
+    //      false-red under the load this test exists to survive. The excess
+    //      does not: a uniformly slowed host scales both calls, so the excess
+    //      stays near 0 whatever the slowdown, while a fixed 16s census defect
+    //      adds ~16s of excess to any host. 10s sits clear of both. No
+    //      separate floor is kept: excess > 10s already implies rerunMs > 10s.
+    //   3. skip only when the control ITSELF failed or timed out AND the rerun
+    //      still timed out (docs/testing/flaky-register.md). A control that
+    //      succeeded, even slowly, with both rerun attempts timing out FAILS:
+    //      the host answered.
+    //      Residual: a query that hangs outright on a host whose control also
+    //      fails still lands here and skips; the register row records that gap.
+    // Any OTHER empty result (empty rows, unparseable output, a permanent
+    // failure — the pass-1 date bug lands here as 'empty Win32_Process result
+    // after retry') still fails.
+    const isTimeout = (s) => s.length === 0 && /^Win32_Process query timed out/.test(String(s.snapshotError));
+    const CONTROL_FAST_MS = 5000;
+    const RERUN_HEALTHY_RATIO = 3;
+    const RERUN_EXCESS_MAX_MS = 10000;
+    const tFull = Date.now();
+    let snapshot = collectProcessSnapshot();
+    const fullMs = Date.now() - tFull;
+    const tCtl = Date.now();
+    const control = spawnSync(
+      'powershell',
+      ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process -Filter "ProcessId=$PID" | Select-Object -ExpandProperty ProcessId'],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    );
+    const controlMs = Date.now() - tCtl;
+    t.diagnostic(`C3 timing: full query ${fullMs}ms, one-row control ${controlMs}ms`);
+    if (isTimeout(snapshot)) {
+      const controlFast = !control.error && control.status === 0 && controlMs < CONTROL_FAST_MS;
+      assert.ok(
+        !controlFast,
+        `the full Win32_Process query timed out (${snapshot.snapshotError}) while a one-row control answered in ${controlMs}ms — ` +
+          'the host is responsive, so the census query itself is too slow for its 15s bound (Castwright#3917)',
+      );
+      const attemptMs = [];
+      snapshot = collectProcessSnapshot({
+        spawn: (c, a, o) => {
+          const t0 = Date.now();
+          const r = spawnSync(c, a, { ...o, timeout: 120000, windowsHide: true });
+          attemptMs.push(Date.now() - t0);
+          return r;
+        },
+      });
+      // The collector's result comes from its last attempt.
+      const rerunMs = attemptMs[attemptMs.length - 1];
+      const excessMs = rerunMs - RERUN_HEALTHY_RATIO * controlMs;
+      t.diagnostic(
+        `C3 slow-control rerun: attempts ${attemptMs.join('/')}ms, gated ${rerunMs}ms (ratio ${(rerunMs / controlMs).toFixed(1)}, excess over ${RERUN_HEALTHY_RATIO}x control ${excessMs}ms)`,
+      );
+      if (isTimeout(snapshot)) {
+        const controlFailed = Boolean(control.error) || control.status !== 0;
+        assert.ok(
+          controlFailed,
+          `the one-row control answered (${controlMs}ms) but the full query timed out on both 120s attempts (${attemptMs.join('/')}ms) — ` +
+            'the host responded, so the census query itself hangs (Castwright#3917)',
+        );
+        t.skip(
+          'host unresponsive: the one-row control itself failed or timed out and the full query ' +
+            'timed out even at 120s (Castwright#3917)',
+        );
+        return;
+      }
+      assert.ok(
+        excessMs <= RERUN_EXCESS_MAX_MS,
+        `the full query took ${rerunMs}ms against a ${controlMs}ms one-row control: ${excessMs}ms over the healthy ${RERUN_HEALTHY_RATIO}x ratio ` +
+          `(> ${RERUN_EXCESS_MAX_MS}ms; healthy CI measured 1821ms vs 607ms) — ` +
+          'a slow control does not explain a query this much slower than one spawn: the census query itself is too slow (Castwright#3917)',
+      );
+    }
     assert.ok(
       snapshot.length > 0,
       'the collector returned ZERO rows — this is pass 1\u0027s blocking finding, reinstated',

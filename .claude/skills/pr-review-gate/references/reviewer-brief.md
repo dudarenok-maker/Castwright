@@ -727,7 +727,7 @@ recite:
     and asserting the action does not run again and the edit stays on screen
     and on disk.
 
-45. **An exact comparison against a value re-derived from a producer that has
+62. **An exact comparison against a value re-derived from a producer that has
     changed since the stored copy was made** — PR #3835 passes 1-4 (#3829,
     `workspace/restructure.ts` `parseTitlesPairWithState`): state.json holds
     chapter titles as the parser wrote them at import; the check compared each
@@ -742,7 +742,7 @@ recite:
     a new caller widens who is exposed to that drift, so measure it on a book
     in an older producer's form before reusing it. Four rounds of rule changes
     did not settle which weaker test is safe; that design is tracked in #3837.
-46. **An app-made placeholder compared as identity evidence** — PR #3835 passes
+63. **An app-made placeholder compared as identity evidence** — PR #3835 passes
     2-3 (#3829, same function): the parser's fallback title for an untitled
     section is `Chapter N` (a position number), and a real heading elsewhere can
     carry the same text, so an untouched import was read as a reorder. A
@@ -756,7 +756,7 @@ recite:
     where a real value of that same text sits on the placeholder's position
     (must still be caught), before trusting any exemption.
 
-47. **A skip honoured where a value is tested as the subject, but not where the
+64. **A skip honoured where a value is tested as the subject, but not where the
     same value is read as evidence about another item** — PR #3835 pass 4
     (#3829, `parseTitlesPairWithState`): `titleOverridden` (the user's own
     wording) exempted a chapter from being checked, but that chapter's title
@@ -823,6 +823,26 @@ recite:
     retry is not the only acceptable remedy: the shipped one reads anyway on
     expiry, guarded by `castWrittenSince` so a read that post-dates a cast
     save does not hydrate over it.
+
+61. **A timing threshold calibrated on a dev box that falls inside the CI
+    runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host
+    from a slow query by a "fast control" line of 5 s, set with only a local
+    figure (~0.45 s) to compare against. Green Windows CI runs of the same
+    query took 1.5-6 s, so on CI the control could land on the slow side
+    and a real 16 s census regression would pass green (observed in a local
+    run with the slow side forced, not on CI), while failing on the
+    author's box. The discriminator's verdict on a real defect was decided by
+    runner load, not by the defect. Checkable: for every absolute time
+    threshold a test or guard uses to classify a result, find the figures from
+    the leg that enforces it (recent green CI runs, a `t.diagnostic` line)
+    and confirm the threshold sits clear of their spread; if it was only
+    measured locally, force the "slow" side (set the threshold to 0) with the
+    defect injected and see whether the guard still fails, or compare against a
+    same-run reference over an absolute line. A bare ratio is not enough when
+    the healthy ratio itself sits near the bound (C3's measured 1821ms vs
+    607ms is ~3.0 against a bound of 3): prefer the excess over the measured
+    healthy ratio (`t - k x reference > margin`), which stays near 0 under
+    uniform slowdown and grows by the defect's cost.
 
 ### Keeping the catalogue current
 
