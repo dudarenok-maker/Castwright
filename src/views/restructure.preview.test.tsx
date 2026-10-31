@@ -27,7 +27,7 @@ vi.mock('../store', async () => {
 });
 
 import { RestructureView } from './restructure';
-import { BOOK_READ_TIMEOUT_MS } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
 
 /* `guard` installs the real restructure guard (first in the chain, as in the app store):
    a user edit made mid-request is refused. Without it the store models a writer that

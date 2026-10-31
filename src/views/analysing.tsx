@@ -29,7 +29,7 @@ import { ModelControlPill, type ModelControlState } from '../components/ModelCon
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
 import { FailureFixList } from '../components/failure-fix-list';
-import { readWithRetry } from '../components/layout';
+import { readWithRetry } from '../lib/book-read';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';

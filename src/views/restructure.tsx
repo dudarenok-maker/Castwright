@@ -24,7 +24,7 @@ import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { flushBookPersistence, type BookFlushOutcome } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
-import { BOOK_READ_TIMEOUT_MS, within } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import type { Chapter } from '../lib/types';

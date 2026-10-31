@@ -37,7 +37,7 @@ import {
 } from '../lib/icons';
 import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
-import { within, BOOK_READ_TIMEOUT_MS } from '../components/layout';
+import { within, BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { designWillGeneratePersona } from '../lib/design-persona';

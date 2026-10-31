@@ -36,7 +36,8 @@ import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildAnalyzerPickerGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
-import { BOOK_READ_TIMEOUT_MS, Layout, type LayoutContext, readWithRetry, within } from '../components/layout';
+import { Layout, type LayoutContext } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS, readWithRetry, within } from '../lib/book-read';
 import { PairShell } from '../views/pair';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
