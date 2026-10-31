@@ -807,6 +807,21 @@ recite:
     confirm a test goes red; a backstop reached only by a hand-seeded reducer
     test is not coverage of the real ordering.
 
+61. **A timing threshold calibrated on a dev box that falls inside the CI
+    runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host
+    from a slow query by a "fast control" line of 5 s, chosen because the
+    one-row control took ~0.45 s locally. Green Windows CI runs of the same
+    query took 1.5-6 s, so on CI the control could land on the slow side
+    and a real 16 s census regression passed green when it did, while failing on the
+    author's box. The discriminator's verdict on a real defect was decided by
+    runner load, not by the defect. Checkable: for every absolute time
+    threshold a test or guard uses to classify a result, find the figures from
+    the leg that enforces it (recent green CI runs, a `t.diagnostic` line)
+    and confirm the threshold sits clear of their spread; if it was only
+    measured locally, force the "slow" side (set the threshold to 0) with the
+    defect injected and see whether the guard still fails, or prefer a ratio
+    to a same-run reference over an absolute line.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
