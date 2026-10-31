@@ -28,6 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
@@ -56,6 +57,7 @@ import {
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { shouldForkSharedVoiceUuid } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
@@ -244,14 +246,87 @@ export async function persistEmotionVariant(
   });
 }
 
+/* #3992 — the base artifact family of one voice key (no emotion variants). */
+function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
+  return kind === 'pt'
+    ? qwenVoicePtPath(name)
+    : kind === 'json'
+      ? qwenVoiceSidecarPath(name)
+      : qwenVoiceWavPath(name);
+}
+
+/* #3992 — see ensureCharacterVoiceUuid. Caller holds the design lock. */
+async function forkSharedVoiceUuid(
+  bookDir: string,
+  characterId: string,
+  oldUuid: string,
+): Promise<string | undefined> {
+  const newUuid = nanoid();
+  const oldKey = `qwen-${oldUuid}`;
+  const newKey = `qwen-${newUuid}`;
+  const family: Array<['pt' | 'json' | 'wav', string]> = [
+    ['pt', ''],
+    ['json', ''],
+    ['pt', '__1.7b'],
+    ['wav', '__master'],
+  ];
+  const copied: string[] = [];
+  for (const [kind, suffix] of family) {
+    const dest = familyPath(kind, `${newKey}${suffix}`);
+    try {
+      await copyFile(familyPath(kind, `${oldKey}${suffix}`), dest, fsConstants.COPYFILE_EXCL);
+      copied.push(dest);
+    } catch {
+      /* source absent (or dest already there): skip — never overwrite. */
+    }
+  }
+  const cleanup = async (): Promise<void> => {
+    await Promise.all(copied.map((f) => rm(f, { force: true }).catch(() => {})));
+  };
+
+  return withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) {
+      await cleanup();
+      return undefined;
+    }
+    const x = fresh.characters[idx];
+    if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
+      await cleanup();
+      return x.voiceUuid ?? undefined;
+    }
+    const linkId = x.voiceId ?? x.id;
+    for (let i = 0; i < fresh.characters.length; i++) {
+      const c = fresh.characters[i];
+      if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
+        fresh.characters[i] = { ...c, voiceUuid: newUuid };
+      }
+    }
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return newUuid;
+  });
+}
+
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
    voice is designed (the .pt is named from qwenStorageKey, which reads the
-   uuid). Idempotent: returns the existing uuid untouched. Mints under the
-   per-book design lock so two concurrent designs of one character can't mint
-   two uuids. Stamps the SAME uuid onto every linked-cast sibling (matching
-   voiceId ?? id) so a series-shared voice keeps one identity — series-scoped
-   when seriesFilter is given (mirrors persistEmotionVariant), else book-scoped.
-   Returns undefined for an unknown character. */
+   uuid). Idempotent for a live character: returns the existing uuid untouched.
+   Mints under the per-book design lock so two concurrent designs of one
+   character can't mint two uuids. Stamps the SAME uuid onto every linked-cast
+   sibling (matching voiceId ?? id) so a series-shared voice keeps one identity
+   — series-scoped when seriesFilter is given (mirrors persistEmotionVariant),
+   else book-scoped. Returns undefined for an unknown character.
+
+   #3992 FORK: a character whose series link the user DECLINED still carries
+   the earlier book's uuid, so a base design would overwrite that book's
+   `qwen-<uuid>.pt`. When shouldForkSharedVoiceUuid says so, mint U', COPY the
+   base family of `qwen-<uuid>` (.pt, .json, __1.7b.pt, __master.wav — never the
+   emotion variants) to `qwen-<U'>`, then stamp U' onto this character (and
+   same-book rows sharing its voiceId ?? id) only. Copy first, stamp second: a
+   crash between them leaves stray copies, never a row pointing at a missing
+   .pt. The copies happen outside the cast lock (like promote-voice); the stamp
+   re-decides inside it. NEVER walks the series (forEachMatchingCastCharacter
+   matches by voiceId, which a declined row still shares with the earlier book). */
 export async function ensureCharacterVoiceUuid(
   bookDir: string,
   characterId: string,
@@ -261,7 +336,10 @@ export async function ensureCharacterVoiceUuid(
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!cast || !character) return undefined;
-    if (character.voiceUuid) return character.voiceUuid;
+    if (character.voiceUuid) {
+      if (!(await shouldForkSharedVoiceUuid(bookDir, character))) return character.voiceUuid;
+      return forkSharedVoiceUuid(bookDir, characterId, character.voiceUuid);
+    }
 
     if (seriesFilter) {
       /* forEachMatchingCastCharacter takes its own per-book cast lock as it
