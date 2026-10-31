@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createKeyedLoader, type KeyedLoader } from '../lib/keyed-loader';
 import {
   SectionLabel,
   MixedHeading,
@@ -169,6 +170,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(() => new Map());
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
+  /* #3991 — `hydrateForeignCast`'s callers run from stale render closures,
+     so its cache / failed / in-flight bookkeeping lives in a ref-held keyed
+     loader rather than the state above. The state patch paths (merge,
+     not-linked, gender/age/tone) don't update the loader's cache, so the
+     cast it returns can lag `globalCastCache`; callers only null-check it. */
+  const castLoaderRef = useRef<KeyedLoader<Character[]> | null>(null);
   /* Plan 101 — DuplicateReviewModal state. We hold the candidate's two
      voice ids (stable) rather than a frozen pair snapshot, then derive
      the live pair (+ hydration status) from `duplicateCandidates` below.
@@ -878,24 +885,16 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      sides resolve. `globalCastFetching` is a Set so concurrent
      per-side fetches for a cross-book pair don't clobber each
      other's in-flight state. */
-  async function hydrateForeignCast(bookId: string): Promise<Character[] | null> {
-    const cached = globalCastCache.get(bookId);
-    if (cached) return cached;
-    if (globalCastFailed.has(bookId)) return null;
-    if (globalCastFetching.has(bookId)) {
-      /* Another caller is already fetching — wait for it to land in the
-         cache (or fail) by polling a microtask cycle. Simpler than a
-         per-bookId promise registry and the wait is bounded by the
-         single in-flight request. */
-      await new Promise<void>((resolve) => {
-        const tick = () => {
-          if (globalCastCache.get(bookId) || globalCastFailed.has(bookId)) resolve();
-          else setTimeout(tick, 25);
-        };
-        tick();
-      });
-      return globalCastCache.get(bookId) ?? null;
-    }
+  function hydrateForeignCast(bookId: string): Promise<Character[] | null> {
+    /* Never read the render-time state above here: a caller's closure is
+       frozen at its render, so a waiter polling state never saw the first
+       fetch land (#3991). The loader shares one in-flight promise per
+       bookId instead. */
+    castLoaderRef.current ??= createKeyedLoader(fetchForeignCast);
+    return castLoaderRef.current.load(bookId);
+  }
+
+  async function fetchForeignCast(bookId: string): Promise<Character[] | null> {
     setGlobalCastFetching((prev) => {
       const next = new Set(prev);
       next.add(bookId);
@@ -952,9 +951,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      `hydrateForeignCast` is the user-facing surface.
 
      Same-bookId pairs (e.g. two voices from one foreign book) dedupe
-     to a single fetch — calling hydrateForeignCast twice in the same
-     microtask tick can't see its own globalCastFetching set update yet,
-     so we collapse upstream. Pairs that are entirely within the open
+     to a single fetch. Since #3991 `hydrateForeignCast` itself shares the
+     in-flight promise per bookId, so collapsing upstream is redundant
+     but harmless. Pairs that are entirely within the open
      book take the synchronous fast-path — no microtask, no await — so
      a Compare click immediately mounts the modal in tests and avoids
      a needless render cycle. */
