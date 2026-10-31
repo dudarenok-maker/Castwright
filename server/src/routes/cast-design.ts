@@ -43,6 +43,7 @@ import {
   isLockAcquisitionTimeout,
   itemFailureReason,
   requestFailureMessage,
+  requestFailureMessageFs,
 } from '../workspace/file-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
@@ -776,7 +777,7 @@ async function runDesignJob(
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the
              end-of-job `failures` list can't disagree. */
-          const reason = itemFailureReason(e, message);
+          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',

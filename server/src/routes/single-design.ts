@@ -30,7 +30,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
-import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -214,7 +214,7 @@ async function runSingleDesign(
       name: (e as Error)?.name,
       message: (e as Error)?.message,
     });
-    const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
+    const message = requestFailureMessageFs(e, (e as Error).message || 'Voice design failed.');
     /* #2260 FINAL ROUND (B2) nit — 'design_failed' left this event unable to
        reach the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links
        for a lock-contention failure, same as the analysis path's own

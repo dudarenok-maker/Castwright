@@ -8,7 +8,7 @@
    missing fork shows up as Book One's bytes being overwritten. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -25,6 +25,23 @@ vi.mock('undici', async (importOriginal) => {
 });
 
 const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+/* Fails the copy of one source file with a non-ENOENT error (an EBUSY from a
+   scanner holding the file), to prove a failed copy is not read as "absent". */
+const failCopyOf = vi.hoisted(() => ({ suffix: null as string | null }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const copyFile = async (src: unknown, dest: unknown, mode?: number) => {
+    if (failCopyOf.suffix && String(src).endsWith(failCopyOf.suffix)) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${String(src)}'`), {
+        code: 'EBUSY',
+        syscall: 'copyfile',
+        path: String(src),
+      });
+    }
+    return actual.copyFile(src as string, dest as string, mode);
+  };
+  return { ...actual, default: { ...actual, copyFile }, copyFile };
+});
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
@@ -133,6 +150,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  failCopyOf.suffix = null;
   requestedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
@@ -571,6 +589,47 @@ describe('#3992 — an unreadable cast.json elsewhere does not fail a design or 
     const res = await design(() => bookOneId);
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(requestedVoiceIds).toEqual([]);
+  });
+});
+
+/* Review pass 1, finding 7 — only an ABSENT source (ENOENT) may be skipped
+   when the base family is copied. Any other failure aborts the fork before the
+   stamp, removes what it already copied, and fails the request. */
+describe('#3992 — a failed copy aborts the fork', () => {
+  const qwenFiles = () => readdirSync(qwenDir()).sort();
+
+  it('EBUSY on the .json: 500 with a path-free body, row unstamped, no stray copies', async () => {
+    seed({});
+    const before = qwenFiles();
+    failCopyOf.suffix = 'qwen-u_shared.json';
+    const res = await design(() => bookTwoId, { preview: true });
+    failCopyOf.suffix = null;
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toMatch(/EBUSY|copyfile|qwen-u_shared/);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([]);
+    expect(qwenFiles()).toEqual(before);
+  });
+
+  it('EBUSY on the .pt: the same', async () => {
+    seed({});
+    const before = qwenFiles();
+    failCopyOf.suffix = 'qwen-u_shared.pt';
+    const res = await design(() => bookTwoId, { preview: true });
+    failCopyOf.suffix = null;
+
+    expect(res.status).toBe(500);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(qwenFiles()).toEqual(before);
+  });
+
+  it('a source that is simply absent is still skipped: the fork goes ahead', async () => {
+    seed({});
+    rmSync(join(qwenDir(), 'qwen-u_shared.json'));
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
   });
 });
 

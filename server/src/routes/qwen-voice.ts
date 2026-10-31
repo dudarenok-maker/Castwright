@@ -41,7 +41,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
@@ -263,7 +263,12 @@ function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
 }
 
 /* #3992 — copy the base artifact family of `oldKey` to `newKey` (never the
-   emotion variants). Returns the files written, for cleanup. */
+   emotion variants). Returns the files written, for cleanup. Only an ABSENT
+   source (ENOENT) is skipped; any other failure (EBUSY, EPERM, ENOSPC, or the
+   destination already existing) removes what was copied so far and rethrows, so
+   the caller never stamps a uuid whose `.pt` is missing. The rethrown fs error
+   carries an absolute path: every route that reaches it curates it through
+   `requestFailureMessageFs`. */
 async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]> {
   const family: Array<['pt' | 'json' | 'wav', string]> = [
     ['pt', ''],
@@ -277,8 +282,10 @@ async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]>
     try {
       await copyFile(familyPath(kind, `${oldKey}${suffix}`), dest, fsConstants.COPYFILE_EXCL);
       copied.push(dest);
-    } catch {
-      /* source absent (or dest already there): skip — never overwrite. */
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // source absent
+      await removeFiles(copied);
+      throw e;
     }
   }
   return copied;
@@ -963,7 +970,7 @@ qwenVoiceRouter.post(
          inheriting the sidecar-error mapping's default. */
       const status = isLockAcquisitionTimeout(e) ? 500 : httpStatusForSidecarError(e);
       return res.status(status).json({
-        error: requestFailureMessage(e, (e as Error).message || 'Voice design failed.'),
+        error: requestFailureMessageFs(e, (e as Error).message || 'Voice design failed.'),
       });
     }
       });
@@ -977,7 +984,7 @@ qwenVoiceRouter.post(
     } catch (e) {
       console.error('[qwen-voice] design-voice failed', e);
       if (!res.headersSent) {
-        res.status(500).json({ error: requestFailureMessage(e, 'Voice design failed.') });
+        res.status(500).json({ error: requestFailureMessageFs(e, 'Voice design failed.') });
       }
     }
   },

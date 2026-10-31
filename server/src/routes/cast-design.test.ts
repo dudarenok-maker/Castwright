@@ -2108,6 +2108,36 @@ describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not
   });
 });
 
+describe('cast-design — a node fs error out of a character’s design is curated, not leaked (#3992)', () => {
+  it('reports the path-free fs sentence as the character’s failure reason', async () => {
+    const castLockMod = await import('../workspace/cast-lock.js');
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    /* aria has a voiceStyle, so the first cast lock is the design's own mint. */
+    const spy = vi.spyOn(castLockMod, 'withCastLock').mockImplementationOnce(async () => {
+      throw Object.assign(
+        new Error("EBUSY: resource busy or locked, copyfile 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt'"),
+        { code: 'EBUSY', syscall: 'copyfile', path: 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt' },
+      );
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+      consoleErrorSpy.mockRestore();
+    }
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failed).toBeDefined();
+    expect(failed?.errorReason).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(failed?.errorReason).not.toContain('real-name');
+  });
+});
+
 describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
   it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
     personaSharesGpuMock.mockReturnValue(false);
