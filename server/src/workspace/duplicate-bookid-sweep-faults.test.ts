@@ -128,6 +128,7 @@ function seed(author: string, title: string, bookId: string, rendered = 0): stri
   );
   return dir;
 }
+const warned = (): string[] => (warn.mock.calls as unknown[][]).map((c) => String(c[0]));
 const idOf = (dir: string): string => JSON.parse(readFileSync(paths.stateJsonPath(dir), 'utf8')).bookId;
 
 describe('a directory that cannot be listed', () => {
@@ -143,7 +144,7 @@ describe('a directory that cannot be listed', () => {
     expect(idOf(loser)).toBe('a__s__t');
     expect(idOf(hidden)).toBe('a__s__t-2');
     /* The warning is path-free (the raw error carries the absolute path). */
-    const lines = warn.mock.calls.map((c) => String(c[0]));
+    const lines = warned();
     expect(lines.some((l) => l.includes('skipping the sweep until next startup'))).toBe(true);
     expect(lines.every((l) => !l.includes(root))).toBe(true);
 
@@ -192,7 +193,7 @@ describe('failure paths of the locked repair', () => {
     expect(await sweep.repairDuplicateBookIds()).toEqual([]);
     expect(idOf(w)).toBe('dup');
     expect(idOf(loser)).toBe('dup');
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('leaving it alone'))).toBe(true);
+    expect(warned().some((l) => l.includes('leaving it alone'))).toBe(true);
   });
 
   it('a state.json that changed id after the resolve is not overwritten', async () => {
@@ -204,7 +205,7 @@ describe('failure paths of the locked repair', () => {
     expect(sweep.getDuplicateBookIdRepairs()).toEqual([]);
     expect(idOf(loser)).toBe('someone-else');
     expect(idOf(w)).toBe('dup');
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('was not rewritten'))).toBe(true);
+    expect(warned().some((l) => l.includes('was not rewritten'))).toBe(true);
   });
 
   it('a loser whose id resolves nowhere by the time the lock is held is skipped, not recorded', async () => {
@@ -217,7 +218,7 @@ describe('failure paths of the locked repair', () => {
 
     expect(await sweep.repairDuplicateBookIds()).toEqual([]);
     expect(sweep.getDuplicateBookIdRepairs()).toEqual([]);
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('is gone; nothing to repair'))).toBe(true);
+    expect(warned().some((l) => l.includes('is gone; nothing to repair'))).toBe(true);
   });
 
   it('a detection that throws is contained: the sweep resolves [] and writes nothing', async () => {
@@ -229,7 +230,7 @@ describe('failure paths of the locked repair', () => {
 
     await expect(sweep.repairDuplicateBookIds()).resolves.toEqual([]);
     expect(idOf(loser)).toBe('dup');
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('detection failed'))).toBe(true);
+    expect(warned().some((l) => l.includes('detection failed'))).toBe(true);
   });
 
   it('the rewrite runs under the book-path claim', async () => {
