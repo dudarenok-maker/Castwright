@@ -76,7 +76,7 @@ describe('normalisation', () => {
   });
 
   it('applies NFC', () => {
-    expect(normaliseForProof('Café')).toBe('café');
+    expect(normaliseForProof('Cafe\u0301')).toBe('caf\u00e9');
   });
 
   it('folds curly quotes, guillemets, the dash set and the ellipsis', () => {
@@ -91,7 +91,7 @@ describe('normalisation', () => {
   });
 
   it('collapses whitespace runs, NBSP included, and trims', () => {
-    expect(normaliseForProof('  a \t\n b  c  ')).toBe('a b c');
+    expect(normaliseForProof('  a \t\n b\u00a0\u00a0c  ')).toBe('a b c');
   });
 
   it('removes the analyzer tag vocabulary anywhere, both sides (M5)', () => {
@@ -507,8 +507,13 @@ describe('guards and runtime', () => {
   it('a 90-chapter, 10,000-sentence book checks in under 2 s', () => {
     const n = 90;
     const per = Math.ceil(10_000 / n);
-    const bodies = range(n).map((c) => body(ownLines(c + 1, per)));
-    const sentences = range(n).flatMap((c) => says(c + 1, ownLines(c + 1, per)));
+    /* Lines vary in their first 8 characters, as prose does. The index looks an
+       item up by its first 8, so lines that all share them (like `own()`'s
+       "chapter ") make every lookup a scan of the whole book. */
+    const line = (c: number, k: number) => `${k} of chapter ${c}: a long synthetic evidence line.`;
+    const lines = (c: number) => range(per).map((k) => line(c, k));
+    const bodies = range(n).map((c) => body(lines(c + 1)));
+    const sentences = range(n).flatMap((c) => says(c + 1, lines(c + 1)));
     expect(sentences.length).toBeGreaterThanOrEqual(10_000);
     const t0 = performance.now();
     const r = checkParseHintsPairing(input(bodies, sentences));

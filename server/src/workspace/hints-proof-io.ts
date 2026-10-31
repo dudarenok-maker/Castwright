@@ -31,7 +31,7 @@ export async function readEditsForHintsCheck(bookDir: string): Promise<EditsForC
   /* Strip a leading UTF-8 BOM exactly as `readJson` does (workspace/state-io.ts):
      Windows editors and PowerShell 5.1 write one, and readJson accepts the file. */
   const raw = bytes.toString('utf8');
-  const stripped = raw.startsWith('﻿') ? raw.slice(1) : raw;
+  const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
   try {
     return { kind: 'ok', value: JSON.parse(stripped) as unknown, sha256 };
   } catch (error) {
