@@ -5472,3 +5472,82 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
     }
   });
 });
+
+describe('Layout — the duplicate-review far-book read is bounded and aborted (#3967)', () => {
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  /* Different surface names ('Eliza' / 'Eliza Gray') — identical names read as already linked. */
+  const voice = (bookId: string) => ({
+    id: 'eliza', character: bookId === 'A' ? 'Eliza' : 'Eliza Gray', bookTitle: `Book ${bookId}`, bookId, attributes: [], usedIn: 1,
+    source: 'current', gradient: ['#000', '#fff'], ttsVoice: { provider: 'gemini', name: 'Kore', description: '' },
+  });
+  const libBook = (bookId: string) => ({
+    bookId, title: `Book ${bookId}`, author: 'Della Renwick', series: 'The Series', isStandalone: false,
+    status: 'cast_pending', tags: [],
+  });
+  const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'The Series', books: [libBook('A'), libBook('B')] }] }] };
+  const farReads = () => getBookStateMock.mock.calls.filter(([id]) => id === 'B');
+
+  /* Opens book A with Eliza's profile drawer up, then clicks the
+     "Possible duplicate of …" chip, which starts the far-book (B) read. */
+  async function openDuplicateReview() {
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: [voice('A'), voice('B')], dropped: [] } as never);
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) =>
+      id === 'B' ? hung(signal) : Promise.resolve(bookStateFor(id, revState(id, null, 0, []))));
+    const store = makeStore();
+    openAt(store, 'A');
+    const view = renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().cast.characters.length).toBeGreaterThan(0));
+    act(() => { store.dispatch(uiActions.setOpenProfileId('eliza')); });
+    fireEvent.click(await screen.findByRole('button', { name: /Possible duplicate of/i }));
+    await waitFor(() => expect(farReads().length).toBeGreaterThan(0));
+    return { store, view };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: [], dropped: [] } as never);
+  });
+
+  it('(a) timeout: a far-book read that never answers is aborted after 15 s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await openDuplicateReview();
+      const signal = farReads()[0][1] as AbortSignal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      await advance(15_500);
+      expect(signal.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith('[duplicate-review] foreign cast hydrate failed', expect.any(String));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(b) closing the review before 15 s aborts the read with no [duplicate-review] warn', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = await openDuplicateReview();
+      const signal = farReads()[0][1] as AbortSignal;
+      await advance(5_000);
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      /* Closing the profile drawer drops the candidate, so the effect cleans up. */
+      act(() => { store.dispatch(uiActions.setOpenProfileId(null)); });
+      await advance(100);
+      expect(signal.aborted).toBe(true);
+      await advance(20_000);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('[duplicate-review]'))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

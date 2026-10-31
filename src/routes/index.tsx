@@ -738,10 +738,13 @@ export function ConfirmRoute() {
      flight). It is stamped with beginFullRead;
      if a cast save could post-date what it read (castWrittenSince) it does NOT
      put that older cast over the slice, it reads again — at most 3 reads in
-     all — and after the last one it keeps the slice as it is. */
+     all — and after the last one it keeps the slice as it is.
+     #3967 — the read itself is bounded at 15 s and aborted when the route is
+     left, so re-entering Confirm never piles up open reads. */
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
+    let readCtrl: AbortController | null = null;
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const attempt = (n: number): void => {
       const writes = dispatch(flushBookPersistence(bookId)) as unknown;
@@ -753,7 +756,9 @@ export function ConfirmRoute() {
         .then(() => {
           if (cancelled) return undefined;
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
-          return api.getBookState(bookId).then((res) => {
+          const ctrl = new AbortController();
+          readCtrl = ctrl;
+          return within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort()).then((res) => {
             if (cancelled) return;
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
@@ -781,6 +786,7 @@ export function ConfirmRoute() {
     attempt(0);
     return () => {
       cancelled = true;
+      readCtrl?.abort();
       timers.forEach(clearTimeout);
     };
   }, [bookId, dispatch]);

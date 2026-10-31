@@ -27,7 +27,9 @@ let capturedOpts: AnalyseOpts | undefined;
 let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
 let rejectSubset: ((reason?: unknown) => void) | undefined;
-let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse | null>) | undefined;
+let getBookStateImpl:
+  | ((bookId: string, signal?: AbortSignal) => Promise<BookStateResponse | null>)
+  | undefined;
 let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
 /* Per-test override — when set, the analyseManuscript mock rejects with
    this error instead of returning a never-resolving promise. Lets tests
@@ -67,8 +69,8 @@ vi.mock('../lib/api', async () => {
           rejectSubset = reject;
         });
       },
-      getBookState: (bookId: string) =>
-        getBookStateImpl ? getBookStateImpl(bookId) : Promise.reject(new Error('no impl')),
+      getBookState: (bookId: string, signal?: AbortSignal) =>
+        getBookStateImpl ? getBookStateImpl(bookId, signal) : Promise.reject(new Error('no impl')),
       getDroppedQuotes: (bookId: string) =>
         getDroppedQuotesImpl
           ? getDroppedQuotesImpl(bookId)
@@ -117,7 +119,7 @@ beforeEach(() => {
   });
 });
 
-function renderView() {
+function renderView(bookId?: string) {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -147,6 +149,7 @@ function renderView() {
       <Provider store={store}>
         <AnalysingView
           manuscriptId="m1"
+          bookId={bookId}
           title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
@@ -1332,6 +1335,96 @@ describe('AnalysingView — Start/Pause/Resume button cycle', () => {
     await waitFor(() => expect(capturedOpts).toBeDefined());
     expect(capturedOpts!.signal!.aborted).toBe(false);
     expect(capturedOpts!.signal).not.toBe(firstSignal);
+  });
+});
+
+describe('AnalysingView — the book-state read is bounded and aborted (#3967)', () => {
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  const hydrateWarns = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.filter((c) => String(c[0]).includes('failed-chapter hydrate skipped'));
+
+  it('(a) a read that never answers is aborted after the 15 s bound', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const signals: AbortSignal[] = [];
+      getBookStateImpl = (_id, signal) => {
+        signals.push(signal as AbortSignal);
+        return hung(signal);
+      };
+      renderView('b1');
+      await advance(14000);
+      expect(signals[0]).toBeInstanceOf(AbortSignal);
+      expect(signals[0].aborted).toBe(false);
+      await advance(1500);
+      expect(signals[0].aborted).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('(b) unmounting aborts the read and stays silent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const signals: AbortSignal[] = [];
+      getBookStateImpl = (_id, signal) => {
+        signals.push(signal as AbortSignal);
+        return hung(signal);
+      };
+      const view = renderView('b1');
+      await advance(5000);
+      expect(signals[0]).toBeInstanceOf(AbortSignal);
+      expect(signals[0].aborted).toBe(false);
+      view.unmount();
+      await advance(100);
+      expect(signals[0].aborted).toBe(true);
+      expect(hydrateWarns(warn)).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('(c) a refresh aborts the previous read and leaves at most one open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const signals: AbortSignal[] = [];
+      getBookStateImpl = (_id, signal) => {
+        signals.push(signal as AbortSignal);
+        return hung(signal);
+      };
+      renderView('b1');
+      await advance(100);
+      fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+      await advance(100);
+      act(() => {
+        capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
+      });
+      await advance(100);
+      expect(signals).toHaveLength(1);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /pause analysis/i }));
+      });
+      await advance(100);
+      expect(signals).toHaveLength(2);
+      expect(signals[0].aborted).toBe(true);
+      expect(signals.filter((s) => !s.aborted)).toHaveLength(1);
+      expect(hydrateWarns(warn)).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 

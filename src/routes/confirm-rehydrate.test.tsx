@@ -40,7 +40,7 @@ const { getBookStateMock, putBookStateMock } = vi.hoisted(() => ({
 
 vi.mock('../lib/api', () => ({
   api: {
-    getBookState: (bookId: string) => getBookStateMock(bookId),
+    getBookState: (bookId: string, signal?: AbortSignal) => getBookStateMock(bookId, signal),
     putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     matchVoices: () => new Promise(() => {}), // layout-style match probe; never resolves
   },
@@ -119,7 +119,7 @@ describe('ConfirmRoute — re-reads merged cast.json on entry', () => {
       </Provider>,
     );
 
-    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith(BOOK_ID));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith(BOOK_ID, expect.any(AbortSignal)));
     await waitFor(() => {
       const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
       expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
@@ -296,6 +296,88 @@ describe('ConfirmRoute — entry re-read when a queued save stalls past the wait
       await vi.advanceTimersByTimeAsync(60_000);
       const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
       expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/* #3967 — the entry re-read is bounded and aborted: leaving Confirm (or re-entering
+   it) never leaves an unsettled read open, and a read that never answers is given
+   up on after BOOK_READ_TIMEOUT_MS. */
+describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', () => {
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+
+  function renderConfirm() {
+    const store = makeStore([VOICELESS_COALFALL]);
+    store.dispatch(uiActions.openBook({ id: BOOK_ID, status: 'cast_pending' }));
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${BOOK_ID}/confirm`]}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  const signalOf = (i: number) => getBookStateMock.mock.calls[i][1] as AbortSignal;
+
+  it('(a) timeout: a read that never settles is aborted after 15 s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      renderConfirm();
+      await advance(100);
+      expect(getBookStateMock).toHaveBeenCalledTimes(1);
+      const first = signalOf(0);
+      expect(first).toBeInstanceOf(AbortSignal);
+      expect(first.aborted).toBe(false);
+      await advance(15_500);
+      expect(first.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(b) unmount: leaving Confirm aborts the in-flight read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      const view = renderConfirm();
+      await advance(100);
+      const signal = signalOf(0);
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      view.unmount();
+      expect(signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(c) re-entry: entering Confirm three times leaves at most one read open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock.mockImplementation((_id: string, signal?: AbortSignal) => hung(signal));
+      for (let i = 0; i < 2; i++) {
+        const view = renderConfirm();
+        await advance(100);
+        view.unmount();
+      }
+      renderConfirm();
+      await advance(100);
+      expect(getBookStateMock).toHaveBeenCalledTimes(3);
+      const open = getBookStateMock.mock.calls.filter(([, s]) => !(s as AbortSignal | undefined)?.aborted);
+      expect(open.length).toBeLessThanOrEqual(1);
     } finally {
       vi.useRealTimers();
     }
