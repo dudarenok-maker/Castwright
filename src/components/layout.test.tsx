@@ -5397,6 +5397,32 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
     }
   });
 
+  it('A5: a hydrate read that takes 16 s on every attempt lands on a later attempt (the bound grows)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation(
+        (_id: string, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            const t = setTimeout(() => resolve(bookStateFor('A', revState('A', null, 0, []))), 16000);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      );
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(120000);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      expect(getsOf('A')).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('A3: never more than one getBookState(A) is open across the retry schedule', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -5412,7 +5438,7 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
       const store = makeStore();
       openAt(store, 'A');
       renderLayoutAt(store, 'A');
-      for (let t = 0; t < 140; t++) await advance(1000); // attempts at 0, 17, 36, 59, 90, 135
+      for (let t = 0; t < 60; t++) await advance(5000); // attempts at 0, 17, 51, 119, 195, 285 (bound 15, 30, 60 s...)
       expect(getsOf('A').length).toBeGreaterThanOrEqual(6);
       expect(maxOpen).toBe(1);
     } finally {

@@ -1445,11 +1445,32 @@ describe('AnalysingView — the book-state read is bounded and aborted (#3967)',
       expect(calls).toBe(1);
       await advance(2_000);
       expect(calls).toBe(2);
-      await advance(15_500);
+      await advance(30_500); // the second attempt's bound is 30 s
       await advance(4_000);
       expect(calls).toBe(3);
       expect(await screen.findByText('Chapter Forty-Two')).toBeInTheDocument();
       expect(hydrateWarns(warn)).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('(g) a read that takes 16 s on every attempt still lands: the bound grows per attempt', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateImpl = (_id, signal) =>
+        new Promise((resolve, reject) => {
+          const t = setTimeout(() => resolve(answer()), 16_000);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        }) as never;
+      renderView('b1');
+      await advance(300_000);
+      expect(await screen.findByText('Chapter Forty-Two')).toBeInTheDocument();
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

@@ -4,6 +4,12 @@
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
 export const BOOK_READ_TIMEOUT_MS = 15000;
+const BOOK_READ_TIMEOUT_MAX_MS = 60000;
+/** The per-attempt bound: 15 s on the first attempt, doubling to a 60 s cap, so a read that
+    takes longer than 15 s every time still lands on a later attempt instead of being
+    aborted a second before it would answer. */
+export const attemptBoundMs = (attempt: number) =>
+  Math.min(BOOK_READ_TIMEOUT_MS * 2 ** attempt, BOOK_READ_TIMEOUT_MAX_MS);
 export const retryDelayMs = (attempt: number) =>
   Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
 
@@ -17,7 +23,9 @@ export class ReadTimeoutError extends Error {
 
 /* #3967 — a bounded book-state read that retries an EXPIRED attempt on the
    hydrate's schedule (retryDelayMs) until it lands: the late answer a bare
-   `within` gave up on is not lost for good. `onExpire` fires on each expiry
+   `within` gave up on is not lost for good. The bound grows per attempt
+   (attemptBoundMs), so a read slower than 15 s every time lands too; the first
+   attempt is still aborted at 15 s. `onExpire` fires on each expiry
    (attempt index). Aborting `outer` — the caller's cleanup — aborts the
    in-flight read, cancels the pending retry timer, and rejects with an
    AbortError; a non-timeout rejection passes through unretried. */
@@ -40,7 +48,7 @@ export function readWithRetry<T>(
     const attempt = (n: number): void => {
       const ctrl = new AbortController();
       inner = ctrl;
-      within(read(ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort()).then(
+      within(read(ctrl.signal), attemptBoundMs(n), timers, () => ctrl.abort()).then(
         (v) => {
           outer.removeEventListener('abort', onAbort);
           resolve(v);

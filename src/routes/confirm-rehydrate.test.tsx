@@ -418,6 +418,31 @@ describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', ()
     }
   });
 
+  it('(f) a read that takes 16 s on every attempt still lands: the bound grows per attempt', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getBookStateMock.mockImplementation(
+        (_id: string, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            const t = setTimeout(
+              () => resolve({ state: { bookId: BOOK_ID, chapters: [] }, cast: { characters: [VOICED_COALFALL] } }),
+              16_000,
+            );
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      );
+      const store = renderConfirmWithStore();
+      await advance(300_000);
+      const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
+      expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('(e) unmounting while the retry timer is pending issues no further read', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

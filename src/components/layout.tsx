@@ -133,7 +133,7 @@ import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
 import { IconRefresh, IconWarning } from '../lib/icons';
-import { BOOK_READ_TIMEOUT_MS, readWithRetry, retryDelayMs, within } from '../lib/book-read';
+import { BOOK_READ_TIMEOUT_MS, attemptBoundMs, readWithRetry, retryDelayMs, within } from '../lib/book-read';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
@@ -932,7 +932,8 @@ export function Layout() {
        revisions-only re-read is dropped silently instead (Task 18): the next
        30 s poll repairs it (on the ready stage; on Confirm and Analysing the
        next stage change does), and nothing else on this book was waiting on it.
-       A read that has not settled in 15 s is treated as a failed read (#3426). */
+       A read that has not settled in its attempt bound (15 s, doubling per retry
+       to 60 s: attemptBoundMs) is treated as a failed read (#3426, #3967). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     /* The attempt's request, aborted on expiry and on cleanup so the hydrate
        never leaves two of its own reads of this book open (#3426). Every other
@@ -959,7 +960,7 @@ export function Layout() {
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
       const ctrl = new AbortController();
       readCtrl = ctrl;
-      within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, boundTimers, () => ctrl.abort())
+      within(api.getBookState(bookId, ctrl.signal), attemptBoundMs(attempt), boundTimers, () => ctrl.abort())
         .then((res) => {
           if (cancelled) return;
           if (!revisionsOnly) {

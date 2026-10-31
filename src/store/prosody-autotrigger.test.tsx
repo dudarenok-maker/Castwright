@@ -1952,6 +1952,29 @@ describe('prosody auto-trigger — the book-state read is bounded and aborted (#
     expect(signals.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('(f) a read that takes 16 s on every attempt still lands and detection runs', async () => {
+    const store = makeStore();
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) => {
+      const mine = id === 'b1' && store.getState().manuscript.manuscriptId === 'mns_b1';
+      const body = {
+        ...defaultStateResponse(id),
+        state: { ...defaultStateResponse(id).state, prosodyAnnotated: false },
+      };
+      if (!mine) return Promise.resolve(body);
+      signals.push(signal ?? new AbortController().signal);
+      return new Promise((resolve, reject) => {
+        const t = setTimeout(() => resolve(body), 16_000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    });
+    await openAndAwaitRead(store);
+    await advance(300_000);
+    await waitFor(() => expect(runProsodyPassesMock).toHaveBeenCalled());
+  });
+
   it('(e) unmounting while the retry timer is pending issues no further read', async () => {
     const store = makeStore();
     arm(store);
