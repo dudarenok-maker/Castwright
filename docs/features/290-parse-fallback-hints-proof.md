@@ -586,6 +586,9 @@ No Playwright spec and no frontend test: there is no UI, client or SSE change. T
 | M19 | re-hydrate an impure record, or drop the positional-id assertion | restart-restructure A1 regression; ids-out-of-order gate test |
 | M20a | an exclude/include toggle writes hints (as `main` does when titles pair) | toggle-writes-nothing tests |
 | M20b | a prune on an unpaired parse book writes (as `main` does) instead of refusing | prune-unpaired 409 test |
+| M20b-a | drop `parseCountIdFails \|\|` from the prune refusal | the m > n and m < n prune tests |
+| M20b-b | restrict the prune refusal to `pairing?.mode === 'checked'` | the main-mode title-mispaired prune test |
+| M20c | drop `&& !parseCountIdFails` from `hintsWritten` (#3953) | the `[1,2,4]` rename and refresh-titles tests (500) |
 | M21 | count distinct texts instead of every saved sentence | refrain ×8 pairs; dup ×3 displaced is refused |
 | M22 | drop the BOM strip in `readEditsForHintsCheck` | BOM'd file reads `ok` |
 | M23 | `applyReparse` does not set the marker | `sentencesPredateChapters === true` after re-parse and replace |
@@ -694,6 +697,7 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
 - **Issue:** the PR body says `Closes #3837` and `Refs #3879`. Under "Also fixed, found in passing" it lists:
   - the **pre-existing `main` defect** that a restructure after a re-parse re-seeds the analysis cache from old-keyed edits, which a later run replays as current takes (fixed by `refreshCacheFromEdits`, M26 / M28);
   - every test fixture changed to fix a stale fixture rather than for the feature;
+  - the **pre-existing `main` defect** (#3953) that a rename or refresh-titles on a parse book with the parse's chapter count but non-positional state ids answered 500 (`manuscript-hints: no hint for chapter id N`) instead of skipping the hints write;
   - the **pre-existing `main` defect** that an exclude/include prune on a parse-fallback book whose count/id fails can come out with equal hint and chapter counts and write `manuscript-hints.json`, laundering the mispaired bodies into `persisted` (refused 409 now, owner round 9).
 - **Review gate:** `pr-review-gate`, depth `high` (multi-scope: routes, workspace, contract).
 - **Verify:** `npm run verify:fast:branch` by hand; cloud `verify.yml` is the required gate.

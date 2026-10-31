@@ -448,6 +448,26 @@ describe('exclude/include on a parse book whose count/id fails', () => {
     expect(res.body.chapters).toHaveLength(3);
     expect(existsSync(hintsPath())).toBe(false);
   });
+
+  /* #3953 -- same count as the parse, titles pair, but state ids [1,2,4] against
+     parse ids [1,2,3]: no coherent id pairing to persist, and the op itself is
+     valid. It used to answer 500 from buildHintsEntry ("no hint for chapter 4"). */
+  it.each([
+    ['rename', 'chapters/2/rename', { title: 'A New Name' }, 'A New Name'],
+    ['refresh-titles', 'chapters/refresh-titles', {}, 'The Lighthouse'],
+  ])('%s on same-count, non-positional ids: 200, no hints file (#3953)', async (_name, path, body, title) => {
+    seedState([
+      { id: 1, title: 'Harbour Lights' },
+      { id: 2, title: 'The Lighthouse' },
+      { id: 4, title: 'Storm Season' },
+    ]);
+    const res = await post(path, body);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(existsSync(hintsPath())).toBe(false);
+    const state = JSON.parse(readFileSync(statePath(), 'utf8'));
+    expect(state.chapters.map((c: { id: number }) => c.id)).toEqual([1, 2, 4]);
+    expect(state.chapters[1].title).toBe(title);
+  });
 });
 
 describe('evidence-less positions keep the title rule at restructure (M12)', () => {

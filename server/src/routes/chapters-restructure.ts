@@ -566,8 +566,9 @@ async function applyRestructureClaimed(
        against a 3-chapter manuscript) has no coherent id pairing to persist, and
        the restructure itself is still valid -- skip rather than fail it. Only an
        exclude/include toggle, rename and refresh-titles get here with such a
-       book: they hand the hints back unchanged (so the counts still differ); a
-       prune on it was refused above. Merge, split and reorder
+       book: they hand the hints back unchanged (so the counts still differ, or,
+       at the same count with ids that do not pair, `parseCountIdFails` skips the
+       write -- #3953); a prune on it was refused above. Merge, split and reorder
        rebuild state from the hints and refuse it with a 409 before this point
        (#3791). A mispaired book (`hintsMispaired`) reaches here only through an
        exclude/include toggle, which writes nothing (above): every other
@@ -578,7 +579,8 @@ async function applyRestructureClaimed(
     if (bodiesCurrent && !aligned) {
       console.warn(`[chapters-restructure] ${manuscriptId}: hints/state chapter counts differ; skipping manuscript-hints.json`);
     }
-    const hintsWritten = bodiesCurrent && aligned && !hintsMispaired && !excludeToggle;
+    const hintsWritten =
+      bodiesCurrent && aligned && !hintsMispaired && !excludeToggle && !parseCountIdFails;
     if (hintsWritten) {
       /* An unreadable previous file just means no previous entry to keep. */
       const previousFile = await readManuscriptHints(bookDir).catch(() => null);
