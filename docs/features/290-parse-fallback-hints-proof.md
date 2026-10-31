@@ -780,4 +780,52 @@ None. The last one, what an exclude/include prune does on an unpaired parse book
 
 ## Ship notes
 
-(Filled in when status flips to `stable`, including Task 7's real-book table.)
+(Filled in when status flips to `stable`.)
+
+### Task 7 real-book acceptance (2026-10-31)
+
+Run read-only against `C:\AudiobookWorkspace\books` (25 analysed books) on branch HEAD `582e4907` with the shipped `checkParseHintsPairing` (`server/src/workspace/hints-proof.ts`) and `sentencesOf` (`hints-proof-io.ts`); no workspace file was modified (mtime and size of every `state.json` / `manuscript-edits.json` unchanged across the run). Command: `server/node_modules/.bin/tsx <scratch>/calib/task7-acceptance.ts` (scratch script outside the repo). The count/id step runs first, as the seams do; same-count books then run in both `evidenceLess` modes. Check ms excludes parsing; the slowest check was 442 ms (Stellarlune) on a loaded box.
+
+| Book | n / m | `count-id` mode | `title` mode | Check ms |
+|---|---|---|---|---|
+| A21 Clone Readiness Gate QA (throwaway) | 1/1 | pair(ev=1) | pair(ev=1) | 1 |
+| A21 Clone Readiness Gate QA v2 (throwaway) | 1/1 | pair(ev=1) | pair(ev=1) | 0 |
+| Der Auftrag von Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 4 |
+| El Encargo de Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| La Commande de Coalfall | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| The Coalfall Commission | 4/4 | pair(ev=2) | pair(ev=2) | 2 |
+| Заказ Коалфолла | 3/3 | pair(ev=2) | pair(ev=2) | 3 |
+| コールフォールの依頼 | 3/3 | pair(ev=2) | pair(ev=2) | 1 |
+| 煤落的委托 | 3/3 | pair(ev=2) | pair(ev=2) | 16 |
+| A16 Row Test - Delo o Koalfolle | 2/2 | pair(ev=2) | pair(ev=2) | 1 |
+| Playing with Fire | 51/51 | pair(ev=42) | pair(ev=42) | 98 |
+| Scepter of the Ancients | 40/40 | pair(ev=31) | pair(ev=31) | 153 |
+| The Lost Art of World Domination | 7/7 | pair(ev=1) | pair(ev=1) | 3 |
+| QA2937 Coalfall RU Throwaway | 2/2 | pair(ev=2) | pair(ev=2) | 1 |
+| Bonus Keefe Story | 7/7 | pair(ev=7) | pair(ev=7) | 2 |
+| Everblaze | 77/77 | pair(ev=70) | pair(ev=70) | 293 |
+| Exile | 70/70 | pair(ev=63) | pair(ev=63) | 346 |
+| Keeper of the Lost Cities | 59/57 | refused by count/id | refused by count/id | - |
+| Neverseen | 88/88 | pair(ev=79) | pair(ev=79) | 399 |
+| Stellarlune | 57/57 | pair(ev=51) | pair(ev=51) | 442 |
+| Unlocked | 82/167 | refused by count/id | refused by count/id | - |
+| Unraveled | 53/53 | pair(ev=44) | pair(ev=44) | 195 |
+| Юный дрессировщик | 15/15 | pair(ev=12) | pair(ev=12) | 89 |
+| Ночной дозор (C2C3 run 2) | 9/9 | pair(ev=9) | pair(ev=9) | 351 |
+| Ночной дозор | 9/9 | pair(ev=9) | pair(ev=9) | 364 |
+
+Positive controls (in memory; identical in both modes):
+
+| Control | Result |
+|---|---|
+| Everblaze, pieces 10 and 11 swapped | refused (`score`: chapter 11, own 0 of 134) |
+| Bonus Keefe Story, pieces 3 and 4 swapped | refused (`score`: chapter 4, own 0 of 28) |
+| Stellarlune, pieces 20 and 21 swapped | refused (`score`: chapter 21, own 0 of 151) |
+| Ночной дозор (C2C3 run 2), pieces 4 and 5 swapped | refused (`score`: chapter 5, own 1 of 1118) |
+| Ночной дозор, pieces 4 and 5 swapped | refused (`score`: chapter 5, own 1 of 1114) |
+| Ночной дозор (C2C3 run 2), SHIFT 3:3 | refused (`displaced-block`: chapter 4 into chapter 5) |
+| Ночной дозор, SHIFT 3:3 | refused (`displaced-block`: chapter 4 into chapter 5) |
+
+Post-re-parse marker simulation (state replaced by the fresh parse, ids 1..m, no evidence seen as the marker implies): Unlocked (167 chapters) and Keeper of the Lost Cities #1 (57) both pair in both modes, so start and restructure proceed.
+
+Acceptance: every same-count book pairs in both modes (pass); Unlocked and Keeper #1 refused by count/id (pass); all controls refused (pass); marker simulation proceeds for both (pass).
