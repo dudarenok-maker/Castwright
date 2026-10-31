@@ -37,6 +37,7 @@ import {
 } from '../lib/icons';
 import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
+import { within, BOOK_READ_TIMEOUT_MS } from '../components/layout';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { designWillGeneratePersona } from '../lib/design-persona';
@@ -112,10 +113,12 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   useEffect(() => {
     if (targetIsOpenBook) return;
     let cancelled = false;
+    /* #3967 — bounded (BOOK_READ_TIMEOUT_MS) and aborted on cleanup. */
+    const ctrl = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
     setForeignCharacters(null);
     setForeignError(null);
-    api
-      .getBookState(bookId)
+    within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort())
       .then((res) => {
         if (cancelled) return;
         setForeignCharacters(res?.cast?.characters ?? []);
@@ -128,6 +131,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+      timers.clear();
     };
   }, [bookId, targetIsOpenBook]);
 

@@ -467,18 +467,25 @@ export function Layout() {
     const farBookId = profileDuplicateOriented.far.voice.bookId;
     if (foreignCast?.bookId === farBookId) return;
     let cancelled = false;
-    api
-      .getBookState(farBookId)
+    /* #3967 — bounded (BOOK_READ_TIMEOUT_MS) and aborted on cleanup; an abort
+       is a silent cancel, a timeout keeps the warn. */
+    const ctrl = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    within(api.getBookState(farBookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, timers, () => ctrl.abort())
       .then((res) => {
         if (cancelled) return;
         const cast = res?.cast?.characters ?? [];
         setForeignCast({ bookId: farBookId, characters: cast });
       })
       .catch((err) => {
+        if (cancelled || (err as Error)?.name === 'AbortError') return;
         console.warn('[duplicate-review] foreign cast hydrate failed', (err as Error).message);
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+      timers.clear();
     };
   }, [duplicateReviewOpen, profileDuplicateOriented, foreignCast?.bookId]);
 
