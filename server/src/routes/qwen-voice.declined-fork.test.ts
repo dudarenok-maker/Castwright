@@ -514,6 +514,66 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
   });
 });
 
+/* Review pass 1, finding 6 — the fork decision and the variant scan read every
+   other book's cast.json, and readJson throws on a parse error. One truncated
+   file elsewhere in the library must not fail a design or a promote. */
+describe('#3992 — an unreadable cast.json elsewhere does not fail a design or promote', () => {
+  const corrupt = () => {
+    const dir = join(workspaceRoot, 'books', 'Someone Else', 'Standalones', 'Unrelated', '.audiobook');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cast.json'), '{"characters":[{"id":');
+  };
+  const solo = (uuid: string, extra: Record<string, unknown> = {}) => {
+    seed({});
+    rmSync(bookDir('Book Two'), { recursive: true, force: true });
+    const one = { ...readRow('Book One'), voiceUuid: uuid, ...extra };
+    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
+    writeFileSync(join(qwenDir(), `qwen-${uuid}.pt`), ORIG_PT);
+  };
+
+  it('design of a sole-holder row answers 200 and keeps its uuid', async () => {
+    solo('u_solo');
+    corrupt();
+    const res = await design(() => bookOneId);
+    expect(res.status).toBe(200);
+    expect(readRow('Book One').voiceUuid).toBe('u_solo');
+    expect(requestedVoiceIds).toEqual(['qwen-u_solo']);
+  });
+
+  it('a declined fork still forks when an unrelated book is unreadable', async () => {
+    seed({});
+    corrupt();
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT)).toBe(true);
+  });
+
+  it('promote answers 200 and keeps the variant file it can no longer prove unshared', async () => {
+    const bytes = Buffer.from('SOLO-ANGRY');
+    solo('u_solo', {
+      overrideTtsVoices: { qwen: { name: 'qwen-u_solo', variants: { angry: { name: 'qwen-u_solo__angry' } } } },
+    });
+    writeFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt'), bytes);
+    writeFileSync(join(qwenDir(), 'qwen-u_solo-preview.pt'), NEW_PT);
+    corrupt();
+    const res = await request(app)
+      .post(`/api/books/${bookOneId}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: 'qwen-u_solo-preview', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect((readRow('Book One').overrideTtsVoices as { qwen?: { variants?: unknown } }).qwen?.variants).toBeUndefined();
+    expect(readFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt')).equals(bytes)).toBe(true);
+  });
+
+  it('the book being designed itself being unreadable still fails the request', async () => {
+    solo('u_solo');
+    writeFileSync(castPath('Book One'), '{"characters":[{"id":');
+    const res = await design(() => bookOneId);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(requestedVoiceIds).toEqual([]);
+  });
+});
+
 describe('#3992 — promote / DELETE keep the earlier book’s variant files', () => {
   const VAR_BYTES = Buffer.from('BOOK-ONE-ANGRY-VARIANT');
   const variantFile = () => join(qwenDir(), 'qwen-u_shared__angry.pt');

@@ -46,6 +46,27 @@ function listDirs(path: string): string[] {
   }
 }
 
+const UNREADABLE = Symbol('unreadable');
+
+/* Read ANOTHER book's cast.json for a scan. A parse error or a non-ENOENT read
+   error (a truncated file, a transient EBUSY) on a book that is not the one being
+   designed must not fail the request, so it is reported as UNREADABLE and the
+   caller decides what that means. Never use this for the book being designed:
+   its read failing is a real failure and must keep throwing. */
+async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNREADABLE> {
+  try {
+    return await readJson<T>(castJsonPath(dir));
+  } catch (e) {
+    console.warn(`[voice-uuid-fork] skipping unreadable cast.json in ${dir}: ${(e as Error).message}`);
+    return UNREADABLE;
+  }
+}
+
+/* Residual risk of the skip, shared by both fork decisions below: an unreadable
+   book is treated as holding nothing. If it does in fact hold the uuid (or the
+   legacy key), a redesign of the book being designed overwrites that book's
+   `.pt` as it did before #3992. The alternative, treating it as a holder, would
+   re-fork the row on every design for as long as the file stays unreadable. */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: { id: string; voiceUuid?: string | null; matchedFrom?: unknown },
@@ -63,8 +84,8 @@ export async function shouldForkSharedVoiceUuid(
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (resolve(otherDir) === selfDir) continue;
-        const cast = await readJson<CastFile>(castJsonPath(otherDir));
-        if (!cast?.characters?.length) continue;
+        const cast = await readOtherBookCast<CastFile>(otherDir);
+        if (cast === UNREADABLE || !cast?.characters?.length) continue;
         for (const y of cast.characters) {
           if (y.voiceUuid !== uuid) continue;
           hasHolder = true;
@@ -102,7 +123,8 @@ export async function shouldMintApartFromLegacyKey(
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (resolve(otherDir) === selfDir) continue;
-        const cast = await readJson<{ characters?: LegacyRow[] }>(castJsonPath(otherDir));
+        const cast = await readOtherBookCast<{ characters?: LegacyRow[] }>(otherDir);
+        if (cast === UNREADABLE) continue;
         for (const y of cast?.characters ?? []) {
           if (y.voiceUuid || (y.voiceId ?? y.id) !== linkId) continue;
           if (!y.overrideTtsVoices?.qwen?.name) continue;
@@ -171,7 +193,11 @@ export async function isVariantUsedByOtherVoiceUuid(
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const cast = await readJson<VariantCastFile>(castJsonPath(dir));
+        const cast = await readOtherBookCast<VariantCastFile>(dir);
+        /* The other way round from the fork scans: this one gates a DELETE, so a
+           book it cannot read counts as a possible holder and the file is kept
+           (an orphan at worst, never a deleted take). */
+        if (cast === UNREADABLE) return true;
         for (const y of cast?.characters ?? []) {
           if (!y.voiceUuid || y.voiceUuid === ownUuid) continue;
           const variants = y.overrideTtsVoices?.qwen?.variants;
