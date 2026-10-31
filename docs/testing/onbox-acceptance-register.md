@@ -722,7 +722,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 41 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 42 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -732,11 +732,16 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**74 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**75 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
+> **Last change: 2026-11-01 (#3992, PR #4007), 74 → 75.** Row **A120** (a declined series link
+> followed by a redesign gives the later book its own voice and leaves the earlier book's voice
+> untouched) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same change. Row is
+> owed; not run here.
+>
+> **Prior change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
 > locked or tuned character's voice whole, and no fresh row inherits a link it was not joined
 > to) added. Group B 8 → 9. `next-id` bumped B108 → B109 in the same change. Row is owed; not
 > run here.
@@ -1870,7 +1875,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A120 -->
+<!-- next-id: A121 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6383,6 +6388,18 @@ The automated tests prove the merged request bodies, the redaction and the overf
 - **Output cap.** With a payload cap, the endpoint's Max output tokens is read-only with its note and keeps its stored value. `{"max_tokens": 64}` on a thinking model overflows (`analyzer-reasoning-overflow`); the remediation names `max_tokens` ("Raise the custom parameter …") and the fixes include `Read: Custom payload` and no `Lower <name>'s max output tokens`. With `{"max_tokens": null}` the wording is "Set a value for …".
 
 *Needs:* the GPU box with llama-swap, Ollama and a thinking model. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §14. Clears when each bullet is recorded with the server log line that shows it.
+
+### A120 · A declined series link then a redesign leaves the earlier book's voice untouched ([#3992](https://github.com/dudarenok-maker/Castwright/issues/3992), PR #4007) · **one GPU box: Qwen sidecar, a two-book series**
+
+The automated tests prove the fork against fixture workspaces. Only a real Qwen sidecar shows that the earlier book's voice is audibly unchanged after the later book's character is redesigned, and that the later book's new voice plays. Set up: a series where Book 2 has a character linked to a Book 1 character's Qwen voice (same `voiceUuid`), with at least one emotion variant designed on Book 1's character.
+
+1. In Book 2, decline the link ("Don't reuse") on that character, then redesign its voice (Design / promote, and once with "Design full cast" scoped to the base voice).
+2. **Book 2 gets its own voice.** Its character in `cast.json` has a new `voiceUuid` (different from Book 1's); `voices/qwen/` holds `qwen-<new>.pt`, `.json`, and where the source had them `__1.7b.pt` and `__master.wav`; the new voice plays in the drawer and in a rendered line.
+3. **Book 1 is untouched.** Its character keeps its `voiceUuid`, `qwen-<old>.pt` is unchanged (same size and mtime from before step 1), and a line rendered in Book 1 sounds the same as before, including its emotion variants (`qwen-<old>__<emotion>.pt` still on disk, still playing).
+4. **Variants are not copied.** Book 2's new voice has none of Book 1's emotion variants under its own uuid. Removing or re-promoting a variant from Book 2 logs `keeping variant ... another voice still uses it` and does not delete Book 1's `__<emotion>.pt`.
+5. **Controls.** A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork.
+
+*Needs:* the GPU box with the Qwen sidecar and a two-book series with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
 ## Group B — local Ollama analyzer only
 

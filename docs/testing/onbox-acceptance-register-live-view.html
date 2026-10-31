@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="68" data-publish-id="aa527278bec4"></div>
+  <div hidden data-published-as="69" data-publish-id="c4b70e40e844"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">74</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">75</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->41<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->42<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->9<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">41 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">42 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -840,6 +840,20 @@
         <li><strong>Output cap.</strong> With a payload cap, the endpoint&#39;s Max output tokens is read-only with its note and keeps its stored value. <code>{"max_tokens": 64}</code> on a thinking model overflows (<code>analyzer-reasoning-overflow</code>); the remediation names <code>max_tokens</code> (&#8220;Raise the custom parameter &#8230;&#8221;) and the fixes include <code>Read: Custom payload</code> and no <code>Lower &lt;name&gt;&#39;s max output tokens</code>. With <code>{"max_tokens": null}</code> the wording is &#8220;Set a value for &#8230;&#8221;.</li>
         </ul>
         <p class="src">the GPU box with llama-swap, Ollama and a thinking model &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;14</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A120</span><span class="iname">A declined series link then a redesign leaves the earlier book&#39;s voice untouched</span><span class="risk">Qwen sidecar, two-book series, one GPU</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove the fork against fixture workspaces. Only a real Qwen sidecar shows that the earlier book&#39;s voice is audibly unchanged after the later book&#39;s character is redesigned, and that the later book&#39;s new voice plays. Set up: a series where Book 2 has a character linked to a Book 1 character&#39;s Qwen voice (same <code>voiceUuid</code>), with at least one emotion variant designed on Book 1&#39;s character.</p>
+        <ul>
+        <li><strong>Decline and redesign.</strong> In Book 2, decline the link (&#8220;Don&#39;t reuse&#8221;) on that character, then redesign its voice (Design / promote, and once with &#8220;Design full cast&#8221; scoped to the base voice).</li>
+        <li><strong>Book 2 gets its own voice.</strong> Its character in <code>cast.json</code> has a new <code>voiceUuid</code> (different from Book 1&#39;s); <code>voices/qwen/</code> holds <code>qwen-&lt;new&gt;.pt</code>, <code>.json</code>, and where the source had them <code>__1.7b.pt</code> and <code>__master.wav</code>; the new voice plays in the drawer and in a rendered line.</li>
+        <li><strong>Book 1 is untouched.</strong> Its character keeps its <code>voiceUuid</code>, <code>qwen-&lt;old&gt;.pt</code> is unchanged (same size and mtime as before), and a line rendered in Book 1 sounds the same as before, including its emotion variants (<code>qwen-&lt;old&gt;__&lt;emotion&gt;.pt</code> still on disk, still playing).</li>
+        <li><strong>Variants are not copied.</strong> Book 2&#39;s new voice has none of Book 1&#39;s emotion variants under its own uuid. Removing or re-promoting a variant from Book 2 logs <code>keeping variant ... another voice still uses it</code> and does not delete Book 1&#39;s <code>__&lt;emotion&gt;.pt</code>.</li>
+        <li><strong>Controls.</strong> A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork.</li>
+        </ul>
+        <p class="src">the GPU box with the Qwen sidecar and a two-book series with a linked character &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3992">#3992</a></p>
       </div>
     </details>
 
