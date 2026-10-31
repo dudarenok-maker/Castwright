@@ -1597,6 +1597,86 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       expect(screen.getByRole('button', { name: /1 duplicate candidate/i })).toBeInTheDocument(),
     );
   });
+
+  /* #3991 — a second open while the first foreign fetches are in flight
+     enters the waiter branch of `hydrateForeignCast`. It used to poll
+     render-time state from a stale closure, so it never saw the fetch land
+     and re-armed a 25 ms timer for the life of the page. The waiter's
+     outcome is only observable through its timer (callers are
+     fire-and-forget here), so these count the 25 ms polls. */
+  describe('concurrent foreign-cast waiter (#3991)', () => {
+    const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 150))));
+    const pollTimers = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter((c) => c[1] === 25).length;
+
+    async function openTwice() {
+      const view = renderWithLibrarySlice();
+      await act(async () => {});
+      const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
+      fireEvent.click(pill);
+      await act(async () => {});
+      /* The first click's in-flight state has re-rendered the view; this
+         second call sees `globalCastFetching` and becomes a waiter. */
+      fireEvent.click(pill);
+      await act(async () => {});
+      return view;
+    }
+
+    it('lets the waiter see the first fetch land: one read per book, the poll stops', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      const resolvers = new Map<string, (v: BookStateResponse | null) => void>();
+      getBookState.mockImplementation(
+        (bookId: string) => new Promise((r) => resolvers.set(bookId, r)),
+      );
+      await openTwice();
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        resolvers.get('b1')!(elizaCasts('b1'));
+        resolvers.get('b2')!(elizaCasts('b2'));
+      });
+      await settle();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled(),
+      );
+      const armed = pollTimers(spy);
+      await settle();
+      expect(pollTimers(spy)).toBe(armed);
+      expect(armed).toBeLessThan(5);
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
+    it('resolves the waiter when the single read fails, and the poll stops', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      const rejecters = new Map<string, (e: Error) => void>();
+      getBookState.mockImplementation(
+        (bookId: string) => new Promise((_, rej) => rejecters.set(bookId, rej)),
+      );
+      await openTwice();
+      await act(async () => {
+        rejecters.get('b1')!(new Error('network down'));
+        rejecters.get('b2')!(new Error('network down'));
+      });
+      await settle();
+      const armed = pollTimers(spy);
+      await settle();
+      expect(pollTimers(spy)).toBe(armed);
+      expect(armed).toBeLessThan(5);
+      expect(getBookState).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    });
+
+    it('leaves no poll timer running after unmount while a read is still pending', async () => {
+      const spy = vi.spyOn(globalThis, 'setTimeout');
+      getBookState.mockImplementation(() => new Promise(() => {}));
+      const { unmount } = await openTwice();
+      unmount();
+      const armed = pollTimers(spy);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(pollTimers(spy)).toBe(armed);
+      spy.mockRestore();
+    });
+  });
 });
 
 describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => {

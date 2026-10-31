@@ -1,5 +1,6 @@
 # Castwright 1.15.0
 
+- **The Voices view no longer gets stuck loading another book's cast.** If you opened a duplicate review or a comparison while that book's voices were still on their way, the second request could wait forever and quietly keep the page busy. It now simply waits for the first to arrive.
 - **Moving or renaming a chapter no longer throws away a take you were still comparing.** If you had re-recorded a chapter and not yet chosen between the old and new take, reordering, renaming or refreshing chapter titles used to drop that choice. Castwright now keeps both takes with the chapter, so the comparison is still waiting for you. Merging or splitting the chapter still clears it, because its audio changes, and a chapter that takes over another's place never picks up an old take that wasn't its own.
 - **Deleting a book and importing it again from its bundle no longer brings the deleted book's cast back.** Before, reopening the re-imported book could show the old cast and save it over the one in the bundle.
 - **Voices matched automatically on the Confirm screen no longer vanish a moment after they appear.** Before, opening the screen could re-read the saved cast just as the matches were applied and show the older, voiceless cast again.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   SectionLabel,
   MixedHeading,
@@ -169,6 +169,11 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(() => new Map());
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
+  /* #3991 — refs mirror the three structures above for
+     `hydrateForeignCast`, whose callers run from stale render closures. */
+  const castCacheRef = useRef(new Map<string, Character[]>());
+  const castFailedRef = useRef(new Set<string>());
+  const castInflightRef = useRef(new Map<string, Promise<Character[] | null>>());
   /* Plan 101 — DuplicateReviewModal state. We hold the candidate's two
      voice ids (stable) rather than a frozen pair snapshot, then derive
      the live pair (+ hydration status) from `duplicateCandidates` below.
@@ -878,24 +883,24 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      sides resolve. `globalCastFetching` is a Set so concurrent
      per-side fetches for a cross-book pair don't clobber each
      other's in-flight state. */
-  async function hydrateForeignCast(bookId: string): Promise<Character[] | null> {
-    const cached = globalCastCache.get(bookId);
-    if (cached) return cached;
-    if (globalCastFailed.has(bookId)) return null;
-    if (globalCastFetching.has(bookId)) {
-      /* Another caller is already fetching — wait for it to land in the
-         cache (or fail) by polling a microtask cycle. Simpler than a
-         per-bookId promise registry and the wait is bounded by the
-         single in-flight request. */
-      await new Promise<void>((resolve) => {
-        const tick = () => {
-          if (globalCastCache.get(bookId) || globalCastFailed.has(bookId)) resolve();
-          else setTimeout(tick, 25);
-        };
-        tick();
-      });
-      return globalCastCache.get(bookId) ?? null;
-    }
+  function hydrateForeignCast(bookId: string): Promise<Character[] | null> {
+    /* Read the outcome through refs, never the render-time state above: a
+       caller's closure is frozen at its render, so a waiter polling state
+       never saw the first fetch land (#3991). A second caller simply
+       shares the first caller's in-flight promise. */
+    const cached = castCacheRef.current.get(bookId);
+    if (cached) return Promise.resolve(cached);
+    if (castFailedRef.current.has(bookId)) return Promise.resolve(null);
+    const inflight = castInflightRef.current.get(bookId);
+    if (inflight) return inflight;
+    const fetching = fetchForeignCast(bookId).finally(() => {
+      castInflightRef.current.delete(bookId);
+    });
+    castInflightRef.current.set(bookId, fetching);
+    return fetching;
+  }
+
+  async function fetchForeignCast(bookId: string): Promise<Character[] | null> {
     setGlobalCastFetching((prev) => {
       const next = new Set(prev);
       next.add(bookId);
@@ -907,6 +912,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       if (!cast || cast.length === 0) {
         throw new Error('book state has no cast');
       }
+      castCacheRef.current.set(bookId, cast);
       setGlobalCastCache((prev) => {
         const next = new Map(prev);
         next.set(bookId, cast);
@@ -921,6 +927,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       return cast;
     } catch (err) {
       console.error('[voices] foreign cast fetch failed', err);
+      castFailedRef.current.add(bookId);
       setGlobalCastFailed((prev) => {
         if (prev.has(bookId)) return prev;
         const next = new Set(prev);
