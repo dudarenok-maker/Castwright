@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import childProcess, { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { runPipeline, STEPS } from '../verify-cache.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
@@ -243,6 +244,31 @@ export function parseLastHeartbeat(text) {
   return { last, maxGap };
 }
 
+// Runs `fn` with every `powershell` spawn answered instantly with a permanent
+// failure (collectProcessSnapshot then returns [] without its retry wait),
+// every other spawnSync passing through. The timeout path runs a synchronous
+// Win32_Process snapshot BEFORE it kills the step (#3695), so the hanging
+// fixture keeps beating through it and the measured span grows by however long
+// that query takes. That is 0.8-3.5s locally but 10s on a loaded GitHub
+// Windows runner (Castwright#3917: throttled 20068ms vs control 10438ms, the
+// same slow-WMI run that also timed out the reaper's C3 collector twice) and
+// it hits one of the two compared runs, not both, so no tolerance can absorb
+// it. The census is not the property under test; stubbing it removes the
+// variable. Restored in `finally`; syncBuiltinESMExports republishes the patch
+// to the named `spawnSync` imports in verify-cache.mjs and reap-stale-batteries.mjs.
+async function withInstantCensus(fn) {
+  const real = childProcess.spawnSync;
+  childProcess.spawnSync = (cmd, ...rest) =>
+    cmd === 'powershell' ? { status: 1, stdout: '', stderr: '', error: undefined } : real(cmd, ...rest);
+  syncBuiltinESMExports();
+  try {
+    return await fn();
+  } finally {
+    childProcess.spawnSync = real;
+    syncBuiltinESMExports();
+  }
+}
+
 // Castwright#3361 behavioural pair. Both measure the span the hanging step was
 // ALIVE for (first heartbeat -> last heartbeat, written by the fixture itself),
 // not the `[timeout] ... after Ns` figure: that one also contains taskkill plus
@@ -282,11 +308,13 @@ export async function runHangingStepSpanMs(extraEnv) {
   };
   let code;
   try {
-    code = await runPipeline({
-      argv: ['--steps', 'test'],
-      cwd: dir,
-      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1', ...extraEnv },
-    });
+    code = await withInstantCensus(() =>
+      runPipeline({
+        argv: ['--steps', 'test'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1', ...extraEnv },
+      }),
+    );
   } finally {
     console.log = originalLog;
   }
