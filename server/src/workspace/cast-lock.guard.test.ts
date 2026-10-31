@@ -21,7 +21,7 @@
      1. Every `withCastLock(` / `withCastLocks(` token becomes a "lock
         range": walk forward from its opening `(`, tracking paren depth
         (skipping string/template literals and comments — via the same
-        `computeOpaqueRanges` tokenizer the occurrence scan uses, see step 3 —
+        `computeAstOpaqueRanges` tokenizer the occurrence scan uses, see step 3 —
         so a stray `(`/`)` inside one can't desync the count), until the
         matching `)`. Everything between the token and that matching paren —
         the whole call, including an inline block-bodied or
@@ -53,14 +53,15 @@
         below for why the earlier exact-adjacency version was itself a hole)
         whose start index (a) falls inside some lock range for that file, per
         step 1, AND (b) is not itself inside a string/template literal or a
-        comment, per the same `computeOpaqueRanges` tokenizer step 1 uses for
+        comment, per the same `computeAstOpaqueRanges` tokenizer step 1 uses for
         its own paren/brace balancing — this task extracted that predicate into
         a standalone function and wired it into the occurrence scan too,
         which it previously bypassed entirely (see "Fixed" in the
         false-positives list below). #2405 replaced the hand-rolled character
-        walker behind it with the TypeScript parser; see the tokenizer block's
-        own header for the two shapes that used to desync it, both of which
-        failed OPEN.
+        walker behind it with the TypeScript parser; the tokenizer now lives in
+        the shared `server/src/test-utils/guard-scan.ts` (#3685), whose header
+        records the two shapes that used to desync it, both of which failed
+        OPEN. This guard no longer carries a private copy of it.
 
    ACCEPTANCE TARGET (pinned literally, not derived): `routes/voice-override-
    linked.ts` is the one allowed exception — its one `writeJsonAtomic` (inside
@@ -199,7 +200,7 @@
        comment quoting it INSIDE a lock range used to be silently absorbed as
        a "locked" site with no real write behind it at all, which is the
        opposite failure — a fabricated pass. Occurrence matching is
-       comment/string-aware via the same `computeOpaqueRanges` tokenizer as
+       comment/string-aware via the same `computeAstOpaqueRanges` tokenizer as
        step 1, so prose that quotes the pattern is invisible to the scan in
        either position.
 
@@ -243,236 +244,22 @@
    was reverted exactly (`git diff` empty) before this file was finalised;
    the guard's own test run is the read-only, permanent check that ships. */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as ts from 'typescript';
 import { CAST_LOCK_GUARD_SCAN_GLOB } from './cast-lock.guard-targets.js';
+import {
+  collectSourceFiles,
+  computeAstOpaqueRanges,
+  findMatchingClose,
+  isOpaque,
+  lineOf,
+  type OpaqueRange,
+} from '../test-utils/guard-scan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
-
-/** Every non-test `.ts` file under `server/src`, recursively. */
-function collectSourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectSourceFiles(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-/* ===== SHARED OPAQUE-RANGE TOKENIZER - BEGIN =================================
-   Duplicated BYTE-FOR-BYTE between
-   `server/src/workspace/cast-lock.guard.test.ts` and
-   `server/src/workspace/voice-library-write-seam.guard.test.ts`. A drift test in
-   the latter fails the build if the two copies stop matching.
-
-   It is duplicated rather than extracted to an imported module ON PURPOSE. The
-   out-of-tree census harnesses that verify this tokenizer in both directions
-   load it by transpiling a guard file standalone and reading
-   `computeOpaqueRanges` / `isOpaque` out of that file's own module scope, so a
-   tokenizer behind an `import` is invisible to them and the correctness
-   property below becomes unmeasurable. The drift test is the enforceable
-   stand-in for a shared module.
-
-   WHAT IT IS FOR: both guards scan raw source text for a write primitive and
-   must ignore a match that only appears in prose (a comment) or in data (a
-   string / template / regex literal). Getting that wrong is dangerous in BOTH
-   directions:
-     - OVER-REACH (fails OPEN): a range that covers live code hides a real call
-       site, so the guard passes on a genuine violation.
-     - UNDER-REACH (fails CLOSED): a real comment left uncovered makes prose
-       quoting the pattern count as a call site, reddening the guard on correct,
-       unchanged code and destroying the negative control both headers
-       advertise.
-
-   WHY THE TypeScript PARSER AND NOT A HAND-ROLLED WALKER: the walker this
-   replaces opened an opaque range on any `"`, `'` or backtick and ran to the
-   next matching one. Two shapes desynced it, and both failed OPEN:
-     1. A regex literal holding a quote - /["'\s]/ - opened a "string" at the
-        quote INSIDE the character class and ran to the next quote anywhere
-        later in the file.
-     2. A NESTED template literal - a backtick inside a `${...}` slot - ended
-        the outer range at the inner literal's OPENING backtick, leaving the
-        walker permanently out of phase.
-   A bare `ts.createScanner` does NOT fix (1): it cannot resolve the
-   regex-vs-division ambiguity and emits a SlashToken. Only the parser knows.
-
-   DELIBERATE SCOPE DECISION - `${...}` SLOTS ARE LIVE CODE. TemplateHead /
-   TemplateMiddle / TemplateTail cover only a template's literal text chunks, so
-   an expression inside an interpolation is NOT opaque and IS scanned. That is
-   stricter than the walker it replaces, which skipped a template whole and so
-   hid any real call site written inside a `${...}`.
-
-   COMMENTS come from token trivia, not a text scan, because a `//` inside a
-   string literal is not a comment. The walk descends through
-   `node.getChildren(sf)` to the LEAF TOKENS and asks each leaf for its leading
-   and trailing comment ranges, de-duplicated by span since one comment is
-   reachable from two directions.
-
-   WHY LEAF TOKENS AND NOT `ts.forEachChild` - this cost 276 uncovered comments.
-   `forEachChild` yields only syntactically significant child NODES; it never
-   yields punctuation tokens (`}`, `]`, `,`). Every comment in a file is the
-   LEADING trivia of exactly one token, or the TRAILING trivia of the token
-   before it on the same line - and `getTrailingCommentRanges` stops at the
-   first newline. So a comment on its own line whose next token is punctuation
-   belonged to a token `forEachChild` never visits, and nobody asked for it. The
-   commonest shape there is is a comment as the last line of a block:
-
-       try {
-         something();
-         // historical: this used to be withCastLock(dir, async () => {
-       }
-
-   Measured with a token-descent oracle, that left 276 comments across 79 of
-   `server/src`'s 427 non-test files uncovered - `config/registry.ts` alone had
-   92 - and it broke both guards in BOTH directions named above: prose quoting
-   an unbalanced `withCastLock(dir, async () => {` in that position fabricated a
-   lock range over a genuinely unlocked write (fails OPEN), and prose quoting a
-   write primitive in that position counted as a real call site (fails CLOSED).
-   `getChildren` DOES yield punctuation, so descending it to the leaves reaches
-   every token and therefore every comment. It costs more - `getChildren`
-   materialises a token array per node - which is why callers memoize the
-   ranges per file content rather than recomputing them per match.
-
-   LITERALS still come from the AST node kinds, NOT from the token stream: the
-   parser is what resolves the regex-vs-division ambiguity (see (1) above), and
-   a leaf-token walk that trusted a raw scanner would reintroduce it.
-   ============================================================================ */
-interface OpaqueRange {
-  start: number;
-  end: number;
-}
-
-/** Every [start, end) span of `content` that is a string / template-chunk /
-    regex literal or a comment, sorted and merged so the spans are disjoint and
-    ascending (`opaqueEnd` binary-searches them). Parses `content` ONCE - a
-    caller scanning a file must compute these once and thread them through,
-    never call this per match. */
-function computeOpaqueRanges(content: string): OpaqueRange[] {
-  const sf = ts.createSourceFile('guard-scan.ts', content, ts.ScriptTarget.Latest, true);
-  const raw: OpaqueRange[] = [];
-  const seenComments = new Set<string>();
-
-  const addComment = (range: ts.CommentRange): void => {
-    const key = `${range.pos}:${range.end}`;
-    if (seenComments.has(key)) return;
-    seenComments.add(key);
-    raw.push({ start: range.pos, end: range.end });
-  };
-
-  const visit = (node: ts.Node): void => {
-    switch (node.kind) {
-      case ts.SyntaxKind.StringLiteral:
-      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
-      case ts.SyntaxKind.RegularExpressionLiteral:
-      case ts.SyntaxKind.TemplateHead:
-      case ts.SyntaxKind.TemplateMiddle:
-      case ts.SyntaxKind.TemplateTail:
-        raw.push({ start: node.getStart(sf), end: node.getEnd() });
-        break;
-      default:
-        break;
-    }
-    const children = node.getChildren(sf);
-    if (children.length === 0) {
-      /* A LEAF TOKEN - punctuation included, which is the whole point (see the
-         block header). Asking only the leaves is sufficient AND cheaper than
-         asking every node: a comment is always the leading trivia of some token
-         or the trailing trivia of the token before it, and an interior node's
-         `pos`/`end` coincide with its first/last leaf's anyway, so an interior
-         node can never contribute a range a leaf does not. */
-      for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
-      for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
-      return;
-    }
-    for (const child of children) visit(child);
-  };
-
-  visit(sf);
-  for (const range of ts.getLeadingCommentRanges(content, 0) ?? []) addComment(range);
-
-  raw.sort((a, b) => a.start - b.start || a.end - b.end);
-  const merged: OpaqueRange[] = [];
-  for (const range of raw) {
-    const last = merged[merged.length - 1];
-    // `>=` merges touching spans too. That adds no characters to the union, so
-    // it cannot over-reach onto live code.
-    if (last && last.end >= range.start) {
-      last.end = Math.max(last.end, range.end);
-    } else {
-      merged.push({ start: range.start, end: range.end });
-    }
-  }
-  return merged;
-}
-
-/** True iff `index` sits inside one of `ranges` - inside a literal or a
-    comment, not real code. */
-function isOpaque(ranges: OpaqueRange[], index: number): boolean {
-  return opaqueEnd(ranges, index) !== -1;
-}
-
-/** The end offset of the opaque range containing `index`, or -1 when `index` is
-    live code. Lets a character walker jump a literal or comment whole. */
-function opaqueEnd(ranges: OpaqueRange[], index: number): number {
-  let lo = 0;
-  let hi = ranges.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const range = ranges[mid];
-    if (index < range.start) hi = mid - 1;
-    else if (index >= range.end) lo = mid + 1;
-    else return range.end;
-  }
-  return -1;
-}
-/* ===== SHARED OPAQUE-RANGE TOKENIZER - END =================================== */
-
-/** Scan forward from `openIndex` (which must hold `openChar`) for the
-    matching `closeChar`, tracking nesting depth. String/template literals and
-    comments are skipped whole (via the precomputed `opaque` ranges) so a
-    bracket character inside one can't desync the count. `opaque` is passed in
-    rather than derived here: this is called once per lock token, and deriving
-    it internally would re-parse the entire file on every call. Returns -1 if
-    unmatched (malformed source). */
-function findMatchingClose(
-  src: string,
-  opaque: OpaqueRange[],
-  openIndex: number,
-  openChar: string,
-  closeChar: string,
-): number {
-  let depth = 0;
-  let i = openIndex;
-  const n = src.length;
-  while (i < n) {
-    const skip = opaqueEnd(opaque, i);
-    if (skip !== -1) {
-      i = skip;
-      continue;
-    }
-    const ch = src[i];
-    if (ch === openChar) {
-      depth++;
-      i++;
-      continue;
-    }
-    if (ch === closeChar) {
-      depth--;
-      if (depth === 0) return i;
-      i++;
-      continue;
-    }
-    i++;
-  }
-  return -1;
-}
 
 interface LockRange {
   start: number;
@@ -510,14 +297,6 @@ function isLocked(ranges: LockRange[], index: number): boolean {
   return ranges.some((r) => index >= r.start && index <= r.end);
 }
 
-function lineOf(content: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index && i < content.length; i++) {
-    if (content[i] === '\n') line++;
-  }
-  return line;
-}
-
 // Whitespace-tolerant between the two opening parens — Prettier's
 // printWidth:100 wraps a long argument onto its own line, which would
 // otherwise silently drop a real occurrence out of coverage (see file
@@ -533,7 +312,7 @@ interface ScanResult {
 
 function scanFile(content: string): ScanResult | null {
   if (!content.includes('castJsonPath')) return null;
-  const opaque = computeOpaqueRanges(content);
+  const opaque = computeAstOpaqueRanges(content);
   const ranges = collectLockRanges(content, opaque);
   const details: string[] = [];
   let writes = 0;
@@ -693,7 +472,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
 
     const result = scanFile(src);
     expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
-    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+    expect(collectLockRanges(src, computeAstOpaqueRanges(src))).toEqual([]);
   });
 
   /* THE SAME FABRICATED PASS, one line lower - and this is the version that
@@ -703,7 +482,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
      sits on LINE 1, where `getLeadingCommentRanges(content, 0)` picks it up
      unconditionally. Move the identical comment to the last line of a block and
      the pre-fix tokenizer never reached it: its next token is `}`, which
-     `ts.forEachChild` does not visit (see the tokenizer block header). The
+     `ts.forEachChild` does not visit (see the guard-scan.ts tokenizer header, #3685). The
      comment stayed live code, `collectLockRanges`'s `isOpaque` guard therefore
      never fired, and the enclosing `run(...)` call's own `)` closed the range
      the prose had opened - swallowing a genuinely unlocked write.
@@ -727,7 +506,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     const result = scanFile(src);
     expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
     expect(result?.details.join('\n')).toContain('line 7');
-    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+    expect(collectLockRanges(src, computeAstOpaqueRanges(src))).toEqual([]);
   });
 
   /* #3427: the ordered spelling of the same write must be seen too. */
