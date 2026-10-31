@@ -524,6 +524,31 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('book scoping: the claim-once count ignores a cross-book edge too, so a doubly-claimed prior stays unwelded (#3965 T5)', () => {
+    // 'Bran' is a surname-tolerant candidate for BOTH fresh rows. consumable()
+    // must count both (the Kell edge names another book), see the prior
+    // claimed twice, and refuse to guess. If the count honoured the
+    // cross-book edge it would see Kell as blocked, count one, and weld Uir.
+    const existing: C[] = [
+      { id: 'bran-old', name: 'Bran', voiceId: 'v_bran', voiceState: 'locked' },
+    ];
+    const fresh: C[] = [
+      { id: 'bran-uir', name: 'Bran Uir' } as C,
+      {
+        id: 'bran-kell',
+        name: 'Bran Kell',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'bran-old' }],
+      } as C,
+    ];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'book-2',
+    );
+    expect(retirements).toEqual([]);
+    expect(merged.find((c) => c.id === 'bran-uir')?.voiceId).toBeUndefined();
+  });
+
   it('id drift: a dropped narrator row never becomes a name-fallback candidate (#2040 Task 12 follow-up, L1)', () => {
     // The prior narrator (id 'narrator') carries only voiceStyle — which
     // isVoicedOrReused does NOT test, so before this task's widening the
