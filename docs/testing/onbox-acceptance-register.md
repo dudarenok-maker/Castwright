@@ -6538,14 +6538,16 @@ Ollama accepts a reasoning level only on a model that thinks, so the Test must r
 
 *Needs:* local Ollama with a thinking and a non-thinking tag. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §12. Clears when all four are recorded.
 
-### B108 · Re-analysis keeps a locked or tuned character's voice whole, and no fresh row inherits a link it was not joined to ([#3920](https://github.com/dudarenok-maker/Castwright/issues/3920), PR [#3934](https://github.com/dudarenok-maker/Castwright/pull/3934)) · **a real analyzer (local Ollama/llama.cpp or Gemini); a real two-book series in the workspace**
+### B108 · Re-analysis keeps a locked or tuned character's voice whole, and no fresh row inherits a link it was not joined to ([#3920](https://github.com/dudarenok-maker/Castwright/issues/3920), PR [#3934](https://github.com/dudarenok-maker/Castwright/pull/3934)) · **a real local Ollama analyzer; a real two-book series in the workspace**
 
-Re-analysis used to let a series-continuity match overwrite a locked or tuned character's own voice, and a new, similarly-named character could pick up a lock or link it was never joined to. The automated tests use fixtures. Only a real analyzer on a real series shows the matcher's actual candidates. In a two-book series, open Book Two and lock one character's voice (pick one that also appears in Book One with a different voice). Re-analyse Book Two. Observe:
+Re-analysis used to let a series-continuity match overwrite a locked or tuned character's own voice, and a new, similarly-named character could pick up a lock or link it was never joined to. The automated tests use fixtures. Only a real analyzer on a real series shows the matcher's actual candidates. The claim is for a character with an assigned voice (not one still on the default pick, [#3954](https://github.com/dudarenok-maker/Castwright/issues/3954)). In a two-book series, open Book Two and lock one character's voice (pick one that also appears in Book One with a different voice). Preconditions: the locked character shows no "Continuity preserved" footer on Confirm before re-analysis (if it already carries a Book One link, the check proves nothing), and Book Two's manuscript also holds a similarly-named character (for example "Brann" and "Brann Weir"). Re-analyse Book Two. Observe:
 - the character keeps its own locked voice, not Book One's;
 - it shows no "Continuity preserved" footer;
-- a new, similarly-named character did not pick up the lock or the link.
+- the similarly-named character did not pick up the lock or the link.
 
-*Needs:* a real analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all three are recorded against a real series.
+Then lock a voice again, choose Start fresh and re-analyse. Observe the locked voice is kept and the "Continuity preserved" footer is gone.
+
+*Needs:* a real local Ollama analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all four are recorded against a real series.
 
 ---
 

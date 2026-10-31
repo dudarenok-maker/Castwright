@@ -449,7 +449,10 @@ function mergeCore<T extends { id: string }>(
     const merged = { ...(f as Record<string, unknown>) };
     // #3920: the merge must apply the #3842 owner rule — no voice match,
     // automatic or manual, replaces a voice the user locked or tuned. A
-    // locked or tuned voice is therefore taken whole from the prior row:
+    // locked or tuned character WITH AN ASSIGNED VOICE (a voiceId) keeps it
+    // whole; one with no voiceId still keys its voice on its id, so a name
+    // join that changes the id changes the voice (pre-existing, tracked in
+    // #3954). The assigned voice is therefore taken whole from the prior row:
     // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
     // key it lacks is deleted, so nothing the series linker stamped onto the
     // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
