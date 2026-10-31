@@ -872,6 +872,23 @@ recite:
     :1793-1794, first await at :1909); an await ahead of the spawn would
     break it, so check for one.
 
+66. **A merge that unions some fields and drops the field recording a user's
+    decision, reached through a guard a change then narrows** — PR #4006 pass
+    2 (#3965, `dedupePriorCastByName`): the same-name collapse kept the best
+    row and unioned `aliases`, but dropped every other field of the losing
+    row, `notLinkedTo` included. On `main` any cross-book decline blocked the
+    collapse outright, so a decline never reached the merge; scoping the gate
+    to the current book sent those groups into the merge, which erased a
+    decline held only by the row that lost rank, and the link the user
+    refused landed on the next run. Checkable: for every merge or collapse
+    that keeps one of N rows, list each field of the dropped rows and mark the
+    ones that record a user decision (not-the-same-person edges, locks,
+    overrides, dismissals); each must be unioned or carried, not silently
+    discarded. Then, for any change that narrows a guard in front of such a
+    path, ask which inputs the old guard kept out of it, and run those inputs
+    through the real jobs and the real downstream consumer (here the linker),
+    not the merge function alone.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

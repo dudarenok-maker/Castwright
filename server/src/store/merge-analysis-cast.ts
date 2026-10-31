@@ -693,6 +693,24 @@ function groupHasNotLinkedEdge(
   return false;
 }
 
+/** `a` plus the entries of `b` it lacks, deduped by (bookId, characterId); a
+    bare-string entry dedupes by its value. Never mutates either input. */
+function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
+  const keyOf = (e: unknown): string =>
+    e && typeof e === 'object'
+      ? `${String((e as { bookId?: unknown }).bookId)} ${String((e as { characterId?: unknown }).characterId)}`
+      : `s:${String(e)}`;
+  const out = [...(a ?? [])];
+  const seen = new Set(out.map(keyOf));
+  for (const e of b) {
+    const k = keyOf(e);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+  }
+  return out;
+}
+
 /** Collapse same-normalised-name rows in a prior cast to one survivor each so
     the carryover merge cannot re-add a voiced duplicate. Bespoke voice beats a
     reuse link; narrator rows and notLinkedTo-separated pairs are never
@@ -747,6 +765,11 @@ export function dedupePriorCastByName<T extends CastRecord>(
     let aliases: string[] | undefined = Array.isArray(best.aliases)
       ? (best.aliases as string[])
       : undefined;
+    // A dropped row's "not the same person" decisions ride onto the survivor:
+    // the collapse is the owner's call, losing a user's decline is not (#3965).
+    let notLinkedTo: unknown[] | undefined = Array.isArray(best.notLinkedTo)
+      ? (best.notLinkedTo as unknown[])
+      : undefined;
     for (const row of group) {
       if (row === best) continue;
       // Fold the dropped row's alternate names in, but never the survivor's own
@@ -758,6 +781,9 @@ export function dedupePriorCastByName<T extends CastRecord>(
         ...(Array.isArray(row.aliases) ? (row.aliases as string[]) : []),
       ];
       aliases = unionAliases(aliases, add);
+      if (Array.isArray(row.notLinkedTo)) {
+        notLinkedTo = unionNotLinkedTo(notLinkedTo, row.notLinkedTo as unknown[]);
+      }
       dropped.push({
         id: row.id,
         ...(typeof row.name === 'string' ? { name: row.name } : {}),
@@ -765,7 +791,16 @@ export function dedupePriorCastByName<T extends CastRecord>(
       });
       if (row.id !== best.id) retirements.push({ from: row.id, to: best.id });
     }
-    survivorByKey.set(key, aliases ? ({ ...best, aliases } as T) : best);
+    survivorByKey.set(
+      key,
+      aliases || notLinkedTo
+        ? ({
+            ...best,
+            ...(aliases ? { aliases } : {}),
+            ...(notLinkedTo ? { notLinkedTo } : {}),
+          } as T)
+        : best,
+    );
   }
 
   if (!collapsedKeys.size) return { cast: [...priorCast], dropped: [], retirements: [] };

@@ -22,6 +22,7 @@ import {
   mergeAnalysisResultWithExistingCast,
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
+  dedupePriorCastByName,
 } from '../store/merge-analysis-cast.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import {
@@ -808,6 +809,39 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     scanLibrary: async () => library,
     isStandaloneBookId: async () => false,
     resolveBookLanguage: async () => 'en',
+  });
+
+  it('a decline held only by the row that loses the same-name collapse still refuses the link (#3965)', async () => {
+    const declined = { bookId: BOOK1, characterId: 'old-tom' };
+    const before: PriorRow[] = [
+      { id: 'thomas', name: 'Old Tom', voiceId: 'v_own', voiceUuid: 'U-own', lines: 0 },
+      { id: 'old-tom', name: 'Old Tom', lines: 3, notLinkedTo: [declined] },
+    ];
+    const prior = dedupePriorCastByName(before, BOOK2).cast as PriorRow[];
+    const fresh: LinkableCharacter[] = [
+      { id: 'old-tom', name: 'Old Tom', gender: 'male', ageRange: 'adult' },
+    ];
+    const library: LibraryCharacterRecord[] = [
+      ...PRIOR_LIBRARY,
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: {
+          id: 'old-tom',
+          name: 'Old Tom',
+          gender: 'male',
+          ageRange: 'adult',
+          voiceId: 'v_b1_tom',
+        },
+      },
+    ];
+    const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
+
+    /* The collapse kept the survivor `thomas` AND the loser's decline; the
+       linker then saw it and refused Book One's Old Tom. */
+    expect(prior.map((p) => p.id)).toEqual(['thomas']);
+    expect(postLink[0].matchedFrom).toBeUndefined();
+    expect(merged.find((c) => c.name === 'Old Tom')?.matchedFrom).toBeUndefined();
   });
 
   const surnameDrift = async (voiceState: 'locked' | 'tuned') => {

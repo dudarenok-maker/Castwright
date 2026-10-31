@@ -431,4 +431,36 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
       }
     },
   );
+
+  it.each(['main', 'subset'] as const)(
+    'a decline held only by the row that loses the dedupe survives (%s job)',
+    async (kind) => {
+      const winnerless: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_a',
+        voiceUuid: 'U1',
+        lines: 0,
+      };
+      const loser: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, winnerless, loser], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom', 'Old Tom')], {
+          speaker: 'old-tom',
+          subset: kind === 'subset',
+        });
+        const edges = named(bookDir, 'Old Tom').flatMap(
+          (r) => (r.notLinkedTo as Array<{ bookId: string; characterId: string }>) ?? [],
+        );
+        expect(edges).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 });

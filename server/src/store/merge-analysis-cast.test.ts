@@ -1284,6 +1284,27 @@ describe('dedupePriorCastByName', () => {
     expect(dedupePriorCastByName(prior, 'book-2').cast).toHaveLength(2);
   });
 
+  it('the collapse unions every dropped notLinkedTo onto the survivor, deduped by (bookId, characterId) (#3965)', () => {
+    const shared = { bookId: 'book-1', characterId: 'tom' };
+    const prior: C[] = [
+      { id: 'tom', name: 'Old Tom', voiceState: 'locked', lines: 0, notLinkedTo: [shared] },
+      { id: 'tom-2', name: 'Old Tom', lines: 3, notLinkedTo: [{ ...shared }, { bookId: 'book-3', characterId: 'x' }] },
+    ];
+    const { cast } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast.map((r) => r.id)).toEqual(['tom']);
+    expect(cast[0].notLinkedTo).toEqual([shared, { bookId: 'book-3', characterId: 'x' }]);
+    expect(prior[0].notLinkedTo).toEqual([shared]);
+  });
+
+  it('a self-naming notLinkedTo edge does not block the collapse, with or without a book (#3965)', () => {
+    const prior: C[] = [
+      { id: 'a', name: 'X', notLinkedTo: [{ bookId: 'b1', characterId: 'a' }] },
+      { id: 'b', name: 'X' },
+    ];
+    expect(dedupePriorCastByName(prior, undefined).cast).toHaveLength(1);
+    expect(dedupePriorCastByName(prior, 'b1').cast).toHaveLength(1);
+  });
+
   it('never collapses narrator rows sharing a name', () => {
     const prior: C[] = [
       { id: 'narrator', name: 'Narrator', voiceState: 'tuned' },
