@@ -124,3 +124,44 @@ describe('restoreBackup — stale-evidence marker (plan 290, round 10)', () => {
     ).not.toHaveProperty('sentencesPredateChapters');
   });
 });
+
+/* Owner round 11 (PR #3966) — a restore that stamps the marker clears the
+   analysis cache of the restored state's manuscriptId (the paired full-pipeline
+   repro is routes/backup.restore-clears-cache.test.ts); one that stamps nothing
+   leaves it as it was. The cache lives under handoff/cache, outside the temp
+   workspace, so each case removes its own file. */
+describe('restoreBackup — the analysis cache (owner round 11)', () => {
+  const CACHE_BYTES = JSON.stringify({ chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'Old take.' }] } });
+
+  async function withCache(name: string, run: (cacheFile: string) => Promise<void>): Promise<void> {
+    const { cachePath } = await import('../store/analysis-cache.js');
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { dirname } = await import('node:path');
+    const cacheFile = cachePath(`tester__myseries__${name}`);
+    mkdirSync(dirname(cacheFile), { recursive: true });
+    writeFileSync(cacheFile, CACHE_BYTES, 'utf8');
+    try {
+      await run(cacheFile);
+    } finally {
+      rmSync(cacheFile, { force: true });
+    }
+  }
+
+  it('same chapters + saved sentences: the cache is byte-identical after the restore', async () => {
+    await withCache('cache-same', async (cacheFile) => {
+      const after = await restoreOnto('cache-same', {}, {}, EDITS);
+      expect(after).not.toHaveProperty('sentencesPredateChapters');
+      expect(await readFile(cacheFile, 'utf8')).toBe(CACHE_BYTES);
+    });
+  });
+
+  it('chapters differing + saved sentences (marker stamped): the cache is removed', async () => {
+    const { existsSync } = await import('node:fs');
+    await withCache('cache-differs', async (cacheFile) => {
+      const after = await restoreOnto('cache-differs', {}, { chapters: retitled }, EDITS);
+      expect(after.sentencesPredateChapters).toBe(true);
+      expect(existsSync(cacheFile)).toBe(false);
+    });
+  });
+});
+

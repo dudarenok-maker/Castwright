@@ -13,8 +13,8 @@
    the analyzer is stubbed as in analysis.title-flags.test.ts: a Start that is
    not refused never reaches a real model. */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -319,6 +319,63 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
       rmSync(target, { recursive: true, force: true });
     }
   }, 60_000);
+
+  /* Owner round 11 (PR #3966): an overwrite that stamps the marker clears the
+     analysis cache of the manuscriptId the book keeps -- its takes are keyed to
+     the chapter list the bundle replaced, and a main run would replay them. An
+     overwrite that stamps nothing leaves the cache as it was. */
+  describe('the analysis cache (owner round 11)', () => {
+    const CACHE_BYTES = JSON.stringify({ chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Old take.' }] } });
+
+    async function overwriteWithCache(title: string, localState?: (s: BookStateJson) => void) {
+      const state = fixtureState(title);
+      const bundle = await makeBundle(state);
+      const target = targetDirFor(state);
+      rmSync(target, { recursive: true, force: true });
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      if (localState) {
+        const live = readState(target);
+        localState(live);
+        writeFileSync(stateJsonPath(target), JSON.stringify(live), 'utf8');
+      }
+      writeFileSync(manuscriptEditsJsonPath(target), EDITS_WITH_SENTENCES, 'utf8');
+      const { cachePath } = await import('../store/analysis-cache.js');
+      const cacheFile = cachePath(state.manuscriptId);
+      mkdirSync(dirname(cacheFile), { recursive: true });
+      writeFileSync(cacheFile, CACHE_BYTES, 'utf8');
+      await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      return { target, cacheFile };
+    }
+
+    it('a structure-changing overwrite (marker stamped) removes the cache of the kept manuscriptId', async () => {
+      let paths: { target: string; cacheFile: string } | undefined;
+      try {
+        paths = await overwriteWithCache('Marker Overwrite Cache Differs', retitleChapter2);
+        expect(readState(paths.target).sentencesPredateChapters).toBe(true);
+        expect(readState(paths.target).manuscriptId).toBe(fixtureState('Marker Overwrite Cache Differs').manuscriptId);
+        expect(existsSync(paths.cacheFile)).toBe(false);
+      } finally {
+        if (paths) {
+          rmSync(paths.target, { recursive: true, force: true });
+          rmSync(paths.cacheFile, { force: true });
+        }
+      }
+    });
+
+    it('a same-chapters overwrite (no marker) leaves the cache byte-identical', async () => {
+      let paths: { target: string; cacheFile: string } | undefined;
+      try {
+        paths = await overwriteWithCache('Marker Overwrite Cache Same');
+        expect(readState(paths.target)).not.toHaveProperty('sentencesPredateChapters');
+        expect(readFileSync(paths.cacheFile, 'utf8')).toBe(CACHE_BYTES);
+      } finally {
+        if (paths) {
+          rmSync(paths.target, { recursive: true, force: true });
+          rmSync(paths.cacheFile, { force: true });
+        }
+      }
+    });
+  });
 
   describe("a marker carried in the bundle's own state.json is stripped (only the stamp decides)", () => {
     const carried = (title: string) => fixtureState(title, { sentencesPredateChapters: true });

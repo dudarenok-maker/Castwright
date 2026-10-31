@@ -7699,7 +7699,12 @@ export async function runMainAnalyzerJob(
               };
               /* Plan 290 — this run re-keyed every saved sentence to the current
                  chapters (the edits write above landed), so the stale-evidence
-                 marker goes. Only the main persist clears it. */
+                 marker goes. Only the main persist clears it. That holds because
+                 every producer of the marker leaves no stale cache behind: a
+                 restructure, a bundle overwrite and a backup restore each clear
+                 the analysis cache when they stamp it (owner round 11), so no
+                 chapter's take here was replayed from a cache keyed to an older
+                 chapter list. */
               delete next.sentencesPredateChapters;
               return next;
             }, {

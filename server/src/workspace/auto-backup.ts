@@ -29,6 +29,7 @@ import { mintEditEpoch } from './slice-revision.js';
 import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 import { removeManuscript } from '../store/manuscripts.js';
+import { clearAnalysisCache } from '../store/analysis-cache.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
    chronological, and human-readable in File Explorer. */
@@ -244,6 +245,8 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
     /* The manuscript id the book carried before the restore, read under the
        state-json lock below. */
     let currentManuscriptId: string | undefined;
+    /* Whether the restored state.json landed carrying the marker. */
+    let stamped = false;
     try {
       /* #3700 — a whole-file overwrite that renames over state.json; it takes the
          per-book state-json leaf lock (inside the book lock) so it can't
@@ -275,7 +278,18 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
              it would pass the revision check against rewound state. */
           editEpoch: mintEditEpoch(),
         });
+        stamped = stale;
       });
+      /* Plan 290 (#3837, owner round 11) -- the analysis cache is keyed by
+         manuscriptId, not by chapter list, so after a stamping restore it still
+         holds takes keyed to the chapter list just replaced; a main run would
+         replay them as current and clear the marker over them. Clear it, as a
+         restructure does while the marker is set (refreshCacheFromEdits). The
+         cache file is not under the state-json lock, so this runs after it,
+         still under the book lock. A restore that stamps nothing keeps it. */
+      if (stamped && typeof parsed.manuscriptId === 'string' && parsed.manuscriptId) {
+        await clearAnalysisCache(parsed.manuscriptId);
+      }
     } finally {
       /* PR #3966 review pass 1 -- the restored state.json describes another
          chapter list, so a warm ManuscriptRecord built from the state it

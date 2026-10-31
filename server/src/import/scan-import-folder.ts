@@ -57,6 +57,7 @@ import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { readEditsForHintsCheck } from '../workspace/hints-proof-io.js';
 import { swapLeavesStaleEvidence } from '../workspace/stale-evidence.js';
 import { removeManuscript } from '../store/manuscripts.js';
+import { clearAnalysisCache } from '../store/analysis-cache.js';
 import {
   BOOK_GONE,
   BookBusyError,
@@ -481,8 +482,10 @@ export async function importPortableBundle(
         /* #3823 -- mint a fresh manuscriptId only when this write would ADD a
            carrier of an id another book holds. A target that already carries the
            bundle's id keeps it, whatever twins or unreadable siblings exist (it
-           adds no carrier, and its id-keyed ledger / analyzer cache stay attached);
-           pre-existing twins are not repaired here. */
+           adds no carrier, and its id-keyed ledger / analyzer cache stay attached,
+           unless the overwrite marks the saved sentences stale -- then the
+           analyzer cache is cleared below, owner round 11); pre-existing twins
+           are not repaired here. */
         const ids = await takenBookIds();
         const bookId = expectedId ?? idForNewBook(ids, baseTitle, true);
         const manuscriptId =
@@ -517,12 +520,15 @@ export async function importPortableBundle(
           ...(bundleHasHints ? [hintsRel] : []),
           ...stagedRel.filter((rel) => rel !== stateRel && rel !== hintsRel),
         ];
+        /* Whether the bundle's state.json (the first rename) landed. */
+        let stateLanded = false;
         try {
           await withStateJsonLock(stateJsonPath(targetDir), async () => {
             for (const [i, rel] of order.entries()) {
               const dest = join(targetDir, rel);
               await mkdir(dirname(dest), { recursive: true });
               await rename(join(stage, rel), dest);
+              if (i === 0) stateLanded = true;
               if (i === 0 && !bundleHasHints) {
                 await rm(manuscriptHintsJsonPath(targetDir), { force: true });
               }
@@ -536,6 +542,16 @@ export async function importPortableBundle(
              has still replaced some files, so the warm record is stale either way. */
           if (live?.manuscriptId) removeManuscript(live.manuscriptId);
           if (manuscriptId) removeManuscript(manuscriptId);
+          /* Plan 290 (#3837, owner round 11) -- a state.json that landed with the
+             marker means the analysis cache of the id the book keeps holds takes
+             keyed to the chapter list just replaced; a main run would replay them
+             as current and clear the marker over them. Clear it, as a restructure
+             does while the marker is set (refreshCacheFromEdits). The cache file
+             is not under the state-json lock, so this runs after it, still under
+             the claim. In the `finally` for the same reason as above: a later
+             rename failing does not undo the state.json that landed. Last, so
+             a failure here cannot skip the record drops. */
+          if (editsPredate && stateLanded && manuscriptId) await clearAnalysisCache(manuscriptId);
         }
         return { bookId, targetPath: targetDir, importedFiles: stagedRel.length };
       });
