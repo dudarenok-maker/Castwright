@@ -3479,7 +3479,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book. `hints_out_of_sync` (#3791, merge, split and reorder; rename and refresh-titles too, but only for a title mismatch on a parse-fallback book): the manuscript hints do not pair one-to-one with state.json's chapters; re-parse the book first. `error` is a curated sentence with no filesystem path. */
+        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book. `hints_out_of_sync` (#3791, #3837; merge, split, reorder, rename and refresh-titles): the manuscript hints do not pair with state.json, either a different chapter count or ids, or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused; one that would drop an empty chapter on such a book is. Re-parse the book first. `error` is a curated sentence with no filesystem path. */
         RestructureConflictError: {
             error: string;
             /** @enum {string} */
@@ -8498,11 +8498,14 @@ export interface operations {
              *     it has. `chapters_restructuring`: a chapter restructure
              *     (merge, split, reorder, exclude, rename or refresh-titles) is in
              *     flight on this book; try again when it finishes.
-             *     `hints_out_of_sync` (#3829): the book's chapter hints came from a fresh
-             *     parse whose chapter count or ids no longer match its state.json
-             *     (a book merged before its hints were saved, or one imported
-             *     before a parser change that splits its plain text into a
-             *     different number of chapters); body `{ error: <curated sentence>, code:
+             *     `hints_out_of_sync` (#3829, #3837): the book's chapter hints came from a fresh
+             *     parse and do not pair with its saved state: a chapter count or ids that
+             *     no longer match its state.json (a book merged before its hints were
+             *     saved, or one imported before a parser change that splits its plain text
+             *     into a different number of chapters), or, at the same count, a chapter
+             *     whose saved analysis sentences do not match its position (checked on
+             *     the main and the subset start; Start fresh checks count and ids only);
+             *     body `{ error: <curated sentence>, code:
              *     hints_out_of_sync }`, where `error` says to re-parse the book from
              *     its Library menu. Nothing was written and no job was registered.
              *     This code is a 409 only; it never arrives as an SSE event. The other
@@ -8582,11 +8585,13 @@ export interface operations {
              *     `draining` and `message`) when the main run registered after the
              *     stream opened. A chapter restructure in flight on the book
              *     refuses the same way with `error: chapters_restructuring` and a
-             *     `message` (no `draining`). `hints_out_of_sync` (#3829): the
-             *     book's chapter hints came from a fresh parse whose chapter count
-             *     or ids no longer match its state.json (a book merged before its
-             *     hints were saved, or one imported before a parser change that
-             *     splits its plain text into a different number of chapters); body `{ error: <curated sentence>, code }`
+             *     `message` (no `draining`). `hints_out_of_sync` (#3829, #3837): the
+             *     book's chapter hints came from a fresh parse and do not pair with
+             *     its state.json: a chapter count or ids that no longer match (a book
+             *     merged before its hints were saved, or one imported before a parser
+             *     change that splits its plain text into a different number of
+             *     chapters), or, at the same count, a chapter whose saved analysis
+             *     sentences do not match its position; body `{ error: <curated sentence>, code }`
              *     and nothing was written.
              */
             409: {
@@ -8711,7 +8716,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused, but one that would drop an empty chapter (changing the count) on such a book is refused the same way. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8765,7 +8770,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused, but one that would drop an empty chapter (changing the count) on such a book is refused the same way. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8820,7 +8825,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused, but one that would drop an empty chapter (changing the count) on such a book is refused the same way. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8872,7 +8877,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) when the manuscript hints do not pair with state.json (different chapter count or ids, or, for hints from a fresh parse, a title that disagrees with its position): the message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused, but one that would drop an empty chapter (changing the count) on such a book is refused the same way. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8969,7 +8974,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791) on a book whose manuscript hints came from a fresh parse and whose chapter titles disagree with it by position (a book reordered before #3703): a rename or title refresh would hide that from a later merge, so it is refused too. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position. An exclude/include toggle is never refused, but one that would drop an empty chapter (changing the count) on such a book is refused the same way. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
