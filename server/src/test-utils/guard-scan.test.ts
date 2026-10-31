@@ -164,6 +164,35 @@ describe('findMatchingClose and lineOf', () => {
 });
 
 describe('token-skipping opaque ranges', () => {
+  it('a backslash-escaped quote does not end the string early', () => {
+    const src = "x = 'a\\'b'; y = 1";
+    const ranges = computeTokenOpaqueRanges(src);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('b'))).toBe(true);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('y'))).toBe(false);
+  });
+
+  it('a backtick string is opaque and holds a foreign quote', () => {
+    const src = "x = `it's`; y = 1";
+    const ranges = computeTokenOpaqueRanges(src);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('s`'))).toBe(true);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('y'))).toBe(false);
+  });
+
+  it('the character just past a block comment close is live code', () => {
+    const src = '/* c */y = 1';
+    const ranges = computeTokenOpaqueRanges(src);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('c'))).toBe(true);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('y'))).toBe(false);
+  });
+
+  it('blankOutOpaque blanks opaque spans, keeping length and newlines', () => {
+    const src = "a('x'); // c\nb(/* d\ne */);";
+    const out = scanner.blankOutOpaque(src);
+    const sp = (n: number): string => ' '.repeat(n);
+    expect(out).toHaveLength(src.length);
+    expect(out).toBe(`a(${sp(3)});${sp(5)}\nb(${sp(4)}\n${sp(4)});`);
+  });
+
   it('strings, line comments and block comments are all opaque; code is not', () => {
     const src = "x = 'str'; // line\n/* block */ y = 1";
     const ranges = computeTokenOpaqueRanges(src);
@@ -193,14 +222,15 @@ describe('token-skipping opaque ranges', () => {
    guarded against is a guard growing a PRIVATE scanner again. Parsed, not
    regexed: guards quote these names in comments. The banned names are every
    runtime export of guard-scan.ts (so a new export is covered the moment it
-   lands) plus the names a retired private copy went by. */
-const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // server/src
-const RETIRED_SCANNER_ALIASES = ['computeOpaqueRanges', 'collectTsFiles'];
-const SHARED_SCANNER_NAMES = new Set([...Object.keys(scanner), ...RETIRED_SCANNER_ALIASES]);
+   lands) plus the names a retired private copy went by.
 
-/** `<relative file>: <name>` -> reason, for a guard that legitimately shares a
-    banned name. Empty today: the first run found none. */
-const SCANNER_NAME_EXEMPTIONS = new Map<string, string>();
+   BLIND SPOTS, stated rather than implied: the match is by declared NAME, at
+   any depth, for function declarations and variable declarations only. A copy
+   under a RENAMED identifier, an object-literal method, or a class method
+   passes - widening to match shapes was declined. */
+const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // server/src
+const RETIRED_SCANNER_ALIASES = ['computeOpaqueRanges', 'collectTsFiles', 'opaqueRangesFor', 'opaqueCache'];
+const SHARED_SCANNER_NAMES = new Set([...Object.keys(scanner), ...RETIRED_SCANNER_ALIASES]);
 
 /** A guard file is `*.guard.test.ts` or `*-guard.test.ts`. */
 function isGuardFile(file: string): boolean {
@@ -220,13 +250,7 @@ function privateScannerCopies(root: string): { scanned: number; offenders: strin
       let name: string | undefined;
       if (ts.isFunctionDeclaration(node) && node.name) name = node.name.text;
       else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) name = node.name.text;
-      if (
-        name &&
-        SHARED_SCANNER_NAMES.has(name) &&
-        !SCANNER_NAME_EXEMPTIONS.has(`${rel}: ${name}`)
-      ) {
-        offenders.push(`${rel}: ${name}`);
-      }
+      if (name && SHARED_SCANNER_NAMES.has(name)) offenders.push(`${rel}: ${name}`);
       ts.forEachChild(node, visit);
     };
     visit(sf);
@@ -238,7 +262,7 @@ describe('guards share the scanner (no private copies)', () => {
   it('no guard file declares a copy of a shared scanner helper, at any depth', () => {
     const { scanned, offenders } = privateScannerCopies(SRC_ROOT);
     // Floor: a broken walk must not pass by finding nothing.
-    expect(scanned).toBeGreaterThanOrEqual(8);
+    expect(scanned).toBeGreaterThanOrEqual(27);
     expect(offenders).toEqual([]);
   });
 
@@ -258,6 +282,9 @@ describe('guards share the scanner (no private copies)', () => {
       'astOpaqueRangesFor',
       'computeOpaqueRanges',
       'collectTsFiles',
+      'blankOutOpaque',
+      'opaqueRangesFor',
+      'opaqueCache',
     ]) {
       expect(SHARED_SCANNER_NAMES.has(name), name).toBe(true);
     }
