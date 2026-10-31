@@ -3,6 +3,7 @@
    matching the GET /api/library response. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import { sortDirNames } from './dir-order.js';
 import { join } from 'node:path';
 import {
   BOOKS_ROOT,
@@ -504,9 +505,11 @@ function formatRuntime(totalSec: number): string {
 function listDirs(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
-    return readdirSync(path, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+    return sortDirNames(
+      readdirSync(path, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name),
+    );
   } catch {
     return [];
   }

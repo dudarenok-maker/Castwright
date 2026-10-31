@@ -34,6 +34,7 @@
    hand-built object is refused), replacing an AsyncLocalStorage order tracker. */
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
+import { sortDirNames } from './dir-order.js';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
@@ -179,9 +180,11 @@ export function __duplicateBookIdsForTest(): Set<string> {
 function listDirNames(path: string): string[] {
   if (!existsSync(path)) return [];
   try {
-    return readdirSync(path, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+    return sortDirNames(
+      readdirSync(path, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name),
+    );
   } catch {
     return [];
   }
