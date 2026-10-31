@@ -303,7 +303,21 @@ async function forkSharedVoiceUuid(
     for (let i = 0; i < fresh.characters.length; i++) {
       const c = fresh.characters[i];
       if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
-        fresh.characters[i] = { ...c, voiceUuid: newUuid };
+        /* Drop the qwen `variants` map in the same write as the stamp. Render
+           never reads a stored variant name: `pickEmotionVariantVoice` re-derives
+           `qwen-<uuid>__<emotion>` from the row's uuid, and the copies above are
+           the base family only, so a surviving slot would ask for a `.pt` that
+           does not exist (`voice_not_designed` at synth). Same reason and shape
+           as voice-library.ts's assign route. The earlier book's variant files
+           and its own slots are untouched. */
+        const qwen = c.overrideTtsVoices?.qwen;
+        fresh.characters[i] = {
+          ...c,
+          voiceUuid: newUuid,
+          ...(qwen?.variants
+            ? { overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: undefined } } }
+            : {}),
+        };
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);

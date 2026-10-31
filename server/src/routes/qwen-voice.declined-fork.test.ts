@@ -306,6 +306,74 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
   });
 });
 
+/* Review pass 1, finding 1 — render never reads the stored variant name:
+   `pickEmotionVariantVoice` re-derives `<base>__<emotion>` from the row's uuid,
+   and a fork copies only the base family. A variants map that survives a fork
+   therefore asks for a `.pt` that does not exist (`voice_not_designed`). */
+describe('#3992 — a fork leaves no variant the render path cannot resolve', () => {
+  const voiced = {
+    ttsEngine: 'qwen',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    },
+  };
+  const seedVoiced = () => {
+    seed({ ...voiced });
+    writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('BOOK-ONE-ANGRY'));
+  };
+  /* the key synthesis asks the sidecar for, per emotion */
+  const renderKey = async (title: string, emotion: string) => {
+    const pick = await import('../tts/voice-mapping.js');
+    const row = readRow(title) as Parameters<typeof pick.pickVoiceForEngine>[1];
+    const base = pick.pickVoiceForEngine('qwen', row);
+    const variants = (row as { overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } } })
+      .overrideTtsVoices?.qwen?.variants;
+    return pick.pickEmotionVariantVoice('qwen', variants, emotion, base, false);
+  };
+  const resolves = async (title: string, emotion: string) =>
+    existsSync(join(qwenDir(), `${await renderKey(title, emotion)}.pt`));
+
+  it('control: before any design the declined row renders angry from a file that exists', async () => {
+    seedVoiced();
+    expect(await resolves('Book Two', 'angry')).toBe(true);
+  });
+
+  it('preview then Cancel: an angry line still resolves to a file', async () => {
+    seedVoiced();
+    const res = await design(() => bookTwoId, { preview: true });
+    expect(res.status).toBe(200);
+    const discard = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: requestedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(discard.status).toBe(200);
+    expect(await resolves('Book Two', 'angry')).toBe(true);
+  });
+
+  it('direct base design (no preview): an angry line still resolves to a file', async () => {
+    seedVoiced();
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    expect(await resolves('Book Two', 'angry')).toBe(true);
+  });
+
+  it('designing a second emotion: both the new and the earlier emotion resolve', async () => {
+    seedVoiced();
+    const res = await design(() => bookTwoId, { emotion: 'sad' });
+    expect(res.status).toBe(200);
+    expect(await resolves('Book Two', 'sad')).toBe(true);
+    expect(await resolves('Book Two', 'angry')).toBe(true);
+  });
+
+  it('Book One keeps its variant slot and file', async () => {
+    seedVoiced();
+    const one = { ...readRow('Book One'), ...voiced };
+    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
+    await design(() => bookTwoId);
+    expect(await resolves('Book One', 'angry')).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-u_shared__angry.pt'))).toBe(true);
+  });
+});
+
 describe('#3992 — promote / DELETE keep the earlier book’s variant files', () => {
   const VAR_BYTES = Buffer.from('BOOK-ONE-ANGRY-VARIANT');
   const variantFile = () => join(qwenDir(), 'qwen-u_shared__angry.pt');
