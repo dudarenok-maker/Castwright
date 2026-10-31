@@ -28,9 +28,10 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
-import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, withBookOp, withBookOps } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
@@ -40,7 +41,7 @@ import {
   qwenVoiceWavPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withCastLock } from '../workspace/cast-lock.js';
+import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -61,6 +62,8 @@ import {
   shouldForkSharedVoiceUuid,
   shouldMintApartFromLegacyKey,
   isVariantUsedByOtherVoiceUuid,
+  findLinkFollowers,
+  readBookId,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
 
@@ -338,45 +341,106 @@ async function forkSharedVoiceUuid(
   oldUuid: string,
 ): Promise<string | undefined> {
   const newUuid = nanoid();
+  /* The books that follow X (link to it, transitively) move with it. Their book-ops
+     and cast locks are taken together with X's (book-ops first, one `withBookOps`,
+     then one `withCastLocks`: rule 3 and the global order). The set is fixed here,
+     before the copies, and re-derived inside the locks below; a book that stopped
+     following in between is left alone, and one that started following in between
+     is left on U (never a write outside the lock set). The design is a registered
+     job, so no book-op of X's is held here. */
+  const scanned = await findLinkFollowers(bookDir, { id: characterId }, oldUuid);
+  const xBookId = await readBookId(bookDir);
+  if (!xBookId) throw new Error('Cannot fork a voice for a book that has no bookId.');
   const copied = await copyBaseFamily(`qwen-${oldUuid}`, `qwen-${newUuid}`);
   const cleanup = (): Promise<void> => removeFiles(copied);
 
-  return withCastLock(bookDir, async () => {
-    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
-    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-    if (!fresh || idx === -1) {
-      await cleanup();
-      return undefined;
-    }
-    const x = fresh.characters[idx];
-    if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
-      await cleanup();
-      return x.voiceUuid ?? undefined;
-    }
-    const linkId = x.voiceId ?? x.id;
-    for (let i = 0; i < fresh.characters.length; i++) {
-      const c = fresh.characters[i];
-      if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
-        /* Drop the qwen `variants` map in the same write as the stamp. Render
-           never reads a stored variant name: `pickEmotionVariantVoice` re-derives
-           `qwen-<uuid>__<emotion>` from the row's uuid, and the copies above are
-           the base family only, so a surviving slot would ask for a `.pt` that
-           does not exist (`voice_not_designed` at synth). Same reason and shape
-           as voice-library.ts's assign route. The earlier book's variant files
-           and its own slots are untouched. */
-        const qwen = c.overrideTtsVoices?.qwen;
-        fresh.characters[i] = {
-          ...c,
-          voiceUuid: newUuid,
-          ...(qwen?.variants
-            ? { overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: undefined } } }
-            : {}),
-        };
+  const out = await withBookOps([xBookId, ...scanned.map((f) => f.bookId)], (books) => {
+    const lockedDirs = books.map((b) => b.bookDir);
+    return withCastLocks(lockedDirs, async (): Promise<string | undefined> => {
+      const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+      if (!fresh || idx === -1) {
+        await cleanup();
+        return undefined;
       }
-    }
-    await writeJsonAtomic(castJsonPath(bookDir), fresh);
-    return newUuid;
+      const x = fresh.characters[idx];
+      if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
+        await cleanup();
+        return x.voiceUuid ?? undefined;
+      }
+
+      let wrote = false;
+      try {
+        /* Followers first. A failure after this point leaves a follower on the copy
+           and X on U (X retries as a fresh fork), never X on U' with a follower
+           still on the earlier book's key. */
+        const locked = new Set(lockedDirs.map((d) => resolve(d)));
+        const live = (await findLinkFollowers(bookDir, x, oldUuid)).filter((f) => locked.has(resolve(f.dir)));
+        for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
+          let cast: CastFile | null;
+          try {
+            cast = await readJson<CastFile>(castJsonPath(dir));
+          } catch (e) {
+            /* Readable a moment ago, not now: leave that book on U, don't fail X. */
+            console.warn(`[qwen-voice] fork: skipping follower book, cast.json unreadable: ${(e as Error).message}`);
+            continue;
+          }
+          if (!cast?.characters) continue;
+          const followerIds = new Set(live.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
+          const linkIds = new Set(
+            cast.characters.filter((c) => followerIds.has(c.id)).map((c) => c.voiceId ?? c.id),
+          );
+          let changed = false;
+          const characters = cast.characters.map((c) => {
+            if (c.voiceUuid !== oldUuid || !linkIds.has(c.voiceId ?? c.id)) return c;
+            changed = true;
+            return withForkedUuid(c, newUuid);
+          });
+          if (!changed) continue;
+          await writeJsonAtomic(castJsonPath(dir), { ...cast, characters });
+          wrote = true;
+        }
+
+        const linkId = x.voiceId ?? x.id;
+        for (let i = 0; i < fresh.characters.length; i++) {
+          const c = fresh.characters[i];
+          if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
+            fresh.characters[i] = withForkedUuid(c, newUuid);
+          }
+        }
+        await writeJsonAtomic(castJsonPath(bookDir), fresh);
+      } catch (e) {
+        /* Nothing written yet: the copies are strays, remove them. Once a follower
+           has been written it points at them, so they stay. */
+        if (!wrote) await cleanup();
+        throw e;
+      }
+      return newUuid;
+    });
   });
+  if (out === BOOK_GONE) {
+    await cleanup();
+    throw new Error('A book in this series was removed while the voice was being forked; try again.');
+  }
+  return out;
+}
+
+/* #3992 — stamp a forked uuid onto one row and drop its qwen `variants` map in the
+   same write. Render never reads a stored variant name: `pickEmotionVariantVoice`
+   re-derives `qwen-<uuid>__<emotion>` from the row's uuid, and the copies above are
+   the base family only, so a surviving slot would ask for a `.pt` that does not
+   exist (`voice_not_designed` at synth). Same reason and shape as
+   voice-library.ts's assign route. The earlier book's variant files and its own
+   slots are untouched. */
+function withForkedUuid(c: CastCharacter, newUuid: string): CastCharacter {
+  const qwen = c.overrideTtsVoices?.qwen;
+  return {
+    ...c,
+    voiceUuid: newUuid,
+    ...(qwen?.variants
+      ? { overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: undefined } } }
+      : {}),
+  };
 }
 
 /* #3992 — the fork decision for a row that already has a uuid. Caller holds
@@ -421,7 +485,10 @@ export async function forkDeclinedVoiceUuidIfShared(
    `qwen-<uuid>.pt`. When shouldForkSharedVoiceUuid says so, mint U', COPY the
    base family of `qwen-<uuid>` (.pt, .json, __1.7b.pt, __master.wav — never the
    emotion variants) to `qwen-<U'>`, then stamp U' onto this character (and
-   same-book rows sharing its voiceId ?? id) only. Copy first, stamp second: a
+   same-book rows sharing its voiceId ?? id) and onto every row in another book
+   that follows it by `matchedFrom`, transitively (Book Three follows Book Two;
+   findLinkFollowers), all in one withCastLocks write. The earlier book stays.
+   Copy first, stamp second: a
    crash between them leaves stray copies, never a row pointing at a missing
    .pt. The stamp also drops the row's qwen `variants` map (render re-derives
    `<key>__<emotion>` from the uuid and only the base family is copied). The

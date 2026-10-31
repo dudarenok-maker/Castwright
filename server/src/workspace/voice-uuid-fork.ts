@@ -14,10 +14,18 @@
       `declinedVoiceFrom` (the durable "Don't reuse" marker, #3992). A row
       declined before the marker shipped has none and never forks (it behaves as
       it did before #3992); a row nobody declined never forks.
-   2. At least one character in ANOTHER book has `voiceUuid === U` (a holder).
-   3. No other-book holder Y links to X: Y has no `matchedFrom` that is
-      bookId-less, or that names B's bookId with a characterId absent or
-      resolving to X. This protects the SOURCE side of a live pair.
+   2. At least one character in ANOTHER book has `voiceUuid === U` and is NOT a
+      follower of X (below). That is the earlier book whose bytes must be kept.
+
+   A FOLLOWER of X is a row, in another book, holding U whose `matchedFrom` names
+   B's bookId with a characterId that is absent or resolves to X (through B's live
+   cast and id history), or that names an already-found follower the same way, so
+   a chain Book Three -> Book Two -> X is found end to end. A bookId-less
+   `matchedFrom` could point at anyone, so it is NOT a follower: it stays on U (and
+   so counts as a holder), and neither is a row in a book with no bookId (it cannot
+   be locked by id). Followers move to the new uuid together with X, in one
+   locked write (qwen-voice.ts forkSharedVoiceUuid); everything else holding U is
+   the earlier book and stays. A visited set makes a link cycle terminate.
 
    Writes nothing and takes no lock. */
 
@@ -66,7 +74,117 @@ async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNRE
   }
 }
 
-/* Residual risk of the skip, shared by both fork decisions below: an unreadable
+/* The ONE read of a book's state.json in this module (the state-json lock guard
+   pins its stateJsonPath( count per file). Throws like any state read; the scan of
+   OTHER books catches it, the book being designed does not. Also exported for the
+   fork write, which needs the designed book's id to take its book-op. */
+export async function readBookId(dir: string): Promise<string | undefined> {
+  return (await readStateJsonWithRecovery(stateJsonPath(dir)))?.bookId || undefined;
+}
+
+interface OtherBook {
+  dir: string;
+  bookId?: string;
+  rows: CastRow[];
+}
+
+/* Every OTHER book's readable cast, with its bookId. An unreadable cast.json is
+   skipped (see readOtherBookCast), so it holds nothing and follows nothing. */
+async function loadOtherBooks(selfDir: string): Promise<OtherBook[]> {
+  const out: OtherBook[] = [];
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (resolve(dir) === selfDir) continue;
+        const cast = await readOtherBookCast<CastFile>(dir);
+        if (cast === UNREADABLE || !cast?.characters?.length) continue;
+        let bookId: string | undefined;
+        try {
+          bookId = await readBookId(dir);
+        } catch {
+          bookId = undefined;
+        }
+        out.push({ dir, bookId, rows: cast.characters });
+      }
+    }
+  }
+  return out;
+}
+
+export interface LinkFollower {
+  dir: string;
+  bookId: string;
+  characterId: string;
+}
+
+const rowKey = (dir: string, id: string): string => `${resolve(dir)}|${id}`;
+
+/* Breadth-first walk from X over `matchedFrom` links, among rows holding `uuid`.
+   A row already visited (X itself, one reached by another path, or one that names
+   its own book) is never revisited, so a cycle ends. */
+async function walkFollowers(
+  selfDir: string,
+  character: { id: string },
+  uuid: string,
+  others: OtherBook[],
+): Promise<LinkFollower[]> {
+  const selfBookId = await readBookId(selfDir);
+  const followers: LinkFollower[] = [];
+  const visited = new Set<string>([rowKey(selfDir, character.id)]);
+  interface Node {
+    dir: string;
+    bookId: string | undefined;
+    characterId: string;
+    rows?: CastRow[];
+  }
+  const queue: Node[] = [
+    { dir: selfDir, bookId: selfBookId, characterId: character.id },
+  ];
+  while (queue.length) {
+    const node = queue.shift()!;
+    if (!node.bookId) continue; // a book with no id cannot be named by a link
+    let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
+    const namesNode = async (characterId: string): Promise<boolean> => {
+      if (characterId === node.characterId) return true;
+      if (!resolver) {
+        const rows = node.rows ?? (await readJson<CastFile>(castJsonPath(node.dir)))?.characters ?? [];
+        resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(node.dir));
+      }
+      return resolver.resolve(characterId)?.character.id === node.characterId;
+    };
+    for (const book of others) {
+      /* A book with no bookId cannot be locked by id (no route can move it either),
+         so it cannot be moved with X: it stays on U. */
+      if (!book.bookId) continue;
+      for (const y of book.rows) {
+        if (y.voiceUuid !== uuid) continue;
+        const key = rowKey(book.dir, y.id);
+        if (visited.has(key)) continue;
+        const mf = y.matchedFrom as MatchedFrom;
+        if (!mf?.bookId || mf.bookId !== node.bookId) continue;
+        if (mf.characterId && !(await namesNode(mf.characterId))) continue;
+        visited.add(key);
+        followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
+        queue.push({ dir: book.dir, bookId: book.bookId, characterId: y.id, rows: book.rows });
+      }
+    }
+  }
+  return followers;
+}
+
+/* Every row in another book that follows X (see the header), transitively.
+   Read-only and lock-free; qwen-voice.ts re-runs it inside the locks it takes. */
+export async function findLinkFollowers(
+  bookDir: string,
+  character: { id: string },
+  uuid: string,
+): Promise<LinkFollower[]> {
+  const selfDir = resolve(bookDir);
+  return walkFollowers(selfDir, character, uuid, await loadOtherBooks(selfDir));
+}
+
+/* Residual risk of the skip, shared by the fork decisions below: an unreadable
    book is treated as holding nothing. If it does in fact hold the uuid (or the
    legacy key), a redesign of the book being designed overwrites that book's
    `.pt` as it did before #3992. The alternative, treating it as a holder, would
@@ -90,25 +208,13 @@ export async function shouldForkSharedVoiceUuid(
   if (!character.declinedVoiceFrom?.length) return false;
 
   const selfDir = resolve(bookDir);
-  const linksToSelf = await makeLinksToSelf(bookDir, character);
-
-  let hasHolder = false;
-  for (const authorName of listDirs(BOOKS_ROOT)) {
-    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
-      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
-        const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        if (resolve(otherDir) === selfDir) continue;
-        const cast = await readOtherBookCast<CastFile>(otherDir);
-        if (cast === UNREADABLE || !cast?.characters?.length) continue;
-        for (const y of cast.characters) {
-          if (y.voiceUuid !== uuid) continue;
-          hasHolder = true;
-          if (await linksToSelf(y.matchedFrom as MatchedFrom)) return false;
-        }
-      }
-    }
-  }
-  return hasHolder;
+  const others = await loadOtherBooks(selfDir);
+  const followed = new Set(
+    (await walkFollowers(selfDir, character, uuid, others)).map((f) => rowKey(f.dir, f.characterId)),
+  );
+  return others.some((b) =>
+    b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))),
+  );
 }
 
 /* #3992 — read-only: the no-uuid sibling of shouldForkSharedVoiceUuid. A row
@@ -172,8 +278,7 @@ async function makeLinksToSelf(
   bookDir: string,
   character: { id: string },
 ): Promise<(mf: MatchedFrom) => Promise<boolean>> {
-  const selfState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-  const selfBookId: string | undefined = selfState?.bookId || undefined;
+  const selfBookId = await readBookId(bookDir);
   let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
   const namesSelf = async (characterId: string): Promise<boolean> => {
     if (characterId === character.id) return true;

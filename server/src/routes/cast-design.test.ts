@@ -945,7 +945,7 @@ describe('scope + variantTasks (fs-25)', () => {
     const prequelDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'The Prequel');
     try {
       const shared = { ...charWithBase, voiceUuid: 'u_marlow_shared' };
-      writeBookOnDisk([...characters, shared]);
+      writeBookOnDisk([...characters, { ...shared, declinedVoiceFrom: ['prequel-id'] }]);
       mkdirSync(join(prequelDir, '.audiobook'), { recursive: true });
       writeFileSync(
         join(prequelDir, '.audiobook', 'state.json'),

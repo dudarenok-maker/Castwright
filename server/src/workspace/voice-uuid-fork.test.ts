@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 let root: string;
 let shouldFork: typeof import('./voice-uuid-fork.js').shouldForkSharedVoiceUuid;
 let shouldMintApart: typeof import('./voice-uuid-fork.js').shouldMintApartFromLegacyKey;
+let findFollowers: typeof import('./voice-uuid-fork.js').findLinkFollowers;
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -33,7 +34,11 @@ function reset() {
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'voice-uuid-fork-test-'));
   process.env.WORKSPACE_DIR = root;
-  ({ shouldForkSharedVoiceUuid: shouldFork, shouldMintApartFromLegacyKey: shouldMintApart } = await import('./voice-uuid-fork.js'));
+  ({
+    shouldForkSharedVoiceUuid: shouldFork,
+    shouldMintApartFromLegacyKey: shouldMintApart,
+    findLinkFollowers: findFollowers,
+  } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
   delete process.env.WORKSPACE_DIR;
@@ -81,11 +86,11 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(false);
   });
 
-  it('source side: a bookId-less link from Book Two also protects Book One', async () => {
+  it('a bookId-less link (manual Assign) is not a follower, so it counts as a holder and the row forks', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
     book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U, matchedFrom: { bookTitle: 'One' } }]);
-    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(false);
+    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
   });
 
   it('forks when Book Two links to a different character id of Book One', async () => {
@@ -182,5 +187,76 @@ describe('shouldMintApartFromLegacyKey (#3992)', () => {
       { id: 'c1', voiceId: 'v_x', overrideTtsVoices: slot, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } },
     ]);
     expect(await shouldMintApart(two, x)).toBe(false);
+  });
+});
+
+describe('findLinkFollowers (#3992)', () => {
+  const THREE_ID = 'book-three-id';
+  const FOUR_ID = 'book-four-id';
+  const names = (fs: Array<{ dir: string; characterId: string }>) =>
+    fs.map((f) => `${basename(f.dir)}:${f.characterId}`).sort();
+
+  it('finds a chain end to end, and not a row whose uuid differs', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
+    book('Four', FOUR_ID, [
+      { id: 'c4', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
+      { id: 'c4x', voiceUuid: 'other', matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
+    ]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Four:c4', 'Three:c3']);
+  });
+
+  it('does not follow a link that names another book or another character', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }, { id: 'c9', voiceUuid: 'z' }]);
+    book('Three', THREE_ID, [
+      { id: 'c3', voiceUuid: U, matchedFrom: { bookId: ONE_ID, characterId: 'c2' } },
+      { id: 'c3b', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c9' } },
+      { id: 'c3c', voiceUuid: U, matchedFrom: { characterId: 'c2' } },
+      { id: 'c3d', voiceUuid: U },
+    ]);
+    expect(await findFollowers(two, { id: 'c2' }, U)).toEqual([]);
+  });
+
+  it('a link with no characterId follows (any row of the named book)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID } }]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
+  });
+
+  it('a cycle terminates and reports each row once', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', THREE_ID, [
+      { id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } },
+      { id: 'c3b', voiceUuid: U, matchedFrom: { bookId: THREE_ID } },
+    ]);
+    book('Four', FOUR_ID, [
+      { id: 'c4', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
+      { id: 'c4b', voiceUuid: U, matchedFrom: { bookId: FOUR_ID, characterId: 'c4' } },
+    ]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Four:c4', 'Four:c4b', 'Three:c3', 'Three:c3b']);
+  });
+
+  it('a link that names a RETIRED id of the followed character still follows', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    writeFileSync(
+      join(two, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { c2_old: 'c2' } }),
+    );
+    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2_old' } }]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
+  });
+
+  it('an unreadable book in the way is skipped, not thrown', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
   });
 });
