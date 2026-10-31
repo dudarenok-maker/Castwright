@@ -269,8 +269,11 @@ export interface BookStateJson {
   /* Plan 290 (#3837) — stale-evidence marker: the saved sentences in
      manuscript-edits.json are keyed to a chapter structure older than
      `chapters`. Set by `applyReparse` (re-parse / replace-manuscript) when
-     saved sentences survive it, and by the bundle overwrite when a local
-     edits file is left beside the bundle's chapter list; cleared only by the
+     saved sentences survive it, and by the bundle overwrite and the backup
+     restore, which leave the local edits file beside a swapped-in chapter
+     list: those two stamp it only when the edits hold sentences (or cannot
+     be read) AND the chapter list differs from the current one or the book
+     is already marked (`swapLeavesStaleEvidence`); cleared only by the
      main analysis persist. Never written as `false` (true or absent); never
      on the PUT /state whitelist. Additive optional field —
      `CURRENT_STATE_SCHEMA` does NOT bump (plan 27 rename-vs-add policy). */
