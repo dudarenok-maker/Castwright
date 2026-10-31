@@ -20,14 +20,18 @@ import {
 } from './extra-params.js';
 import type { TransportKind } from '../errors.js';
 
+const NEW_OPENAI_KEYS = ['structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'thinking_token_budget', 'stop_token_ids', 'additional_drop_params', 'drop_params', 'extra_body', 'fallbacks', 'context_window_fallbacks', 'content_policy_fallbacks', 'output_config', 'router_settings_override'];
+
 const geminiRefusal = (paths: string) =>
   `Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: ${paths}.`;
 
 describe('protected keys are exactly spec §9; Gemini config is an allowlist (P16)', () => {
   it('per transport', () => {
     expect(PROTECTED_KEYS.openai).toEqual([
-      'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
-      'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'include_reasoning',
+      'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'stop_token_ids', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
+      'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
+      'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'additional_drop_params', 'drop_params', 'extra_body',
+      'fallbacks', 'context_window_fallbacks', 'content_policy_fallbacks', 'output_config', 'router_settings_override',
     ]);
     expect(PROTECTED_KEYS.ollama).toEqual(['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop']);
     expect(PROTECTED_KEYS.gemini).toEqual(['model', 'contents']);
@@ -80,12 +84,58 @@ describe('validateExtraParams', () => {
       ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: tools, options.main_gpu.'],
     });
   });
-  it('protects chat_template_kwargs.enable_thinking only for the enable_thinking style', () => {
+  it('protects chat_template_kwargs.enable_thinking unless the style is not_controllable (#3904)', () => {
     const p = { chat_template_kwargs: { enable_thinking: true } };
-    expect(validateExtraParams('openai', p, { reasoningStyle: 'reasoning_effort' }).ok).toBe(true);
-    expect(validateExtraParams('openai', p, { reasoningStyle: 'enable_thinking' })).toEqual({
-      ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.'],
+    const refusal = { ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.'] };
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'reasoning_effort' })).toEqual(refusal);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'enable_thinking' })).toEqual(refusal);
+    /* fail closed: no style is not "not controllable" */
+    expect(validateExtraParams('openai', p, {})).toEqual(refusal);
+  });
+  it('protects the LiteLLM top-level thinking field like enable_thinking: free only under not_controllable (#3904)', () => {
+    const p = { thinking: { type: 'enabled', budget_tokens: 16000 } };
+    const refusal = { ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: thinking.'] };
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'reasoning_effort' })).toEqual(refusal);
+    expect(validateExtraParams('openai', p, { reasoningStyle: 'enable_thinking' })).toEqual(refusal);
+    expect(validateExtraParams('openai', p, {})).toEqual(refusal);
+    const r = validateExtraParams('openai', { Thinking: {} }, { reasoningStyle: 'reasoning_effort' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.errors.join(' ')).toContain('Thinking');
+    expect(validateExtraParams('openai', { Thinking: {} }, { reasoningStyle: 'not_controllable' }).ok).toBe(true);
+  });
+  it('drops a stored Thinking case variant at merge time only under a gated style (#3904)', () => {
+    const gated = filterStoredPayload('openai', { Thinking: {}, top_k: 40 }, { reasoningStyle: 'reasoning_effort' });
+    expect(gated.dropped).toEqual(['Thinking']);
+    expect(gated.value).toEqual({ top_k: 40 });
+    const free = filterStoredPayload('openai', { Thinking: {}, top_k: 40 }, { reasoningStyle: 'not_controllable' });
+    expect(free.dropped).toEqual([]);
+    expect(free.value).toEqual({ Thinking: {}, top_k: 40 });
+  });
+  it('drops a stored thinking under a gated style with a names-only warning (#3904)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const secret = 'sk-secret-value-123456';
+    const stored = { thinking: { type: 'enabled', note: secret }, top_k: 40 };
+    expect(mergeExtraParams('openai', { model: 'm' }, stored, { reasoningStyle: 'reasoning_effort' })).toEqual({ model: 'm', top_k: 40 });
+    expect(mergeExtraParams('openai', { model: 'm' }, stored)).toEqual({ model: 'm', top_k: 40 });
+    expect(mergeExtraParams('openai', { model: 'm' }, stored, { reasoningStyle: 'not_controllable' })).toEqual({ model: 'm', ...stored });
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join(' | ');
+    expect(logged).toContain('thinking');
+    expect(logged).not.toContain(secret);
+    vi.restoreAllMocks();
+  });
+  it.each(NEW_OPENAI_KEYS)('refuses the key %s (#3904)', (key) => {
+    expect(validateExtraParams('openai', { [key]: {}, top_k: 40 }, {})).toEqual({
+      ok: false, errors: [`These keys are controlled by Castwright and cannot be set here: ${key}.`],
     });
+  });
+  it.each(NEW_OPENAI_KEYS)('refuses a case variant of %s (#3904)', (key) => {
+    const variant = key.replace(/^./, (c) => c.toUpperCase());
+    const r = validateExtraParams('openai', { [variant]: {} }, {});
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.errors.join(' ')).toContain(variant);
+    expect(filterStoredPayload('openai', { [variant]: {}, top_k: 40 })).toEqual({ value: { top_k: 40 }, dropped: [variant] });
   });
   it('refuses null on an owned container, allows null on keys inside it', () => {
     expect(validateExtraParams('ollama', { options: null }, {})).toEqual({ ok: false, errors: ['"options" cannot be null — it holds settings Castwright sends. Set or null individual keys inside it instead.'] });
@@ -228,17 +278,30 @@ describe('mergeExtraParams re-applies the rules to a stored payload (P16, P17)',
     expect(JSON.stringify(out)).not.toContain('evil');
     vi.restoreAllMocks();
   });
-  it('drops endpoint reasoning keys, and enable_thinking only under the enable_thinking style', () => {
+  it('drops endpoint reasoning keys, and enable_thinking unless the style is not_controllable', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(mergeExtraParams('openai', { reasoning_effort: 'none' }, { reasoning_effort: 'high', reasoning_budget_tokens: 9000, include_reasoning: true, top_k: 40 })).toEqual({
       reasoning_effort: 'none',
       top_k: 40,
     });
     const native = { chat_template_kwargs: { enable_thinking: false } };
-    expect(mergeExtraParams('openai', native, { chat_template_kwargs: { enable_thinking: true } }, { reasoningStyle: 'enable_thinking' })).toEqual(native);
-    expect(mergeExtraParams('openai', native, { chat_template_kwargs: { enable_thinking: true } }, { reasoningStyle: 'reasoning_effort' })).toEqual({
+    const stored = { chat_template_kwargs: { enable_thinking: true } };
+    expect(mergeExtraParams('openai', native, stored, { reasoningStyle: 'enable_thinking' })).toEqual(native);
+    expect(mergeExtraParams('openai', native, stored, { reasoningStyle: 'reasoning_effort' })).toEqual(native);
+    expect(mergeExtraParams('openai', native, stored)).toEqual(native);
+    expect(mergeExtraParams('openai', native, stored, { reasoningStyle: 'not_controllable' })).toEqual({
       chat_template_kwargs: { enable_thinking: true },
     });
+    vi.restoreAllMocks();
+  });
+  it.each(NEW_OPENAI_KEYS)('drops a stored %s with a names-only warning (#3904)', (key) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const secret = 'sk-secret-value-123456';
+    expect(mergeExtraParams('openai', { model: 'm' }, { [key]: secret, top_k: 40 })).toEqual({ model: 'm', top_k: 40 });
+    expect(filterStoredPayload('openai', { [key]: secret }).dropped).toEqual([key]);
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join(' | ');
+    expect(logged).toContain(key);
+    expect(logged).not.toContain(secret);
     vi.restoreAllMocks();
   });
 });

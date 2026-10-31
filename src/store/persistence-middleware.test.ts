@@ -15,6 +15,7 @@ import {
   beginFullRead,
   learnSliceRevisions,
   landedFieldsSince,
+  castWrittenSince,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
@@ -2639,5 +2640,147 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       expect(stateOnDisk(disk).title).toBe('The Northern Star');
       restore();
     });
+  });
+});
+
+/* #3916 — Confirm's entry re-read asks whether a cast save could post-date what
+   it read. The query follows landedFieldsSince: stamp with beginFullRead, ask
+   with the stamp. */
+describe('castWrittenSince (#3916)', () => {
+  const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as Character;
+
+  function makeCastStore() {
+    return configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      } as never,
+      preloadedState: {
+        ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+        bookMeta: {
+          draft: null,
+          saved: {
+            b1: {
+              title: 'The Northern Star',
+              author: 'Marin Vale',
+              series: '',
+              narratorCredit: 'Castwright',
+              genre: null,
+              publicationDate: null,
+              description: null,
+              notes: null,
+            },
+          },
+          prosodyEnabled: {},
+        },
+      } as never,
+      middleware: (gDM) => gDM().concat(persistenceMiddleware),
+    });
+  }
+  type S = ReturnType<typeof makeCastStore>;
+  const stamp = (store: S) => store.dispatch(beginFullRead('b1')) as unknown as number;
+  const written = (store: S, book: string, seq: number) =>
+    store.dispatch(castWrittenSince(book, seq) as never) as unknown as boolean;
+  const rename = (store: S, name: string) => store.dispatch(castActions.setCharacters([eliza(name)]));
+
+  it('is false for a book with no cast write', () => {
+    const store = makeCastStore();
+    expect(written(store, 'b1', stamp(store))).toBe(false);
+  });
+
+  it('is true while a cast write is queued in its debounce', async () => {
+    const store = makeCastStore();
+    const seq = stamp(store);
+    rename(store, 'Eliza');
+    expect(putBookState).not.toHaveBeenCalled();
+    expect(written(store, 'b1', seq)).toBe(true);
+  });
+
+  it('is true while a cast write is in flight', async () => {
+    const pending: ((v: unknown) => void)[] = [];
+    putBookState.mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(500);
+    expect(pending).toHaveLength(1);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(true);
+    pending[0](undefined);
+    await advance(0);
+  });
+
+  it('is true when a cast PUT landed after the read was stamped', async () => {
+    const store = makeCastStore();
+    const seq = stamp(store);
+    rename(store, 'Eliza');
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(written(store, 'b1', seq)).toBe(true);
+  });
+
+  it('is false when the cast PUT landed before the read was stamped', async () => {
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(false);
+  });
+
+  it('treats a landing at exactly the stamp as seen, not written since (boundary)', async () => {
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    /* The landing took the clock's tick N; the next stamp is N + 1. */
+    const landingTick = stamp(store) - 1;
+    expect(written(store, 'b1', landingTick - 1)).toBe(true);
+    expect(written(store, 'b1', landingTick)).toBe(false);
+  });
+
+  it('ignores a landed state-slice write and another book’s cast write', async () => {
+    const store = makeCastStore();
+    const seq = stamp(store);
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'T1' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect((putBookState.mock.calls[0][1] as { slice: string }).slice).toBe('state');
+    expect(written(store, 'b1', seq)).toBe(false);
+
+    rename(store, 'Eliza');
+    await advance(500);
+    expect(written(store, 'b1', seq)).toBe(true);
+    expect(written(store, 'b2', seq)).toBe(false);
+  });
+
+  /* A save given up on after its retries is KEPT: an idle outbox entry, no
+     timer and no flight. It is the only thing the outbox clause sees. */
+  it('is true for a cast save kept after its retries ran out (idle outbox entry)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(20000);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(true);
+    err.mockRestore();
+  });
+
+  it('is false once the full read let go of the kept save (dropRetainedSaves onFullRead)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = makeCastStore();
+    rename(store, 'Eliza');
+    await advance(20000);
+    const seq = stamp(store);
+    expect(written(store, 'b1', seq)).toBe(true);
+    store.dispatch(dropRetainedSaves('b1', true) as never);
+    expect(written(store, 'b1', seq)).toBe(false);
+    err.mockRestore();
   });
 });

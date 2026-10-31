@@ -786,14 +786,26 @@ describe('seedReuseGuardsFromPriorCast', () => {
   });
 
   it('does NOT use the name-fallback when two fresh rows share a name (ambiguous — pre-dedup main route)', () => {
-    const existing: C[] = [{ id: 'olga', name: 'Ольга', matchedFrom: { bookId: 'b0', characterId: 'olga' } }];
+    /* The prior id is claimed by NO fresh row (olga-old), so the fresh-id exclusion
+       cannot mask the clause: only the fresh-name ambiguity count keeps both
+       guards off the two same-name fresh rows. */
+    const existing: C[] = [
+      {
+        id: 'olga-old',
+        name: 'Ольга',
+        matchedFrom: { bookId: 'b0', characterId: 'olga' },
+        notLinkedTo: [{ bookId: 'b0', characterId: 'x' }],
+      },
+    ];
     const fresh: C[] = [
       { id: 'olga', name: 'Ольга' },
       { id: 'ольга', name: 'Ольга' },
     ];
     seedReuseGuardsFromPriorCast(existing, fresh);
-    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'olga' }); // id match still works
-    expect(fresh[1].matchedFrom).toBeUndefined(); // ambiguous fresh name → not seeded
+    for (const f of fresh) {
+      expect(f.matchedFrom).toBeUndefined(); // ambiguous fresh name → not seeded
+      expect(f.notLinkedTo).toBeUndefined();
+    }
   });
 
   it('does NOT use the name-fallback when two prior rows share a name (ambiguous source)', () => {
@@ -814,6 +826,140 @@ describe('seedReuseGuardsFromPriorCast', () => {
     const fresh: C[] = [{ id: 'ольга', name: 'Ольга' }];
     seedReuseGuardsFromPriorCast(existing, fresh);
     expect((fresh[0].matchedFrom as { bookId: string }).bookId).toBe('right');
+  });
+
+  describe('A2 — name fallback matches mergeCore (#3920)', () => {
+    it('a prior row already claimed by id is not a name-fallback candidate for a different fresh row (cousin name)', () => {
+      const existing: C[] = [
+        {
+          id: 'mara',
+          name: 'Mara',
+          matchedFrom: { bookId: 'b1', characterId: 'mara', bookTitle: 'One', confidence: 0.9 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [
+        { id: 'mara', name: 'Mara Vale' },
+        { id: 'mara-2', name: 'Mara' },
+      ];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      // the id match keeps the guards
+      expect(fresh[0].matchedFrom).toEqual({
+        bookId: 'b1',
+        characterId: 'mara',
+        bookTitle: 'One',
+        confidence: 0.9,
+      });
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
+      // the cousin-named fresh row does not inherit the link (strict rule) ...
+      expect(fresh[1].matchedFrom).toBeUndefined();
+      // ... but DOES get the protective separation (loose rule, #3920 finding 2)
+      expect(fresh[1].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'x' }]);
+    });
+
+    it('split rule: a prior narrator row hands neither guard to a same-name real fresh row', () => {
+      const existing: C[] = [
+        {
+          id: 'narrator',
+          name: 'Old Tom',
+          matchedFrom: { bookId: 'b1', characterId: 'narrator', confidence: 0.8 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [{ id: 'old-tom', name: 'Old Tom' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+      // narrator-id rows are bridged by id class only (#3920), never by name
+      expect(fresh[0].notLinkedTo).toBeUndefined();
+    });
+
+    it('split rule: a fresh narrator row takes neither guard from a same-name real prior row', () => {
+      const existing: C[] = [
+        {
+          id: 'tom',
+          name: 'Narrator',
+          matchedFrom: { bookId: 'b1', characterId: 'tom', confidence: 0.8 },
+          notLinkedTo: [{ bookId: 'b1', characterId: 'x' }],
+        },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+      // narrator-id rows are bridged by id class only (#3920), never by name
+      expect(fresh[0].notLinkedTo).toBeUndefined();
+    });
+
+    it('a fresh narrator-id row takes notLinkedTo from the unique prior narrator-id row whatever their names (#3920)', () => {
+      const existing: C[] = [
+        {
+          id: 'char-narrator',
+          name: 'Old Tom',
+          notLinkedTo: [{ bookId: 'b1', characterId: 'narrator' }],
+        },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'narrator' }]);
+    });
+
+    it('with both prior narrator-id rows present, a fresh narrator takes its own by id, never the other by class (#3920)', () => {
+      const existing: C[] = [
+        { id: 'char-narrator', name: 'A', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] },
+        { id: 'narrator', name: 'B', notLinkedTo: [{ bookId: 'b1', characterId: 'y' }] },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Z' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'y' }]);
+    });
+
+    it('a prior narrator sharing a real fresh row name does not make that name ambiguous for a real prior row (#3920)', () => {
+      const existing: C[] = [
+        { id: 'char-narrator', name: 'Old Tom' },
+        { id: 'old-tom', name: 'Old Tom', notLinkedTo: [{ bookId: 'b1', characterId: 'old-tom' }] },
+      ];
+      const fresh: C[] = [{ id: 'old-tom-2', name: 'Old Tom' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'old-tom' }]);
+    });
+
+    it('a prior narrator row is never a name-fallback candidate (user-renamed narrator)', () => {
+      const existing: C[] = [
+        {
+          id: 'narrator',
+          name: 'Old Tom',
+          matchedFrom: { bookId: 'b1', characterId: 'narrator', confidence: 0.8 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'old-tom', name: 'Old Tom' }]; // no narrator row this run
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+    });
+
+    it('a fresh narrator row never takes a name-fallback candidate', () => {
+      const existing: C[] = [
+        {
+          id: 'tom',
+          name: 'Narrator',
+          matchedFrom: { bookId: 'b1', characterId: 'tom', confidence: 0.8 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'narrator', name: 'Narrator' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toBeUndefined();
+    });
+
+    it('control — legitimate id drift is still bridged by the name fallback', () => {
+      const existing: C[] = [
+        {
+          id: 'coalfall',
+          name: 'Coalfall',
+          matchedFrom: { bookId: 'b1', characterId: 'coalfall', confidence: 0.9 },
+        },
+      ];
+      const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall' }];
+      seedReuseGuardsFromPriorCast(existing, fresh);
+      expect(fresh[0].matchedFrom).toEqual({ bookId: 'b1', characterId: 'coalfall', confidence: 0.9 });
+    });
   });
 });
 
@@ -921,6 +1067,26 @@ describe('dropReuseContinuityKeepDesignedVoice (fresh re-analysis prior)', () =>
     const out = dropReuseContinuityKeepDesignedVoice(prior);
     expect(out[0].voiceState).toBe('locked');
     expect(out[1].voiceState).toBe('tuned');
+  });
+
+  it('#3920: a locked or tuned row keeps its voiceId but drops its series link; a generated row loses voiceId', () => {
+    const link = { bookId: 'book-1', characterId: 'x', confidence: 0.9 };
+    const prior: C[] = [
+      { id: 'a', name: 'A', voiceId: 'w2', voiceState: 'locked', matchedFrom: link, notLinkedTo: ['z'] },
+      { id: 'b', name: 'B', voiceId: 'w3', voiceState: 'tuned', matchedFrom: link, notLinkedTo: ['z'] },
+      { id: 'c', name: 'C', voiceId: 'w4', voiceState: 'generated', matchedFrom: link, notLinkedTo: ['z'] },
+    ];
+    const [a, b, c] = dropReuseContinuityKeepDesignedVoice(prior);
+    expect(a.voiceId).toBe('w2');
+    expect(a.voiceState).toBe('locked');
+    expect(a.matchedFrom).toBeUndefined();
+    expect(a.notLinkedTo).toBeUndefined();
+    expect(b.voiceId).toBe('w3');
+    expect(b.voiceState).toBe('tuned');
+    expect(b.matchedFrom).toBeUndefined();
+    expect(b.notLinkedTo).toBeUndefined();
+    expect(c.voiceId).toBeUndefined(); // control: unpinned rows lose it as before
+    expect(c.matchedFrom).toBeUndefined();
   });
 
   it('does not mutate the input', () => {
@@ -1220,3 +1386,133 @@ describe('dedupePriorCastByName', () => {
     expect(retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
   });
 });
+
+describe('mergeAnalysisResultWithExistingCast — locked/tuned voice is taken whole (#3920)', () => {
+  // The #3842 owner rule at the re-analysis merge: no voice match, automatic
+  // or manual, replaces a voice the user locked or tuned. The series linker
+  // (linkSeriesReuseAtAnalysis) stamps its match onto the FRESH row
+  // (voiceId/voiceUuid/matchedFrom, plus the denormalised qwen slot and
+  // persona); when that fresh row then joins a prior row whose voiceState is
+  // 'locked' or 'tuned', the prior row's voice fields must be taken WHOLE —
+  // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
+  // key it lacks is deleted — so none of the linker's stamp survives the
+  // join, under the id, exact-name and surname-tolerant joins alike.
+  const lockedPrior = (over: Partial<C> = {}): C => ({
+    id: 'wren',
+    name: 'Wren',
+    voiceId: 'v_mine',
+    voiceState: 'locked',
+    ...over,
+  });
+  // A fresh row carrying everything the series linker stamps/denormalises.
+  const linkedFresh = (over: Partial<C> = {}): C => ({
+    id: 'wren',
+    name: 'Wren',
+    voiceId: 'v_book1',
+    voiceUuid: 'u_book1',
+    matchedFrom: { bookId: 'b1', characterId: 'wren', bookTitle: 'One', confidence: 0.9 },
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    ttsEngine: 'qwen',
+    voiceStyle: 'warm',
+    ...over,
+  });
+
+  it('id join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it('exact-name join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh({ id: 'wren-x' })];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe('wren-x');
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+    expect(retirements).toEqual([{ from: 'wren', to: 'wren-x' }]);
+  });
+
+  it('surname-tolerant join: the locked prior row wins whole — no linker stamp survives', () => {
+    const existing: C[] = [lockedPrior()];
+    const fresh: C[] = [linkedFresh({ id: 'wren-ashby', name: 'Wren Ashby' })];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe('wren-ashby');
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+    expect(retirements).toEqual([{ from: 'wren', to: 'wren-ashby' }]);
+  });
+
+  it('tuned is pinned the same as locked', () => {
+    const existing: C[] = [lockedPrior({ voiceState: 'tuned' })];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('tuned');
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].voiceUuid).toBeUndefined();
+    expect(merged[0].overrideTtsVoices).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it("prior row's own fields kept: a locked prior row's own voiceUuid and qwen slot win, not the fresh ones", () => {
+    const existing: C[] = [
+      lockedPrior({ voiceUuid: 'u_mine', overrideTtsVoices: { qwen: { name: 'mine' } } }),
+    ];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(merged[0].voiceUuid).toBe('u_mine');
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'mine' } });
+    // The stamp keys the prior row still lacks are deleted, not inherited.
+    expect(merged[0].matchedFrom).toBeUndefined();
+    expect(merged[0].ttsEngine).toBeUndefined();
+    expect(merged[0].voiceStyle).toBeUndefined();
+  });
+
+  it("control, 'generated' prior row: the fresh linker stamp survives (today's behaviour, unchanged)", () => {
+    const existing: C[] = [lockedPrior({ voiceState: 'generated' })];
+    const fresh: C[] = [linkedFresh()];
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    // Prior-defined keys still copy over the fresh row.
+    expect(merged[0].voiceId).toBe('v_mine');
+    expect(merged[0].voiceState).toBe('generated');
+    // The linker's stamp on the fresh row survives untouched.
+    expect(merged[0].matchedFrom).toEqual({
+      bookId: 'b1',
+      characterId: 'wren',
+      bookTitle: 'One',
+      confidence: 0.9,
+    });
+    expect(merged[0].voiceUuid).toBe('u_book1');
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wren' } });
+    expect(merged[0].ttsEngine).toBe('qwen');
+    expect(merged[0].voiceStyle).toBe('warm');
+  });
+});
+

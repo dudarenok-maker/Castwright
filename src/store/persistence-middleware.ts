@@ -425,6 +425,18 @@ export const landedFieldsSince = (bookId: string, readSeq: number) => ({
   type: LANDED_SINCE,
   payload: { bookId, readSeq },
 });
+/* #3916 — has the book's cast slice a write a read stamped at `readSeq` could not
+   have seen: one still queued (outbox entry or debounce timer), one in flight, or
+   one that landed after the stamp. Owner decision (2026-10-30): Confirm's entry
+   re-read waits for queued saves and never overwrites a save made while it was
+   out. This lets a re-read stamped with `beginFullRead` tell whether a cast save
+   could post-date what it read; it follows `landedFieldsSince`. Not a reducer
+   action. */
+const CAST_WRITTEN_SINCE = 'persistence/castWrittenSince';
+export const castWrittenSince = (bookId: string, readSeq: number) => ({
+  type: CAST_WRITTEN_SINCE,
+  payload: { bookId, readSeq },
+});
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -700,6 +712,13 @@ export const persistenceMiddleware: Middleware = (store) => {
       const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
       const la = landedAt.get(flushKey(readBook, 'state')) ?? {};
       return Object.keys(la).filter((f) => la[f] > readSeq);
+    }
+
+    if (type === CAST_WRITTEN_SINCE) {
+      const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
+      const key = flushKey(readBook, 'cast');
+      if ((outbox.get(key)?.size ?? 0) > 0 || timers.has(key) || flights.has(key)) return true;
+      return Object.values(landedAt.get(key) ?? {}).some((tick) => tick > readSeq);
     }
 
     if (type === LEARN_REVISIONS) {

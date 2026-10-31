@@ -29,8 +29,31 @@ export const OWNED_CONTAINERS: Record<TransportKind, readonly string[]> = {
 
 export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
   openai: [
-    'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
-    'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'include_reasoning',
+    'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'stop_token_ids', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
+    'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
+    /* #3904 — vLLM's spellings of the structured-output controls Castwright owns through `response_format`. An endpoint does
+       not record which server it is, so the union of llama.cpp's and vLLM's spellings, plus LiteLLM's `thinking`, is refused; a
+       server that ignores one loses nothing. LiteLLM's `thinking` is refused only under a gated style (STYLE_GATED_KEYS), not
+       always. Other servers' spellings (OpenRouter, LM Studio, ...) have not been checked. */
+    'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag',
+    /* #3921 — LiteLLM's request-body `additional_drop_params` strips any named parameter (response_format, reasoning_effort, ...)
+       before the provider call and replaces an operator's own list; `drop_params` turns an unsupported-parameter 400 into a
+       silent send without it. Always refused, not style-gated: dropping unsupported parameters belongs in the proxy's config. */
+    'additional_drop_params', 'drop_params',
+    /* #3921 — LiteLLM copies `extra_body` to the OpenAI SDK, which merges it over the request body, so it can replace any
+       control Castwright owns (response_format, reasoning_effort, ...). Always refused: nothing is lost, because LiteLLM
+       already moves an unknown top-level key into extra_body itself. */
+    'extra_body',
+    /* #3921 — LiteLLM's request-level fallbacks: after a failure the router applies a dict target over the request (so it
+       re-carries any refused key, e.g. additional_drop_params), and a plain string target replaces the protected `model`.
+       Always refused; fallback config belongs in the proxy, which this does not affect. */
+    'fallbacks', 'context_window_fallbacks', 'content_policy_fallbacks',
+    /* #3921 — LiteLLM ranks `output_config.effort` above `reasoning_effort` (router.py), so it can replace the reasoning
+       control. Always refused, not style-gated. (`reasoning`, the sibling carrier, is already refused above.) */
+    'output_config',
+    /* #3921 — LiteLLM's proxy lifts the three fallback keys out of `router_settings_override` into the request, so it
+       carries them one level down. Always refused; settings it would carry belong in the proxy's config. */
+    'router_settings_override',
   ],
   ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
   /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */
@@ -44,11 +67,14 @@ export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
 export const GEMINI_CONFIG_ALLOWLIST = [
   'temperature', 'topP', 'topK', 'maxOutputTokens', 'presencePenalty', 'frequencyPenalty', 'seed', 'safetySettings',
 ] as const;
-const ENABLE_THINKING_KEY = 'chat_template_kwargs.enable_thinking';
+const STYLE_GATED_KEYS = ['chat_template_kwargs.enable_thinking', 'thinking'] as const;
 
 function protectedKeySet(kind: TransportKind, ctx: { reasoningStyle?: ReasoningStyle }): Set<string> {
   const set = new Set<string>(PROTECTED_KEYS[kind]);
-  if (kind === 'openai' && ctx.reasoningStyle === 'enable_thinking') set.add(ENABLE_THINKING_KEY);
+  /* #3904 — only `not_controllable` leaves these to the user: under the other two styles Castwright sends its own reasoning
+     control and vLLM lets an explicit enable_thinking override reasoning_effort (LiteLLM's top-level `thinking` is the same
+     control in its Anthropic-style spelling). An absent style fails closed. */
+  if (kind === 'openai' && ctx.reasoningStyle !== 'not_controllable') for (const k of STYLE_GATED_KEYS) set.add(k);
   return set;
 }
 
