@@ -754,10 +754,17 @@ export function parseTitlesPairWithState(
   state: BookStateJson,
   parseTitles: ReadonlyArray<string | null>,
 ): boolean {
-  return state.chapters.every((c, i) => {
-    const parsed = parseTitles[i];
-    return c.titleOverridden === true || parsed == null || c.title === parsed;
-  });
+  return state.chapters.every((c, i) => titlePairsAt(c, parseTitles[i]));
+}
+
+/** One position of `parseTitlesPairWithState`. Shared with the hints-proof
+    check (#3837, `workspace/hints-proof.ts`) at its evidence-less positions, so
+    the two title tests can never drift. */
+export function titlePairsAt(
+  chapter: { title: string; titleOverridden?: boolean },
+  parseTitle: string | null | undefined,
+): boolean {
+  return chapter.titleOverridden === true || parseTitle == null || chapter.title === parseTitle;
 }
 
 /** Hints pair with state when both hold the same chapter ids (so the same
