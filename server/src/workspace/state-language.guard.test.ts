@@ -11,8 +11,9 @@
    type check total.
 
    BUILT IN THE cast-lock.guard.test.ts IDIOM, as #2246 requires: a scan over
-   raw source text under `server/src`, REUSING its `skipOpaqueToken` /
-   `computeOpaqueRanges` / `isOpaque` helpers so a comment or string that
+   raw source text under `server/src`, using the shared token-family helpers
+   (`computeTokenOpaqueRanges` / `isOpaqueInTokenRanges`, from
+   `../test-utils/guard-scan.ts`, #3685) so a comment or string that
    happens to spell out one of these patterns verbatim is never a site. No
    parser, no import resolver, no call-graph — the same syntactic horizon
    cast-lock works inside, and the same zero-grammar scanner quirks come with
@@ -74,90 +75,22 @@
    `writeJsonAtomic(stateJsonPath(` and a string literal `join(dir,'state.json')`
    — both opaque, never sites. `git diff` empty of mutations before finalise. */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  collectSourceFiles,
+  computeTokenOpaqueRanges,
+  isOpaqueInTokenRanges,
+} from '../test-utils/guard-scan.js';
 import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './state-language.guard-targets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
+// The file walker and the token-skipping opaque-range scanner live in
+// ../test-utils/guard-scan.ts (#3685); this guard no longer carries its own copy.
 const SEAM_FILE = 'workspace/state-migrate.ts';
-
-/** Every non-test `.ts` file under `server/src`, recursively. */
-function collectSourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectSourceFiles(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-/** If `src[i]` opens a string/template literal or a line/block comment, return
-    the index just past its end (handling backslash escapes inside quotes, and
-    the unterminated-comment case by running to EOF). Otherwise return -1.
-    Reused behaviourally from cast-lock.guard.test.ts. */
-function skipOpaqueToken(src: string, i: number): number {
-  const n = src.length;
-  const ch = src[i];
-  if (ch === '"' || ch === "'" || ch === '`') {
-    const quote = ch;
-    let j = i + 1;
-    while (j < n) {
-      if (src[j] === '\\') {
-        j += 2;
-        continue;
-      }
-      if (src[j] === quote) {
-        j++;
-        break;
-      }
-      j++;
-    }
-    return j;
-  }
-  if (ch === '/' && src[i + 1] === '/') {
-    let j = i + 2;
-    while (j < n && src[j] !== '\n') j++;
-    return j;
-  }
-  if (ch === '/' && src[i + 1] === '*') {
-    let j = i + 2;
-    while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
-    j += 2;
-    return j;
-  }
-  return -1;
-}
-
-/** Every [start, end) span in `content` that is a string/template literal or a
-    comment, per `skipOpaqueToken`. Reused behaviourally from
-    cast-lock.guard.test.ts. */
-function computeOpaqueRanges(content: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
-  const n = content.length;
-  let i = 0;
-  while (i < n) {
-    const skip = skipOpaqueToken(content, i);
-    if (skip !== -1) {
-      ranges.push({ start: i, end: skip });
-      i = skip;
-      continue;
-    }
-    i++;
-  }
-  return ranges;
-}
-
-/** True iff `index` falls inside one of `ranges` — a string/template/comment,
-    not real code. Reused behaviourally from cast-lock.guard.test.ts. */
-function isOpaque(ranges: Array<{ start: number; end: number }>, index: number): boolean {
-  return ranges.some((r) => index >= r.start && index < r.end);
-}
 
 /** Count non-opaque (real-code) occurrences of `re` in `content`. `re` is
     shared global state so `lastIndex` is reset before scanning, exactly as
@@ -171,7 +104,7 @@ function countInCode(
   let m: RegExpExecArray | null;
   let c = 0;
   while ((m = re.exec(content))) {
-    if (!isOpaque(opaque, m.index)) c++;
+    if (!isOpaqueInTokenRanges(opaque, m.index)) c++;
   }
   return c;
 }
@@ -376,7 +309,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       if (rel === SEAM_FILE) continue;
       const content = readFileSync(file, 'utf8');
-      const opaque = computeOpaqueRanges(content);
+      const opaque = computeTokenOpaqueRanges(content);
       const mentions = countInCode(content, STATE_PATH_RE, opaque);
       if (mentions === 0) continue; // not a stateJsonPath-mentioning file → G1 silent
       const writes = countInCode(content, WRITE_JSON_ATOMIC_RE, opaque);
@@ -420,7 +353,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     for (const file of files) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       const content = readFileSync(file, 'utf8');
-      const opaque = computeOpaqueRanges(content);
+      const opaque = computeTokenOpaqueRanges(content);
       const raw = countRawStateWrites(content, opaque);
       if (raw === 0) continue;
 
@@ -490,7 +423,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     for (const file of files) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       const content = readFileSync(file, 'utf8');
-      const opaque = computeOpaqueRanges(content);
+      const opaque = computeTokenOpaqueRanges(content);
       const n = countInCode(content, STATE_PATH_RE, opaque);
       if (n === 0) continue;
       perFile[rel] = n;
