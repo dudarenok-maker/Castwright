@@ -678,7 +678,7 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
    - (a) Release notes: an entry in `docs/release-notes-next.md` (technical, PR-refed), and a brand-voice line in the in-progress section of `RELEASE_NOTES.md`. For example: an analysed book whose chapter titles changed under a parser update can be edited again without a re-parse, and a book whose chapters were reordered long ago is caught before re-analysis.
    - (b) A `docs/features/INDEX.md` entry for plan 290.
    - (c) Archived plan 51 (`docs/features/archive/51-restructure-chapters.md`), invariant 2: rewrite the "what pair means" passage for `parse` records (the sentence check for chapters with evidence, the title check for chapters without, at restructure). Replace "exclude only sets a flag, so it still succeeds, but writes no hints file there" with the round-8 rule: a toggle never writes; a prune writes on a paired or persisted book and is refused otherwise.
-   - (d) CLAUDE.md chore: the "`git grep requestFailureMessage` … enumerates all seventy-eight call sites" sentence and its per-file counts no longer match the tree (the third checker pass found it stale on `main`). Recount call sites, not imports, with `git grep -n requestFailureMessage -- server/src ':!*.test.ts'`, and fix the number and the list. This plan adds no call site; the fix is owed because the sentence is false.
+   - (d) CLAUDE.md chore: the "`git grep requestFailureMessage` … enumerates all seventy-eight call sites" sentence. Recounted at implementation (call lines, not imports): 78, with the per-file split already in CLAUDE.md; the sentence is current and was left unchanged. No CLAUDE.md edit is owed. This plan adds no call site.
 
 ## Before-shipping items
 
@@ -693,7 +693,7 @@ Each task must leave all 14 green. The order makes that possible: the fixtures c
   - **surfaces:** `docs/testing/onbox-acceptance-register.md`, the live view `docs/testing/onbox-acceptance-register-live-view.html` (`npm run register:build`, `npm run check:onbox-register`, then publish to the register's recorded URL after `--against-published`), and a run sheet if one is created.
 - **INDEX.md:** a new entry under the server/workspace area.
 - **Release notes:** both documents (Task 8a). User-visible delta: title-drifted analysed books are no longer refused at restructure, same-count reorders are refused at analysis start, and a re-parsed book is no longer judged by its old sentences.
-- **CLAUDE.md:** the `requestFailureMessage` enumeration chore (Task 8d).
+- **CLAUDE.md:** none owed: the `requestFailureMessage` enumeration was recounted (Task 8d) and is current.
 - **Issue:** the PR body says `Closes #3837` and `Refs #3879`. Under "Also fixed, found in passing" it lists:
   - the **pre-existing `main` defect** that a restructure after a re-parse re-seeds the analysis cache from old-keyed edits, which a later run replays as current takes (fixed by `refreshCacheFromEdits`, M26 / M28);
   - every test fixture changed to fix a stale fixture rather than for the feature;
