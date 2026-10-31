@@ -807,6 +807,17 @@ recite:
     confirm a test goes red; a backstop reached only by a hand-seeded reducer
     test is not coverage of the real ordering.
 
+60. **A time limit copied from a sibling without the sibling's retry** — PR
+    #3930 pass 1, finding 1 (#3916): ConfirmRoute copied Layout's
+    `BOOK_READ_TIMEOUT_MS` bound but not Layout's backoff retry, so a save
+    stalled past 15 s meant the entry re-read was never issued. In the source
+    the limit only ever ends one attempt; in the copy it ends the only attempt,
+    so when the limit expires "later" becomes "never". Checkable: whenever a
+    bound or timeout is copied from another call site, open the source and
+    read what it does on expiry (retry, backoff, a fallback, a surfaced
+    error); confirm the copy does the same, or names why it need not, and
+    drive a test where the limit expires to see what then runs.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
