@@ -235,6 +235,9 @@ vi.mock('../views/book-library', () => ({
 
 /* The Account view is mounted for the restore case; its update card is not under test. */
 vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
+vi.mock('./duplicate-book-repair-banner', () => ({
+  DuplicateBookRepairBanner: () => <div data-testid="duplicate-book-repair-banner-mount" />,
+}));
 
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
@@ -2187,6 +2190,22 @@ describe('Layout — analyzer catalog loads at boot so endpoint labels resolve (
 
     await waitFor(() => expect(store.getState().account.analyzerCatalog).not.toBeNull());
     expect(modelLabel('openai:lab::qwen3-30b', store.getState().account.analyzerCatalog)).toBe('Lab server · qwen3-30b');
+  });
+});
+
+describe('Layout — duplicate-bookId repair banner (#3713)', () => {
+  it('mounts the DuplicateBookRepairBanner', async () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    expect(await screen.findByTestId('duplicate-book-repair-banner-mount')).toBeInTheDocument();
   });
 });
 

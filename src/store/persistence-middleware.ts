@@ -437,6 +437,15 @@ export const castWrittenSince = (bookId: string, readSeq: number) => ({
   type: CAST_WRITTEN_SINCE,
   payload: { bookId, readSeq },
 });
+/* #3713 — the server re-minted the id this tab has open (a duplicate-bookId
+   sweep ran while the tab was alive), so the id now names a DIFFERENT folder than
+   the snapshot in these slices. Every queued, kept or in-flight-follow-up save for
+   the book is discarded and no new one is sent until a full read begun AFTER the
+   hold has landed (`learnSliceRevisions` with a later `readSeq`): a save carries
+   no base revision on its first send, so the server would write the stale roster
+   into whichever twin kept the id. Not a reducer action. */
+const HOLD_BOOK = 'persistence/holdBook';
+export const holdBookSaves = (bookId: string) => ({ type: HOLD_BOOK, payload: bookId });
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -470,6 +479,9 @@ export const persistenceMiddleware: Middleware = (store) => {
      read stamped before that teaches nothing for the field. */
   const landedAt = new Map<FlushKey, Record<string, number>>();
   let clock = 0;
+  /* #3713 — books whose saves are held (see `holdBookSaves`), each with the
+     `clock` reading of the hold. A full read stamped after it releases the book. */
+  const heldBooks = new Map<string, number>();
 
   /* The token fields a unit's value carries: its own name on `state`, the
      build's defined fields on a whole-slice unit. An undefined value is not
@@ -657,6 +669,8 @@ export const persistenceMiddleware: Middleware = (store) => {
           }
           if (++failures <= FLUSH_RETRY_DELAYS_MS.length) {
             await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[failures - 1]));
+            /* #3713 — a hold emptied the box while this send waited: nothing left to re-send. */
+            if (box.size === 0) break;
             continue;
           }
           /* Given up on (#3421): the units stay, kept for the book's next
@@ -708,6 +722,20 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === BEGIN_FULL_READ) return ++clock;
 
+    if (type === HOLD_BOOK && typeof a.payload === 'string') {
+      for (const slice of LEARNED_SLICES) {
+        const key = flushKey(a.payload, slice);
+        const timer = timers.get(key);
+        if (timer) {
+          clearTimeout(timer);
+          timers.delete(key);
+        }
+        outbox.get(key)?.clear();
+      }
+      heldBooks.set(a.payload, ++clock);
+      return result;
+    }
+
     if (type === LANDED_SINCE) {
       const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
       const la = landedAt.get(flushKey(readBook, 'state')) ?? {};
@@ -727,6 +755,7 @@ export const persistenceMiddleware: Middleware = (store) => {
         revisions?: Partial<Record<StateSlice, SliceRevision>>;
         readSeq: number;
       };
+      if ((heldBooks.get(readBook) ?? Infinity) < readSeq) heldBooks.delete(readBook);
       /* C4 — every field the read covers, except one a PUT landed on since the
          read was stamped. */
       for (const slice of LEARNED_SLICES) {
@@ -805,6 +834,8 @@ export const persistenceMiddleware: Middleware = (store) => {
     const rule = PERSIST_RULES[type];
     if (!rule) return result;
     if (!bookId) return result;
+    /* #3713 — the slices hold a snapshot of a folder the id no longer names. */
+    if (heldBooks.has(bookId)) return result;
 
     /* #3624 — the patch is built from the slices as they are RIGHT NOW, but
        the target comes from the stage. Between `openBook(A)` and A's hydrate

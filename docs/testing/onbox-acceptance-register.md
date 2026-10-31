@@ -726,17 +726,22 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 16 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 17 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**74 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**75 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
+> **Last change: 2026-11-01 (#3713, PR #4004), 74 → 75.** Row **E116** (the duplicate-bookId
+> startup sweep on a real library: the twin with the work keeps the id, the loser is re-minted,
+> both books open, the repair banner shows once, a second start changes nothing) added. Group
+> E 16 → 17. `next-id` bumped E116 → E117 in the same change. Row is owed; not run here.
+>
+> **Prior change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
 > locked or tuned character's voice whole, and no fresh row inherits a link it was not joined
 > to) added. Group B 8 → 9. `next-id` bumped B108 → B109 in the same change. Row is owed; not
 > run here.
@@ -6959,7 +6964,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E116 -->
+<!-- next-id: E117 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7637,6 +7642,19 @@ The automated tests pin the Gemini `config` merge, the allowlist and the redacti
 - **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
 
 *Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
+
+### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
+
+The automated tests pin the ranking, the repair and the banner against synthetic books. Only a real library shows that the sweep keeps the id on the right twin, leaves both books intact, and surfaces the notice once. Build the twin by copying a real, rendered book's folder under a second title folder (e.g. `<Author>/<Series>/<Title> copy`) so both `state.json` files carry the same `bookId`; then give one twin the work (rendered audio, a cast) and make the other the emptier one, or leave them equal to exercise the tiebreakers. Start the server (`npm start`) and observe:
+- **Which twin keeps the id.** The twin with the work keeps it, not the first match: most chapters with a non-empty `audioRenderedAt`, then most `cast.json` characters, then the older `createdAt`, then walk order (case-insensitive sorted path). Put the work in the folder that sorts LATER and confirm it still keeps the id.
+- **The loser on disk.** Only the losing twin's `state.json` `bookId` changes, to the id minted from its own `author__series__title` folder path (with a `-2` style suffix if that id is already taken). Nothing else in either folder changes: no audio, no `cast.json`. The other writes are the loser's export manifests under `.audiobook/export-manifests/` (`bookId` and `downloadUrl` re-pointed to the new id) and, when the twins shared a `manuscriptId` (a copied folder does), the loser's `state.json` `manuscriptId` becomes a fresh `mns_...` and its own `manuscript-hints.json`, `script-review-pending.json`, `dropped-quotes.json`, `analysis-state.json` and `analysis-last-outcome.json` are rekeyed to it. The winner's files are byte-identical. `logs/server.log` carries a `[duplicate-bookid] "<id>" was carried by both <winner> and <loser>; <winner> keeps it (ranked first), <loser> is now "<new>"` line, and `[duplicate-bookid] gave 1 book(s) a fresh id on startup`.
+- **Analyse on the loser.** Open the re-minted copy and run Analyse. The copy's folder (`cast.json`, `manuscript-edits.json`) is written and the winner's `cast.json` and `state.json` are byte-identical afterwards (compare hashes before and after). The copy's analysis starts from the first chapter: its saved partial-analysis cache stays with the winner (known loss). Run Analyse on the winner too and confirm it still resolves to the winner.
+- **A tab left open across the restart.** Open the fresh copy (the twin that does NOT keep the id) in a browser tab, then restart the server. Within about 30 s the tab re-reads the book (it moves to the copy's new id when it provably holds the copy, else it reloads the id's current owner) and the notice appears. Before the notice, change nothing; after it, change a cast row in that tab. The kept twin's `cast.json` is unchanged (compare a hash before and after), and the tab's edit lands in the copy, not the kept twin.
+- **Both books open.** Each opens from the library by its own id, with its own audio and cast intact. The loser starts with an empty queue and no backups (both are keyed by bookId), but any export it already had (give it one first) still lists under its new id and downloads. If a directory under the books root is made unlistable (e.g. an ACL deny), the sweep logs `a directory is unlistable; skipping the sweep until next startup` and changes nothing.
+- **The banner.** `GET /api/info` lists the repair in `duplicateBookIdRepairs` with folders RELATIVE to the books root (no absolute path). The app shows the repair notice at the top of every view, naming the kept folder and the reassigned folder, with a Dismiss button; after Dismiss it stays gone across a reload in that browser.
+- **Idempotent.** Stop and start the server again: no `[duplicate-bookid]` lines, `duplicateBookIdRepairs` is empty, no banner, and neither `state.json` changes (compare mtimes).
+
+*Needs:* no GPU; a real workspace (a copied book folder is enough) and a running server. *Cost:* ~10 minutes. *Criteria:* the bullets above; plan [`288-book-op-lock.md`](../features/288-book-op-lock.md), "Repair of existing duplicate bookIds (#3713)". Clears when each bullet is recorded.
 
 ## Group G — GitHub Actions itself
 

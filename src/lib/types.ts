@@ -274,6 +274,18 @@ export interface AppInfo {
      the source is unreachable; absent on an older server. */
   updateAvailable?: boolean | null;
   latestVersion?: string | null;
+  /* #3713 — duplicate-bookId repairs the server made at startup. Folders are
+     relative to the books root; keptFolder kept the id, reassignedFolder got
+     newBookId. Empty when nothing was repaired; absent on an older server. */
+  duplicateBookIdRepairs?: Array<{
+    previousBookId: string;
+    newBookId: string;
+    keptFolder: string;
+    reassignedFolder: string;
+    /* The re-minted twin's manuscriptId before the repair when it differed from
+       every twin's, so an open tab can tell it holds that twin; null when shared. */
+    reassignedManuscriptId?: string | null;
+  }>;
 }
 
 /* Result of the "is a newer release available?" check for the Account →

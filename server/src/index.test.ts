@@ -10,6 +10,8 @@
    merely because this test imports the module). */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /* #3174 (G4) — bootWarmUserSettings() calls the real (module-level)
    readUserSettings import, so forcing its malformed-file throw needs the
@@ -36,6 +38,7 @@ import {
   runShutdownSequence,
   bootWarmUserSettings,
   bootStartSidecarSupervisor,
+  bootRepairDuplicateBookIds,
   type ShutdownDeps,
 } from './index.js';
 
@@ -202,6 +205,81 @@ describe('bootWarmUserSettings (#3174 G4)', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('bootRepairDuplicateBookIds (#3713)', () => {
+  const repairRecord = {
+    previousBookId: 'a__s__t',
+    newBookId: 'a__s__t-2',
+    keptFolder: 'A/S/T2',
+    reassignedFolder: 'A/S/T',
+  };
+
+  it('a repair that resolves [] logs nothing', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await bootRepairDuplicateBookIds(async () => []);
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a repair that resolves one record logs the count line', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await bootRepairDuplicateBookIds(async () => [repairRecord]);
+      expect(logSpy).toHaveBeenCalledWith(
+        '[duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).',
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('a repair that rejects is swallowed and warned, never rethrown', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        bootRepairDuplicateBookIds(async () => {
+          throw new Error('simulated repair failure');
+        }),
+      ).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[duplicate-bookid] startup repair failed',
+        expect.any(Error),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('main() boot order (#3713, PR #4004)', () => {
+  /* main() cannot run here (it binds a port), so pin the order in its source: the
+     sweep rewrites state.json, so it must follow the upgrade coordinator's backup,
+     precede listen, and precede the fire-and-forget fsck that reads state.json. */
+  const source = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+  const at = (needle: string): number => {
+    const i = source.indexOf(needle);
+    expect(i, `${needle} not found in index.ts`).toBeGreaterThan(-1);
+    return i;
+  };
+
+  it('runs the duplicate-bookId sweep after the upgrade coordinator and before listen', () => {
+    const coordinator = at('await runUpgradeCoordinator(');
+    const sweep = at('await bootRepairDuplicateBookIds();');
+    const listen = at('listenWithAutoRebind(server, {');
+    expect(coordinator).toBeLessThan(sweep);
+    expect(sweep).toBeLessThan(listen);
+  });
+
+  it('starts the fsck only after the sweep, so the two never touch a state.json together', () => {
+    expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void fsckAllBooks()'));
   });
 });
 

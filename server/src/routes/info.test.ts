@@ -11,6 +11,10 @@ import { infoRouter } from './info.js';
 import { getAppVersion } from '../app-version.js';
 import { USER_SETTINGS_PATH, writeUpgradeMeta, _resetUserSettingsCache, readUserSettings } from '../workspace/user-settings.js';
 import {
+  __resetDuplicateBookIdRepairsForTest,
+  __setDuplicateBookIdRepairsForTest,
+} from '../workspace/duplicate-bookid-sweep.js';
+import {
   getCachedUpdateStatus,
   refreshUpdateStatusInBackground,
   __resetUpdateCacheForTests,
@@ -49,6 +53,29 @@ describe('GET /api/info', () => {
       syncManifest: 1, // srv-32 — companion compat-gates off this
     });
     expect(res.body.showWhatsNew).toBe(false);
+  });
+
+  it('carries duplicateBookIdRepairs: [] when nothing was repaired (#3713)', async () => {
+    __resetDuplicateBookIdRepairsForTest();
+    const res = await request(app).get('/api/info');
+    expect(res.body.duplicateBookIdRepairs).toEqual([]);
+  });
+
+  it('carries the seeded duplicateBookIdRepairs record (#3713)', async () => {
+    const record = {
+      previousBookId: 'a__s__t',
+      newBookId: 'a__s__t-2',
+      keptFolder: 'A/S/T2',
+      reassignedFolder: 'A/S/T',
+      reassignedManuscriptId: null,
+    };
+    __setDuplicateBookIdRepairsForTest([record]);
+    try {
+      const res = await request(app).get('/api/info');
+      expect(res.body.duplicateBookIdRepairs).toEqual([record]);
+    } finally {
+      __resetDuplicateBookIdRepairsForTest();
+    }
   });
 
   it('reports host hardware for the device panel (fs-43)', async () => {
