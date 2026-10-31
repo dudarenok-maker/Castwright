@@ -118,6 +118,7 @@ function mkBook(characters: CastRow[], name: string): { manuscriptId: string; bo
       manuscriptId,
       title: 'Book Two',
       author: 'Author',
+      language: 'en',
       series: 'Series',
       seriesPosition: 2,
       isStandalone: false,
