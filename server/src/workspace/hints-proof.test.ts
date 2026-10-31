@@ -378,6 +378,17 @@ describe('the block check (M9, M10)', () => {
     expect(r).toMatchObject({ paired: false, reason: 'displaced-block', chapterId: 1, intoChapterId: 2 });
   });
 
+  it("an own item sits at its own-piece occurrence, not where another piece quotes it", () => {
+    /* Chapter 2's D1-D3 are found only in piece 1; its own item X is also quoted in
+       piece 1, between D1 and D2. Placed in its own piece, X does not split the run. */
+    const X = 'The own line that the first chapter also quotes.';
+    const D = [0, 1, 2].map(moved);
+    const r = checkParseHintsPairing(
+      input([body([D[0]!, X, D[1]!, D[2]!]), body([X, ...ownLines(2, 12)])], says(2, [...D, X, ...ownLines(2, 12)])),
+    );
+    expect(r).toEqual({ paired: false, evidenceChapters: 1, reason: 'displaced-block', chapterId: 2, intoChapterId: 1 });
+  });
+
   it('file order is not parse order: D1, O1, D2, O2, D3 in the edits is refused', () => {
     const O = ownLines(1, 12);
     const D = [0, 1, 2].map(moved);
