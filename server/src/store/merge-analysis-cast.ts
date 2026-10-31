@@ -127,19 +127,39 @@ function unionAliases(a: unknown, b: unknown): string[] | undefined {
     written in: a bare string (defensive; nothing mints this shape today) or
     the real on-disk `{ bookId, characterId }` shape `POST /not-linked-to`
     writes (`server/src/routes/cast-not-linked-to.ts:238`; typed in
-    `voices.ts:104`/`voice-override-linked.ts:65`). Matches on `characterId`
-    alone, ignoring `bookId` — the identical trade `remap-fresh-to-prior.ts`'s
-    own `notLinkedToId` helper makes (§2040 Task 10/11), for the same reason:
-    a false "linked" is silent data corruption (two people collapsed into
-    one), a false "not linked" only costs a match a user can still do by
-    hand. */
-function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
+    `voices.ts:104`/`voice-override-linked.ts:65`).
+
+    Book scoping (#3965, owner decision 2026-10-31): an OBJECT entry whose
+    `bookId` names a DIFFERENT book than `currentBookId` is a cross-book
+    "not the same person" decision and says nothing about a same-book join,
+    so it is ignored. The earlier bookId-blind trade ("a false 'not linked'
+    only costs a match a user can still do by hand") failed its own premise:
+    the seed copies a prior row's cross-book edge onto its id-drifted twin,
+    and honouring it here split that locked character and cost its voice.
+    Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
+    writes) and bare strings still block. `currentBookId` omitted (a record
+    with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe.
+    Twin of `notLinkedToId` in `remap-fresh-to-prior.ts` - keep the two in
+    step. */
+function notLinkedToId(
+  row: Record<string, unknown>,
+  targetId: string,
+  currentBookId?: string,
+): boolean {
   const nl = row.notLinkedTo;
   if (!Array.isArray(nl)) return false;
   return nl.some((entry) => {
     if (typeof entry === 'string') return entry === targetId;
     if (entry && typeof entry === 'object') {
-      return (entry as { characterId?: unknown }).characterId === targetId;
+      const e = entry as { characterId?: unknown; bookId?: unknown };
+      if (
+        typeof currentBookId === 'string' &&
+        typeof e.bookId === 'string' &&
+        e.bookId !== currentBookId
+      ) {
+        return false;
+      }
+      return e.characterId === targetId;
     }
     return false;
   });
@@ -168,13 +188,16 @@ export function voicedSurvivorsDropped(
 
     Delegates to `mergeCore` with the name-fallback ON — this entry point is
     for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
-    the whole book and a dropped prior row really is gone. See
+    the whole book and a dropped prior row really is gone. `currentBookId`
+    (optional) is the id of the book being analysed; it scopes the
+    `notLinkedTo` gate (see `notLinkedToId`). See
     `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
+  currentBookId?: string,
 ): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true);
+  return mergeCore(existing, fresh, true, currentBookId);
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
@@ -226,11 +249,13 @@ function surnameTolerantMatch(a: string, b: string): boolean {
     same-name match (`:401-437`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
     carry-forward loop at the end unconditionally rescues every voiced prior
-    row instead of treating any of them as already claimed. */
+    row instead of treating any of them as already claimed. `currentBookId`
+    (optional) scopes both `notLinkedTo` gates by book; see `notLinkedToId`. */
 function mergeCore<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
   nameFallback: boolean,
+  currentBookId?: string,
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -371,8 +396,8 @@ function mergeCore<T extends { id: string }>(
     if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
   }
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
-    notLinkedToId(cand, f.id) ||
-    notLinkedToId(f as unknown as Record<string, unknown>, cand.id);
+    notLinkedToId(cand, f.id, currentBookId) ||
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
@@ -437,8 +462,8 @@ function mergeCore<T extends { id: string }>(
         // durably, via retireCharacterId).
         if (
           cand &&
-          !notLinkedToId(cand, f.id) &&
-          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id)
+          !notLinkedToId(cand, f.id, currentBookId) &&
+          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId)
         ) {
           old = cand;
           claimedByName.add(cand.id);

@@ -7378,7 +7378,7 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined);
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -9554,7 +9554,7 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined);
           /* #2295 — the authoritative cast.json write; mirrors the main job's
              same-named wrap, including WHY it is wrapped at the write rather
              than at `catch (persistErr)` (which also covers the journals) and

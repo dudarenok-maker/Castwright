@@ -454,6 +454,76 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('book scoping: a CROSS-book notLinkedTo edge on both rows does not block the same-book join (#3965 T1)', () => {
+    const existing: C[] = [
+      {
+        id: 'old-tom',
+        name: 'Old Tom',
+        voiceId: 'v_tom',
+        voiceState: 'locked',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      },
+    ];
+    const fresh: C[] = [
+      {
+        id: 'old-tom-2',
+        name: 'Old Tom',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      } as C,
+    ];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'book-2',
+    );
+    expect(merged.filter((c) => c.name === 'Old Tom')).toHaveLength(1);
+    expect(merged.map((c) => c.id)).toEqual(['old-tom-2']);
+    expect(merged[0].voiceId).toBe('v_tom');
+    expect(merged[0].voiceState).toBe('locked');
+    expect(retirements).toEqual([{ from: 'old-tom', to: 'old-tom-2' }]);
+  });
+
+  it('book scoping: a cross-book edge on the PRIOR row only also joins (#3965 T2)', () => {
+    const existing: C[] = [
+      {
+        id: 'old-tom',
+        name: 'Old Tom',
+        voiceId: 'v_tom',
+        voiceState: 'locked',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom-2' }],
+      },
+    ];
+    const fresh: C[] = [{ id: 'old-tom-2', name: 'Old Tom' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'book-2',
+    );
+    expect(merged.map((c) => c.id)).toEqual(['old-tom-2']);
+    expect(merged[0].voiceId).toBe('v_tom');
+    expect(retirements).toEqual([{ from: 'old-tom', to: 'old-tom-2' }]);
+  });
+
+  it('book scoping: a SAME-book edge still blocks the name-fallback match (#3965 T3)', () => {
+    const existing: C[] = [
+      {
+        id: 'alden-old',
+        name: 'Alden',
+        aliases: ['Al'],
+        notLinkedTo: [{ bookId: 'book-2', characterId: 'alden-new' }],
+      },
+    ];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'book-2',
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']);
+    expect(merged[0].aliases).toBeUndefined();
+    expect(retirements).toEqual([]);
+  });
+
   it('id drift: a dropped narrator row never becomes a name-fallback candidate (#2040 Task 12 follow-up, L1)', () => {
     // The prior narrator (id 'narrator') carries only voiceStyle — which
     // isVoicedOrReused does NOT test, so before this task's widening the
