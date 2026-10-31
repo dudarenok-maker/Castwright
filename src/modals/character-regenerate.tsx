@@ -15,7 +15,8 @@ interface Props {
   /** `preview: false` → regenerate every affected chapter now. `preview: true`
       → render only the first affected chapter (chapterIds[0]) and open the A/B
       gate; the layout fans the rest out on Approve. Either way `chapterIds`
-      carries every chapter the character speaks in, in reading order. */
+      carries every INCLUDED chapter the character speaks in, in reading
+      order (excluded chapters never render, so they are left out). */
   onConfirm: (args: {
     characterId: string;
     chapterIds: number[];

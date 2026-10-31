@@ -44,8 +44,10 @@ describe('CharacterRegenerateModal', () => {
     const chips = screen.getByTestId('regen-affected-chapters');
     expect(chips.textContent).not.toMatch(/CH 01/);
     expect(chips.textContent).toMatch(/CH 04preview/);
-    /* Only ch4 (10:00) counts: the 50:00 excluded chapter must not inflate the ETA. */
+    /* Only ch4 (10:00 × 2.5 = 25 min) counts: the 50:00 excluded chapter must
+       not inflate the ETA (it would read ≈2 h 30 min). */
     expect(screen.getByText(/speaks in/).textContent).toMatch(/speaks in\s*1\s*chapter\b/);
+    expect(screen.getByText('≈25 min')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('regen-character-all'));
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ chapterIds: [4] }));
   });
