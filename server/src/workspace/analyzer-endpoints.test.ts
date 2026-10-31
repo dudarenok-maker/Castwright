@@ -191,6 +191,11 @@ describe('create / update / delete / key decisions', () => {
     expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
     expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: additional_drop_params.' }]);
   });
+  it('refuses LiteLLM extra_body, which the OpenAI SDK merges over the body, under any style, naming it (#3921)', () => {
+    const r = refusal(() => applyCreate(empty, { ...base, extraParams: { extra_body: { response_format: { type: 'text' } } } }));
+    expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(r.issues).toEqual([{ path: ['extraParams'], message: 'These keys are controlled by Castwright and cannot be set here: extra_body.' }]);
+  });
   it('refuses a top-level __proto__ key in the payload instead of silently dropping it', () => {
     const payload = JSON.parse('{"__proto__":{"x":1}}');
     const refused = refusal(() => applyCreate(empty, { ...base, extraParams: payload }));

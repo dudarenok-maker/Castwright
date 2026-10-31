@@ -20,7 +20,7 @@ import {
 } from './extra-params.js';
 import type { TransportKind } from '../errors.js';
 
-const NEW_OPENAI_KEYS = ['structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'thinking_token_budget', 'stop_token_ids', 'additional_drop_params', 'drop_params'];
+const NEW_OPENAI_KEYS = ['structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'thinking_token_budget', 'stop_token_ids', 'additional_drop_params', 'drop_params', 'extra_body'];
 
 const geminiRefusal = (paths: string) =>
   `Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: ${paths}.`;
@@ -30,7 +30,7 @@ describe('protected keys are exactly spec §9; Gemini config is an allowlist (P1
     expect(PROTECTED_KEYS.openai).toEqual([
       'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'stop_token_ids', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
       'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'thinking_token_budget', 'include_reasoning',
-      'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'additional_drop_params', 'drop_params',
+      'structured_outputs', 'guided_json', 'guided_regex', 'guided_choice', 'guided_grammar', 'guided_decoding_backend', 'guided_whitespace_pattern', 'structural_tag', 'additional_drop_params', 'drop_params', 'extra_body',
     ]);
     expect(PROTECTED_KEYS.ollama).toEqual(['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop']);
     expect(PROTECTED_KEYS.gemini).toEqual(['model', 'contents']);
