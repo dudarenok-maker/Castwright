@@ -281,15 +281,16 @@ export function lineOf(content: string, index: number): number {
 }
 
 /* ===== TOKEN-SKIPPING OPAQUE-RANGE TOKENIZER =================================
-   The older quote-to-quote walker, used by state-language and
-   state-fixture-language only. It opens a range on any quote or backtick and
+   The older quote-to-quote walker, used by the four token-family guards:
+   state-language, state-fixture-language, cast-history-threading and
+   generation-cast-history-seq. It opens a range on any quote or backtick and
    runs to the next matching one, and it knows nothing of regex literals or
    nested templates, so it can desync where the AST family does not. That is
    why it is NOT unified with the AST family above. ============================ */
 /** If `src[i]` opens a string/template literal or a line/block comment, return
     the index just past its end (handling backslash escapes inside quotes, and
     the unterminated-comment case by running to EOF). Otherwise return -1.
-    Shared by the two token-skipping guards (#3685). */
+    Shared by the four token-skipping guards (#3685). */
 export function skipOpaqueToken(src: string, i: number): number {
   const n = src.length;
   const ch = src[i];

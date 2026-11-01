@@ -21,7 +21,7 @@ import * as scanner from './guard-scan.js';
 /* Unit tests for the shared guard scanner (#3685). Every case pins a behaviour
    the guard files relied on while each carried its own private copy, so drift
    in the shared module reddens HERE (the tokenizer cases below, and the
-   no-private-copies block at the bottom) rather than in ten guards at once.
+   no-private-copies block at the bottom) rather than in eleven guards at once.
    Nothing writes inside the repo: the collector tests build a temp tree under
    os.tmpdir() and remove it in afterAll. */
 describe('file collectors', () => {
@@ -191,6 +191,22 @@ describe('token-skipping opaque ranges', () => {
     const sp = (n: number): string => ' '.repeat(n);
     expect(out).toHaveLength(src.length);
     expect(out).toBe(`a(${sp(3)});${sp(5)}\nb(${sp(4)}\n${sp(4)});`);
+  });
+
+  it('blankOutOpaque blanks a whole template literal, ${...} slot included (token family, not AST)', () => {
+    const src = '`${f()}`';
+    expect(scanner.blankOutOpaque(src)).toBe(' '.repeat(src.length));
+  });
+
+  it('blankOutOpaque on an unterminated comment keeps the length', () => {
+    expect(scanner.blankOutOpaque('a /* b')).toBe('a     ');
+  });
+
+  it('a block comment opener does not close on its own slash', () => {
+    const src = '/*/ x */ y';
+    const ranges = computeTokenOpaqueRanges(src);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('x'))).toBe(true);
+    expect(isOpaqueInTokenRanges(ranges, src.indexOf('y'))).toBe(false);
   });
 
   it('strings, line comments and block comments are all opaque; code is not', () => {
