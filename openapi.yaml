@@ -4573,6 +4573,48 @@ paths:
         '409':
           description: Source or other book has no cast on disk yet
 
+  /api/books/{bookId}/cast/{characterId}/decline-voice-link:
+    post:
+      summary: Record that a series voice link was declined ("Don't reuse") — #3992
+      operationId: declineVoiceLink
+      description: |
+        Appends `fromBookId` to the character's `declinedVoiceFrom` marker so the
+        decline survives re-analysis and a later redesign forks the shared voice
+        instead of overwriting the earlier book's. Single-book write; `fromBookId`
+        need not be resolvable (a deleted book's id is still a valid decline).
+        Idempotent — an already-recorded book is a no-op. The client calls it from
+        the match drawer's Don't reuse, alongside clearing `matchedFrom`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fromBookId]
+              properties:
+                fromBookId: { type: string }
+      responses:
+        '200':
+          description: The marker after the write
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [declinedVoiceFrom]
+                properties:
+                  declinedVoiceFrom:
+                    type: array
+                    items: { type: string }
+        '400':
+          description: Missing `fromBookId`, or it names the book itself
+        '404':
+          description: Book or character not found
+        '409':
+          description: The book has no cast on disk yet
+
   /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
     post:
       summary: "Reject an orphaned-id reconciliation (\"not the same character\") — #2040 Task 17"
@@ -8648,6 +8690,21 @@ components:
             route (both books' cast.json carry the matching entry). Used
             by the voices-view duplicate-candidate detection to suppress
             future "same character?" suggestions for the pair. Plan 101.
+        declinedVoiceFrom:
+          type: array
+          items: { type: string }
+          description: |
+            Ids of the earlier books whose series voice link this character was
+            DECLINED from ("Don't reuse"), #3992. Deliberately narrower than
+            `notLinkedTo`: it records only "not THIS voice", never "not the same
+            person", so it does not feed the same-book join gates or the
+            duplicate detector. Server-owned: written only by
+            `POST /api/books/:bookId/cast/:characterId/decline-voice-link` (the
+            whole-roster cast PUT takes it from disk and cannot set or clear it);
+            a manual re-link to the book clears its entry. Honoured by the series
+            linker and the analysis merge (never re-linked to a declined book) and
+            by the voice-design fork (only a marked row forks the shared
+            `voiceUuid`).
         tone:
           type: object
           properties:

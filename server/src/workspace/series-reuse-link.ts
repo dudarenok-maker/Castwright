@@ -21,6 +21,7 @@
    Guards mirror scripts/repair-series-reuse.mjs:
      - skip `unknown-male` / `unknown-female` (per-book buckets, never reused);
      - never link a `notLinkedTo` pair (intentional same-name-different-person);
+     - never link to a book in the row's `declinedVoiceFrom` (#3992, "Don't reuse");
      - only link against EARLIER books (lower seriesPosition) and skip the run
        entirely for the earliest book in the series (nothing prior);
      - never overwrite an existing `matchedFrom`, nor flip a tuned/locked voice
@@ -94,6 +95,8 @@ export interface LinkableCharacter {
   } | null;
   matchFactors?: unknown[];
   notLinkedTo?: { bookId: string; characterId: string }[];
+  /** #3992 — earlier books this row's voice link was declined from. */
+  declinedVoiceFrom?: string[];
 }
 
 /* Walk the books tree once, returning bookId → seriesPosition for every book
@@ -378,7 +381,11 @@ export async function linkSeriesReuseAtAnalysis(
          same person (e.g. teenage vs adult Wren); never auto-link it. */
       (c.notLinkedTo ?? []).some(
         (p) => p.bookId === v.bookId && p.characterId === v.characterId,
-      );
+      ) ||
+      /* #3992 — "Don't reuse": the user declined THIS book's voice for the row.
+         Narrower than the edge above (it says nothing about being the same
+         person), so it only skips that one book; an earlier one still links. */
+      (c.declinedVoiceFrom ?? []).includes(v.bookId);
 
     /* Stable-key pass FIRST: a character that kept its deterministic write key
        (`voiceId ?? id`) across books IS the same voice, even when the analyzer

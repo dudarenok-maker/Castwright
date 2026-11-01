@@ -18,6 +18,7 @@ import { castTierRouter } from './routes/cast-tier.js';
 import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
+import { castDeclineVoiceLinkRouter } from './routes/cast-decline-voice-link.js';
 import { castRejectOrphanRouter } from './routes/cast-reject-orphan.js';
 import { castLinkOrphanRouter } from './routes/cast-link-orphan.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
@@ -304,6 +305,7 @@ app.use('/api/books', castTierRouter); // mounts /:bookId/cast/tier (series-scop
 app.use('/api/books', castAliasesRouter); // mounts /:bookId/cast/{unlink-alias,add-alias} (editable alias chips on the profile drawer)
 app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
 app.use('/api/books', castNotLinkedToRouter); // mounts /:bookId/cast/:characterId/not-linked-to (plan 101 — mark cross-book duplicate as intentional variant)
+app.use('/api/books', castDeclineVoiceLinkRouter); // mounts /:bookId/cast/:characterId/decline-voice-link (#3992 — durable "Don't reuse" marker)
 app.use('/api/books', castRejectOrphanRouter); // mounts POST+DELETE /:bookId/cast/:characterId/reject-orphan-match (#2040 Task 17 — orphaned-id banner "not the same character" action; #2092/#2089 — pair-scoped reject + undo)
 app.use('/api/books', castLinkOrphanRouter); // mounts POST /:bookId/cast/:characterId/link-orphan-match (#2238 — orphaned-id banner "link to this character" action, the positive mirror of reject-orphan-match)
 app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:characterId/series-patch (cross-book Compare save propagation, BACKLOG #7)

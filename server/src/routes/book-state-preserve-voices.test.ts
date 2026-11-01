@@ -748,3 +748,44 @@ describe('book-state PUT state — titleSynthesized survives the chapters replac
     expect(after.chapters[0].titleSynthesized).toBe(true);
   });
 });
+
+/* #3992 — `declinedVoiceFrom` ("Don't reuse") is server-owned like notLinkedTo:
+   the redux row never carries it, so a routine autosave must not erase it, and a
+   client cannot forge one. */
+describe('book-state PUT cast — declinedVoiceFrom is server-owned (#3992)', () => {
+  const char = (extra: Record<string, unknown> = {}) => ({
+    id: 'mairin',
+    name: 'Mairin',
+    role: 'character',
+    color: '#abc',
+    ...extra,
+  });
+  const put = (characters: object[]) =>
+    request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'cast', patch: { characters } });
+
+  it('keeps the on-disk marker when the client omits it (the autosave that follows declineMatch)', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'] })]);
+    const res = await put([char({ name: 'Mairin Renamed' })]);
+    expect(res.status).toBe(200);
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.declinedVoiceFrom).toEqual(['earlier-book']);
+    expect(mairin.name).toBe('Mairin Renamed');
+  });
+
+  it('ignores a client-forged or client-cleared marker', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'] })]);
+    await put([char({ declinedVoiceFrom: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toEqual(['earlier-book']);
+    await put([char({ declinedVoiceFrom: [] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toEqual(['earlier-book']);
+  });
+
+  it('cannot plant a marker on a row that has none', async () => {
+    writeBook(bookDir, bookId, [char()]);
+    await put([char({ declinedVoiceFrom: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toBeUndefined();
+  });
+});

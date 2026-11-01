@@ -147,6 +147,7 @@ import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
 import {
   CastVoiceConsentError,
   preserveClonedSlotsOnCastWrite,
+  preserveDeclinedVoiceFromOnCastWrite,
   preserveDesignedVoicesOnCastWrite,
   preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
@@ -230,9 +231,12 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
      Runs BEFORE preserveDesignedVoicesOnCastWrite, whose slot-blind
      fill-the-gap pass only ever restores a wholly-absent map. */
   const restored = preserveClonedSlotsOnCastWrite(existingChars, cast.characters);
-  const characters = preserveNotLinkedToOnCastWrite(
+  const characters = preserveDeclinedVoiceFromOnCastWrite(
     existingChars,
-    preserveDesignedVoicesOnCastWrite(existingChars, restored),
+    preserveNotLinkedToOnCastWrite(
+      existingChars,
+      preserveDesignedVoicesOnCastWrite(existingChars, restored),
+    ),
   );
   return { ...cast, characters };
 }

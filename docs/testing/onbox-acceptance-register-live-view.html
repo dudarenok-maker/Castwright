@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="68" data-publish-id="aa527278bec4"></div>
+  <div hidden data-published-as="71" data-publish-id="12d2aa0a5952"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">74</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">75</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->41<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->42<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->9<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">41 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">42 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -840,6 +840,23 @@
         <li><strong>Output cap.</strong> With a payload cap, the endpoint&#39;s Max output tokens is read-only with its note and keeps its stored value. <code>{"max_tokens": 64}</code> on a thinking model overflows (<code>analyzer-reasoning-overflow</code>); the remediation names <code>max_tokens</code> (&#8220;Raise the custom parameter &#8230;&#8221;) and the fixes include <code>Read: Custom payload</code> and no <code>Lower &lt;name&gt;&#39;s max output tokens</code>. With <code>{"max_tokens": null}</code> the wording is &#8220;Set a value for &#8230;&#8221;.</li>
         </ul>
         <p class="src">the GPU box with llama-swap, Ollama and a thinking model &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;14</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A120</span><span class="iname">A declined series link then a redesign leaves the earlier book&#39;s voice untouched</span><span class="risk">Qwen sidecar, two-book series, one GPU</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove the fork against fixture workspaces. Only a real Qwen sidecar shows that the earlier book&#39;s voice is audibly unchanged after the later book&#39;s character is redesigned, and that the later book&#39;s new voice plays. Set up: a series where Book 2 has a character linked to a Book 1 character&#39;s Qwen voice (same <code>voiceUuid</code>), with at least one emotion variant designed on Book 1&#39;s character.</p>
+        <ul>
+        <li><strong>Decline and redesign.</strong> In Book 2, decline the link (&#8220;Don&#39;t reuse&#8221;) on that character, then redesign its voice from the profile drawer (Design, or Design and compare then promote). The bulk &#8220;Design full cast&#8221; base scope cannot fork this row: it skips any row that already carries a <code>qwen.name</code>, and the linker copies one onto a linked row. The bulk &#8220;Emotion variants&#8221; scope does fork it (see the emotion-tagged line step below).</li>
+        <li><strong>Book 2 gets its own voice.</strong> Its character in <code>cast.json</code> has a new <code>voiceUuid</code> (different from Book 1&#39;s); <code>voices/qwen/</code> holds <code>qwen-&lt;new&gt;.pt</code>, <code>.json</code>, and where the source had them <code>__1.7b.pt</code> and <code>__master.wav</code>; the new voice plays in the drawer and in a rendered line.</li>
+        <li><strong>Book 1 is untouched.</strong> Its character keeps its <code>voiceUuid</code>, <code>qwen-&lt;old&gt;.pt</code> is unchanged (same size and mtime as before), and a line rendered in Book 1 sounds the same as before, including its emotion variants (<code>qwen-&lt;old&gt;__&lt;emotion&gt;.pt</code> still on disk, still playing).</li>
+        <li><strong>Variants are not copied, and the stale map is dropped.</strong> The fork copies only the base family, and it drops Book 2&#39;s <code>overrideTtsVoices.qwen.variants</code> map in the same write, because the render path re-derives <code>qwen-&lt;uuid&gt;__&lt;emotion&gt;</code> from the uuid. Book 2&#39;s <code>cast.json</code> has no <code>variants</code> after the fork; Book 1&#39;s <code>qwen-&lt;old&gt;__&lt;emotion&gt;.pt</code> files and its own variants map are untouched.</li>
+        <li><strong>An emotion-tagged line in Book 2 renders.</strong> After the redesign (also after a Cancel in Design and compare, and after designing one new emotion on Book 2 with &#8220;Emotion variants&#8221;), render a chapter in Book 2 that has a line tagged with the emotion Book 1 has a variant for. It plays in Book 2&#39;s own voice (the base voice when no variant was designed again) with no <code>voice_not_designed</code> in the sidecar or server log. This is the step that catches a surviving variants map asking for a <code>.pt</code> that does not exist under the new uuid.</li>
+        <li><strong>Controls.</strong> A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork. A character that was never declined but shares a uuid with an earlier book without a link (Book 2 confirmed before Book 1) is not forked either: designing it twice leaves both books on one uuid.</li>
+        <li><strong>Don&#39;t reuse sticks across re-analysis.</strong> After the decline (before and after the redesign), re-analyse Book 2. The character stays unlinked (no <code>matchedFrom</code>, no &#8220;Reused&#8221; badge), its <code>cast.json</code> row still carries <code>declinedVoiceFrom: [&lt;Book 1&#39;s bookId&gt;]</code>, and it keeps its voice (the shared one before the redesign, the new one after). Redesigning it afterwards still leaves Book 1&#39;s <code>qwen-&lt;old&gt;.pt</code> unchanged. Linking it to Book 1 again by hand (link to an earlier character) clears the marker for that book.</li>
+        <li><strong>A chain follows the middle book.</strong> With a Book 3 whose character links to Book 2&#39;s (its <code>matchedFrom</code> names Book 2, the same <code>voiceUuid</code>): decline Book 2&#39;s link to Book 1 and redesign Book 2&#39;s character. Book 3&#39;s character moves to Book 2&#39;s new <code>voiceUuid</code> in the same write and plays Book 2&#39;s new voice; Book 1 is untouched and Book 3 is still linked to Book 2. A character that links to Book 2 without a book id (a manual Assign) stays on Book 1&#39;s voice.</li>
+        </ul>
+        <p class="src">the GPU box with the Qwen sidecar and a series of two books (three for the chain step) with a linked character &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3992">#3992</a></p>
       </div>
     </details>
 

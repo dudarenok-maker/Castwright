@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import {
+  LockAcquisitionTimeoutError,
+  LOCK_CONTENTION_REQUEST_ERROR,
+  FS_FAILURE_REQUEST_ERROR,
+} from '../workspace/file-lock.js';
 
 // Stub the shared design core so the job runs without a sidecar/GPU.
 // vi.mock is hoisted to the top of the file, so it runs before any imports —
@@ -221,6 +225,27 @@ describe('single-design job — first design', () => {
       expect.anything(),
       bookDir, // fs-61 — book-scoped fallback when there's no seriesFilter
     );
+  });
+});
+
+describe('single-design job — the character vanishes mid-fork (#3992)', () => {
+  it('ends the job with a not_found error and never designs under the pre-fork uuid', async () => {
+    const qwenMod = await import('./qwen-voice.js');
+    const spy = vi.spyOn(qwenMod, 'ensureCharacterVoiceUuid').mockResolvedValueOnce(undefined);
+    capturedDesignArgs = null;
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+      expect(res.status).toBe(200);
+      const events = collectSse(res);
+      expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'not_found' });
+      expect(events.some((e) => e.type === 'designed' || e.type === 'preview_ready')).toBe(false);
+      expect(capturedDesignArgs).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(designLock.isDesignBusy(bookDir)).toBe(false);
   });
 });
 
@@ -665,6 +690,30 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
     expect(String(err?.message ?? '')).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
 
     expect(designLock.isDesignBusy(bookDir)).toBe(false);
+  });
+
+  it('curates a node fs error from the design job (a failed fork copy, #3992) into a path-free sentence', async () => {
+    const castPath = castJsonPath(bookDir);
+    readJsonFailAfter = {
+      path: castPath,
+      passThroughCalls: 1,
+      error: Object.assign(
+        new Error("EBUSY: resource busy or locked, copyfile 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt'"),
+        { code: 'EBUSY', syscall: 'copyfile', path: 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt' },
+      ),
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b', preview: true });
+    consoleErrorSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    const err = collectSse(res).find((e) => e.type === 'error');
+    expect(err).toBeTruthy();
+    expect(String(err?.message ?? '')).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(String(err?.message ?? '')).not.toContain('real-name');
   });
 
   it('answers a curated 500 when the design job throws before it responds (#3711 review)', async () => {

@@ -4944,6 +4944,48 @@ async function mockRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedTo
   };
 }
 
+/* POST /api/books/:bookId/cast/:characterId/decline-voice-link  (#3992) — the
+   match drawer's "Don't reuse". Redux's declineMatch clears `matchedFrom`, but
+   the row keeps the earlier book's voiceUuid and nothing on disk says it was
+   declined, so a re-analysis re-links it and a redesign overwrites the earlier
+   book's voice. This records `declinedVoiceFrom` server-side (the cast PUT cannot:
+   it takes the field from disk). Idempotent. */
+export interface DeclineVoiceLinkArgs {
+  bookId: string;
+  characterId: string;
+  fromBookId: string;
+}
+export interface DeclineVoiceLinkResponse {
+  declinedVoiceFrom: string[];
+}
+
+async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
+  const { bookId, characterId, fromBookId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/decline-voice-link`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromBookId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Don't-reuse failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
+  await wait(80);
+  return { declinedVoiceFrom: [args.fromBookId] };
+}
+
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task
    17) — the orphaned-character-fallback banner's "not the same character"
    action. `characterId` is the LIVE character the orphaned id resolved onto
@@ -10991,6 +11033,7 @@ const real = {
   linkPriorCharacter: realLinkPriorCharacter,
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
+  declineVoiceLink: realDeclineVoiceLink,
   rejectOrphanMatch: realRejectOrphanMatch,
   undoRejectOrphanMatch: realUndoRejectOrphanMatch,
   linkOrphanMatch: realLinkOrphanMatch,
@@ -11338,6 +11381,7 @@ const mock = {
   linkPriorCharacter: mockLinkPriorCharacter,
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
+  declineVoiceLink: mockDeclineVoiceLink,
   rejectOrphanMatch: mockRejectOrphanMatch,
   undoRejectOrphanMatch: mockUndoRejectOrphanMatch,
   linkOrphanMatch: mockLinkOrphanMatch,
