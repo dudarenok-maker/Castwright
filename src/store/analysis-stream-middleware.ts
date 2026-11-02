@@ -115,8 +115,22 @@ export const analysisStreamMiddleware: Middleware = (store) => {
        server one must not overwrite it. */
     const current = () => (store.getState() as AnalysisRootState).analysis.activeStream;
     const atStart = current();
+    /* #3967 — the first read is bounded and aborted like the book-state one below, and a
+       failure clears the same way (outer catch): the refusal already says the local snapshot
+       is stale, so a read that fails or never settles must not leave the denied `running`. */
+    const stateCtrl = new AbortController();
+    const stateTimers = new Set<ReturnType<typeof setTimeout>>();
     try {
-      const server = bookId ? await api.getAnalysisState(bookId) : null;
+      let server: Awaited<ReturnType<typeof api.getAnalysisState>> = null;
+      if (bookId) {
+        try {
+          server = await within(api.getAnalysisState(bookId, stateCtrl.signal), BOOK_READ_TIMEOUT_MS, stateTimers, () =>
+            stateCtrl.abort(),
+          );
+        } finally {
+          stateTimers.forEach(clearTimeout);
+        }
+      }
       if (current() !== atStart) return;
       if (!server) {
         dispatch(analysisActions.clearActiveStream());
@@ -129,8 +143,10 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            expires, whether the book's cast is confirmed is unknown, and showing a
            non-running snapshot on a confirmed book is what the gate below exists to stop;
            but the local `running` is already denied by the server and its handle is closed,
-           so no tick would correct it — clear it (Layout's cold-boot read restores a
-           genuine pill on the next arrival at the book). */
+           so no tick would correct it — clear it. A genuine pill does not come back on its
+           own: Layout's cold-boot read runs only on a full read, so it returns on a reload
+           or after visiting another book (Analysing reads "Start analysis" meanwhile, a
+           non-`fresh` POST that still resumes, and the halt reason is lost). */
         const readCtrl = new AbortController();
         const readTimers = new Set<ReturnType<typeof setTimeout>>();
         let book: Awaited<ReturnType<typeof api.getBookState>> = null;
@@ -178,6 +194,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       );
     } catch (err) {
       console.warn('[analysis-state] refusal re-read failed:', (err as Error)?.message);
+      if (current() === atStart) dispatch(analysisActions.clearActiveStream());
     }
   };
 

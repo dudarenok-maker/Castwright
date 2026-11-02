@@ -34,6 +34,7 @@ const getAnalysisStateMock = vi.fn();
 const getBookStateMock = vi.fn();
 /* #3967 — the signal each getBookState call was handed, in call order. */
 const bookStateSignals: Array<AbortSignal | undefined> = [];
+const analysisStateSignals: Array<AbortSignal | undefined> = [];
 
 vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
@@ -76,7 +77,10 @@ vi.mock('../lib/api', () => {
         analyseManuscriptMock(manuscriptId, opts),
       runAnalysisForChapters: (manuscriptId: string, chapterIds: number[], opts: unknown) =>
         runAnalysisForChaptersMock(manuscriptId, chapterIds, opts),
-      getAnalysisState: (bookId: string) => getAnalysisStateMock(bookId),
+      getAnalysisState: (bookId: string, signal?: AbortSignal) => {
+        analysisStateSignals.push(signal);
+        return getAnalysisStateMock(bookId);
+      },
       getBookState: (bookId: string, signal?: AbortSignal) => {
         bookStateSignals.push(signal);
         return getBookStateMock(bookId);
@@ -137,6 +141,7 @@ beforeEach(() => {
   getAnalysisStateMock.mockReset();
   getBookStateMock.mockReset();
   bookStateSignals.length = 0;
+  analysisStateSignals.length = 0;
   getBookStateMock.mockResolvedValue({ state: { castConfirmed: false } });
   captured = [];
   const makeImpl =
@@ -1298,6 +1303,95 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  /* #3967 pass 3 — the first read (getAnalysisState) is bounded and clears the same way. */
+  it('#3967 — a getAnalysisState read that rejects clears the stale running snapshot', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await settle();
+      expect(warn).toHaveBeenCalledWith('[analysis-state] refusal re-read failed:', '503');
+      expect(store.getState().analysis.activeStream).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('#3967 — a getAnalysisState read that never settles is aborted at 15 s, warned, and clears the stale running snapshot', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockReturnValueOnce(new Promise(() => {}));
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(analysisStateSignals).toHaveLength(1);
+      expect(analysisStateSignals[0]!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(analysisStateSignals[0]!.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith('[analysis-state] refusal re-read failed:', expect.stringContaining('timed out'));
+      expect(store.getState().analysis.activeStream).toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('#3967 — a snapshot dispatched while a failing getAnalysisState read is pending survives its failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      let rejectRead!: (e: unknown) => void;
+      getAnalysisStateMock.mockReturnValueOnce(new Promise((_r, rej) => (rejectRead = rej)));
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await settle();
+      const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
+      store.dispatch(analysisActions.setActiveStream(newer));
+      rejectRead(new Error('503'));
+      await settle();
+      expect(store.getState().analysis.activeStream).toEqual(newer);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('#3967 — a book-state read that rejects (not a timeout) clears the stale running snapshot, and a newer snapshot survives it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+      getBookStateMock.mockRejectedValueOnce(new Error('500'));
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await settle();
+      expect(store.getState().analysis.activeStream).toBeNull();
+
+      const store2 = buildStore();
+      store2.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store2.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+      let rejectBook!: (e: unknown) => void;
+      getBookStateMock.mockReturnValueOnce(new Promise((_r, rej) => (rejectBook = rej)));
+      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      await settle();
+      const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
+      store2.dispatch(analysisActions.setActiveStream(newer));
+      rejectBook(new Error('500'));
+      await settle();
+      expect(store2.getState().analysis.activeStream).toEqual(newer);
+    } finally {
+      warn.mockRestore();
     }
   });
 

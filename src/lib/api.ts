@@ -2481,8 +2481,11 @@ async function realGetBookState(
    coercion (see server/src/routes/book-state.ts). Returns null on
    404 so the caller can treat "no in-flight analysis" the same as
    "endpoint not reachable" — both equivalent to "no pill". */
-async function realGetAnalysisState(bookId: string): Promise<AnalysisStateResponse | null> {
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`);
+async function realGetAnalysisState(
+  bookId: string,
+  signal?: AbortSignal,
+): Promise<AnalysisStateResponse | null> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`, { signal });
   if (res.status === 404) return null;
   if (!res.ok)
     throw new Error(
@@ -2494,7 +2497,10 @@ async function realGetAnalysisState(bookId: string): Promise<AnalysisStateRespon
 /* Mock counterpart — returns null (no in-flight analysis) since mock
    mode has no disk-backed workspace nor a live analyzer. Layout's
    discovery effect treats null the same as 404 (no pill). */
-async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
+async function mockGetAnalysisState(
+  _bookId: string,
+  _signal?: AbortSignal,
+): Promise<AnalysisStateResponse | null> {
   await wait(20);
   return null;
 }
