@@ -49,7 +49,7 @@ import { chaptersActions, type ChaptersState } from './chapters-slice';
 import { queueActions, type QueueState } from './queue-slice';
 import { completeQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
 import { notificationsActions } from './notifications-slice';
-import type { UiState } from './ui-slice';
+import { uiActions, type UiState } from './ui-slice';
 import type { AppDispatch } from './index';
 import type { StreamRunner } from './generation-stream-runner';
 
@@ -202,6 +202,21 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                re-claim it before the snapshot catches up. Idempotent for an
                already-gone id; the next /api/queue snapshot reconciles. */
             completed.add(entryId);
+            /* #3919 — the preview's own entry is done-pruned but no review
+               completion ever armed it (the chapter was excluded elsewhere, or
+               an Include was rolled back): the rest would never fan out, and
+               nothing says so. Drop it and tell the user. */
+            const pv = (storeApi.getState() as DispatcherRootState).ui.previewRegen;
+            if (pv && pv.bookId === bookId && pv.previewChapterId === chapterId && pv.completed === undefined) {
+              dispatch(uiActions.clearPreviewForBook(bookId));
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: 'The preview chapter finished without a new take, so the preview was cancelled.',
+                  dedupeKey: `preview-never-rendered:${bookId}`,
+                }),
+              );
+            }
             /* srv-11 — a successful chapter resets the book's failure streak. */
             failureStreakByBook.delete(bookId);
             void dispatch(completeQueueEntry(entryId)).catch(() => {

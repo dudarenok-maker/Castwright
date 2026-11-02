@@ -310,6 +310,48 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4/complete', doneInit);
   });
 
+  it('#3919 clears a preview whose chapter finished without a review render, and says so', async () => {
+    const store = makeStore(2);
+    store.dispatch(
+      uiSlice.actions.setPreviewRegen({
+        bookId: 'book-A',
+        characterId: 'c1',
+        previewChapterId: 3,
+        remainingChapterIds: [4],
+        reason: 'voice',
+        note: '',
+      }),
+    );
+    seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+    await flushMicro();
+    completeStream('book-A', 3);
+    await flushMicro();
+    expect(store.getState().ui.previewRegen).toBeNull();
+    expect(store.getState().notifications.toasts).toEqual([
+      expect.objectContaining({ kind: 'warn', dedupeKey: 'preview-never-rendered:book-A' }),
+    ]);
+  });
+
+  it('#3919 leaves a preview alone once its chapter reported a review completion', async () => {
+    const store = makeStore(2);
+    store.dispatch(
+      uiSlice.actions.setPreviewRegen({
+        bookId: 'book-A',
+        characterId: 'c1',
+        previewChapterId: 3,
+        remainingChapterIds: [4],
+        reason: 'voice',
+        note: '',
+        completed: { stubFallback: false },
+      }),
+    );
+    seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+    await flushMicro();
+    completeStream('book-A', 3);
+    await flushMicro();
+    expect(store.getState().ui.previewRegen).not.toBeNull();
+  });
+
   it('fills up to N workers across books and holds the rest', async () => {
     const store = makeStore(2);
     seed(store, [
