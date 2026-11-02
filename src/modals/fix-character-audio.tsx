@@ -54,6 +54,8 @@ export function FixCharacterAudioModal({
       chapters.filter(
         (c) =>
           !!characterId &&
+          // Excluded chapters never render; their audio (if any) is gone or about to be.
+          !c.excluded &&
           c.characters?.[characterId] !== undefined &&
           (c.audioModelKey != null || c.state === 'done') &&
           // A pre-scoped per-line fix targets exactly one chapter.
