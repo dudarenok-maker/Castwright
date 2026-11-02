@@ -636,9 +636,9 @@ export function GenerationView({
       try {
         await api.setChapterExcluded(bookId, chapterId, true);
         if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
-        /* #3919 — a queued preview of this chapter can never complete (the
-           server skips an excluded chapter), so the rest would never fan out,
-           silently. Drop it and say so. */
+        /* #3919 — a preview of this chapter (queued, or finished and awaiting
+           Approve) can never complete or fan out (the server skips an excluded
+           chapter), so the rest would be lost, silently. Drop it and say so. */
         const pv = store.getState().ui.previewRegen;
         if (pv && pv.bookId === bookId && pv.remainingChapterIds.includes(chapterId)) {
           // The approve fan-out reads the live slices only for the open book.

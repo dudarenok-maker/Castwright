@@ -884,6 +884,19 @@ recite:
     sibling-family call) and confirm a direct test goes red; add the case
     for any that survives.
 
+68. **Ids captured when a job starts, acted on later without re-checking each
+    still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
+    stored `remainingChapterIds` when it started; Approve enqueued and logged
+    them as they were, so a chapter excluded in between was regenerated into a
+    no-op, and a preview whose chapter was excluded elsewhere never fanned out
+    and said nothing. Checkable: for any list of ids stored in state, a queue
+    entry or a closure, find where it is read back and ask what can change the
+    qualifying predicate (excluded, deleted, moved, renamed) in between; each
+    such path must either re-filter at the point of use or drop the id where
+    the change happens, and a test should flip the predicate between capture
+    and use. (Numbered 68: #4006 and #4011 each held a pending 66, so 68 is taken;
+    renumber on merge if the order changes.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
