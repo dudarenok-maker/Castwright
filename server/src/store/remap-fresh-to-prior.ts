@@ -5,8 +5,14 @@
    diverged; this one runs BEFORE the fresh roster and its sentences are
    persisted anywhere, so the id never gets a chance to drift.
 
-   Matcher: Tier A from §4.2 — `normaliseForMatch`'d display name, exactly one
-   candidate on each side. Ambiguous names, and any pair separated by a
+   Matcher: Tier A from §4.2 — `normaliseForMatch`'d display name, widened
+   (#3954) to the surname-tolerant join and the voiced-row selection rule
+   `mergeCore` already uses (`merge-analysis-cast.ts`): a normalised fresh
+   name held by exactly one fresh row chooses a prior candidate from the
+   exact-name tier, falling back to a surname-tolerant tier only when the
+   exact tier chose no row; in both tiers exactly one voiced row wins, else
+   exactly one row in total, and a prior row claimed by more than one pair
+   keeps only its exact pair. Ambiguous names, and any pair separated by a
    `notLinkedTo` edge, keep the fresh id: this module never guesses.
 
    §11 Q2 — composed against the SAME run's dedup→fold cumulative rewrite
@@ -28,6 +34,7 @@
 import { normaliseForMatch } from '../util/text-match.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
+import { isVoicedOrReused, surnameTolerantMatch } from './merge-analysis-cast.js';
 import { notLinkedToId } from './not-linked-to-scope.js';
 
 type PriorCastRow = { id: string } & Record<string, unknown>;
@@ -66,8 +73,11 @@ function nameKeyOf(c: Record<string, unknown>): string {
 }
 
 /** Rewrite this run's fresh character/sentence ids onto the existing cast's
-    ids wherever exactly one fresh row and exactly one prior row share a
-    normalised display name, and no `notLinkedTo` edge separates them.
+    ids wherever a normalised display name held by exactly one fresh row
+    resolves to exactly one prior candidate — the exact-name tier first, then
+    (only when the exact tier chose no row) the surname-tolerant join with the
+    same voiced-row selection rule `mergeCore` uses (`merge-analysis-cast.ts`)
+    — and no `notLinkedTo` edge separates the pair.
 
     `priorRewrites` is this run's own cumulative dedup→fold rewrite table
     (§11 Q2 — pass `composeRewrites(dd.rewrites, folded.rewrites)`; defaults
@@ -118,15 +128,45 @@ export function remapFreshToPriorIds<
   }
 
   const freshIds = new Set(fresh.map((f) => f.id));
-  const rewrites: Record<string, string> = {};
+
+  /* #3954 child 1 — candidate selection widened to the surname-tolerant join
+     and the voiced-row selection rule `mergeCore` already uses
+     (`merge-analysis-cast.ts`). For each normalised fresh name held by
+     exactly one fresh row, choose a prior candidate: the exact tier first
+     (prior rows with that normalised name), then — only when the exact tier
+     chose no row — the tolerant tier (prior rows whose normalised name
+     `surnameTolerantMatch`es it; the exact preference rides on that tier
+     ordering). In both tiers a candidate must be a row the fresh roster did
+     not already take over by id (`!freshIds.has(priorIdAfter(p.id))`, this
+     remap's form of mergeCore's "dropped by id"), and the selection rule
+     decides among the survivors: exactly one voiced/reused row wins, else
+     exactly one row in total, else the name is ambiguous and no row is
+     chosen. Every guard below then runs on the chosen pair, unchanged and in
+     the same order as before this widening. */
+  const choosePrior = (rows: ReadonlyArray<PriorCastRow>): PriorCastRow | undefined => {
+    const eligible = rows.filter((p) => !freshIds.has(priorIdAfter(p.id)));
+    const voiced = eligible.filter(isVoicedOrReused);
+    if (voiced.length === 1) return voiced[0];
+    if (voiced.length === 0 && eligible.length === 1) return eligible[0];
+    return undefined;
+  };
+
+  /* Surviving (fresh, prior) pairs — exact-tier pairs flagged — collected
+     before `rewrites` is built so the claim-once guard below can count them
+     per prior row. */
+  const pairs: { freshRow: C; priorRow: PriorCastRow; target: string; exact: boolean }[] = [];
 
   for (const [key, freshCandidates] of freshByName) {
     if (freshCandidates.length !== 1) continue;
-    const priorCandidates = priorByName.get(key);
-    if (!priorCandidates || priorCandidates.length !== 1) continue;
-
     const freshRow = freshCandidates[0];
-    const priorRow = priorCandidates[0];
+
+    const exactRow = choosePrior(priorByName.get(key) ?? []);
+    // Tolerant tier — ONLY because the exact tier chose no row. The `??`
+    // short-circuits, so the tolerant scan never even runs when it did.
+    const priorRow =
+      exactRow ?? choosePrior(priorCast.filter((p) => surnameTolerantMatch(key, nameKeyOf(p))));
+    if (!priorRow) continue;
+    const exact = exactRow !== undefined;
     const target = priorIdAfter(priorRow.id);
     // Already converged via this run's own dedup→fold rewrite table (Site 1
     // / Site 3 territory) — nothing left for this remap to do.
@@ -160,7 +200,21 @@ export function remapFreshToPriorIds<
     ) {
       continue;
     }
-    rewrites[freshRow.id] = target;
+    pairs.push({ freshRow, priorRow, target, exact });
+  }
+
+  /* Claim-once (#3954, the mirror of mergeCore's `:328-390` guard): a prior
+     row claimed by more than one surviving pair loses its TOLERANT pairs; an
+     exact pair is never removed (a prior row has exactly one normalised name,
+     so at most one exact pair can ever claim it). Only then build `rewrites`. */
+  const claims = new Map<PriorCastRow, number>();
+  for (const pair of pairs) {
+    claims.set(pair.priorRow, (claims.get(pair.priorRow) ?? 0) + 1);
+  }
+  const rewrites: Record<string, string> = {};
+  for (const pair of pairs) {
+    if (!pair.exact && (claims.get(pair.priorRow) ?? 0) > 1) continue;
+    rewrites[pair.freshRow.id] = pair.target;
   }
 
   if (Object.keys(rewrites).length === 0) {

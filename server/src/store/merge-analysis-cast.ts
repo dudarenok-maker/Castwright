@@ -92,7 +92,7 @@ export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
 
 /** A character carries continuity worth rescuing when it has a non-generated
     voice state or any concrete voice/reuse field. */
-function isVoicedOrReused(c: CastRecord): boolean {
+export function isVoicedOrReused(c: CastRecord): boolean {
   const state = c.voiceState;
   if (state === 'reused' || state === 'tuned' || state === 'locked') return true;
   // voiceUuid counts as a designed voice (srv-43): a voiceUuid-only row must be
@@ -191,7 +191,7 @@ export function overlayInterimCastForLiveView<T extends { id: string }>(
     similarity measure could weld two genuinely different characters whose names
     merely resemble each other, and token-count + strict-leading-prefix keeps
     that from happening (#2536 decision — surname-aware, not fuzzy). */
-function surnameTolerantMatch(a: string, b: string): boolean {
+export function surnameTolerantMatch(a: string, b: string): boolean {
   if (a === b) return true;
   const ta = a.split(' ');
   const tb = b.split(' ');

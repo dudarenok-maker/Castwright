@@ -277,4 +277,145 @@ describe('remapFreshToPriorIds', () => {
     );
     expect(r.rewrites).toEqual({});
   });
+
+  /* #3954 child 1 — the surname-tolerant join keeps the prior id (option (c),
+     owner decision 2026-10-31 on #3954): a character whose name gained or
+     lost a trailing token keeps its prior cast id before any sentence is
+     written, using the SAME surname-tolerant join and voiced-row selection
+     rule `mergeCore` already applies (`merge-analysis-cast.ts`), never a
+     second matcher. */
+  it('R1: keeps the prior id when the fresh name gained a surname (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren-ashby', name: 'Wren Ashby' }],
+      [{ characterId: 'wren-ashby', id: 1 }],
+      [{ id: 'w2', name: 'Wren', voiceState: 'locked' }],
+    );
+    expect(r.rewrites).toEqual({ 'wren-ashby': 'w2' });
+    expect(r.characters[0].id).toBe('w2');
+    expect(r.sentences[0].characterId).toBe('w2');
+  });
+
+  it('R2: keeps the prior id when the fresh name lost a surname (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren', name: 'Wren' }],
+      [{ characterId: 'wren', id: 1 }],
+      [{ id: 'w2', name: 'Wren Ashby' }],
+    );
+    expect(r.rewrites).toEqual({ wren: 'w2' });
+    expect(r.characters[0].id).toBe('w2');
+    expect(r.sentences[0].characterId).toBe('w2');
+  });
+
+  it('R3: remaps an unpinned linked prior row with no voiceId (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren-ashby', name: 'Wren Ashby' }],
+      [{ characterId: 'wren-ashby', id: 1 }],
+      [
+        {
+          id: 'w2',
+          name: 'Wren',
+          voiceState: 'reused',
+          matchedFrom: { bookId: 'book-1', characterId: 'wren', bookTitle: 'One', confidence: 1 },
+        },
+      ],
+    );
+    expect(r.rewrites).toEqual({ 'wren-ashby': 'w2' });
+    expect(r.characters[0].id).toBe('w2');
+    expect(r.sentences[0].characterId).toBe('w2');
+  });
+
+  it('R4: claim-once refuses a prior row claimed by two tolerant keys (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [
+        { id: 'brann-weir', name: 'Brann Weir' },
+        { id: 'brann-cole', name: 'Brann Cole' },
+      ],
+      [],
+      [{ id: 'brann', name: 'Brann' }],
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('R5: an exact pair is preferred over a tolerant pair on the same prior row (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [
+        { id: 'b1', name: 'Brann' },
+        { id: 'b2', name: 'Brann Weir' },
+      ],
+      [],
+      [{ id: 'brann', name: 'Brann' }],
+    );
+    expect(r.rewrites).toEqual({ b1: 'brann' });
+  });
+
+  it('R6: two unvoiced tolerant candidates stay ambiguous (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren', name: 'Wren' }],
+      [],
+      [
+        { id: 'wa', name: 'Wren Ashby' },
+        { id: 'wc', name: 'Wren Cole' },
+      ],
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('R7: a voiced prior row wins a shared exact name (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'alden-fresh', name: 'Alden' }],
+      [],
+      [
+        { id: 'alden-locked', name: 'Alden', voiceState: 'locked' },
+        { id: 'alden-plain', name: 'Alden' },
+      ],
+    );
+    expect(r.rewrites).toEqual({ 'alden-fresh': 'alden-locked' });
+  });
+
+  it('R7 tolerant: a voiced prior row wins a shared tolerant name (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'alden-vane', name: 'Alden Vane' }],
+      [],
+      [
+        { id: 'alden-locked', name: 'Alden', voiceState: 'locked' },
+        { id: 'alden-plain', name: 'Alden' },
+      ],
+    );
+    expect(r.rewrites).toEqual({ 'alden-vane': 'alden-locked' });
+  });
+
+  it('R8: a same-book notLinkedTo edge blocks the tolerant join (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren-ashby', name: 'Wren Ashby' }],
+      [],
+      [
+        {
+          id: 'w2',
+          name: 'Wren',
+          notLinkedTo: [{ bookId: 'book-2', characterId: 'wren-ashby' }],
+        },
+      ],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('R9: a reserved prior id is never adopted by the tolerant join (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'timkin-reed', name: 'Timkin Reed' }],
+      [],
+      [{ id: 'unknown-male', name: 'Timkin' }],
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('R10: two trailing tokens apart never joins (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'wren-ashby-cole', name: 'Wren Ashby Cole' }],
+      [],
+      [{ id: 'w2', name: 'Wren' }],
+    );
+    expect(r.rewrites).toEqual({});
+  });
 });
