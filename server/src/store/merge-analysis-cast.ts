@@ -139,7 +139,8 @@ export function voicedSurvivorsDropped(
 }
 
 /** Overlay the existing cast's voice-design fields onto the freshly-analysed
-    roster (matched by `id`, with a same-name fallback for analyzer id drift),
+    roster (matched by `id`, with a same-name fallback for the joins the id
+    remap refused, chiefly a reserved prior id),
     union aliases, and re-add voiced characters the fresh roster dropped.
     Returns a new array plus the id retirements the name-fallback performed
     (a dropped-by-id existing row matched to a differently-id'd fresh row);
@@ -223,7 +224,12 @@ function mergeCore<T extends { id: string }>(
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
     typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
 
-  /* Name-fallback for analyzer id drift. The analyzer is non-deterministic about
+  /* Name-fallback for the joins `remapFreshToPriorIds` refused. The id drift
+     itself is handled before this code runs: the remap keeps the PRIOR id
+     for an exact or surname-tolerant name join (#3954), so a fresh row
+     arrives here already under the prior id and joins by id. What reaches
+     this fallback is a join the remap declined, chiefly a reserved prior id
+     (a bucket such as `unknown-male` is never the survivor). The analyzer is non-deterministic about
      a character's id across runs (it relabelled the dragon `coalfall` →
      `coalfall-dragon` between two analyses of the same book). The id-keyed
      overlay then misses: a voiced dropped row would come back voiceless AND
@@ -434,10 +440,11 @@ function mergeCore<T extends { id: string }>(
     const merged = { ...(f as Record<string, unknown>) };
     // #3920: the merge must apply the #3842 owner rule — no voice match,
     // automatic or manual, replaces a voice the user locked or tuned. A
-    // locked or tuned character WITH AN ASSIGNED VOICE (a voiceId) keeps it
-    // whole; one with no voiceId still keys its voice on its id, so a name
-    // join that changes the id changes the voice (pre-existing, tracked in
-    // #3954). The assigned voice is therefore taken whole from the prior row:
+    // locked or tuned character keeps its voice whole, with or without an
+    // assigned voice (a voiceId): a row with no voiceId keys its voice on its
+    // id, and the id remap keeps the prior id through an exact or
+    // surname-tolerant name join (#3954), so that key holds. The voice is
+    // taken whole from the prior row:
     // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
     // key it lacks is deleted, so nothing the series linker stamped onto the
     // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
