@@ -74,91 +74,28 @@
        re-export would not be detected;
      - template-literal `${...}` JSON bodies, skipped whole as opaque. */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  collectTestFiles,
+  computeTokenOpaqueRanges,
+  isOpaqueInTokenRanges,
+  opaqueRangeAt,
+  skipOpaqueToken,
+} from '../test-utils/guard-scan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 
-/** Every `*.test.ts` file under `server/src`, recursively — the complement
-    of state-language.guard.test.ts's `collectSourceFiles`. */
-function collectTestFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectTestFiles(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-/** If `src[i]` opens a string/template literal or a line/block comment,
-    return the index just past its end. Duplicated behaviourally from
-    state-language.guard.test.ts / cast-lock.guard.test.ts. */
-function skipOpaqueToken(src: string, i: number): number {
-  const n = src.length;
-  const ch = src[i];
-  if (ch === '"' || ch === "'" || ch === '`') {
-    const quote = ch;
-    let j = i + 1;
-    while (j < n) {
-      if (src[j] === '\\') {
-        j += 2;
-        continue;
-      }
-      if (src[j] === quote) {
-        j++;
-        break;
-      }
-      j++;
-    }
-    return j;
-  }
-  if (ch === '/' && src[i + 1] === '/') {
-    let j = i + 2;
-    while (j < n && src[j] !== '\n') j++;
-    return j;
-  }
-  if (ch === '/' && src[i + 1] === '*') {
-    let j = i + 2;
-    while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
-    j += 2;
-    return j;
-  }
-  return -1;
-}
+// The test-file walker and the token-skipping opaque-range scanner live in
+// ../test-utils/guard-scan.ts (#3685); this guard no longer carries its own copy.
 
 interface Range {
   start: number;
   end: number;
 }
 
-function computeOpaqueRanges(content: string): Range[] {
-  const ranges: Range[] = [];
-  const n = content.length;
-  let i = 0;
-  while (i < n) {
-    const skip = skipOpaqueToken(content, i);
-    if (skip !== -1) {
-      ranges.push({ start: i, end: skip });
-      i = skip;
-      continue;
-    }
-    i++;
-  }
-  return ranges;
-}
-
-function opaqueRangeAt(ranges: Range[], index: number): Range | undefined {
-  return ranges.find((r) => index >= r.start && index < r.end);
-}
-
-function isOpaque(ranges: Range[], index: number): boolean {
-  return opaqueRangeAt(ranges, index) !== undefined;
-}
 
 /** Classify every `{` in `content` as an object-literal opener ('obj') or a
     block-statement opener ('block'), from the last significant (non-opaque,
@@ -296,7 +233,7 @@ function findDoMockSpans(content: string, opaque: Range[]): Range[] {
   const re = /\bvi\.doMock\(/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content))) {
-    if (isOpaque(opaque, m.index)) continue;
+    if (isOpaqueInTokenRanges(opaque, m.index)) continue;
     let depth = 1;
     let i = m.index + m[0].length;
     const n = content.length;
@@ -322,7 +259,7 @@ function fileIsGated(content: string, opaque: Range[]): boolean {
   GATE_SIGNAL_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = GATE_SIGNAL_RE.exec(content))) {
-    if (isOpaque(opaque, m.index)) continue;
+    if (isOpaqueInTokenRanges(opaque, m.index)) continue;
     if (mockSpans.some((s) => m!.index >= s.start && m!.index < s.end)) continue;
     return true;
   }
@@ -365,7 +302,7 @@ describe('state.json test-fixture language — static guard (#2246 B1 root cause
     for (const file of files) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
       const content = readFileSync(file, 'utf8');
-      const opaque = computeOpaqueRanges(content);
+      const opaque = computeTokenOpaqueRanges(content);
       if (!fileIsGated(content, opaque)) continue;
       gatedFileCount++;
 

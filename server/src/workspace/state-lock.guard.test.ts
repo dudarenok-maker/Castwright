@@ -55,10 +55,11 @@
    without touching the tree. */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
+import { collectSourceFiles } from '../test-utils/guard-scan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
@@ -104,17 +105,6 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
     why: 'render finalize: holds only the state-json leaf lock, not the book lock, so its stamp can land on a chapter id a concurrent restructure just renumbered (design owed, #3625; the lost-stamp half was fixed by #3700).',
   },
 };
-
-function collectSourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) collectSourceFiles(full, out);
-    else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
-}
 
 interface Hit {
   line: number;
