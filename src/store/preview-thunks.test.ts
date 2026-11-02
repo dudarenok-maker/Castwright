@@ -76,6 +76,24 @@ describe('approvePreviewSideEffects (plan 286)', () => {
     const [entries] = enqueueBodies();
     expect(entries.map((e: { bookId: string; chapterId: number }) => [e.bookId, e.chapterId])).toEqual([['A', 2], ['A', 3]]);
   });
+  it('#3919 — leaves a chapter excluded since the preview started out of the fan-out and the log', async () => {
+    const store = makeStore('A');
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('A'));
+    store.dispatch(chaptersSlice.actions.setChapters([{ id: 1 }, { id: 2, excluded: true }, { id: 3 }] as never));
+    await store.dispatch(approvePreviewSideEffects(PREVIEW({ remainingChapterIds: [2, 3] })));
+    const [entries] = enqueueBodies();
+    expect(entries.map((e: { chapterId: number }) => e.chapterId)).toEqual([3]);
+    const ev = store.getState().changeLog.events.find((e) => e.type === 'regenerate');
+    expect(JSON.stringify(ev)).not.toContain('3 chapters');
+  });
+  it('#3919 — does nothing past the clear when every remaining chapter is excluded', async () => {
+    const store = makeStore('A');
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('A'));
+    store.dispatch(chaptersSlice.actions.setChapters([{ id: 1 }, { id: 2, excluded: true }] as never));
+    await store.dispatch(approvePreviewSideEffects(PREVIEW({ remainingChapterIds: [2] })));
+    expect(enqueueBodies()).toHaveLength(0);
+    expect((store.getState().ui.stage as { view?: string }).view).not.toBe('generate');
+  });
   it('a preview for another book fans out to THAT book and does not switch the view', async () => {
     const store = makeStore('B');
     const viewBefore = (store.getState().ui.stage as { view?: string }).view;

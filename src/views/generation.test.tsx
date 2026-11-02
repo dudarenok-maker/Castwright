@@ -3517,6 +3517,25 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().ui.previewRegen).not.toBeNull();
   });
 
+  it('#3919 excluding a chapter a preview would fan out to drops it from the preview', async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 1,
+        remainingChapterIds: [2, 3],
+        reason: 'voice',
+        note: '',
+        bookId: 'b1',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen?.remainingChapterIds).toEqual([3]);
+  });
+
   it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
     const message = 'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.';
     const store = makeIncludeStore();

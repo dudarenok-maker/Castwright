@@ -640,6 +640,10 @@ export function GenerationView({
            server skips an excluded chapter), so the rest would never fan out,
            silently. Drop it and say so. */
         const pv = store.getState().ui.previewRegen;
+        if (pv && pv.bookId === bookId && pv.remainingChapterIds.includes(chapterId)) {
+          // The approve fan-out reads the live slices only for the open book.
+          dispatch(uiActions.setPreviewRegen({ ...pv, remainingChapterIds: pv.remainingChapterIds.filter((id) => id !== chapterId) }));
+        }
         if (pv && pv.bookId === bookId && pv.previewChapterId === chapterId) {
           dispatch(uiActions.clearPreviewForBook(bookId));
           dispatch(
