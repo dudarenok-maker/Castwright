@@ -30,6 +30,8 @@ import {
   dedupeRosterByName,
   stripEstablishedAsciiRewrites,
 } from '../analyzer/roster-dedup.js';
+import { toVoiceLike } from '../tts/synthesise-chapter.js';
+import { qwenStorageKey } from '../tts/voice-mapping.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
 
 const AUTHOR = 'A';
@@ -860,11 +862,13 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(linked.overrideTtsVoices?.qwen?.name).toBe('voice_wren');
     expect(linked.voiceState).toBe('reused');
 
-    /* The merge takes the pinned prior voice WHOLE: every preserved field the
-       prior row has is copied, every field it lacks is deleted, so nothing
-       the linker stamped survives the join (merge-analysis-cast.ts, the
-       #3920 child-1 pinned overlay). */
-    const wren = merged.find((c) => c.id === 'wren-ashby');
+    /* Child 1 (#3954) keeps the PRIOR id across the surname join, so the
+       merged row is found under 'wren' (the voice-key tests below pin why
+       that matters). The merge takes the pinned prior voice WHOLE: every
+       preserved field the prior row has is copied, every field it lacks is
+       deleted, so nothing the linker stamped survives the join
+       (merge-analysis-cast.ts, the #3920 child-1 pinned overlay). */
+    const wren = merged.find((c) => c.id === 'wren');
     expect(wren).toBeTruthy();
     expect(wren?.voiceId).toBe('v_mine');
     expect(wren?.voiceState).toBe(voiceState);
@@ -881,6 +885,139 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
 
   it('surname drift, tuned variant: same whole-voice outcome', async () => {
     await surnameDrift('tuned');
+  });
+
+  /* #3954 child 2 — both no-voiceId shapes the owner named. A row with no
+     voiceId still keys its voice on its id (toVoiceLike: voiceId ?? id, and
+     qwenStorageKey likewise), so the voice only holds across a surname join
+     if the join keeps the PRIOR id. Child 1's remap does that before the
+     merge; these pin it end to end through runReAnalysis — the merged row,
+     the sentence rewrite, and the voice-key derivation the synth path uses. */
+  it('#3954 S1: a locked prior row with no voiceId keeps the prior id, so the voice key holds through the join', async () => {
+    const prior: PriorRow[] = [
+      { id: 'w2', name: 'Wren', gender: 'female', ageRange: 'teen', voiceState: 'locked' },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren-ashby', name: 'Wren Ashby', gender: 'female', ageRange: 'teen' },
+    ];
+    const { merged, remappedSentences } = await runReAnalysis(
+      prior,
+      fresh,
+      routeOptions(PRIOR_LIBRARY),
+      undefined,
+      [{ characterId: 'wren-ashby' }],
+    );
+
+    /* Exactly one row for this character, under the prior id, still locked
+       and still without a voiceId — the voice key is the id, and it did not
+       move. */
+    const rows = merged.filter((c) => c.id === 'w2' || c.id === 'wren-ashby');
+    expect(rows).toHaveLength(1);
+    const row = rows[0] as LinkableCharacter;
+    expect(row.id).toBe('w2');
+    expect(row.voiceState).toBe('locked');
+    expect(row.voiceId).toBeUndefined();
+    expect(row.matchedFrom).toBeUndefined();
+
+    /* The sentence the analyzer minted under the fresh id is rewritten onto
+       the prior id together with the roster. */
+    expect(remappedSentences[0]?.characterId).toBe('w2');
+
+    /* The voice key the synth path derives is unchanged: the same VoiceLike
+       id as the prior row, the same qwen storage key. */
+    expect(toVoiceLike(row).id).toBe(toVoiceLike(prior[0] as never).id);
+    expect(qwenStorageKey(row, row.id)).toBe('qwen-w2');
+  });
+
+  it('#3954 S2: an unpinned linked prior row with no voiceId keeps the prior id, the voice key and its own matchedFrom', async () => {
+    /* The cast-add-from-roster shape: voiceState 'reused', a matchedFrom of
+       its own, and no voiceId (target.voiceId can be undefined there). */
+    const matchedFrom = {
+      bookId: BOOK1,
+      characterId: 'wren',
+      bookTitle: 'Book One',
+      confidence: 1,
+    };
+    const prior: PriorRow[] = [{ id: 'w2', name: 'Wren', voiceState: 'reused', matchedFrom }];
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren-ashby', name: 'Wren Ashby', gender: 'female', ageRange: 'teen' },
+    ];
+    const { merged, remappedSentences } = await runReAnalysis(
+      prior,
+      fresh,
+      routeOptions(PRIOR_LIBRARY),
+      undefined,
+      [{ characterId: 'wren-ashby' }],
+    );
+
+    const rows = merged.filter((c) => c.id === 'w2' || c.id === 'wren-ashby');
+    expect(rows).toHaveLength(1);
+    const row = rows[0] as LinkableCharacter;
+    expect(row.id).toBe('w2');
+    expect(row.voiceState).toBe('reused');
+    expect(row.voiceId).toBeUndefined();
+    /* The prior row's own link is the one that survives (the pinned overlay
+       takes a matchedFrom row whole), not the one the linker stamped onto
+       the fresh row. */
+    expect(row.matchedFrom).toEqual(matchedFrom);
+    expect(remappedSentences[0]?.characterId).toBe('w2');
+    expect(toVoiceLike(row).id).toBe(toVoiceLike(prior[0] as never).id);
+    expect(qwenStorageKey(row, row.id)).toBe('qwen-w2');
+  });
+
+  it('#3954 S2, two-row variant: among two surname-tolerant prior candidates the reused row is the one chosen', async () => {
+    /* The voiced-row selection rule, exercised end to end: with one reused
+       and one unvoiced candidate both surname-tolerant-matching the fresh
+       name, the reused row wins the remap and the fresh id still retires
+       onto the prior one. */
+    const matchedFrom = {
+      bookId: BOOK1,
+      characterId: 'wren',
+      bookTitle: 'Book One',
+      confidence: 1,
+    };
+    const prior: PriorRow[] = [
+      { id: 'w2', name: 'Wren', voiceState: 'reused', matchedFrom },
+      { id: 'w3', name: 'Wren', voiceState: 'generated' },
+    ];
+    const fresh: LinkableCharacter[] = [
+      { id: 'wren-ashby', name: 'Wren Ashby', gender: 'female', ageRange: 'teen' },
+    ];
+    const { merged, remappedSentences } = await runReAnalysis(
+      prior,
+      fresh,
+      routeOptions(PRIOR_LIBRARY),
+      undefined,
+      [{ characterId: 'wren-ashby' }],
+    );
+
+    expect(remappedSentences[0]?.characterId).toBe('w2');
+    expect(merged.find((c) => c.id === 'wren-ashby')).toBeUndefined();
+    const row = merged.find((c) => c.id === 'w2') as LinkableCharacter;
+    expect(row.voiceState).toBe('reused');
+    expect(row.voiceId).toBeUndefined();
+    expect(row.matchedFrom).toEqual(matchedFrom);
+  });
+
+  it('#3954 S3: a reserved prior id keeps today\'s direction end to end — the fresh id survives, never the bucket', async () => {
+    /* The remap refuses a reserved bucket id (isReservedId), so the name
+       join falls through to mergeCore's fallback, which retires the dropped
+       bucket row and the fresh id wins — the #2584 F2 direction, unchanged. */
+    const prior: PriorRow[] = [{ id: 'unknown-male', name: 'Timkin', voiceState: 'tuned' }];
+    const fresh: LinkableCharacter[] = [{ id: 'timkin', name: 'Timkin' }];
+    const { merged, remappedSentences } = await runReAnalysis(
+      prior,
+      fresh,
+      routeOptions(PRIOR_LIBRARY),
+      undefined,
+      [{ characterId: 'timkin' }],
+    );
+
+    const rows = merged.filter((c) => c.name === 'Timkin');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe('timkin');
+    expect(merged.find((c) => c.id === 'unknown-male')).toBeUndefined();
+    expect(remappedSentences[0]?.characterId).toBe('timkin');
   });
 
   it('Start fresh: a locked row whose voice equals Book One keeps voiceId, loses matchedFrom (strip → seed → link → merge)', async () => {
@@ -1329,7 +1466,10 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     ];
     const { merged } = await runReAnalysis(prior, fresh, routeOptions(PRIOR_LIBRARY));
 
-    const wren = merged.find((c) => c.id === 'wren-ashby');
+    /* Child 1 (#3954): a generated prior row is still the sole tolerant
+       candidate, so the fresh id retires onto the prior one — look the row
+       up under 'wren'. Unpinned, so the linker's stamps survive as before. */
+    const wren = merged.find((c) => c.id === 'wren');
     expect(wren?.matchedFrom?.bookId).toBe(BOOK1);
     expect(wren?.matchedFrom?.characterId).toBe('wren');
     expect(wren?.voiceState).not.toBe('locked');
