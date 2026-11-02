@@ -99,7 +99,8 @@ export function RestructureView({ bookId }: Props) {
       /* The user may have opened another book while the re-read was in flight;
          the hydrate's sequence guard only orders same-book reads, so adopt only
          while this book is still the open one (same guard as refetchActiveRevisions). */
-      if (fresh && activeBookId(store.getState()) === bookId) {
+      const adoptedFresh = !!fresh && activeBookId(store.getState()) === bookId;
+      if (fresh && adoptedFresh) {
         /* #3400 — the server drops A/B entries for the touched chapters, so
            adopt its revisions through the same sequence-guarded hydrate book
            open uses; otherwise the dropped entries linger until the next poll. */
@@ -133,7 +134,6 @@ export function RestructureView({ bookId }: Props) {
             characters: store.getState().cast.characters,
           }),
         );
-        dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
       }
       /* Same cross-book rule for the remap: it rewrites (and drops unmapped)
          whatever sentences the slice holds, so apply it only while the slice
@@ -146,17 +146,24 @@ export function RestructureView({ bookId }: Props) {
          in-place write (emotion detection, bulk-reassign Undo) replaces the
          array but still holds the pre-restructure keys, which need the remap. */
       const after = store.getState();
-      if (
+      const remapped =
         activeBookId(after) === bookId &&
         after.manuscript.bookId === bookId &&
-        (after.manuscript.hydrateSeq ?? 0) === hydrateSeqAtStart
-      ) {
+        (after.manuscript.hydrateSeq ?? 0) === hydrateSeqAtStart;
+      if (remapped) {
         dispatch(
           manuscriptActions.applyChapterRestructure({
             sentenceRemap: res.sentenceRemap ?? [],
           }),
         );
       }
+      /* #3967 — the mark is per book and writes no slice, so it must not sit behind the
+         guards above that stop a cross-book slice write (leaving the book dropped it, and
+         reopening then read revisions only and showed the pre-restructure list). Mark
+         whenever the slices did not take this restructure: no fresh read adopted
+         (expired, empty, or the book no longer on screen), or a remap skipped because a
+         hydrate landed meanwhile. Layout's retrying full read then repairs the rest. */
+      if (!adoptedFresh || !remapped) dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
       // Refresh library so the Listen view's chapter card and the
       // generation queue pick up the new structure on next render.
       const lib = await within(api.getLibrary(), BOOK_READ_TIMEOUT_MS, timers).catch(() => null);
