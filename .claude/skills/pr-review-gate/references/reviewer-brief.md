@@ -872,6 +872,18 @@ recite:
     :1793-1794, first await at :1909); an await ahead of the spawn would
     break it, so check for one.
 
+66. **Copies merged into one shared module, their drift test retired, and
+    nothing left that goes red on an edit to the shared lines** — PR #4011
+    pass 1 (#3685): the per-guard copies of a tokenizer were byte-identical
+    by test, and that drift test was the only thing that went red when a
+    copied line changed. Unifying them deleted the test and left the shared
+    module's lines deletable with every suite green; pass 3 found three more
+    survivors (a family swap, a dropped bound, a comment scan starting one
+    character early). Checkable: when copies are merged and their drift test
+    retired, delete each branch of the shared version in turn (and swap each
+    sibling-family call) and confirm a direct test goes red; add the case
+    for any that survives.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
