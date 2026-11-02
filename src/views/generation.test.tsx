@@ -3517,6 +3517,26 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().ui.previewRegen).not.toBeNull();
   });
 
+  it("#3919 excluding a chapter leaves another book's preview of the same chapter id alone", async () => {
+    const store = makeIncludeStore();
+    store.dispatch(
+      uiActions.setPreviewRegen({
+        characterId: 'marlow',
+        previewChapterId: 2,
+        remainingChapterIds: [3],
+        reason: 'voice',
+        note: '',
+        bookId: 'other-book',
+      }),
+    );
+    renderInclude(store);
+    fireEvent.click(screen.getByText('Chapter 2'));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
+    await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
+    expect(store.getState().ui.previewRegen).toMatchObject({ bookId: 'other-book', remainingChapterIds: [3] });
+    expect(store.getState().notifications.toasts).toEqual([]);
+  });
+
   it('#3919 excluding a chapter a preview would fan out to drops it from the preview', async () => {
     const store = makeIncludeStore();
     store.dispatch(
