@@ -499,7 +499,7 @@ describe('RestructureView — #3400 restructure flag', () => {
       const store = makeStore();
       const OLD = [1, 2, 3, 4].map((id) => ({ id, title: `Old ${id}`, slug: `old-${id}`, duration: '', state: 'done' }));
       const NEW = [
-        { id: 1, title: 'Old 1', slug: 'old-1' },
+        { id: 1, title: 'Old 1', slug: 'old-1', audioRenderedAt: '2026-01-01T00:00:00Z' },
         { id: 2, title: 'Old 2', slug: 'old-2' },
         { id: 3, title: 'Old 4', slug: 'old-4' },
       ];
@@ -528,6 +528,8 @@ describe('RestructureView — #3400 restructure flag', () => {
       });
       await waitFor(() => expect(flag(store)).toBeNull());
       expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+      /* A chapter whose audio the response records as rendered stays done, not Queued. */
+      expect(store.getState().chapters.chapters.map((c) => c.state === 'done')).toEqual([true, false, false]);
       expect(screen.getByTestId('restructure-merge-button').textContent).not.toMatch(/\(2\)/);
       /* The rest of the book's state is repaired by Layout's retrying full read. */
       expect(store.getState().bookMeta.needsFullRead?.['b1']).toBeGreaterThan(0);
@@ -602,6 +604,8 @@ describe('RestructureView — #3967 the book is marked whenever the slices did n
       const store = makeStore();
       await mergeThenLeave(store, 9_999_999);
       expect(mark(store)).toBe(1);
+      /* the response's list is not adopted into a book that is no longer open */
+      expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
     } finally {
       vi.useRealTimers();
     }

@@ -122,13 +122,19 @@ describe('readWithRetry', () => {
 
   it('aborting an in-flight read aborts its request and neither retries nor reports an expiry', async () => {
     /* A read that ignores its signal, so only the helper's own guard stops the expiry from retrying. */
-    const read = vi.fn(() => new Promise<never>(() => {}));
+    const signals: AbortSignal[] = [];
+    const read = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<never>(() => {});
+    });
     const onExpire = vi.fn();
     const outer = new AbortController();
     const p = readWithRetry(read, outer.signal, new Set(), onExpire);
     const settled = p.catch((e) => e);
     await vi.advanceTimersByTimeAsync(5000);
+    expect(signals[0]!.aborted).toBe(false);
     outer.abort();
+    expect(signals[0]!.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(300000);
     expect(read).toHaveBeenCalledTimes(1);
     expect(onExpire).not.toHaveBeenCalled();

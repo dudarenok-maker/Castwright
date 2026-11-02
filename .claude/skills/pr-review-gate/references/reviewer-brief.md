@@ -894,6 +894,20 @@ recite:
     sibling-family call) and confirm a direct test goes red; add the case
     for any that survives.
 
+67. **A per-book mark placed inside a cross-book slice-write guard** — PR #4008
+    pass 3 (#3967): Restructure's `markNeedsFullRead` sat inside the
+    `activeBookId === bookId` check that exists to stop a late result being
+    written into another book's slices. The mark is per book and writes no
+    slice, so it was dropped exactly when the user left the book, and
+    reopening then read revisions only and showed the pre-restructure list
+    (a second merge of the same ids swallowed the next chapter). The same
+    mark was also missing when a hydrate landed mid-request and the remap was
+    skipped. Checkable: for every guard that exists to stop a cross-book slice
+    write, list what else is inside it; anything keyed by book id that writes
+    no slice (a mark, a flag, a cache entry) belongs outside it. Then drive
+    the guard's false branch (leave the book before the read settles, once
+    with a hang and once with a prompt answer) and assert the mark.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

@@ -6,8 +6,8 @@ const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
 export const BOOK_READ_TIMEOUT_MS = 15000;
 const BOOK_READ_TIMEOUT_MAX_MS = 60000;
 /** The per-attempt bound: 15 s on the first attempt, doubling to a 60 s cap, so a read that
-    takes longer than 15 s every time still lands on a later attempt instead of being
-    aborted a second before it would answer. */
+    takes longer than 15 s (up to 60 s) every time still lands on a later attempt instead of
+    being aborted a second before it would answer. A read slower than the 60 s cap never lands. */
 export const attemptBoundMs = (attempt: number) =>
   Math.min(BOOK_READ_TIMEOUT_MS * 2 ** attempt, BOOK_READ_TIMEOUT_MAX_MS);
 export const retryDelayMs = (attempt: number) =>
@@ -24,8 +24,9 @@ export class ReadTimeoutError extends Error {
 /* #3967 — a bounded book-state read that retries an EXPIRED attempt on the
    hydrate's schedule (retryDelayMs) until it lands: the late answer a bare
    `within` gave up on is not lost for good. The bound grows per attempt
-   (attemptBoundMs), so a read slower than 15 s every time lands too; the first
-   attempt is still aborted at 15 s. `onExpire` fires on each expiry
+   (attemptBoundMs), so a read slower than 15 s every time lands too, up to the 60 s
+   cap (a read slower than 60 s never lands); the first attempt is still aborted at
+   15 s. `onExpire` fires on each expiry
    (attempt index). Aborting `outer` — the caller's cleanup — aborts the
    in-flight read, cancels the pending retry timer, and rejects with an
    AbortError; a non-timeout rejection passes through unretried. */
