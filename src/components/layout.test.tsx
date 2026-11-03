@@ -23,10 +23,10 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { revisionsSlice } from '../store/revisions-slice';
-import { manuscriptSlice } from '../store/manuscript-slice';
+import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { changeLogSlice } from '../store/change-log-slice';
+import { changeLogSlice, changeLogActions } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { exportsSlice } from '../store/exports-slice';
@@ -5732,6 +5732,45 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     expect(server.castPuts).toBe(1);
   });
 
+  /* PR #4004 pass 4, finding 2: a save queued while the full read that commits the token is out was built
+     from the stale slices; the commit must not arm it. One per non-cast slice, through the real
+     middleware, `bookFetch` and Layout, and asserted on the wire (the token each PUT carried). */
+  it.each([
+    ['manuscript', () => manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' })],
+    ['changeLog', () => changeLogActions.wipeBookShapeEvents()],
+    ['state', () => uiActions.confirmCast()],
+  ] as const)(
+    'a %s save queued in the last 500 ms of the committing full read is never sent with the token',
+    async (slice, action) => {
+      const { server, store } = await openLoserTab();
+      sweep(server);
+      server.readDelay = 1500;
+      server.puts.length = 0;
+      /* A cast edit is refused: the handler marks the book and Layout's full read goes out. */
+      act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
+      await settle(1700);
+      expect(server.puts).toEqual([{ slice: 'cast', token: null, status: 409 }]);
+      act(() => { store.dispatch(action() as never); }); // ~100 ms before the read lands
+      await settle(1500);
+      await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']), { timeout: 6000 });
+      await settle(900);
+      expect(server.puts.filter((p) => p.slice === slice && p.status === 200)).toEqual([]);
+      expect(server.cast).toEqual(WINNER);
+    },
+  );
+
+  it('CONTROL: a save queued after the full read landed carries the token and lands', async () => {
+    const { server, store } = await openLoserTab();
+    sweep(server);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
+    await settle(900);
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
+    server.puts.length = 0;
+    act(() => { store.dispatch(changeLogActions.wipeBookShapeEvents()); });
+    await settle(900);
+    expect(server.puts).toEqual([{ slice: 'changeLog', token: 'tok', status: 200 }]);
+  });
+
   it('a stale Library row: Delete on the repaired id is refused, deletes nothing, and tells the user', async () => {
     const { server, store } = await openLoserTab();
     act(() => { store.dispatch(uiActions.goHome()); });
@@ -5756,16 +5795,20 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     return () => seen.filter((a) => a.type === 'persistence/dropRetained' && a.onFullRead && a.payload === PREV);
   };
 
-  it('the full read of a repaired id drops kept saves including based state ones, before committing the token', async () => {
+  it('the full read of a repaired id commits the token without arming a save queued before it, and asks for the drop', async () => {
     const server = fakeServer();
     server.gated = true;
+    server.readDelay = 600;
     const store = makeStoreWithScopeAndPersistence();
     installRepairedBookHandler(store);
     const drops = droppedOnRead(store);
     renderWithLibrary(store);
     act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
-    await settle();
+    await settle(400);
+    act(() => { store.dispatch(uiActions.confirmCast()); }); // queued; its timer fires after the read lands
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']), { timeout: 3000 });
+    await settle(900);
+    expect(server.puts.filter((p) => p.status === 200)).toEqual([]);
     expect(drops().length).toBeGreaterThan(0);
     expect(drops().every((a) => a.dropBased === true)).toBe(true);
   });

@@ -2838,6 +2838,50 @@ describe('a repaired book (#3713)', () => {
     err.mockRestore();
   });
 
+  /* PR #4004 pass 4, finding 2: `dropQueued` — what a token commit asks for — also cancels what is
+     queued behind a debounce timer or waiting out a retry, not only an idle kept save. */
+  describe('dropQueued', () => {
+    const edit = (store: ReturnType<typeof makeReduxStore>) =>
+      store.dispatch(uiActions.confirmCast());
+
+    it('cancels a save still behind its debounce timer', async () => {
+      const store = makeReduxStore();
+      edit(store);
+      store.dispatch(dropRetainedSaves('b1', true, true, true) as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(putBookState).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: without dropQueued the same queued save is still sent', async () => {
+      const store = makeReduxStore();
+      edit(store);
+      store.dispatch(dropRetainedSaves('b1', true, true) as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(putBookState).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops a save waiting out a transport-failure retry from being re-sent', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      putBookState.mockRejectedValue(new Error('network down'));
+      const store = makeReduxStore();
+      edit(store);
+      await vi.advanceTimersByTimeAsync(600); // first attempt fails, the +1 s retry is pending
+      expect(putBookState).toHaveBeenCalledTimes(1);
+      store.dispatch(dropRetainedSaves('b1', true, true, true) as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(putBookState).toHaveBeenCalledTimes(1);
+      err.mockRestore();
+    });
+
+    it('another book is untouched', async () => {
+      const store = makeReduxStore();
+      edit(store);
+      store.dispatch(dropRetainedSaves('some-other-book', true, true, true) as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(putBookState).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('a rebind of the open book keeps its uncommitted details draft; opening another book still clears it', () => {
     const store = makeBookMetaStore();
     store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed' }));

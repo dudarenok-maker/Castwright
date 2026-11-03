@@ -130,7 +130,13 @@ describe('the repaired-book handler (#3713)', () => {
     await bookFetch('/api/books/b1', { method: 'DELETE' });
     await flush();
     await flush();
-    expect(seen).toContainEqual({ type: 'persistence/dropRetained', payload: 'b1', onFullRead: true, dropBased: true });
+    expect(seen).toContainEqual({
+      type: 'persistence/dropRetained',
+      payload: 'b1',
+      onFullRead: true,
+      dropBased: true,
+      dropQueued: true,
+    });
   });
 
   /* PR #4004 pass 4, finding 1: the token vouches for what the slices hold, so slices still holding

@@ -65,7 +65,7 @@ export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getS
         if (held === bookId) resetBookSlices(store.dispatch, bookId);
         /* A save the middleware kept from before this commit was made without the token: the
            commit must not arm it (a based `state` save included). */
-        store.dispatch(dropRetainedSaves(bookId, true, true));
+        store.dispatch(dropRetainedSaves(bookId, true, true, true));
         commitBookReadToken(bookId);
       })
       .catch((err) => console.warn('[repaired-book] re-read failed', err));

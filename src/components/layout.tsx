@@ -1103,6 +1103,10 @@ export function Layout() {
             );
             /* #3713 — the slices now ARE this book's disk snapshot: the server's
                repaired-id write gate (lib/book-read-token.ts) may let their saves through. */
+            /* A save QUEUED while this read was out (a debounce timer, a retry) was built from the
+               slices the hydrate above just replaced: it must not be armed by the commit (PR #4004
+               pass 4). The screen shows the disk snapshot, so nothing visible is lost. */
+            if (hasIssuedBookReadToken(bookId)) dispatch(dropRetainedSaves(bookId, true, true, true));
             commitBookReadToken(bookId);
           }
           /* Always carry `bookId` — even when `res.revisions` is null (no
