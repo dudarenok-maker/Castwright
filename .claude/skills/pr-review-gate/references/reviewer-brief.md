@@ -908,7 +908,35 @@ recite:
     the guard's false branch (leave the book before the read settles, once
     with a hang and once with a prompt answer) and assert the mark.
 
-68. **A repair scheduled rather than applied, while the lock protecting the stale
+68. **Ids captured when a job starts, acted on later without re-checking each
+    still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
+    stored `remainingChapterIds` when it started; Approve enqueued and logged
+    them as they were, so a chapter excluded in between was regenerated into a
+    no-op, and a preview whose chapter was excluded elsewhere never fanned out
+    and said nothing. Checkable: for any list of ids stored in state, a queue
+    entry or a closure, find where it is read back and ask what can change the
+    qualifying predicate (excluded, deleted, moved, renamed) in between; each
+    such path must either re-filter at the point of use or drop the id where
+    the change happens, and a test should flip the predicate between capture
+    and use. (Numbered 68: #4006 and #4011 each held a pending 66, so 68 is taken;
+    renumber on merge if the order changes.)
+
+69. **A per-job cleanup keyed on a value its sibling jobs share** — PR #4001
+    pass 4 (#3919): a profile-change preview cancelled itself when "its"
+    queue entry finished without a review completion, but the check matched
+    on `bookId` + `chapterId`, which every queue entry for that chapter
+    shares; an ordinary regen of the same chapter, ahead of the preview's
+    own entry, cancelled a preview that had not run yet. Checkable: for any
+    cleanup, cancel or timeout that fires when a job ends, name the key it
+    matches on and list the other jobs that can carry the same key (same
+    chapter, book, character, id after a reissue); the check must key on the
+    job's own identity (its entry id, or a field only it carries), and a test
+    should finish a sibling job first and assert the cleanup does not fire.
+    Entry 55 (an id reissued after a delete) is the nearest. (Numbered 69:
+    66-68 are taken or reserved by open PRs; renumber on merge if the order
+    changes.)
+
+75. **A repair scheduled rather than applied, while the lock protecting the stale
     state is released** — PR #4008 pass 4 (#3967): when a Restructure's
     re-read expired or its remap was skipped, the fix was a mark that queues
     Layout's full read. But `applyResponse` returned, and each handler's

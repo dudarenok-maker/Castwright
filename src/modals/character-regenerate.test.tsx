@@ -34,6 +34,24 @@ describe('CharacterRegenerateModal', () => {
     expect(chips.textContent).toMatch(/CH 01preview/);
   });
 
+  it('leaves an excluded chapter out of the chips, the ETA and the confirmed ids (#3919)', () => {
+    const onConfirm = vi.fn();
+    const withExcluded = [
+      { ...ch(1, { marlow: 'done' }), excluded: true, duration: '50:00' } as Chapter,
+      ...chapters.slice(1),
+    ];
+    render(<CharacterRegenerateModal character={marlow} chapters={withExcluded} onClose={() => {}} onConfirm={onConfirm} />);
+    const chips = screen.getByTestId('regen-affected-chapters');
+    expect(chips.textContent).not.toMatch(/CH 01/);
+    expect(chips.textContent).toMatch(/CH 04preview/);
+    /* Only ch4 (10:00 × 2.5 = 25 min) counts: the 50:00 excluded chapter must
+       not inflate the ETA (it would read ≈2 h 30 min). */
+    expect(screen.getByText(/speaks in/).textContent).toMatch(/speaks in\s*1\s*chapter\b/);
+    expect(screen.getByText('≈25 min')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('regen-character-all'));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ chapterIds: [4] }));
+  });
+
   it('"Regenerate all" fires onConfirm with every affected chapter and preview:false', () => {
     const onConfirm = vi.fn();
     render(<CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
@@ -79,6 +97,13 @@ describe('CharacterRegenerateModal', () => {
       <CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />,
     );
     expect(screen.getByText('≈50 min')).toBeInTheDocument();
+  });
+
+  it('says the character speaks only in excluded chapters, not that they never speak (#3919)', () => {
+    const onlyExcluded = [{ ...ch(1, { marlow: 'done' }), excluded: true } as Chapter];
+    render(<CharacterRegenerateModal character={marlow} chapters={onlyExcluded} onClose={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByText(/only in excluded chapters/)).toBeInTheDocument();
+    expect(screen.queryByText(/doesn't speak in any chapter/)).toBeNull();
   });
 
   it('shows "—" for the ETA when the character speaks in no chapters', () => {

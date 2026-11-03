@@ -41,17 +41,26 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
        the change log, so both must name preview.bookId. The fan-out below is
        keyed on preview.bookId and is still correct cross-book. */
     const state = getState();
+    /* #3919 — the ids were captured when the preview started; a chapter
+       excluded since renders nothing, so it is neither logged nor enqueued.
+       When the slices hold another book nothing here can tell: only the
+       Generate toggle drops the id from the preview then, so the fan-out may
+       still name an excluded chapter (the server skips it). */
+    const excludedIds = state.chapters.currentBookId === preview.bookId
+      ? new Set(state.chapters.chapters.filter((c) => c.excluded).map((c) => c.id))
+      : new Set<number>();
+    const remainingChapterIds = preview.remainingChapterIds.filter((id) => !excludedIds.has(id));
     const character = activeBookId(state) === preview.bookId && state.manuscript.bookId === preview.bookId
       ? state.cast.characters.find((c) => c.id === preview.characterId)
       : undefined;
     if (character) {
       dispatch(changeLogActions.appendLogEvent(buildCharacterRegenEvent({
-        character, chapterIds: [preview.previewChapterId, ...preview.remainingChapterIds], reason: preview.reason, note: preview.note,
+        character, chapterIds: [preview.previewChapterId, ...remainingChapterIds], reason: preview.reason, note: preview.note,
       })));
     }
-    if (preview.remainingChapterIds.length === 0) return;
+    if (remainingChapterIds.length === 0) return;
     const r = rand();
-    await dispatch(enqueueQueueEntries(preview.remainingChapterIds.map((chId) => ({
+    await dispatch(enqueueQueueEntries(remainingChapterIds.map((chId) => ({
       id: `regen-rest-${preview.bookId}-${preview.characterId}-${chId}-${r}`, bookId: preview.bookId, chapterId: chId, scope: 'this' as const,
     }))));
     if (activeBookId(getState()) === preview.bookId) dispatch(uiActions.changeView('generate'));
