@@ -357,3 +357,62 @@ describe('pass-4 B — a stranded legacy follower takes its source’s uuid and 
     expect(readFileSync(join(qwenDir(), 'qwen-u_two.pt')).equals(Buffer.from('TWO-OWN-PT'))).toBe(true);
   });
 });
+
+describe('pass-4 minor — the unreadable-target refusal only fires for a book that could be the target', () => {
+  const unrelatedDir = () => join(workspaceRoot, 'books', 'Someone Else', 'Standalones', 'Unrelated');
+  function tearUnrelatedWith(state: string | null) {
+    const dir = join(unrelatedDir(), '.audiobook');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cast.json'), TORN);
+    if (state !== null) writeFileSync(join(dir, 'state.json'), state);
+  }
+  const mend = () => rmSync(join(workspaceRoot, 'books', 'Someone Else'), { recursive: true, force: true });
+  function seedDeletedTarget() {
+    seedChain();
+    rmSync(bookDir('Book Two'), { recursive: true, force: true }); // Book Three links a deleted book
+  }
+
+  it('control: a deleted target with every book readable designs', async () => {
+    seedDeletedTarget();
+    expect((await design('Book Three')).status).toBe(200);
+  });
+
+  it('a torn UNRELATED book (its state.json names another bookId) does not refuse', async () => {
+    seedDeletedTarget();
+    tearUnrelatedWith(JSON.stringify({ bookId: 'b_someone_else' }));
+    const res = await design('Book Three');
+    mend();
+    expect(res.status).toBe(200);
+  });
+
+  it('a torn book with no state.json has no bookId to be named, so it does not refuse either', async () => {
+    seedDeletedTarget();
+    tearUnrelatedWith(null);
+    const res = await design('Book Three');
+    mend();
+    expect(res.status).toBe(200);
+  });
+
+  it('failure path: a torn book whose state.json is torn too COULD be the target, so it refuses and says to try again', async () => {
+    seedDeletedTarget();
+    tearUnrelatedWith('{"bookId":');
+    const res = await design('Book Three');
+    mend();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again/);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('failure path: the torn book IS the link target (its state.json names it): refuses with the retry advice', async () => {
+    seedChain();
+    writeFileSync(castPath('Book Two'), TORN);
+    const res = await design('Book Three');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again/);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
+  });
+});

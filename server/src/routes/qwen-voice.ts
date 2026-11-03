@@ -67,6 +67,7 @@ import {
   type VoiceHolds,
   findDeclinedAncestor,
   readBookId,
+  RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
 
@@ -410,13 +411,13 @@ async function forkSharedVoice(
              overwrite the earlier book. Fail the fork; nothing has been written. */
           const unreadable = new Set(unreadableDirs);
           if (scanned.some((f) => unreadable.has(resolve(f.dir)))) {
-            throw new Error('A book in this series could not be read while the voice was being forked; try again.');
+            throw new RetryableForkError('A book in this series could not be read while the voice was being forked; try again.');
           }
           /* A follower the locks do not cover (a link that landed after the first
              scan) would be left on U while X moves to U'. Never skip it: fail the
              fork, nothing has been written, and the retry locks it. */
           if (followers.some((f) => !locked.has(resolve(f.dir)))) {
-            throw new Error('A book in this series changed while the voice was being forked; try again.');
+            throw new RetryableForkError('A book in this series changed while the voice was being forked; try again.');
           }
           const live = followers;
           for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
@@ -475,7 +476,7 @@ async function forkSharedVoice(
   }
   if (out === BOOK_GONE) {
     await cleanup();
-    throw new Error('A book in this series was removed while the voice was being forked; try again.');
+    throw new RetryableForkError('A book in this series was removed while the voice was being forked; try again.');
   }
   return out;
 }
@@ -554,7 +555,7 @@ async function forkIfSharedLocked(
       if (after.voiceUuid === uuid) {
         /* The fork did not carry this row (the link changed under us): designing
            now would write the earlier book's file, so fail rather than guess. */
-        throw new Error('The voice could not be separated from the earlier book; try again.');
+        throw new RetryableForkError('The voice could not be separated from the earlier book; try again.');
       }
       return after.voiceUuid ?? undefined;
     }
@@ -659,7 +660,7 @@ export async function ensureCharacterVoiceUuid(
           if (!after.voiceUuid) {
             /* The mint did not carry this row (the link changed under us): the series
                mint would stamp the earlier book, so fail rather than guess. */
-            throw new Error('The voice could not be separated from the earlier book; try again.');
+            throw new RetryableForkError('The voice could not be separated from the earlier book; try again.');
           }
           return after.voiceUuid;
         }
@@ -1129,6 +1130,9 @@ qwenVoiceRouter.post(
       );
     } catch (e) {
       if (e instanceof CharacterGoneError) return res.status(404).json({ error: e.message });
+      /* A fixed, path-free sentence that says a retry can work (an unreadable or
+         changing book): the user is told so instead of the generic message. */
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
       throw e;
     }
     const characterForDesign: CastCharacter = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };

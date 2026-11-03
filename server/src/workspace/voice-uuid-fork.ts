@@ -65,6 +65,16 @@ function listDirs(path: string): string[] {
   }
 }
 
+/* A failure whose message is a fixed, path-free sentence telling the user a retry
+   can work (a book was unreadable or changed under a fork). The design route
+   answers its message instead of the generic "Voice design failed.". */
+export class RetryableForkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RetryableForkError';
+  }
+}
+
 const UNREADABLE = Symbol('unreadable');
 
 /* Read ANOTHER book's cast.json for a scan. A parse error or a non-ENOENT read
@@ -254,6 +264,17 @@ export async function findLinkFollowers(
    then overwrite the earlier book. A target that is simply absent (a deleted
    book, with every other book readable) ends the walk as it always did. Writes
    nothing and takes no lock. */
+async function couldBeUnreadable(dirs: string[], bookId: string): Promise<boolean> {
+  for (const dir of dirs) {
+    try {
+      if ((await readBookId(dir)) === bookId) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type DeclinedAncestor = { dir: string; characterId: string } | { voiceUuid: string } | null;
 
 export async function findDeclinedAncestor(
@@ -269,15 +290,18 @@ export async function findDeclinedAncestor(
      walk applies with the legacy reading of "holds" and of "must mint apart". */
   const uuid = character.voiceUuid;
   const holds = uuid ? holdsUuid(uuid) : holdsLegacyKey(character.voiceId ?? character.id);
-  const { books, unreadable } = await loadOtherBooks(resolve(bookDir));
+  const { books, unreadable, unreadableDirs } = await loadOtherBooks(resolve(bookDir));
   const visited = new Set<string>([rowKey(bookDir, character.id)]);
   let mf = character.matchedFrom as MatchedFrom;
   let walkerId = character.id;
   while (mf?.bookId) {
     const target = books.find((b) => b.bookId === mf?.bookId);
     if (!target) {
-      if (unreadable) {
-        throw new Error('A book in this series could not be read; try again once it can.');
+      /* Only an unreadable book that could BE the target refuses: one whose
+         state.json names another bookId (or has none) cannot be it. A state.json
+         that cannot be read either leaves the book unidentified, so it might be. */
+      if (unreadable && (await couldBeUnreadable(unreadableDirs, mf.bookId))) {
+        throw new RetryableForkError('A book in this series could not be read; try again once it can.');
       }
       return null;
     }
