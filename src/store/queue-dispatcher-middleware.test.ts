@@ -332,6 +332,8 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     expect(store.getState().notifications.toasts).toEqual([
       expect.objectContaining({ kind: 'warn', dedupeKey: 'preview-never-rendered:book-A' }),
     ]);
+    /* A halt closes the stream the same way; the copy must not claim a finish. */
+    expect(store.getState().notifications.toasts[0].message).not.toMatch(/finished/);
   });
 
   it('#3919 an ordinary entry for the preview’s chapter finishing does not cancel the preview', async () => {

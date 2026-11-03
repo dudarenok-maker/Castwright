@@ -213,7 +213,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
               dispatch(
                 notificationsActions.pushToast({
                   kind: 'warn',
-                  message: 'The preview chapter finished without a new take, so the preview was cancelled.',
+                  message: 'The preview chapter stopped before producing a new take, so the preview was cancelled.',
                   dedupeKey: `preview-never-rendered:${bookId}`,
                 }),
               );
