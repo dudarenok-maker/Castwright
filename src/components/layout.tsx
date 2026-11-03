@@ -61,6 +61,7 @@ import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
 import type { Character, BookExportJob, Revision } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { renderedChaptersForCharacter } from '../lib/stale-chapters';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
 import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
 import { isNotAFailureHaltCode } from '../lib/analysis-phase-state';
@@ -98,7 +99,6 @@ import { useAccessibilitySettings } from '../lib/use-accessibility-settings';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { useLanguageGuard } from '../hooks/use-language-guard';
 import { MiniPlayer } from './mini-player';
-import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
 import { StartGenerationModal } from '../modals/start-generation';
@@ -1780,18 +1780,6 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProsodyBookId, completeKey, openProsodyBusy, prosodyRerunTick]);
 
-  if (ui.previewMode) {
-    return (
-      <PreviewListenerView
-        chapters={chapters}
-        characters={characters}
-        onExit={() => dispatch(uiActions.setPreviewMode(false))}
-        currentTrack={ui.currentTrack}
-        setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
-      />
-    );
-  }
-
   /* Top-bar TTS pill — shown whenever a book is in scope (Confirm Cast,
      Analysing, Ready). Books/upload don't render it since TTS only matters
      once a manuscript is loaded. Single /health poll owned here; the
@@ -2958,11 +2946,7 @@ export function Layout() {
                     JSON.stringify(prior.overrideTtsVoices ?? {}) !==
                       JSON.stringify(updated.overrideTtsVoices ?? {});
                   if (voiceChanged) {
-                    const affectedChapters = chapters
-                      .filter(
-                        (ch) => ch.state === 'done' && ch.characters && updated.id in ch.characters,
-                      )
-                      .map((ch) => ch.id);
+                    const affectedChapters = renderedChaptersForCharacter(updated.id, chapters);
                     if (affectedChapters.length > 0) {
                       dispatch(
                         uiActions.setStaleAudio({

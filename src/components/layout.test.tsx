@@ -242,6 +242,20 @@ vi.mock('./duplicate-book-repair-reread', () => ({
   DuplicateBookRepairReread: () => <div data-testid="duplicate-book-repair-reread-mount" />,
 }));
 
+/* The drawer is stood in for by one button so a test can drive Layout's own
+   onSave (the profile-save stale-audio nudge) without the drawer's form. */
+vi.mock('../modals/profile-drawer', () => ({
+  ProfileDrawer: (p: {
+    character: { voiceId?: string };
+    onSave: (c: unknown, m: { hadConflict: boolean }) => void;
+  }) => (
+    <button
+      data-testid="mock-profile-save"
+      onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
+    />
+  ),
+}));
+
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
@@ -268,6 +282,7 @@ import {
 import type { RootState } from '../store';
 import { modelLabel } from '../lib/model-label';
 import type { AnalyzerCatalog } from '../lib/types';
+import { StaleAudioBanner } from './stale-audio-banner';
 import { BooksRoute } from '../routes/index';
 import { AccountView } from '../views/account';
 import { createBookStateDisk } from '../test/book-state-disk';
@@ -5657,5 +5672,46 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     await settle(900);
     expect(server.castPuts).toBe(1);
     expect(store.getState().notifications.toasts.map((t) => t.message)).not.toContain(BOOK_REPAIRED_MESSAGE);
+  });
+});
+
+describe('Layout — the stale-audio banner and the regenerate modal agree on excluded chapters (#3919)', () => {
+  const eliza = (n: number, excluded = false): Chapter =>
+    ({ id: n, title: `Chapter ${n}`, duration: '10:00', state: 'done', progress: 1, excluded, characters: { eliza: 'done' } }) as Chapter;
+
+  async function saveVoiceChange(chapters: Chapter[]) {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/A/cast']}>
+          <Routes><Route path="*" element={<><Layout /><StaleAudioBanner /></>} /></Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    act(() => {
+      store.dispatch(chaptersSlice.actions.setChapters(chapters));
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    fireEvent.click(await screen.findByTestId('mock-profile-save'));
+    return store;
+  }
+
+  it('names only the included chapter in the banner and lists the same one in the modal', async () => {
+    const store = await saveVoiceChange([eliza(1, true), eliza(4)]);
+    expect(store.getState().ui.staleAudio?.chapterIds).toEqual([4]);
+    expect(await screen.findByTestId('stale-audio-banner')).toHaveTextContent(/across 1 chapter\./);
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate…/ }));
+    const chips = await screen.findByTestId('regen-affected-chapters');
+    expect(chips.textContent).toMatch(/CH 04/);
+    expect(chips.textContent).not.toMatch(/CH 01/);
+  });
+
+  it('raises no banner when the character only speaks in an excluded chapter', async () => {
+    const store = await saveVoiceChange([eliza(1, true)]);
+    expect(store.getState().ui.staleAudio).toBeNull();
+    expect(screen.queryByTestId('stale-audio-banner')).toBeNull();
   });
 });

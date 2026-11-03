@@ -334,7 +334,7 @@ export function AnalyzerEndpointsSection() {
     }
   };
 
-  const useFreeModel = (id: string) => {
+  const applyFreeModel = (id: string) => {
     const model = (freeModels[id] ?? '').trim();
     if (model === '') return;
     const modelId = endpointModelId(id, model);
@@ -371,7 +371,7 @@ export function AnalyzerEndpointsSection() {
                 onChange={(ev) => setFreeModels((f) => ({ ...f, [e.id]: ev.target.value }))}
                 className="px-3 py-1.5 rounded-xl border border-ink/15 bg-white text-xs text-ink min-h-[44px] fine-pointer:min-h-0"
               />
-              <button type="button" data-testid={`endpoint-use-free-model-${e.id}`} onClick={() => useFreeModel(e.id)} className="px-3 py-1 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">Use as default analysis model</button>
+              <button type="button" data-testid={`endpoint-use-free-model-${e.id}`} onClick={() => applyFreeModel(e.id)} className="px-3 py-1 rounded-full border border-ink/15 text-xs min-h-[44px] fine-pointer:min-h-0">Use as default analysis model</button>
             </div>
           </div>
         );

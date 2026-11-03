@@ -272,7 +272,7 @@ complete breadcrumb (numerically sorted) so cross-references still resolve.
 - [16 — Generation stream](archive/16-generation-stream.md) — Generation stream.
 - [17 — Regenerate (this or forward)](archive/17-regenerate-this-or-forward.md) — Regenerate (this or forward).
 - [18 — Listen view](archive/18-listen-view.md) — Cover, chapter list, mini-player, metadata editor, listener-app tiles (5 of 7 live via export modal), export queue, cover Replace/Regenerate. Plan 18a slice + 18b correction shipped 2026-05-18; remaining gaps tracked as BACKLOG Could #31/#32/#33/#34/#35.
-- [19 — Listener preview (POV)](archive/19-preview-listener.md) — Listener preview (POV).
+- [19 — Listener preview (POV)](archive/19-preview-listener.md) — Listener preview (POV). — **Removed** (#4014; the crashing page and its Listen-header button were deleted).
 - [20 — Revisions & drift](archive/20-revisions-and-drift.md) — Pending drafts + drift events + a/b audio audition (rollback-preserved previous audio) + stale-audio banner on voice edits. Close-out adds startup fsck for half-preserved rollback pairs + mid-flight Reject toast. Shipped 2026-05-18.
 - [21 — Book library](archive/21-book-library.md) — Book library.
 - [22 — Voice library](archive/22-voice-library.md) — Voice library.

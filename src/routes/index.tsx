@@ -1001,9 +1001,12 @@ function ReadyViewSwitch({
             /* Whole-book regenerate: chapter 1 + scope='forward' covers
                every chapter while reusing the per-chapter modal. The scope
                override is cleared by setRegenChapter(null) on close. */
-            if (chapters.length === 0) return;
+            /* #3919 — anchor on the first INCLUDED chapter: an excluded one
+               never renders, so "Just this chapter" would be a no-op. */
+            const anchor = chapters.find((ch) => !ch.excluded);
+            if (!anchor) return;
             dispatch(uiActions.setRegenInitialScope('forward'));
-            dispatch(uiActions.setRegenChapter(chapters[0]));
+            dispatch(uiActions.setRegenChapter(anchor));
           }}
           onRegenerateCharacterInChapter={(charId, chapterId) =>
             dispatch(
@@ -1059,7 +1062,6 @@ function ListenRoute({ bookId }: { bookId: string }) {
       currentTrack={currentTrack}
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
       onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
-      onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
       onFixLine={async (marker) => {
         /* fs-26 — resolve the re-record marker's playhead to the chapter audio
            segment it sits in, then open the Fix-audio modal pre-scoped to that
