@@ -168,6 +168,23 @@ export const castSlice = createSlice({
         if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
       }
     },
+    /* #3992 — mirror the "Don't reuse" marker the decline route returned, so
+       applyVoiceMatches' own filter (which reads it) works in the session where
+       the decline happened, not only after a re-read. Server-owned: the cast PUT
+       takes both lists from disk, so this is local state only. */
+    setDeclinedVoice: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        declinedVoiceFrom: string[];
+        declinedVoiceUuids: string[];
+      }>,
+    ) => {
+      const c = s.characters.find((x) => x.id === a.payload.characterId);
+      if (!c) return;
+      c.declinedVoiceFrom = a.payload.declinedVoiceFrom;
+      c.declinedVoiceUuids = a.payload.declinedVoiceUuids;
+    },
     /* Pin a character's voice so subsequent regenerates preserve it. The
        Profile Drawer's Lock button dispatches this; the change-log slice
        records the matching voice_lock event. */

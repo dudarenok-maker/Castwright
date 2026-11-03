@@ -1890,6 +1890,22 @@ describe('castSlice — clearCharacterEmotionVariants (redesign invalidation)', 
   });
 });
 
+describe('castSlice — setDeclinedVoice (#3992 pass 3)', () => {
+  const payload = { characterId: 'wren', declinedVoiceFrom: ['book-one'], declinedVoiceUuids: ['u_shared'] };
+  it('mirrors both marker lists onto the row', () => {
+    const next = castSlice.reducer(baseState([makeChar('wren', {})]), castActions.setDeclinedVoice(payload));
+    expect(next.characters[0].declinedVoiceFrom).toEqual(['book-one']);
+    expect((next.characters[0] as { declinedVoiceUuids?: string[] }).declinedVoiceUuids).toEqual(['u_shared']);
+  });
+  it('is a no-op for an unknown character', () => {
+    const next = castSlice.reducer(
+      baseState([makeChar('other', {})]),
+      castActions.setDeclinedVoice(payload),
+    );
+    expect(next.characters[0].declinedVoiceFrom).toBeUndefined();
+  });
+});
+
 describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => {
   const forkedRow = () =>
     baseState([

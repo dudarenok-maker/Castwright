@@ -142,6 +142,40 @@ describe('declineMatchFlow (#3992)', () => {
     expect(row.voiceState).toBe('reused');
   });
 
+  it('applies the marker the route returned, so applyVoiceMatches’ own filter works in the same session', async () => {
+    vi.mocked(api.declineVoiceLink).mockResolvedValue({
+      declinedVoiceFrom: ['book-one'],
+      declinedVoiceUuids: ['u_shared'],
+    });
+    const store = makeStore([matched]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    const row = store.getState().cast.characters[0] as Character & { declinedVoiceUuids?: string[] };
+    expect(row.declinedVoiceFrom).toEqual(['book-one']);
+    expect(row.declinedVoiceUuids).toEqual(['u_shared']);
+    store.dispatch(
+      castSlice.actions.applyVoiceMatches({
+        matches: [
+          {
+            characterId: 'wren',
+            candidates: [
+              { voiceId: 'v1', fromBookId: 'book-one', fromBookTitle: 'Book One', fromCharacterId: 'wren', score: 0.9 },
+            ],
+          },
+        ],
+      } as never),
+    );
+    expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
+  });
+
+  it('a failed record applies no marker either (the link and the row stay as they were)', async () => {
+    vi.mocked(api.declineVoiceLink).mockRejectedValue(new Error('boom'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = makeStore([matched]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    warn.mockRestore();
+    expect((store.getState().cast.characters[0] as Character).declinedVoiceFrom).toBeUndefined();
+  });
+
   it('the same book still open after the request: the reducer applies (control)', async () => {
     const store = makeStore([matched]);
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));

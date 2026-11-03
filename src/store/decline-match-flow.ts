@@ -35,9 +35,10 @@ export function declineMatchFlow(characterId: string) {
     const fromBookId = state.cast.characters.find((c) => c.id === characterId)?.matchedFrom?.bookId;
     const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
 
+    let marker: { declinedVoiceFrom: string[]; declinedVoiceUuids: string[] } | undefined;
     if (bookId && fromBookId) {
       try {
-        await api.declineVoiceLink({ bookId, characterId, fromBookId });
+        marker = await api.declineVoiceLink({ bookId, characterId, fromBookId });
       } catch (err) {
         console.warn('[decline-match] recording the decline failed', (err as Error).message);
         dispatch(
@@ -52,5 +53,6 @@ export function declineMatchFlow(characterId: string) {
     }
     if (!selectIsOpenBook(getState(), openBook)) return;
     dispatch(castActions.declineMatch(characterId));
+    if (marker) dispatch(castActions.setDeclinedVoice({ characterId, ...marker }));
   };
 }
