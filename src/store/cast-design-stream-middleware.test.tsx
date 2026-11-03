@@ -131,6 +131,7 @@ afterEach(() => {
 describe('castDesignMiddleware', () => {
   it('start: seeds the snapshot, opens the SSE, and ticks through designs', () => {
     const store = makeStore();
+    openBook(store, 'b1');
     /* Seed two cast rows so the character_designed mirror has somewhere to land. */
     store.dispatch(
       castSlice.actions.setCharacters([
@@ -657,8 +658,71 @@ describe('castDesignMiddleware', () => {
     });
   });
 
+  /* #3992 pass 5: the bulk job mirrors into the slices under the same rule. */
+  describe('a bulk design for a book that is not the open one', () => {
+    const seed = (open: string | null) => {
+      const store = makeStore();
+      if (open) openBook(store, open);
+      store.dispatch(
+        castSlice.actions.setCharacters([
+          {
+            id: 'c1',
+            name: 'Aria',
+            overrideTtsVoices: { qwen: { name: 'qwen-u_three' } },
+          } as never,
+        ]),
+      );
+      store.dispatch(
+        castDesignActions.designAllRequested({
+          bookId: 'b2', // the job ran for Book Two
+          characterIds: ['c1'],
+          modelKey: 'qwen3-tts-0.6b',
+          scope: 'both',
+          variantTasks: [{ characterId: 'c1', emotions: ['angry'] }],
+        }),
+      );
+      return store;
+    };
+    const rowOf = (store: ReturnType<typeof makeStore>) =>
+      store.getState().cast.characters.find((c) => c.id === 'c1')!;
+
+    for (const [label, open] of [
+      ['a different book open', 'b3'],
+      ['no book open', null],
+    ] as const) {
+      it(`${label}: onCharacterDesigned leaves the cast slice alone but still counts progress`, () => {
+        const store = seed(open);
+        startCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_two' });
+        expect(rowOf(store).overrideTtsVoices?.qwen?.name).toBe('qwen-u_three');
+        expect(store.getState().castDesign.active?.done).toBe(1);
+      });
+
+      it(`${label}: onVariantDesigned leaves the cast slice alone but still counts progress and the fallback`, () => {
+        const store = seed(open);
+        startCalls[0].cb.onVariantDesigned?.({
+          characterId: 'c1',
+          emotion: 'angry',
+          voiceId: 'qwen-u_two__angry',
+          viaFallback: true,
+        });
+        expect(rowOf(store).overrideTtsVoices?.qwen?.variants).toBeUndefined();
+        expect(store.getState().castDesign.active?.done).toBe(1);
+        expect(store.getState().castDesign.active?.fallbacks).toEqual([{ characterId: 'c1', emotion: 'angry' }]);
+      });
+    }
+
+    it('the open book still mirrors', () => {
+      const store = seed('b2');
+      startCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_two' });
+      startCalls[0].cb.onVariantDesigned?.({ characterId: 'c1', emotion: 'angry', voiceId: 'qwen-u_two__angry' });
+      expect(rowOf(store).overrideTtsVoices?.qwen?.name).toBe('qwen-u_two');
+      expect(rowOf(store).overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-u_two__angry' });
+    });
+  });
+
   it('onVariantDesigned mirrors the variant into the cast slice and bumps done', () => {
     const store = makeStore();
+    openBook(store, 'b');
     /* Seed character 'a' so setCharacterEmotionVariant has somewhere to land. */
     store.dispatch(
       castSlice.actions.setCharacters([{ id: 'a', name: 'Alice' } as never]),

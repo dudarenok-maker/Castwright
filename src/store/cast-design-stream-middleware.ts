@@ -105,11 +105,15 @@ export function createCastDesignMiddleware(): Middleware {
       onCharacterDesigned: ({ characterId, voiceId }) => {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. */
-        dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
+        if (holdsBook(bookId)) {
+          dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
+        }
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
       onVariantDesigned: ({ characterId, emotion, voiceId, viaFallback }) => {
-        dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        if (holdsBook(bookId)) {
+          dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        }
         if (viaFallback) {
           dispatch(castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt: Date.now() }));
         }
