@@ -246,6 +246,9 @@ export function createCastDesignMiddleware(): Middleware {
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
       },
       onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona, voiceUuid }) => {
+        /* #3992 — the server forks a declined row's shared uuid BEFORE the preview,
+           so a Cancel (which never approves) must still learn the new uuid here. */
+        if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
         dispatch(
           castDesignActions.previewReady({
             bookId,

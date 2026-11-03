@@ -490,6 +490,74 @@ describe('castDesignMiddleware', () => {
     ).toBe('uuid-c1-xyz');
   });
 
+  /* #3992 pass 3: a re-design's preview runs AFTER the server forked a declined
+     row's uuid and dropped its variants; the Cancel path never approves, so the
+     preview is where redux has to learn the new uuid (and drop the stale slots)
+     before an autosave writes them back. */
+  it('onPreviewReady mirrors a forked voiceUuid and drops the variants that went with it', () => {
+    const store = makeStore();
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        {
+          id: 'c1',
+          name: 'Aria',
+          voiceUuid: 'u_shared',
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+          },
+        } as never,
+      ]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    singleStartCalls[0].cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'qwen-u_forked-preview',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+      voiceUuid: 'u_forked',
+    });
+    const row = store.getState().cast.characters.find((c) => c.id === 'c1')!;
+    expect(row.voiceUuid).toBe('u_forked');
+    expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('onPreviewReady without a voiceUuid leaves the row alone', () => {
+    const store = makeStore();
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria', voiceUuid: 'u_keep' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    singleStartCalls[0].cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'p',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+    });
+    expect(store.getState().cast.characters.find((c) => c.id === 'c1')?.voiceUuid).toBe('u_keep');
+  });
+
   it('onVariantDesigned mirrors the variant into the cast slice and bumps done', () => {
     const store = makeStore();
     /* Seed character 'a' so setCharacterEmotionVariant has somewhere to land. */

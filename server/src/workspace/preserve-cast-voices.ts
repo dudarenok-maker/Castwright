@@ -69,7 +69,23 @@ export function preserveDesignedVoicesOnCastWrite<T extends { id: string }>(
        identity could be restamped to an arbitrary value with no consent
        check at all. Scoped to characters that already exist on disk (`old`
        found) — same scope PRESERVED_DESIGN_FIELDS already uses. */
-    if (old.voiceUuid !== undefined) merged.voiceUuid = old.voiceUuid;
+    if (old.voiceUuid !== undefined) {
+      /* #3992 — an incoming row on a DIFFERENT uuid than disk's is a stale one: a
+         fork moved the row to a new uuid and dropped its qwen `variants` (the
+         render key `qwen-<uuid>__<emotion>` would have no `.pt`), while the client's
+         redux row still carries them. The qwen slot, variants included, goes with
+         the uuid it belongs to, so it comes from disk too. */
+      if (merged.voiceUuid !== old.voiceUuid) {
+        const oldQwen = (old.overrideTtsVoices as { qwen?: unknown } | undefined)?.qwen;
+        if (oldQwen !== undefined) {
+          merged.overrideTtsVoices = {
+            ...((merged.overrideTtsVoices as Record<string, unknown> | undefined) ?? {}),
+            qwen: oldQwen,
+          };
+        }
+      }
+      merged.voiceUuid = old.voiceUuid;
+    }
     return merged as T;
   });
 }

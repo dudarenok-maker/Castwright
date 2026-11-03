@@ -1890,6 +1890,52 @@ describe('castSlice — clearCharacterEmotionVariants (redesign invalidation)', 
   });
 });
 
+describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => {
+  const forkedRow = () =>
+    baseState([
+      makeChar('wren', {
+        voiceUuid: 'u_shared',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+        },
+      } as never),
+    ]);
+
+  it('a CHANGED uuid drops the qwen variants the server dropped with the fork', () => {
+    const next = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
+    );
+    expect(next.characters[0].voiceUuid).toBe('u_forked');
+    expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_shared');
+  });
+
+  it('the same uuid, a first mint, or an unknown character leaves the variants alone', () => {
+    const same = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_shared' }),
+    );
+    expect(Object.keys(same.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['angry']);
+
+    const minted = castSlice.reducer(
+      baseState([
+        makeChar('wren', {
+          overrideTtsVoices: { qwen: { name: 'qwen-v', variants: { sad: { name: 'qwen-v__sad' } } } },
+        } as never),
+      ]),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_new' }),
+    );
+    expect(Object.keys(minted.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+
+    const ghost = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'ghost', voiceUuid: 'x' }),
+    );
+    expect(ghost.characters[0].voiceUuid).toBe('u_shared');
+  });
+});
+
 describe('selectCastTierByCharacterId (#1308)', () => {
   it('maps characterId to its pinned ttsModelKey', () => {
     const s = {

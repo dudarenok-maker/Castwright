@@ -800,3 +800,58 @@ describe('book-state PUT cast — declinedVoiceFrom is server-owned (#3992)', ()
     expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
   });
 });
+
+/* #3992 pass-3 — a fork drops the forked row's qwen `variants` on disk, but the
+   redux row the client still holds carries them. The whole-roster cast PUT must
+   not write them back under the NEW uuid (the render key `qwen-<new>__<emotion>`
+   has no `.pt`, so every such line fails at synth). */
+describe('book-state PUT cast — a forked row’s dropped variants stay dropped (#3992 pass 3)', () => {
+  const stale = (extra: Record<string, unknown> = {}) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'character',
+    color: '#abc',
+    voiceUuid: 'u_shared',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    },
+    ...extra,
+  });
+  const forked = (qwen: Record<string, unknown>) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'character',
+    color: '#abc',
+    voiceUuid: 'u_forked',
+    overrideTtsVoices: { qwen },
+  });
+  const put = (characters: object[]) =>
+    request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'cast', patch: { characters } });
+
+  it('takes the qwen slot from disk when the incoming row carries the pre-fork uuid', async () => {
+    writeBook(bookDir, bookId, [forked({ name: 'qwen-u_forked' })]);
+    expect((await put([stale()])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.voiceUuid).toBe('u_forked');
+    expect(wren.overrideTtsVoices.qwen).toEqual({ name: 'qwen-u_forked' });
+  });
+
+  it('control: an incoming row on the SAME uuid keeps its variants (incoming wins)', async () => {
+    writeBook(bookDir, bookId, [forked({ name: 'qwen-u_forked' })]);
+    const row = stale({ voiceUuid: 'u_forked' });
+    expect((await put([row])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_shared__angry');
+  });
+
+  it('failure path: a disk row with no qwen slot leaves the incoming one alone (no crash, no invention)', async () => {
+    writeBook(bookDir, bookId, [{ ...forked({}), overrideTtsVoices: undefined }]);
+    expect((await put([stale()])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.voiceUuid).toBe('u_forked');
+    expect(wren.overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+  });
+});

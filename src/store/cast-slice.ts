@@ -283,6 +283,12 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
+      /* #3992 — a CHANGED uuid is a fork: the server dropped the row's qwen
+         `variants` with it (their `<uuid>__<emotion>` files belong to the old
+         uuid), so the autosave spreads must not write the stale slots back. */
+      if (c.voiceUuid && c.voiceUuid !== voiceUuid && c.overrideTtsVoices?.qwen?.variants) {
+        delete c.overrideTtsVoices.qwen.variants;
+      }
       c.voiceUuid = voiceUuid;
     },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
