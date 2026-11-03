@@ -156,6 +156,15 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
     expect(analyzerCharacterSchema.safeParse(charWithoutTone).success).toBe(false);
   });
 
+  it('keeps the server-owned declinedVoiceFrom (#3992) out of the analyzer grammar', () => {
+    expect('declinedVoiceFrom' in characterSchema.shape).toBe(true);
+    expect('declinedVoiceFrom' in analyzerCharacterSchema.shape).toBe(false);
+    // strict: a model that emits it anyway is rejected, not silently trusted
+    expect(
+      analyzerCharacterSchema.safeParse({ ...charWithToneAndGender, declinedVoiceFrom: ['b'] }).success,
+    ).toBe(false);
+  });
+
   it('characterSchema still accepts a character with NO tone (validation tolerant)', () => {
     expect(characterSchema.safeParse(charWithoutTone).success).toBe(true);
   });

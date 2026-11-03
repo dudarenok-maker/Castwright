@@ -233,10 +233,14 @@ export const requiredToneSchema = z
     `neutral` is always an available enum value, so constrained decoding can
     never deadlock on it. Never used for validation (that stays
     characterSchema, gender + tone optional so old cast.json files load). */
-export const analyzerCharacterSchema = characterSchema.extend({
-  tone: requiredToneSchema,
-  gender: z.enum(['male', 'female', 'neutral']),
-});
+export const analyzerCharacterSchema = characterSchema
+  /* #3992 — `declinedVoiceFrom` is server-owned (the decline route is its only
+     writer); the analyzer is never asked for it, so it stays out of the grammar. */
+  .omit({ declinedVoiceFrom: true })
+  .extend({
+    tone: requiredToneSchema,
+    gender: z.enum(['male', 'female', 'neutral']),
+  });
 
 /** Grammar variant of stage1ChapterSchema — embeds analyzerCharacterSchema
     so the model must emit tone AND gender on every character it returns. */
