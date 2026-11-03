@@ -526,6 +526,21 @@ async function moveStrandedFollower(
   });
 }
 
+/* #3992 — fork the uuid-holding source `findDeclinedAncestor` named (it carries the
+   rows on its uuid that follow it) and return the uuid it holds afterwards. A source
+   still on the uuid it should have left means the fork did not apply (the link
+   changed under us): fail rather than let a follower design over the earlier book.
+   Caller holds the design lock. */
+async function forkSourceAndRead(src: { dir: string; characterId: string; forkUuid?: string }): Promise<string> {
+  const from = src.forkUuid as string;
+  await forkSharedVoiceUuid(src.dir, src.characterId, from);
+  const after = (await readJson<CastFile>(castJsonPath(src.dir)))?.characters?.find((c) => c.id === src.characterId);
+  if (!after?.voiceUuid || after.voiceUuid === from) {
+    throw new RetryableForkError('The voice could not be separated from the earlier book; try again.');
+  }
+  return after.voiceUuid;
+}
+
 /* #3992 — the fork decision for a row that already has a uuid. Caller holds
    the design lock. Returns the uuid to design under (forked or existing). */
 async function forkIfSharedLocked(
@@ -547,6 +562,11 @@ async function forkIfSharedLocked(
     const ancestor = await findDeclinedAncestor(bookDir, { ...character, matchedFrom: linked });
     if (ancestor && 'voiceUuid' in ancestor) {
       return moveStrandedFollower(bookDir, characterId, uuid, ancestor.voiceUuid);
+    }
+    if (ancestor && ancestor.forkUuid && ancestor.forkUuid !== uuid) {
+      /* The source is on a uuid this row is not (it declined this row's): it must
+         fork off its own first, then this row follows it onto the uuid it ends on. */
+      return moveStrandedFollower(bookDir, characterId, uuid, await forkSourceAndRead(ancestor));
     }
     if (ancestor) {
       await forkSharedVoiceUuid(ancestor.dir, ancestor.characterId, uuid);
@@ -652,6 +672,13 @@ export async function ensureCharacterVoiceUuid(
           /* The source already minted apart: this row follows it (and so do the rows
              below it) rather than taking the series mint. */
           return moveStrandedFollower(bookDir, characterId, undefined, ancestor.voiceUuid);
+        }
+        if (ancestor && 'dir' in ancestor && ancestor.forkUuid) {
+          /* The source holds a uuid and is a declined row still on the earlier book's:
+             it forks off first (carrying its followers), then this row takes the uuid
+             the source ends on. Taking its uuid before that would design over the
+             earlier book's file. */
+          return moveStrandedFollower(bookDir, characterId, undefined, await forkSourceAndRead(ancestor));
         }
         if (ancestor && 'dir' in ancestor) {
           await mintUuidApartFromLegacyKey(ancestor.dir, ancestor.characterId, linkId);

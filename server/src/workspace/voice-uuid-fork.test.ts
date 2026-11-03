@@ -382,8 +382,9 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
   it('null when the linked row no longer holds the uuid, or names no character; a legacy walker takes the source uuid', async () => {
     const three = chain();
     expect(await findAncestor(three, { id: 'c', voiceUuid: 'other', matchedFrom: link(TWO_ID) })).toBeNull();
-    // a legacy walker (no uuid) whose source holds one takes it (#3992 pass 4): the series mint would restamp the source
-    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toEqual({ voiceUuid: U });
+    // a legacy walker (no uuid) whose source is a declined row still on the earlier book's uuid forks it first (#3992 pass 5)
+    const viaDeclined = await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) });
+    expect(viaDeclined && 'dir' in viaDeclined && [basename(viaDeclined.dir), viaDeclined.characterId, viaDeclined.forkUuid]).toEqual(['Two', 'c', U]);
     // ...but a source with no uuid either has nothing to follow
     expect(await findAncestor(three, { id: 'c', voiceId: 'v_none', matchedFrom: link(TWO_ID, 'nobody') })).toBeNull();
     expect(await findAncestor(three, { id: 'zzz', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
@@ -391,6 +392,33 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
     const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) });
     expect(found && 'dir' in found && found.characterId).toBe('c');
     expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: { characterId: 'c' } })).toBeNull();
+  });
+
+  it('a legacy walker takes its source’s uuid once the source owns it (#3992 pass 4)', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: 'u_one' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, declinedVoiceFrom: DECLINED }]);
+    const three = book('Three', THREE, [{ id: 'c', matchedFrom: link(TWO_ID) }]);
+    // nobody else holds U, so Two is not sharing it: Three takes it
+    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toEqual({ voiceUuid: U });
+  });
+
+  it('a legacy walker below a linked source forks the declined row above that source (#3992 pass 5)', async () => {
+    chain();
+    const four = book('Four', FOUR, [{ id: 'c', matchedFrom: link(THREE) }]);
+    const found = await findAncestor(four, { id: 'c', matchedFrom: link(THREE) });
+    expect(found && 'dir' in found && [basename(found.dir), found.forkUuid]).toEqual(['Two', U]);
+  });
+
+  it('a source already forked off a uuid but itself still shared forks again before a stranded follower takes it (#3992 pass 5)', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: 'u_two' }]);
+    book('Two', TWO_ID, [
+      { id: 'c', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] },
+    ]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) });
+    expect(found && 'dir' in found && [basename(found.dir), found.forkUuid]).toEqual(['Two', 'u_two']);
   });
 
   it('terminates on a link cycle', async () => {

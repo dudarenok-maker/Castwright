@@ -29,7 +29,6 @@ import { castDesignActions, type DesignAllRequestedPayload } from './cast-design
 import { castActions } from './cast-slice';
 import { notificationsActions } from './notifications-slice';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
-import { selectIsOpenBook } from './open-book';
 
 const REQUESTED_TYPE = castDesignActions.designAllRequested.type;
 const RESUBSCRIBE_TYPE = castDesignActions.resubscribe.type;
@@ -80,13 +79,8 @@ export function createCastDesignMiddleware(): Middleware {
     /* The cast slice holds ONE book (open-book.ts), and series books share
        character ids, so a single-design result for a book that is not the open one
        must not be mirrored into it. The server already persisted it. */
-    const holdsBook = (bookId: string): boolean => {
-      const s = store.getState() as {
-        manuscript: { bookId: string | null; manuscriptId: string | null };
-      };
-      const { manuscriptId } = s.manuscript;
-      return s.manuscript.bookId === bookId && manuscriptId != null && selectIsOpenBook(s, { bookId, manuscriptId });
-    };
+    const holdsBook = (bookId: string): boolean =>
+      (store.getState() as { manuscript: { bookId: string | null } }).manuscript.bookId === bookId;
 
     const buildCallbacks = (bookId: string, controller: AbortController): CastDesignCallbacks => ({
       signal: controller.signal,

@@ -275,7 +275,33 @@ async function couldBeUnreadable(dirs: string[], bookId: string): Promise<boolea
   return false;
 }
 
-export type DeclinedAncestor = { dir: string; characterId: string } | { voiceUuid: string } | null;
+/* `forkUuid` names the uuid the row at `dir` must fork off when it is NOT the
+   uuid the asking row holds: a legacy walker (no uuid) whose source is a declined
+   row still on the earlier book's uuid. Absent, the row holds the asking row's own
+   voice (the uuid fork, or the legacy-key mint for a legacy source). */
+export type DeclinedAncestor =
+  | { dir: string; characterId: string; forkUuid?: string }
+  | { voiceUuid: string }
+  | null;
+
+/* A source row that holds a uuid the asking row does not (a legacy walker's
+   source; a source on a third uuid that declined the walker's): the asking row may
+   take that uuid only once it BELONGS to the source. Decided in uuid mode first: a
+   source that must fork off the uuid it shares (or has a row above it on that uuid
+   that must) is returned to be forked, carrying its followers, and the asker then
+   takes the uuid the source ends on. Otherwise the uuid is the source's own. */
+async function resolveSourceUuid(dir: string, row: CastRow): Promise<DeclinedAncestor> {
+  const uuid = row.voiceUuid as string;
+  if (await shouldForkSharedVoiceUuid(dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])) {
+    return { dir, characterId: row.id, forkUuid: uuid };
+  }
+  if (row.matchedFrom) {
+    const above = await findDeclinedAncestor(dir, row);
+    if (above && 'dir' in above) return { ...above, forkUuid: uuid };
+    if (above) return above;
+  }
+  return { voiceUuid: uuid };
+}
 
 export async function findDeclinedAncestor(
   bookDir: string,
@@ -313,9 +339,10 @@ export async function findDeclinedAncestor(
       if (!row.voiceUuid) return null;
       /* A legacy walker (no uuid) whose source holds one takes it: the source left
          the shared legacy key, and the link says this row shares with the source. */
-      if (!uuid) return { voiceUuid: row.voiceUuid };
-      /* The source that declined the voice, already forked off it. */
-      if (declinesVoice(row, { voiceUuid: uuid })) return { voiceUuid: row.voiceUuid };
+      if (!uuid) return resolveSourceUuid(target.dir, row);
+      /* The source that declined the voice, already forked off it (unless it is
+         itself still sharing the uuid it forked to). */
+      if (declinesVoice(row, { voiceUuid: uuid })) return resolveSourceUuid(target.dir, row);
       /* A linked source on yet another uuid (an earlier move carried it off U): the
          declined row may be further up, so keep walking. Moving a row also carries
          its followers (qwen-voice.ts moveStrandedFollower), but a row left behind
