@@ -40,7 +40,7 @@
      counts would drop and the suite would redden.
    - FAIL-OPEN GUARD (added on top of the brief's original shape, task-5
      correction): the offender loop below only walks the files it actually
-     found — if `collectTsFiles` or the `.mjs` path silently matched nothing
+     found — if `collectSourceFiles` or the `.mjs` path silently matched nothing
      (a renamed directory, a typo'd path), the main assertion would pass
      VACUOUSLY, exactly the failure mode this whole lane exists to avoid (see
      `cast.json` write-lock guard, `cast-lock.guard.test.ts`, for the same
@@ -51,64 +51,22 @@
      reddens instead of passing green on zero evidence. A dedicated "point the
      walker at a directory that doesn't exist" probe was run by hand (see
      task-5-report.md) rather than shipped as a persistent test, since
-     `readdirSync` on a missing directory throws — the walker cannot silently
+     the shared walker (`collectSourceFiles` in `test-utils/guard-scan.ts`,
+     #3685) calls `readdirSync`, which throws on a missing directory — the walker cannot silently
      return `[]` for a bad path, only for an empty, EXISTING one, which the
      reverse allowlist check already covers. */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
+import { blankOutOpaque, collectSourceFiles } from '../test-utils/guard-scan.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_SRC = join(HERE, '..');
 const REPO = join(SERVER_SRC, '..', '..');
 
 const CALLS = ['buildCastResolver(', 'isAudioCurrent('];
-
-/** Every non-test `.ts` file under `dir`, recursively — copied from
- *  `server/src/workspace/cast-lock.guard.test.ts`'s `collectSourceFiles`
- *  rather than `fs.globSync` (Node 22+ only; this repo targets Node 20 —
- *  round 1, M17) or a second `node:fs` import (would trip
- *  `no-duplicate-imports`). Throws (via `readdirSync`) if `dir` does not
- *  exist, rather than returning `[]` — the fail-open guard above depends on
- *  a bad path being loud, not silent. */
-function collectTsFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectTsFiles(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-/** Replace every line comment, block comment and string literal with spaces of
- *  the same length, so indices stay stable and quoted code never matches. */
-export function blankOutOpaque(src: string): string {
-  const out = src.split('');
-  let i = 0;
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== '\n') out[k] = ' ';
-  };
-  while (i < src.length) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') { const end = src.indexOf('\n', i); const stop = end < 0 ? src.length : end; blank(i, stop); i = stop; continue; }
-    if (two === '/*') { const end = src.indexOf('*/', i + 2); const stop = end < 0 ? src.length : end + 2; blank(i, stop); i = stop; continue; }
-    const c = src[i];
-    if (c === '"' || c === "'" || c === '`') {
-      let k = i + 1;
-      while (k < src.length && src[k] !== c) { if (src[k] === '\\') k += 1; k += 1; }
-      blank(i, Math.min(k + 1, src.length));
-      i = k + 1;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join('');
-}
 
 /** True when the call starting at `callIndex` passes an object LITERAL as its
  *  history argument (the second top-level argument for `buildCastResolver`, the
@@ -184,14 +142,14 @@ const ALLOWLIST: Array<{ file: string; count: number; reason: string }> = [
 
 describe('guard 3 — the loaded CastIdHistory is threaded whole (#2128)', () => {
   const files = [
-    ...collectTsFiles(SERVER_SRC),
+    ...collectSourceFiles(SERVER_SRC),
     join(REPO, 'scripts', 'repair-cast-id-drift.mjs'),
   ];
 
   it('scanned at least the expected number of files — a walker matching nothing must not pass green', () => {
     // Canary for the fail-open hazard: `server/src` has ~150+ non-test .ts
     // files today. A wrong SERVER_SRC/REPO path (a renamed directory, a
-    // typo) would make `collectTsFiles` return a tiny or empty list — this
+    // typo) would make `collectSourceFiles` return a tiny or empty list — this
     // floor catches that directly, on top of the reverse allowlist check
     // below (which catches it indirectly, via an unmatched allowlist entry).
     expect(files.length).toBeGreaterThan(50);
