@@ -36,12 +36,14 @@ import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+import { declinesVoice } from '../store/declined-voice.js';
 
 interface CastRow {
   id: string;
   voiceUuid?: string | null;
   matchedFrom?: unknown;
   declinedVoiceFrom?: string[] | null;
+  declinedVoiceUuids?: string[] | null;
 }
 
 interface CastFile {
@@ -219,28 +221,48 @@ export async function findLinkFollowers(
    the shared uuid would overwrite Book One. Walks X's link chain UP, among rows
    holding `uuid`, following each `matchedFrom` through the target book's live cast
    and id history, and returns the first row `shouldForkSharedVoiceUuid` says must
-   fork, or null when the chain ends, leaves `uuid`, loops, or reaches a book that
-   cannot be read or named (nothing is known to protect then, which is how it
-   behaved before #3992). Writes nothing and takes no lock. */
+   fork, or null when the chain ends, leaves `uuid` or loops.
+
+   A source that already forked is the other half: it holds a different uuid and
+   lists X's uuid in its `declinedVoiceUuids`, so X is a follower the fork never
+   reached (its book was unreadable, or the link landed after the fork). It is
+   STRANDED on a voice its source left, and is returned as `{ voiceUuid }`, the
+   uuid the source holds now, for the caller to move it onto (the follow rule).
+
+   A link whose target cannot be told apart from an unreadable book THROWS: the
+   unreadable book may be that target, and designing under the shared uuid would
+   then overwrite the earlier book. A target that is simply absent (a deleted
+   book, with every other book readable) ends the walk as it always did. Writes
+   nothing and takes no lock. */
+export type DeclinedAncestor = { dir: string; characterId: string } | { voiceUuid: string } | null;
+
 export async function findDeclinedAncestor(
   bookDir: string,
   character: { id: string; voiceUuid?: string | null; matchedFrom?: unknown },
-): Promise<{ dir: string; characterId: string } | null> {
+): Promise<DeclinedAncestor> {
   const uuid = character.voiceUuid;
   if (!uuid) return null;
-  const { books } = await loadOtherBooks(resolve(bookDir));
+  const { books, unreadable } = await loadOtherBooks(resolve(bookDir));
   const visited = new Set<string>([rowKey(bookDir, character.id)]);
   let mf = character.matchedFrom as MatchedFrom;
   while (mf?.bookId) {
     const target = books.find((b) => b.bookId === mf?.bookId);
-    if (!target) return null;
+    if (!target) {
+      if (unreadable) {
+        throw new Error('A book in this series could not be read; try again once it can.');
+      }
+      return null;
+    }
     const rows = target.rows;
     let row: CastRow | undefined;
     if (mf.characterId) {
       const resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(target.dir));
       row = resolver.resolve(mf.characterId)?.character;
     }
-    if (!row || row.voiceUuid !== uuid) return null;
+    if (!row) return null;
+    if (row.voiceUuid !== uuid) {
+      return row.voiceUuid && declinesVoice(row, { voiceUuid: uuid }) ? { voiceUuid: row.voiceUuid } : null;
+    }
     const key = rowKey(target.dir, row.id);
     if (visited.has(key)) return null;
     visited.add(key);
@@ -259,9 +281,13 @@ export async function findDeclinedAncestor(
    design for as long as the file stays unreadable, which is transient), while
    assuming it holds nothing lets the redesign overwrite that book's `.pt` with no
    way to get it back. The earlier book's voice wins over a spare copy. The other
-   direction, a book that could be a FOLLOWER we cannot see, is covered at write
-   time: a follower found by the scan that has become unreadable fails the fork
-   (qwen-voice.ts), it is never skipped. */
+   direction, a book that could be a FOLLOWER we cannot see, is NOT covered at write
+   time: a follower the first scan found that became unreadable, or a link that
+   landed after it, fails the fork (qwen-voice.ts), but one that was already
+   unreadable at the first scan is simply not in the set, so the fork leaves it on
+   U. It is caught later, when ITS design comes: findDeclinedAncestor sees the
+   source holds a different uuid that lists U as declined and moves the row onto
+   it (qwen-voice.ts moveStrandedFollower). */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: {

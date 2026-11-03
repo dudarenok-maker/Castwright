@@ -359,9 +359,11 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
     expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
   });
 
-  it('null when the book it links to cannot be read: no throw', async () => {
+  it('throws when the book it links to cannot be read (it may be the target), instead of walking on', async () => {
     const three = chain();
     writeFileSync(join(root, 'books', 'Author', 'Series', 'Two', '.audiobook', 'cast.json'), '{"characters":[{"id":');
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
+    await expect(findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).rejects.toThrow(
+      /could not be read/,
+    );
   });
 });

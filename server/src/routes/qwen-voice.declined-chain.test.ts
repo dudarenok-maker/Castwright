@@ -331,13 +331,13 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
   });
-  it('a book that STARTED following between the scan and the locked write is left on u_shared, never written outside the lock set', async () => {
+  it('a book that STARTED following between the scan and the locked write fails the fork (pass 3), never written outside the lock set', async () => {
     seedChain({ four: true });
     writeRows('Book Four', [{ ...baseRow }]); // holds u_shared, follows nobody yet
     beforeCopy.fn = () => writeRows('Book Four', [{ ...baseRow, ...linkTo('Book Three') }]);
-    expect((await design('Book Two')).status).toBe(200);
-    const fresh = readRow('Book Two').voiceUuid;
-    expect(readRow('Book Three').voiceUuid).toBe(fresh);
+    expect((await design('Book Two')).status).toBe(500);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
     expect(readRow('Book Four').voiceUuid).toBe('u_shared');
     expect(book1Intact()).toBe(true);
   });

@@ -407,7 +407,13 @@ async function forkSharedVoiceUuid(
           if (scanned.some((f) => unreadable.has(resolve(f.dir)))) {
             throw new Error('A book in this series could not be read while the voice was being forked; try again.');
           }
-          const live = followers.filter((f) => locked.has(resolve(f.dir)));
+          /* A follower the locks do not cover (a link that landed after the first
+             scan) would be left on U while X moves to U'. Never skip it: fail the
+             fork, nothing has been written, and the retry locks it. */
+          if (followers.some((f) => !locked.has(resolve(f.dir)))) {
+            throw new Error('A book in this series changed while the voice was being forked; try again.');
+          }
+          const live = followers;
           for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
             const cast = await readJson<CastFile>(castJsonPath(dir));
             if (!cast?.characters) continue;
@@ -487,6 +493,37 @@ function withForkedUuid(c: CastCharacter, newUuid: string): CastCharacter {
   };
 }
 
+/* #3992 — a linked row left on a voice its source already forked off (see
+   findDeclinedAncestor) follows the source: the row, and its same-book rows sharing
+   its voiceId ?? id, take the source's uuid, whose base family the fork already
+   copied. One book, so one cast lock; the read and the decision are inside it.
+   Returns the uuid to design under. Caller holds the design lock. */
+async function moveStrandedFollower(
+  bookDir: string,
+  characterId: string,
+  oldUuid: string,
+  sourceUuid: string,
+): Promise<string | undefined> {
+  return withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) throw new CharacterGoneError();
+    const x = fresh.characters[idx];
+    if (x.voiceUuid !== oldUuid || !(x as { matchedFrom?: unknown }).matchedFrom) {
+      return x.voiceUuid ?? undefined; // changed under us: design under what it holds now
+    }
+    const linkId = x.voiceId ?? x.id;
+    for (let i = 0; i < fresh.characters.length; i++) {
+      const c = fresh.characters[i];
+      if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
+        fresh.characters[i] = withForkedUuid(c, sourceUuid);
+      }
+    }
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return sourceUuid;
+  });
+}
+
 /* #3992 — the fork decision for a row that already has a uuid. Caller holds
    the design lock. Returns the uuid to design under (forked or existing). */
 async function forkIfSharedLocked(
@@ -506,6 +543,9 @@ async function forkIfSharedLocked(
   const linked = (character as { matchedFrom?: unknown }).matchedFrom;
   if (linked) {
     const ancestor = await findDeclinedAncestor(bookDir, { ...character, matchedFrom: linked });
+    if (ancestor && 'voiceUuid' in ancestor) {
+      return moveStrandedFollower(bookDir, characterId, uuid, ancestor.voiceUuid);
+    }
     if (ancestor) {
       await forkSharedVoiceUuid(ancestor.dir, ancestor.characterId, uuid);
       const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);

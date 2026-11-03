@@ -380,13 +380,15 @@ describe('pass-2 3 — designing a FOLLOWER of a declined, unforked row must not
     expect(strays()).toEqual([]);
   });
 
-  it('a link into a book that cannot be read is not walked: the design proceeds as it did before #3992', async () => {
+  it('a link into a book that cannot be read refuses the design (pass 3: the unreadable book may be the target)', async () => {
     seedChain();
     const goodTwo = readFileSync(castPath('Book Two'), 'utf8');
     writeFileSync(castPath('Book Two'), '{"characters":[{"id":');
     const res = await design('Book Three');
     writeFileSync(castPath('Book Two'), goodTwo);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
   });
 });
 
