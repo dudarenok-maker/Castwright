@@ -245,6 +245,8 @@ export async function findLinkFollowers(
    reached (its book was unreadable, or the link landed after the fork). It is
    STRANDED on a voice its source left, and is returned as `{ voiceUuid }`, the
    uuid the source holds now, for the caller to move it onto (the follow rule).
+   The walk keeps going up through a linked source on a third uuid, so a row left
+   behind by an earlier move still finds the declined row above it.
 
    A link whose target cannot be told apart from an unreadable book THROWS: the
    unreadable book may be that target, and designing under the shared uuid would
@@ -283,9 +285,20 @@ export async function findDeclinedAncestor(
     const row: CastRow | undefined = resolver.resolve(mf.characterId ?? walkerId)?.character;
     if (!row) return null;
     if (!holds(row)) {
-      return uuid && row.voiceUuid && declinesVoice(row, { voiceUuid: uuid })
-        ? { voiceUuid: row.voiceUuid }
-        : null;
+      if (!row.voiceUuid) return null;
+      if (!uuid) return null;
+      /* The source that declined the voice, already forked off it. */
+      if (declinesVoice(row, { voiceUuid: uuid })) return { voiceUuid: row.voiceUuid };
+      /* A linked source on yet another uuid (an earlier move carried it off U): the
+         declined row may be further up, so keep walking. Moving a row also carries
+         its followers (qwen-voice.ts moveStrandedFollower), but a row left behind
+         must not depend on that having happened. */
+      const key = rowKey(target.dir, row.id);
+      if (visited.has(key) || !(row.matchedFrom as MatchedFrom)?.bookId) return null;
+      visited.add(key);
+      mf = row.matchedFrom as MatchedFrom;
+      walkerId = row.id;
+      continue;
     }
     const key = rowKey(target.dir, row.id);
     if (visited.has(key)) return null;
@@ -316,9 +329,11 @@ export async function findDeclinedAncestor(
    see, is NOT covered at write time: a follower the first scan found that became unreadable, or a link that
    landed after it, fails the fork (qwen-voice.ts), but one that was already
    unreadable at the first scan is simply not in the set, so the fork leaves it on
-   U. It is caught later, when ITS design comes: findDeclinedAncestor sees the
-   source holds a different uuid that lists U as declined and moves the row onto
-   it (qwen-voice.ts moveStrandedFollower). */
+   U. It is caught later, when ITS design comes: findDeclinedAncestor walks up its
+   chain to the source that holds a different uuid and lists U as declined, and
+   moves the row onto it TOGETHER WITH the rows that follow it (qwen-voice.ts
+   moveStrandedFollower), so the rows below it are not left on U in turn. A row
+   left behind anyway still finds the declined row by walking up. */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: {

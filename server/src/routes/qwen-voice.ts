@@ -353,6 +353,9 @@ interface SharedVoice {
   key: string;
   holds: VoiceHolds;
   stillApplies: (x: CastCharacter) => Promise<boolean>;
+  /** Move the rows onto this EXISTING uuid (its base family already exists) instead
+      of minting one and copying `key`'s family. */
+  moveOnto?: string;
 }
 
 async function forkSharedVoice(
@@ -360,7 +363,7 @@ async function forkSharedVoice(
   characterId: string,
   shared: SharedVoice,
 ): Promise<string | undefined> {
-  const newUuid = nanoid();
+  const newUuid = shared.moveOnto ?? nanoid();
   /* The books that follow X (link to it, transitively) move with it. Their book-ops
      and cast locks are taken together with X's (book-ops first, one `withBookOps`,
      then one `withCastLocks`: rule 3 and the global order). The set is fixed here,
@@ -371,7 +374,7 @@ async function forkSharedVoice(
   const scanned = (await scanLinkFollowers(bookDir, { id: characterId }, shared.holds)).followers;
   const xBookId = await readBookId(bookDir);
   if (!xBookId) throw new Error('Cannot fork a voice for a book that has no bookId.');
-  const copied = await copyBaseFamily(shared.key, `qwen-${newUuid}`);
+  const copied = shared.moveOnto ? [] : await copyBaseFamily(shared.key, `qwen-${newUuid}`);
   const cleanup = (): Promise<void> => removeFiles(copied);
 
   /* Set only when a follower could not be rolled back: it still points at the
@@ -496,33 +499,29 @@ function withForkedUuid(c: CastCharacter, newUuid: string): CastCharacter {
 }
 
 /* #3992 — a linked row left on a voice its source already forked off (see
-   findDeclinedAncestor) follows the source: the row, and its same-book rows sharing
-   its voiceId ?? id, take the source's uuid, whose base family the fork already
-   copied. One book, so one cast lock; the read and the decision are inside it.
+   findDeclinedAncestor) follows the source: the row, its same-book rows sharing
+   its voiceId ?? id, AND every row that follows it (transitively, in other books)
+   take the source's uuid, whose base family the fork already copied. The followers
+   move with it exactly as in the fork (one withBookOps, then one withCastLocks,
+   rolled back together): moving only this row would leave the row below it on the
+   declined voice, and its own design would then overwrite the earlier book. A
+   legacy row (`oldUuid` undefined) is moved off the shared legacy key the same way.
    Returns the uuid to design under. Caller holds the design lock. */
 async function moveStrandedFollower(
   bookDir: string,
   characterId: string,
-  oldUuid: string,
+  oldUuid: string | undefined,
   sourceUuid: string,
 ): Promise<string | undefined> {
-  return withCastLock(bookDir, async () => {
-    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
-    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-    if (!fresh || idx === -1) throw new CharacterGoneError();
-    const x = fresh.characters[idx];
-    if (x.voiceUuid !== oldUuid || !(x as { matchedFrom?: unknown }).matchedFrom) {
-      return x.voiceUuid ?? undefined; // changed under us: design under what it holds now
-    }
-    const linkId = x.voiceId ?? x.id;
-    for (let i = 0; i < fresh.characters.length; i++) {
-      const c = fresh.characters[i];
-      if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
-        fresh.characters[i] = withForkedUuid(c, sourceUuid);
-      }
-    }
-    await writeJsonAtomic(castJsonPath(bookDir), fresh);
-    return sourceUuid;
+  const x = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+  if (!x) throw new CharacterGoneError();
+  return forkSharedVoice(bookDir, characterId, {
+    key: oldUuid ? `qwen-${oldUuid}` : `qwen-${x.voiceId ?? x.id}`,
+    holds: oldUuid ? (c) => c.voiceUuid === oldUuid : holdsLegacyKey(x.voiceId ?? x.id),
+    stillApplies: async (cur) =>
+      (oldUuid ? cur.voiceUuid === oldUuid : !cur.voiceUuid) &&
+      !!(cur as { matchedFrom?: unknown }).matchedFrom,
+    moveOnto: sourceUuid,
   });
 }
 
