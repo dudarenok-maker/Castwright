@@ -1403,6 +1403,46 @@ describe('dedupePriorCastByName', () => {
     ).toHaveLength(2);
   });
 
+  it('a bare-string or bookId-less decline of the link target blocks, with a target no member owns (#3965)', () => {
+    const linked: C = {
+      id: 'thomas',
+      name: 'Old Tom',
+      voiceState: 'reused',
+      voiceId: 'v_b1',
+      lines: 0,
+      matchedFrom: { bookId: 'book-1', characterId: 'tom-b1' },
+    };
+    const decliner = (notLinkedTo: unknown[]): C => ({
+      id: 'old-tom',
+      name: 'Old Tom',
+      lines: 3,
+      notLinkedTo,
+    });
+    expect(dedupePriorCastByName([linked, decliner(['tom-b1'])], 'book-2').cast).toHaveLength(2);
+    expect(
+      dedupePriorCastByName([linked, decliner([{ characterId: 'tom-b1' }])], 'book-2').cast,
+    ).toHaveLength(2);
+    // Controls: a different bare string / a different book still collapse.
+    expect(dedupePriorCastByName([linked, decliner(['other'])], 'book-2').cast).toHaveLength(1);
+    expect(
+      dedupePriorCastByName([linked, decliner([{ bookId: 'book-3', characterId: 'tom-b1' }])], 'book-2')
+        .cast,
+    ).toHaveLength(1);
+  });
+
+  it('the union keeps a loser decline of the same character in ANOTHER book (#3965)', () => {
+    const prior: C[] = [
+      { id: 'tom', name: 'Old Tom', voiceState: 'locked', lines: 0, notLinkedTo: [{ bookId: 'book-1', characterId: 'tom' }] },
+      { id: 'tom-2', name: 'Old Tom', lines: 3, notLinkedTo: [{ bookId: 'book-3', characterId: 'tom' }] },
+    ];
+    const { cast } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast.map((r) => r.id)).toEqual(['tom']);
+    expect(cast[0].notLinkedTo).toEqual([
+      { bookId: 'book-1', characterId: 'tom' },
+      { bookId: 'book-3', characterId: 'tom' },
+    ]);
+  });
+
   it('collapses when the decline names a different book or a different target than the other row’s link (#3965)', () => {
     const linked: C = {
       id: 'thomas',
