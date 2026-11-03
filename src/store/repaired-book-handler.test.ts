@@ -116,6 +116,21 @@ describe('the repaired-book handler (#3713)', () => {
     expect(h.getBookState).toHaveBeenCalledTimes(1);
   });
 
+  /* PR #4004 pass 3, finding 2: the commit arms every save the middleware kept from before it. */
+  it('drops kept saves, based state saves included, before committing the token', async () => {
+    const store = makeStore('b1');
+    const seen: unknown[] = [];
+    const dispatch = store.dispatch.bind(store);
+    store.dispatch = ((a: { type?: string }) => {
+      seen.push(a);
+      return dispatch(a as never);
+    }) as typeof store.dispatch;
+    await bookFetch('/api/books/b1', { method: 'DELETE' });
+    await flush();
+    await flush();
+    expect(seen).toContainEqual({ type: 'persistence/dropRetained', payload: 'b1', onFullRead: true, dropBased: true });
+  });
+
   it('a failing book re-read leaves the refusal in place and does not throw', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     h.getBookState.mockRejectedValue(new Error('down'));

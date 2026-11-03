@@ -5666,6 +5666,45 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
   });
 
+  /* PR #4004 pass 3, finding 2: the full read that COMMITS a token must drop the book's kept
+     saves, based `state` ones included (a kept save made before the commit carried no token). */
+  const droppedOnRead = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) => {
+    const seen: Array<{ type?: string; payload?: unknown; onFullRead?: boolean; dropBased?: boolean }> = [];
+    const dispatch = store.dispatch.bind(store);
+    store.dispatch = ((a: { type?: string }) => {
+      seen.push(a);
+      return dispatch(a as never);
+    }) as typeof store.dispatch;
+    return () => seen.filter((a) => a.type === 'persistence/dropRetained' && a.onFullRead && a.payload === PREV);
+  };
+
+  it('the full read of a repaired id drops kept saves including based state ones, before committing the token', async () => {
+    const server = fakeServer();
+    server.gated = true;
+    const store = makeStoreWithScopeAndPersistence();
+    installRepairedBookHandler(store);
+    const drops = droppedOnRead(store);
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
+    await settle();
+    expect(drops().length).toBeGreaterThan(0);
+    expect(drops().every((a) => a.dropBased === true)).toBe(true);
+  });
+
+  it('CONTROL: a full read of an id that was never repaired keeps based state saves (the P2 rule)', async () => {
+    fakeServer();
+    const store = makeStoreWithScopeAndPersistence();
+    installRepairedBookHandler(store);
+    const drops = droppedOnRead(store);
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
+    await settle();
+    expect(drops().length).toBeGreaterThan(0);
+    expect(drops().some((a) => a.dropBased)).toBe(false);
+  });
+
   it('CONTROL: with no repair the same edit goes through, untouched by the gate', async () => {
     const { server, store } = await openLoserTab();
     act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });

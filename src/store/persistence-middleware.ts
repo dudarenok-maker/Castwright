@@ -393,12 +393,16 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
    A re-parse or a manuscript replace drops nothing: it rotates the book's
    edit epoch, so the server refuses every kept save (plan 289, D8b). Touches
    only the kept saves — a newer edit already queued for the book is
-   untouched. Not a reducer action. */
+   untouched. `dropBased` (#3713, PR #4004 pass 3) lifts the based-`state` exception: it is
+   what a full read passes when it COMMITS a repaired-id read token, because a save kept from
+   before the commit was made without the token and must not be armed by it. Not a reducer
+   action. */
 const DROP_RETAINED = 'persistence/dropRetained';
-export const dropRetainedSaves = (bookId: string, onFullRead = false) => ({
+export const dropRetainedSaves = (bookId: string, onFullRead = false, dropBased = false) => ({
   type: DROP_RETAINED,
   payload: bookId,
   onFullRead,
+  dropBased,
 });
 
 /* Plan 289 (D6) — a re-sent save carries the revision it was built against, so
@@ -751,7 +755,7 @@ export const persistenceMiddleware: Middleware = (store) => {
         const box = outbox.get(key);
         if (!box || timers.has(key) || flights.has(key)) continue;
         /* P2 — a based `state` save stays, for the server to judge. */
-        const keepBased = onRead && slice === 'state';
+        const keepBased = onRead && slice === 'state' && !(a as { dropBased?: boolean }).dropBased;
         for (const [u, e] of Array.from(box)) {
           if (keepBased && e.base) continue;
           box.delete(u);

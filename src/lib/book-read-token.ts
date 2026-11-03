@@ -45,6 +45,11 @@ export function commitBookReadToken(bookId: string): void {
   if (token) tokens.set(bookId, token);
 }
 
+/** A book-state read issued a token for `bookId` (the book is a repaired id) that nothing has committed yet. */
+export function hasIssuedBookReadToken(bookId: string): boolean {
+  return issued.has(bookId);
+}
+
 export function __resetBookReadTokensForTest(): void {
   issued.clear();
   tokens.clear();

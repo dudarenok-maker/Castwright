@@ -86,7 +86,7 @@ import { UpdateNotifierBanner } from './update-notifier-banner';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { DuplicateBookRepairBanner } from './duplicate-book-repair-banner';
 import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
-import { commitBookReadToken } from '../lib/book-read-token';
+import { commitBookReadToken, hasIssuedBookReadToken } from '../lib/book-read-token';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -1020,7 +1020,9 @@ export function Layout() {
                A kept `state`-slice save that carries a base is not dropped
                (#3784 P2): it stays for the server to judge. Based whole-slice
                saves (cast, manuscript, changeLog) are dropped. */
-            dispatch(dropRetainedSaves(bookId, true));
+            /* #3713: when this read ISSUED a repaired-id token (committed below), a kept save
+               made before the commit carried none, so a based `state` one goes too. */
+            dispatch(dropRetainedSaves(bookId, true, hasIssuedBookReadToken(bookId)));
             /* #3916 — the same skip for a cast write made since this read went out
                (a voice match applied on Confirm): the roster it read predates that
                write, and hydrating it would wipe the applied match from the screen

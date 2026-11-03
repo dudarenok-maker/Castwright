@@ -10,6 +10,7 @@ import type { Store } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { commitBookReadToken, setRepairedBookHandler } from '../lib/book-read-token';
 import { bookMetaActions } from './book-meta-slice';
+import { dropRetainedSaves } from './persistence-middleware';
 import { libraryActions } from './library-slice';
 import { notificationsActions } from './notifications-slice';
 
@@ -41,6 +42,9 @@ export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getS
            be refused on every retry. */
         if (stageShows(store.getState(), bookId)) return;
         await api.getBookState(bookId);
+        /* A save the middleware kept from before this commit was made without the token: the
+           commit must not arm it (a based `state` save included). */
+        store.dispatch(dropRetainedSaves(bookId, true, true));
         commitBookReadToken(bookId);
       })
       .catch((err) => console.warn('[repaired-book] re-read failed', err));

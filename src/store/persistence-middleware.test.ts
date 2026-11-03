@@ -2528,6 +2528,27 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       restore();
     });
 
+    /* #3713 / PR #4004 pass 3: committing a repaired-id read token arms every save the middleware
+       still holds, so a kept save made BEFORE the commit must not survive it, a based `state` one
+       included. `dropBased` (third argument) is what Layout and the repaired-book handler pass then. */
+    it('#3713: a commit-time drop also takes a based kept state save', async () => {
+      const { disk, store, restore } = setup();
+      await keepConfirm(store, disk);
+      store.dispatch(dropRetainedSaves('b1', true, true));
+      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
+      expect(stateOnDisk(disk).castConfirmed).toBe(false);
+      restore();
+    });
+
+    it('#3713: a commit-time drop of one book leaves another books kept save alone', async () => {
+      const { disk, store, restore } = setup();
+      await keepConfirm(store, disk);
+      store.dispatch(dropRetainedSaves('some-other-book', true, true));
+      await store.dispatch(flushBookPersistence('b1'));
+      expect(stateOnDisk(disk).castConfirmed).toBe(true);
+      restore();
+    });
+
     /* P2 is narrowed to the `state` slice: a full read puts the screen back to
        disk without a kept whole-slice save, so keeping it would land a roster
        the screen no longer shows (F1). */

@@ -942,6 +942,9 @@ whose slices still hold the other twin therefore does not arm the writes that sn
 and the change was not saved), marks the book for a full read (Layout re-reads it, which commits the token), and
 refreshes the Library; any book the open stage does not show (including one the slices still hold, on the Library) is
 read and committed straight away so the user's retry passes, because Layout reads only while the stage shows the book.
+Wherever a token is committed (that handler, and Layout's full read of a gated id) the book's kept saves are dropped
+first, a based `state` save included (`dropRetainedSaves(bookId, true, true)`): a save the middleware kept from before the
+commit was made without the token, and the commit must not arm it.
 The persistence middleware already treats any 4xx on `PUT /state` as a final refusal, so the rejected save is dropped
 without a retry and a details commit is rolled back, its typed draft kept.
 
