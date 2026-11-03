@@ -284,3 +284,76 @@ describe('pass-4 A — moving a stranded follower carries the rows that follow i
     expect(readRow('Book Four').voiceUuid).toBe(two);
   });
 });
+
+describe('pass-4 B — a stranded legacy follower takes its source’s uuid and the series mint never restamps', () => {
+  const legacy = {
+    ...baseRow,
+    voiceUuid: undefined,
+    overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
+  };
+  function seedLegacyThree() {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']] }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two') }]);
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+  }
+  const oneIntact = () =>
+    readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT) &&
+    readRow('Book One').voiceUuid === undefined;
+  async function strandLegacyThree() {
+    const goodThree = readFileSync(castPath('Book Three'), 'utf8');
+    writeFileSync(castPath('Book Three'), TORN);
+    expect((await design('Book Two')).status).toBe(200);
+    writeFileSync(castPath('Book Three'), goodThree);
+  }
+
+  it('design Two (Three torn), restore, design Three: Three takes Two’s uuid, Book One has none', async () => {
+    seedLegacyThree();
+    await strandLegacyThree();
+    const two = readRow('Book Two').voiceUuid;
+    expect(two).toBeTruthy();
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
+
+    requestedVoiceIds = [];
+    expect((await design('Book Three')).status).toBe(200);
+    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+    expect(readRow('Book Two').voiceUuid).toBe(two);
+    expect(readRow('Book Three').voiceUuid).toBe(two);
+    expect(oneIntact()).toBe(true);
+  });
+
+  it('failure path: a failed write of the legacy follower fails the design and stamps nothing', async () => {
+    seedLegacyThree();
+    await strandLegacyThree();
+    const two = readRow('Book Two').voiceUuid;
+    requestedVoiceIds = [];
+    failWriteIn.text = 'Book Three';
+    const res = await design('Book Three');
+    failWriteIn.text = null;
+    expect(res.status).toBe(500);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
+    expect(readRow('Book Two').voiceUuid).toBe(two);
+    expect(oneIntact()).toBe(true);
+  });
+
+  it('the series mint leaves a row that already has its own uuid alone', async () => {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_two' }]);
+    writeBook('Book Three', [{ ...legacy }]);
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+    writeFileSync(join(qwenDir(), 'qwen-u_two.pt'), Buffer.from('TWO-OWN-PT'));
+    expect((await design('Book Three')).status).toBe(200);
+    const three = readRow('Book Three').voiceUuid;
+    expect(three).toBeTruthy();
+    expect(three).not.toBe('u_two');
+    expect(readRow('Book Two').voiceUuid).toBe('u_two');
+    expect(readFileSync(join(qwenDir(), 'qwen-u_two.pt')).equals(Buffer.from('TWO-OWN-PT'))).toBe(true);
+  });
+});

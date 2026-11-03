@@ -246,7 +246,8 @@ export async function findLinkFollowers(
    STRANDED on a voice its source left, and is returned as `{ voiceUuid }`, the
    uuid the source holds now, for the caller to move it onto (the follow rule).
    The walk keeps going up through a linked source on a third uuid, so a row left
-   behind by an earlier move still finds the declined row above it.
+   behind by an earlier move still finds the declined row above it. A walker with
+   no uuid whose source holds one takes that uuid the same way.
 
    A link whose target cannot be told apart from an unreadable book THROWS: the
    unreadable book may be that target, and designing under the shared uuid would
@@ -286,7 +287,9 @@ export async function findDeclinedAncestor(
     if (!row) return null;
     if (!holds(row)) {
       if (!row.voiceUuid) return null;
-      if (!uuid) return null;
+      /* A legacy walker (no uuid) whose source holds one takes it: the source left
+         the shared legacy key, and the link says this row shares with the source. */
+      if (!uuid) return { voiceUuid: row.voiceUuid };
       /* The source that declined the voice, already forked off it. */
       if (declinesVoice(row, { voiceUuid: uuid })) return { voiceUuid: row.voiceUuid };
       /* A linked source on yet another uuid (an earlier move carried it off U): the

@@ -379,10 +379,13 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
     expect(await findAncestor(two, { id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) })).toBeNull();
   });
 
-  it('null when the linked row no longer holds the uuid, has no uuid to follow, or names no character', async () => {
+  it('null when the linked row no longer holds the uuid, or names no character; a legacy walker takes the source uuid', async () => {
     const three = chain();
     expect(await findAncestor(three, { id: 'c', voiceUuid: 'other', matchedFrom: link(TWO_ID) })).toBeNull();
-    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toBeNull();
+    // a legacy walker (no uuid) whose source holds one takes it (#3992 pass 4): the series mint would restamp the source
+    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toEqual({ voiceUuid: U });
+    // ...but a source with no uuid either has nothing to follow
+    expect(await findAncestor(three, { id: 'c', voiceId: 'v_none', matchedFrom: link(TWO_ID, 'nobody') })).toBeNull();
     expect(await findAncestor(three, { id: 'zzz', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
     // no characterId: the same id in the linked book is the source (the follower rule's reading)
     const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) });

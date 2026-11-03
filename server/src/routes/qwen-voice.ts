@@ -647,6 +647,11 @@ export async function ensureCharacterVoiceUuid(
          landed on this row. */
       if ((character as { matchedFrom?: unknown }).matchedFrom) {
         const ancestor = await findDeclinedAncestor(bookDir, character);
+        if (ancestor && 'voiceUuid' in ancestor) {
+          /* The source already minted apart: this row follows it (and so do the rows
+             below it) rather than taking the series mint. */
+          return moveStrandedFollower(bookDir, characterId, undefined, ancestor.voiceUuid);
+        }
         if (ancestor && 'dir' in ancestor) {
           await mintUuidApartFromLegacyKey(ancestor.dir, ancestor.characterId, linkId);
           const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
@@ -663,7 +668,10 @@ export async function ensureCharacterVoiceUuid(
          walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
          unlocked and delegating; it must not gain a lock of its own. */
       const uuid = nanoid();
-      const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
+      /* A row that already has its own uuid keeps it: a forked row still shares
+         `voiceId` with the earlier book, and restamping it would orphan its own
+         designed voice. */
+      const stamp = (c: CastCharacter): CastCharacter => (c.voiceUuid ? c : { ...c, voiceUuid: uuid });
       await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, stamp);
       return uuid;
     }
