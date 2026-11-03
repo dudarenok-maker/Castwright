@@ -108,7 +108,11 @@ const sel = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
 
 type CastRow = Record<string, unknown>;
 
-function mkBook(characters: CastRow[], name: string): { manuscriptId: string; bookDir: string } {
+function mkBook(
+  characters: CastRow[],
+  name: string,
+  history?: unknown,
+): { manuscriptId: string; bookDir: string } {
   const manuscriptId = `t3965-${Date.now()}-${Math.random()}`;
   const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-3965-'));
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -136,6 +140,9 @@ function mkBook(characters: CastRow[], name: string): { manuscriptId: string; bo
     }),
   );
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+  if (history) {
+    writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify(history));
+  }
   const chapterHints = [
     { id: 1, title: 'Chapter One', body: BODY(name) },
     { id: 2, title: 'Chapter Two', body: BODY(name) },
@@ -226,6 +233,9 @@ const readCast = (bookDir: string): CastRow[] =>
   JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8')).characters;
 const named = (bookDir: string, name: string): CastRow[] =>
   readCast(bookDir).filter((c) => c.name === name);
+const readRejectedPairs = (bookDir: string): Array<{ from: string; to: string }> =>
+  JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), 'utf8'))
+    .rejectedPairs;
 
 const NARR: CharacterOutput = {
   id: 'narrator',
@@ -460,6 +470,44 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
           (r) => (r.notLinkedTo as Array<{ bookId: string; characterId: string }>) ?? [],
         );
         expect(edges).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    "a row's own same-book reject edge still blocks the collapse, keeping the rejected pair (%s job)",
+    async (kind) => {
+      /* The user merged the reject target `tom` into a same-name `x`, which
+         repointed the rejected pair to (thomas, x). `thomas` keeps the seeded
+         same-book self-edge. Fusing the two would delete that rejection. */
+      const x: CastRow = { id: 'x', name: 'Old Tom', voiceId: 'v_x', lines: 0 };
+      const thomas: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_th',
+        voiceState: 'locked',
+        lines: 3,
+        notLinkedTo: [{ bookId: BOOK, characterId: 'thomas' }],
+      };
+      const history = {
+        schema: 1,
+        supersededBy: { tom: 'x' },
+        rejectedPairs: [{ from: 'thomas', to: 'x' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, x, thomas], 'Old Tom', history);
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('thomas', 'Old Tom')], {
+          speaker: 'thomas',
+          subset: kind === 'subset',
+        });
+        expect(
+          named(bookDir, 'Old Tom')
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(['thomas', 'x']);
+        expect(readRejectedPairs(bookDir)).toEqual([{ from: 'thomas', to: 'x' }]);
       } finally {
         await cleanup(manuscriptId, bookDir);
       }

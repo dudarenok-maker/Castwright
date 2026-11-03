@@ -1296,13 +1296,16 @@ describe('dedupePriorCastByName', () => {
     expect(prior[0].notLinkedTo).toEqual([shared]);
   });
 
-  it('a self-naming notLinkedTo edge does not block the collapse, with or without a book (#3965)', () => {
+  it("a row's own SAME-book self-naming edge still blocks the collapse; a cross-book one does not (#3965)", () => {
+    // The seed writes the reject-orphan edge onto the re-minted orphan itself,
+    // so a self-edge is the surviving record of a rejected pair.
     const prior: C[] = [
       { id: 'a', name: 'X', notLinkedTo: [{ bookId: 'b1', characterId: 'a' }] },
       { id: 'b', name: 'X' },
     ];
-    expect(dedupePriorCastByName(prior, undefined).cast).toHaveLength(1);
-    expect(dedupePriorCastByName(prior, 'b1').cast).toHaveLength(1);
+    expect(dedupePriorCastByName(prior, undefined).cast).toHaveLength(2);
+    expect(dedupePriorCastByName(prior, 'b1').cast).toHaveLength(2);
+    expect(dedupePriorCastByName(prior, 'b2').cast).toHaveLength(1);
   });
 
   it('never collapses narrator rows sharing a name', () => {

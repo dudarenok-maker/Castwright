@@ -686,7 +686,10 @@ function groupHasNotLinkedEdge(
 ): boolean {
   for (const c of group) {
     for (const other of group) {
-      if (other === c) continue;
+      // `other === c` is deliberate: a row's own same-book self-edge is the
+      // seed's surviving record of a rejected pair (reject-orphan writes it onto
+      // the re-minted orphan), and fusing the pair would delete that rejection.
+      // The book scope still drops a cross-book self-id.
       if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
     }
   }
