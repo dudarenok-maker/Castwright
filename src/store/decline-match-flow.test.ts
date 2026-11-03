@@ -21,7 +21,15 @@ const matched = {
 function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books' = 'ready') {
   const initialUi = uiSlice.getInitialState();
   const store = configureStore({
-    reducer: { cast: castSlice.reducer, ui: uiSlice.reducer, notifications: notificationsSlice.reducer },
+    reducer: {
+      cast: castSlice.reducer,
+      ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      /* the slices hold ONE book at a time; `test/open` stands in for the layout
+         hydrating another book's slices */
+      manuscript: (s: { manuscriptId: string | null } = { manuscriptId: 'm-two' }, a: { type: string; payload?: string }) =>
+        a.type === 'test/open' ? { manuscriptId: a.payload ?? null } : s,
+    },
     preloadedState: {
       ui: {
         ...initialUi,
@@ -108,6 +116,36 @@ describe('declineMatchFlow (#3992)', () => {
     expect(order).toEqual(['request saw matchedFrom=book-one']);
     expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
     expect((store.getState() as unknown as { notifications: { toasts: unknown[] } }).notifications.toasts).toHaveLength(0);
+  });
+
+  it('opening ANOTHER book while the request is in flight leaves that book’s row untouched (pass-3 5)', async () => {
+    const store = makeStore([matched]);
+    let release!: () => void;
+    vi.mocked(api.declineVoiceLink).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] });
+        }),
+    );
+    const pending = (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    // Book Three opens: its cast hydrates, its wren is linked to Book Two
+    const three = {
+      ...matched,
+      matchedFrom: { bookId: 'book-two', characterId: 'wren', bookTitle: 'Book Two', confidence: 0.9 },
+    } as unknown as Character;
+    store.dispatch({ type: 'test/open', payload: 'm-three' });
+    store.dispatch(castSlice.actions.setCharacters([three]));
+    release();
+    await pending;
+    const row = store.getState().cast.characters[0];
+    expect(row.matchedFrom?.bookId).toBe('book-two');
+    expect(row.voiceState).toBe('reused');
+  });
+
+  it('the same book still open after the request: the reducer applies (control)', async () => {
+    const store = makeStore([matched]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
   });
 
   it('records nothing when no book is open', async () => {

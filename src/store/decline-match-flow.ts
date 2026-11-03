@@ -12,11 +12,19 @@
  * since the reducer erases it. A link with no book id (a manual Assign records
  * none) has nothing to name, so only the reducer runs; the same when no book is
  * open. Works from the Cast view (`ready`) and from Confirm, where the drawer also
- * opens and where a re-analysis lands. */
+ * opens and where a re-analysis lands.
+ *
+ * The request outlives the click (a contended book-op or cast lock stretches it to
+ * 10 s), and the slices hold ONE book at a time while `cast/declineMatch` is a
+ * persisted action saved to whichever book the stage names. So the book open at
+ * click time is captured, and the reducer runs only if the slices still hold it
+ * (open-book.ts). Otherwise the server write already stands, and the next open of
+ * that book reads it. */
 
 import { castActions } from './cast-slice';
 import { notificationsActions } from './notifications-slice';
 import { api } from '../lib/api';
+import { selectIsOpenBook } from './open-book';
 import type { AppDispatch, RootState } from './index';
 
 export function declineMatchFlow(characterId: string) {
@@ -25,6 +33,7 @@ export function declineMatchFlow(characterId: string) {
     const stage = state.ui.stage;
     const bookId = stage.kind === 'ready' || stage.kind === 'confirm' ? stage.bookId : null;
     const fromBookId = state.cast.characters.find((c) => c.id === characterId)?.matchedFrom?.bookId;
+    const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
 
     if (bookId && fromBookId) {
       try {
@@ -41,6 +50,7 @@ export function declineMatchFlow(characterId: string) {
         return;
       }
     }
+    if (!selectIsOpenBook(getState(), openBook)) return;
     dispatch(castActions.declineMatch(characterId));
   };
 }
