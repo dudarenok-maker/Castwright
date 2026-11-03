@@ -17,14 +17,19 @@ const matched = {
   voiceState: 'reused',
 } as unknown as Character;
 
-function makeStore(characters: Character[], stage: 'ready' | 'books' = 'ready') {
+function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books' = 'ready') {
   const initialUi = uiSlice.getInitialState();
   const store = configureStore({
     reducer: { cast: castSlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       ui: {
         ...initialUi,
-        stage: stage === 'ready' ? { kind: 'ready', bookId: 'book-two', view: 'cast' } : { kind: 'books' },
+        stage:
+          stage === 'ready'
+            ? { kind: 'ready', bookId: 'book-two', view: 'cast' }
+            : stage === 'confirm'
+              ? { kind: 'confirm', bookId: 'book-two', openProfileId: 'wren' }
+              : { kind: 'books' },
       } as ReturnType<typeof uiSlice.getInitialState>,
     },
   });
@@ -40,6 +45,17 @@ beforeEach(() => {
 describe('declineMatchFlow (#3992)', () => {
   it('clears matchedFrom in redux AND records the decline against the book it was read from', async () => {
     const store = makeStore([matched]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
+    expect(api.declineVoiceLink).toHaveBeenCalledWith({
+      bookId: 'book-two',
+      characterId: 'wren',
+      fromBookId: 'book-one',
+    });
+  });
+
+  it('records the decline from the Confirm stage too (the drawer opens there)', async () => {
+    const store = makeStore([matched], 'confirm');
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
     expect(api.declineVoiceLink).toHaveBeenCalledWith({

@@ -18,7 +18,10 @@ import type { AppDispatch, RootState } from './index';
 export function declineMatchFlow(characterId: string) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
     const state = getState();
-    const bookId = state.ui.stage.kind === 'ready' ? state.ui.stage.bookId : null;
+    /* The match drawer opens on Confirm as well as on the Cast view, and a decline
+       made there is the one a re-analysis re-links, so both stages count. */
+    const stage = state.ui.stage;
+    const bookId = stage.kind === 'ready' || stage.kind === 'confirm' ? stage.bookId : null;
     const fromBookId = state.cast.characters.find((c) => c.id === characterId)?.matchedFrom?.bookId;
 
     dispatch(castActions.declineMatch(characterId));
