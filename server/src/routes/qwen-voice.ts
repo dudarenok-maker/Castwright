@@ -338,7 +338,7 @@ async function mintUuidApartFromLegacyKey(
     for (let i = 0; i < fresh.characters.length; i++) {
       const c = fresh.characters[i];
       if ((c.voiceId ?? c.id) === linkId && !c.voiceUuid) {
-        fresh.characters[i] = { ...c, voiceUuid: newUuid };
+        fresh.characters[i] = withForkedUuid(c, newUuid);
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);

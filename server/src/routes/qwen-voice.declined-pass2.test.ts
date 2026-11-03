@@ -4,7 +4,15 @@
    being overwritten. Book One holds the shared voice u_shared; Book Two declined
    it; Book Three follows Book Two. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -379,5 +387,46 @@ describe('pass-2 3 — designing a FOLLOWER of a declined, unforked row must not
     const res = await design('Book Three');
     writeFileSync(castPath('Book Two'), goodTwo);
     expect(res.status).toBe(200);
+  });
+});
+
+describe('pass-2 L — the legacy-key mint follows the same rules as the uuid fork', () => {
+  const legacySlot = { qwen: { name: 'qwen-v_wren' } };
+  const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: legacySlot };
+  function seedLegacy(rows: { one?: object; two?: object; three?: object }) {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', [{ ...legacy, ...rows.one }]);
+    writeBook('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']], ...rows.two }]);
+    if (rows.three) writeBook('Book Three', [{ ...legacy, ...rows.three }]);
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+  }
+
+  it('a third book’s bookId-less link does not reopen the series mint onto Book One', async () => {
+    seedLegacy({ three: { matchedFrom: { bookTitle: 'Book Two', confidence: 0.92 } } });
+    const res = await design('Book Two');
+    expect(res.status).toBe(200);
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+    expect(readRow('Book Two').voiceUuid).toBeTruthy();
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
+  });
+
+  it('the minted row drops the qwen variants map, whose render keys would not exist under the new uuid', async () => {
+    const slot = {
+      qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } },
+    };
+    seedLegacy({ one: { overrideTtsVoices: slot }, two: { overrideTtsVoices: slot } });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt'), Buffer.from('ONE-ANGRY'));
+    expect((await design('Book Two', { preview: true })).status).toBe(200);
+    const two = readRow('Book Two');
+    expect(two.voiceUuid).toBeTruthy();
+    expect(two.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    // Book One keeps its own variant, untouched
+    expect(readRow('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe(
+      'qwen-v_wren__angry',
+    );
+    expect(existsSync(join(qwenDir(), 'qwen-v_wren__angry.pt'))).toBe(true);
   });
 });

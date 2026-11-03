@@ -347,10 +347,13 @@ interface LegacyRow {
 type MatchedFrom = { bookId?: string; characterId?: string } | null | undefined;
 
 /* Does another book's `matchedFrom` link back to X (the character in
-   `bookDir`)? A bookId-less one could point at anyone, so it counts; one naming
-   X's bookId counts when its characterId is absent or resolves to X. Resolved
-   through X's own book (live cast + id history) so a retired id still matches;
-   no second id matcher. */
+   `bookDir`)? Only one naming X's bookId counts, when its characterId is absent
+   or resolves to X. Resolved through X's own book (live cast + id history) so a
+   retired id still matches; no second id matcher. A bookId-less one (a manual
+   Assign writes one) could point at anyone, so it is NOT a link to X: that row is
+   a holder of the legacy key, the same reading as the uuid fork's followers (see
+   the header). Counting it as a link would end the scan at the first such row and
+   hand the series mint, which moves the earlier book's render key, back to X. */
 async function makeLinksToSelf(
   bookDir: string,
   character: { id: string },
@@ -367,8 +370,7 @@ async function makeLinksToSelf(
     return resolver.resolve(characterId)?.character.id === character.id;
   };
   return async (mf) => {
-    if (!mf) return false;
-    if (!mf.bookId) return true;
+    if (!mf?.bookId) return false;
     if (selfBookId && mf.bookId === selfBookId) {
       return !mf.characterId || (await namesSelf(mf.characterId));
     }

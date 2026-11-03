@@ -201,6 +201,23 @@ describe('shouldMintApartFromLegacyKey (#3992)', () => {
     expect(await shouldMintApart(two, { ...x, declinedVoiceFrom: undefined })).toBe(false);
   });
 
+  it('true: a bookId-less matchedFrom elsewhere is a holder, not a link back to this row (pass-2 L)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [x]);
+    book('One', ONE_ID, [{ id: 'c1', voiceId: 'v_x', overrideTtsVoices: slot }]);
+    book('Three', 'book-three-id', [
+      { id: 'c3', voiceId: 'v_x', overrideTtsVoices: slot, matchedFrom: { bookTitle: 'Book Two', confidence: 0.9 } },
+    ]);
+    expect(await shouldMintApart(two, x)).toBe(true);
+    // and on its own it is still a holder: with nothing else sharing the key the row mints apart
+    reset();
+    const two2 = book('Two', TWO_ID, [x]);
+    book('Three', 'book-three-id', [
+      { id: 'c3', voiceId: 'v_x', overrideTtsVoices: slot, matchedFrom: { bookTitle: 'Book Two', confidence: 0.9 } },
+    ]);
+    expect(await shouldMintApart(two2, x)).toBe(true);
+  });
+
   it('false: the other book links back to this one (source side of a live pair)', async () => {
     reset();
     const two = book('Two', TWO_ID, [x]);
