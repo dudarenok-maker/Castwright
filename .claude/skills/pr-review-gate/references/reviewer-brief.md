@@ -894,19 +894,22 @@ recite:
     sibling-family call) and confirm a direct test goes red; add the case
     for any that survives.
 
-67. **A per-book mark placed inside a cross-book slice-write guard** — PR #4008
-    pass 3 (#3967): Restructure's `markNeedsFullRead` sat inside the
-    `activeBookId === bookId` check that exists to stop a late result being
-    written into another book's slices. The mark is per book and writes no
-    slice, so it was dropped exactly when the user left the book, and
-    reopening then read revisions only and showed the pre-restructure list
-    (a second merge of the same ids swallowed the next chapter). The same
-    mark was also missing when a hydrate landed mid-request and the remap was
-    skipped. Checkable: for every guard that exists to stop a cross-book slice
-    write, list what else is inside it; anything keyed by book id that writes
-    no slice (a mark, a flag, a cache entry) belongs outside it. Then drive
-    the guard's false branch (leave the book before the read settles, once
-    with a hang and once with a prompt answer) and assert the mark.
+67. **A merge that unions some fields and drops the field recording a user's
+    decision, reached through a guard a change then narrows** — PR #4006 pass
+    2 (#3965, `dedupePriorCastByName`): the same-name collapse kept the best
+    row and unioned `aliases`, but dropped every other field of the losing
+    row, `notLinkedTo` included. On `main` any cross-book decline blocked the
+    collapse outright, so a decline never reached the merge; scoping the gate
+    to the current book sent those groups into the merge, which erased a
+    decline held only by the row that lost rank, and the link the user
+    refused landed on the next run. Checkable: for every merge or collapse
+    that keeps one of N rows, list each field of the dropped rows and mark the
+    ones that record a user decision (not-the-same-person edges, locks,
+    overrides, dismissals); each must be unioned or carried, not silently
+    discarded. Then, for any change that narrows a guard in front of such a
+    path, ask which inputs the old guard kept out of it, and run those inputs
+    through the real jobs and the real downstream consumer (here the linker),
+    not the merge function alone.
 
 68. **Ids captured when a job starts, acted on later without re-checking each
     still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
@@ -936,6 +939,18 @@ recite:
     66-68 are taken or reserved by open PRs; renumber on merge if the order
     changes.)
 
+70. **A degenerate input dismissed as "not a decision" without tracing who
+    writes it** — PR #4006 pass 2 (#3965, `groupHasNotLinkedEdge`): a row's
+    own self-naming `notLinkedTo` edge was ignored as "not a decision between
+    two rows". One writer does put a decision there: the seed's name bridge
+    copies reject-orphan's same-book edge onto the re-minted orphan, so the
+    self-edge is the surviving record of a rejected pair, and ignoring it
+    fused the pair and deleted the rejection from both records. Checkable:
+    before calling a self-reference, empty value or no-op shape harmless,
+    list every writer of that field and read what each puts there; if one
+    writes a real decision in that shape, the shape needs a test through the
+    real jobs, not a comment saying it cannot matter.
+
 75. **A repair scheduled rather than applied, while the lock protecting the stale
     state is released** — PR #4008 pass 4 (#3967): when a Restructure's
     re-read expired or its remap was skipped, the fix was a mark that queues
@@ -950,6 +965,20 @@ recite:
     down on its landing, on its failure, and on leaving the book), or applies
     the repair itself. Then drive the window: make an edit after the lock would
     have come down and assert what reaches disk.
+
+76. **A per-book mark placed inside a cross-book slice-write guard** — PR #4008
+    pass 3 (#3967): Restructure's `markNeedsFullRead` sat inside the
+    `activeBookId === bookId` check that exists to stop a late result being
+    written into another book's slices. The mark is per book and writes no
+    slice, so it was dropped exactly when the user left the book, and
+    reopening then read revisions only and showed the pre-restructure list
+    (a second merge of the same ids swallowed the next chapter). The same
+    mark was also missing when a hydrate landed mid-request and the remap was
+    skipped. Checkable: for every guard that exists to stop a cross-book slice
+    write, list what else is inside it; anything keyed by book id that writes
+    no slice (a mark, a flag, a cache entry) belongs outside it. Then drive
+    the guard's false branch (leave the book before the read settles, once
+    with a hang and once with a prompt answer) and assert the mark.
 
 ### Keeping the catalogue current
 

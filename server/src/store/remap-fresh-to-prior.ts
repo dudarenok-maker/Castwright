@@ -28,6 +28,7 @@
 import { normaliseForMatch } from '../util/text-match.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
+import { notLinkedToId } from './not-linked-to-scope.js';
 
 type PriorCastRow = { id: string } & Record<string, unknown>;
 
@@ -64,31 +65,6 @@ function nameKeyOf(c: Record<string, unknown>): string {
   return typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
 }
 
-/** True when `row.notLinkedTo` names `targetId` in either entry shape the
-    field is written in: a bare string (a hypothetical within-book edge this
-    module accepts defensively, though nothing mints it today) or the real
-    on-disk `{ bookId, characterId }` shape `POST /not-linked-to` writes
-    (`server/src/routes/cast-not-linked-to.ts:238`; typed in `voices.ts:104`
-    / `voice-override-linked.ts:65`). Matches on `characterId` alone,
-    ignoring `bookId` — so a cross-book "not the same person" decision also
-    blocks a within-book remap sharing that character id. That is
-    deliberately fail-safe, not a bug: `merge-analysis-cast.ts:377-388`
-    (`groupHasNotLinkedEdge`) makes the identical trade for the same
-    reason — a false "linked" is silent data corruption (two people
-    collapsed into one), a false "not linked" only costs a remap that a
-    user can still do by hand. */
-function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
-  const nl = row.notLinkedTo;
-  if (!Array.isArray(nl)) return false;
-  return nl.some((entry) => {
-    if (typeof entry === 'string') return entry === targetId;
-    if (entry && typeof entry === 'object') {
-      return (entry as { characterId?: unknown }).characterId === targetId;
-    }
-    return false;
-  });
-}
-
 /** Rewrite this run's fresh character/sentence ids onto the existing cast's
     ids wherever exactly one fresh row and exactly one prior row share a
     normalised display name, and no `notLinkedTo` edge separates them.
@@ -101,6 +77,10 @@ function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean 
     equals the fresh candidate's own id the pair has already converged via
     the mechanisms that consume the same table, and this remap does nothing.
 
+    `currentBookId` (optional) is the id of the book being analysed; it scopes
+    the `notLinkedTo` gate by book (see `notLinkedToId`). Omit it to keep the
+    bookId-blind behaviour.
+
     Returns new arrays; `fresh`, `sentences` and `priorCast` are not
     mutated. */
 export function remapFreshToPriorIds<
@@ -111,6 +91,7 @@ export function remapFreshToPriorIds<
   sentences: S[],
   priorCast: ReadonlyArray<PriorCastRow>,
   priorRewrites: Readonly<Record<string, string>> = {},
+  currentBookId?: string,
 ): { characters: C[]; sentences: S[]; rewrites: Record<string, string> } {
   if (fresh.length === 0 || priorCast.length === 0) {
     return { characters: [...fresh], sentences: [...sentences], rewrites: {} };
@@ -174,8 +155,8 @@ export function remapFreshToPriorIds<
     // and the prior row's raw id as well as its destination.
     if (isReservedId(freshRow.id) || isReservedId(priorRow.id) || isReservedId(target)) continue;
     if (
-      notLinkedToId(priorRow, freshRow.id) ||
-      notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id)
+      notLinkedToId(priorRow, freshRow.id, currentBookId) ||
+      notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id, currentBookId)
     ) {
       continue;
     }
