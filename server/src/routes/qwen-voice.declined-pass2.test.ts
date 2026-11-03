@@ -430,3 +430,65 @@ describe('pass-2 L — the legacy-key mint follows the same rules as the uuid fo
     expect(existsSync(join(qwenDir(), 'qwen-v_wren__angry.pt'))).toBe(true);
   });
 });
+
+describe('pass-2 stray copies — a throw after the copies leaves no qwen-<new>.* behind', () => {
+  it('the fork: a follower book whose state.json breaks between the scan and its book-op', async () => {
+    seedChain();
+    copyHook.fn = () =>
+      writeFileSync(join(bookDir('Book Three'), '.audiobook', 'state.json'), '{"bookId":');
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(strays()).toEqual([]);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+  });
+
+  it('the fork: a lock that times out waiting for the follower’s book-op', async () => {
+    seedChain();
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const holder = withBookOp(ids['Book Three'], async () => {
+      await held;
+    });
+    const res = await design('Book Two');
+    release();
+    await holder;
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(strays()).toEqual([]);
+    expect(book1Intact()).toBe(true);
+  }, 40_000);
+
+  it('the legacy-key mint: a cast lock that times out after the copies', async () => {
+    const legacy = {
+      ...baseRow,
+      voiceUuid: undefined,
+      overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
+    };
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']] }]);
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+    const { withCastLock } = await import('../workspace/cast-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const holder = withCastLock(bookDir('Book Two'), async () => {
+      await held;
+    });
+    const res = await design('Book Two');
+    release();
+    await holder;
+    expect(res.status).toBe(500);
+    expect(readdirSync(qwenDir()).filter((f) => f !== 'qwen-v_wren.pt')).toEqual([]);
+    expect(readRow('Book Two').voiceUuid).toBeUndefined();
+  }, 40_000);
+});

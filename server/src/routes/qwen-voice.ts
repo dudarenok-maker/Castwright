@@ -322,28 +322,34 @@ async function mintUuidApartFromLegacyKey(
 ): Promise<string | undefined> {
   const newUuid = nanoid();
   const copied = await copyBaseFamily(legacyKey, `qwen-${newUuid}`);
-  return withCastLock(bookDir, async () => {
-    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
-    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-    if (!fresh || idx === -1) {
-      await removeFiles(copied);
-      throw new CharacterGoneError();
-    }
-    const x = fresh.characters[idx];
-    if (x.voiceUuid) {
-      await removeFiles(copied);
-      return x.voiceUuid;
-    }
-    const linkId = x.voiceId ?? x.id;
-    for (let i = 0; i < fresh.characters.length; i++) {
-      const c = fresh.characters[i];
-      if ((c.voiceId ?? c.id) === linkId && !c.voiceUuid) {
-        fresh.characters[i] = withForkedUuid(c, newUuid);
+  try {
+    return await withCastLock(bookDir, async () => {
+      const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+      if (!fresh || idx === -1) {
+        throw new CharacterGoneError();
       }
-    }
-    await writeJsonAtomic(castJsonPath(bookDir), fresh);
-    return newUuid;
-  });
+      const x = fresh.characters[idx];
+      if (x.voiceUuid) {
+        await removeFiles(copied);
+        return x.voiceUuid;
+      }
+      const linkId = x.voiceId ?? x.id;
+      for (let i = 0; i < fresh.characters.length; i++) {
+        const c = fresh.characters[i];
+        if ((c.voiceId ?? c.id) === linkId && !c.voiceUuid) {
+          fresh.characters[i] = withForkedUuid(c, newUuid);
+        }
+      }
+      await writeJsonAtomic(castJsonPath(bookDir), fresh);
+      return newUuid;
+    });
+  } catch (e) {
+    /* ANY throw (the lock timing out before the callback ran, a vanished
+       character, a failed write) leaves nothing stamped, so the copies are strays. */
+    await removeFiles(copied);
+    throw e;
+  }
 }
 
 /* #3992 — see ensureCharacterVoiceUuid. Caller holds the design lock. */
@@ -366,83 +372,96 @@ async function forkSharedVoiceUuid(
   const copied = await copyBaseFamily(`qwen-${oldUuid}`, `qwen-${newUuid}`);
   const cleanup = (): Promise<void> => removeFiles(copied);
 
-  const out = await withBookOps([xBookId, ...scanned.map((f) => f.bookId)], (books) => {
-    const lockedDirs = books.map((b) => b.bookDir);
-    return withCastLocks(lockedDirs, async (): Promise<string | undefined> => {
-      const fresh = await readJson<CastFile>(castJsonPath(bookDir));
-      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-      if (!fresh || idx === -1) {
-        await cleanup();
-        throw new CharacterGoneError();
-      }
-      const x = fresh.characters[idx];
-      if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
-        await cleanup();
-        return x.voiceUuid ?? undefined;
-      }
-
-      /* Every book written so far, with the cast it had before: a failure at any
-         later write puts these back (see the catch), so a follower is never left
-         on the new uuid while the row it links to is still on the old one. */
-      const written: Array<{ dir: string; before: CastFile }> = [];
-      try {
-        const locked = new Set(lockedDirs.map((d) => resolve(d)));
-        const { followers, unreadableDirs } = await scanLinkFollowers(bookDir, x, oldUuid);
-        /* A book the first scan found as a follower, locked on that basis, that
-           cannot be read now is NOT skipped: skipping it would leave a row linked
-           to X on U while X moves to U', and a later redesign of it would then
-           overwrite the earlier book. Fail the fork; nothing has been written. */
-        const unreadable = new Set(unreadableDirs);
-        if (scanned.some((f) => unreadable.has(resolve(f.dir)))) {
-          throw new Error('A book in this series could not be read while the voice was being forked; try again.');
+  /* Set only when a follower could not be rolled back: it still points at the
+     copies, so they must stay whatever else is thrown. */
+  let keepCopies = false;
+  let out: string | undefined | typeof BOOK_GONE;
+  try {
+    out = await withBookOps([xBookId, ...scanned.map((f) => f.bookId)], (books) => {
+      const lockedDirs = books.map((b) => b.bookDir);
+      return withCastLocks(lockedDirs, async (): Promise<string | undefined> => {
+        const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+        const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+        if (!fresh || idx === -1) {
+          await cleanup();
+          throw new CharacterGoneError();
         }
-        const live = followers.filter((f) => locked.has(resolve(f.dir)));
-        for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
-          const cast = await readJson<CastFile>(castJsonPath(dir));
-          if (!cast?.characters) continue;
-          const followerIds = new Set(live.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
-          const linkIds = new Set(
-            cast.characters.filter((c) => followerIds.has(c.id)).map((c) => c.voiceId ?? c.id),
-          );
-          let changed = false;
-          const characters = cast.characters.map((c) => {
-            if (c.voiceUuid !== oldUuid || !linkIds.has(c.voiceId ?? c.id)) return c;
-            changed = true;
-            return withForkedUuid(c, newUuid);
-          });
-          if (!changed) continue;
-          await writeJsonAtomic(castJsonPath(dir), { ...cast, characters });
-          written.push({ dir, before: cast });
+        const x = fresh.characters[idx];
+        if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
+          await cleanup();
+          return x.voiceUuid ?? undefined;
         }
 
-        const linkId = x.voiceId ?? x.id;
-        for (let i = 0; i < fresh.characters.length; i++) {
-          const c = fresh.characters[i];
-          if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
-            fresh.characters[i] = withForkedUuid(c, newUuid);
+        /* Every book written so far, with the cast it had before: a failure at any
+           later write puts these back (see the catch), so a follower is never left
+           on the new uuid while the row it links to is still on the old one. */
+        const written: Array<{ dir: string; before: CastFile }> = [];
+        try {
+          const locked = new Set(lockedDirs.map((d) => resolve(d)));
+          const { followers, unreadableDirs } = await scanLinkFollowers(bookDir, x, oldUuid);
+          /* A book the first scan found as a follower, locked on that basis, that
+             cannot be read now is NOT skipped: skipping it would leave a row linked
+             to X on U while X moves to U', and a later redesign of it would then
+             overwrite the earlier book. Fail the fork; nothing has been written. */
+          const unreadable = new Set(unreadableDirs);
+          if (scanned.some((f) => unreadable.has(resolve(f.dir)))) {
+            throw new Error('A book in this series could not be read while the voice was being forked; try again.');
           }
-        }
-        await writeJsonAtomic(castJsonPath(bookDir), fresh);
-      } catch (e) {
-        /* Put every follower already written back (still inside the locks, so
-           nothing else has touched them). Restored: the copies are strays, remove
-           them. A restore that fails leaves that follower on the copy, so the
-           copies stay, and the original failure is the one reported. */
-        let restored = true;
-        for (const w of written.reverse()) {
-          try {
-            await writeJsonAtomic(castJsonPath(w.dir), w.before);
-          } catch (restoreErr) {
-            restored = false;
-            console.error('[qwen-voice] fork: could not roll a follower back', restoreErr);
+          const live = followers.filter((f) => locked.has(resolve(f.dir)));
+          for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
+            const cast = await readJson<CastFile>(castJsonPath(dir));
+            if (!cast?.characters) continue;
+            const followerIds = new Set(live.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
+            const linkIds = new Set(
+              cast.characters.filter((c) => followerIds.has(c.id)).map((c) => c.voiceId ?? c.id),
+            );
+            let changed = false;
+            const characters = cast.characters.map((c) => {
+              if (c.voiceUuid !== oldUuid || !linkIds.has(c.voiceId ?? c.id)) return c;
+              changed = true;
+              return withForkedUuid(c, newUuid);
+            });
+            if (!changed) continue;
+            await writeJsonAtomic(castJsonPath(dir), { ...cast, characters });
+            written.push({ dir, before: cast });
           }
+
+          const linkId = x.voiceId ?? x.id;
+          for (let i = 0; i < fresh.characters.length; i++) {
+            const c = fresh.characters[i];
+            if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
+              fresh.characters[i] = withForkedUuid(c, newUuid);
+            }
+          }
+          await writeJsonAtomic(castJsonPath(bookDir), fresh);
+        } catch (e) {
+          /* Put every follower already written back (still inside the locks, so
+             nothing else has touched them). Restored: the copies are strays, remove
+             them. A restore that fails leaves that follower on the copy, so the
+             copies stay, and the original failure is the one reported. */
+          let restored = true;
+          for (const w of written.reverse()) {
+            try {
+              await writeJsonAtomic(castJsonPath(w.dir), w.before);
+            } catch (restoreErr) {
+              restored = false;
+              console.error('[qwen-voice] fork: could not roll a follower back', restoreErr);
+            }
+          }
+          if (restored) await cleanup();
+          else keepCopies = true;
+          throw e;
         }
-        if (restored) await cleanup();
-        throw e;
-      }
-      return newUuid;
+        return newUuid;
+      });
     });
-  });
+  } catch (e) {
+    /* ANY throw out of the locks leaves nothing stamped, so the copies are strays:
+       the cast or book-op lock timing out BEFORE the callback ran never reaches the
+       cleanups inside it. Only a follower that could not be rolled back keeps them. */
+    if (!keepCopies) await cleanup();
+    throw e;
+  }
   if (out === BOOK_GONE) {
     await cleanup();
     throw new Error('A book in this series was removed while the voice was being forked; try again.');
