@@ -1,6 +1,6 @@
 # Listening & Revising
 
-The Listen view is home base for a book once at least one chapter has rendered — not just a playback screen, but the place you actually judge whether the performance landed, and fix it in place when it didn't. Below, *The Drowning Bell* — finished, 12 chapters, a cast of 6 — with cover art, title, cast size, and total runtime up top, and quick actions to play from the start, export, preview as a listener would hear it, restructure chapters, or replace the manuscript.
+The Listen view is home base for a book once at least one chapter has rendered — not just a playback screen, but the place you actually judge whether the performance landed, and fix it in place when it didn't. Below, *The Drowning Bell* — finished, 12 chapters, a cast of 6 — with cover art, title, cast size, and total runtime up top, and quick actions to play from the start, export, restructure chapters, or replace the manuscript.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/listening-and-revising/01-listen-header-dark.png">

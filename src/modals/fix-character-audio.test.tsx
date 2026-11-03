@@ -25,7 +25,7 @@ const CHAPTERS: Chapter[] = [
   { id: 4, title: 'Alone', duration: '1:00', state: 'done', progress: 1, characters: { amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
-function makeStore(recorded: Action[]) {
+function makeStore(recorded: Action[], chapters: Chapter[] = CHAPTERS) {
   return configureStore({
     reducer: {
       chapters: chaptersSlice.reducer,
@@ -33,7 +33,7 @@ function makeStore(recorded: Action[]) {
       splice: spliceSlice.reducer,
     },
     preloadedState: {
-      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
+      chapters: { ...chaptersSlice.getInitialState(), chapters },
     },
     middleware: (getDefault) =>
       getDefault().concat(
@@ -48,9 +48,9 @@ function makeStore(recorded: Action[]) {
 describe('FixCharacterAudioModal', () => {
   afterEach(cleanup);
 
-  function renderModal() {
+  function renderModal(chapters: Chapter[] = CHAPTERS) {
     const recorded: Action[] = [];
-    const store = makeStore(recorded);
+    const store = makeStore(recorded, chapters);
     render(
       <Provider store={store}>
         <FixCharacterAudioModal characterId="castor" characterName="Castor Allred" bookId="bk1" onClose={() => {}} />
@@ -71,6 +71,13 @@ describe('FixCharacterAudioModal', () => {
     expect(screen.getByText(/The River/)).toBeTruthy();
     expect(screen.queryByText(/Hidden Lake/)).toBeNull();
     expect(screen.queryByText(/Alone/)).toBeNull();
+  });
+
+  it('leaves an excluded chapter out of the candidates and the batch (#3919)', () => {
+    const { lastStartBatch } = renderModal([{ ...CHAPTERS[0], excluded: true } as Chapter, ...CHAPTERS.slice(1)]);
+    expect(screen.queryByText(/The Meadow/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Apply to 1 chapter/i }));
+    expect(lastStartBatch()!.payload.chapterIds).toEqual([2]);
   });
 
   it('dispatches a remix batch with the chosen gain for the candidate chapters', () => {

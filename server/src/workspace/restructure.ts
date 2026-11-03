@@ -181,8 +181,8 @@ export function pendingMovesAfterRestructure(
     cleared (its own take is staged at a temp slug by then); an UNRENDERED chapter has no op and
     no take of its own, so any `.previous.*` at its slug is a stale orphan it would otherwise
     inherit (and a boot fsck would promote) — unless the same chapter (by uuid) already held that
-    slug, in which case whatever is there is its own take (a stamp-less chapter, e.g. an excluded
-    one a backup restore stripped, still owns it). Sorted, unique. */
+    slug, in which case whatever is there is its own take (a stamp-less chapter, e.g. one a backup
+    restore stripped whose segments file is gone so nothing can re-stamp it, still owns it). Sorted, unique. */
 export function staleTakeClearSlugs(
   newChapters: BookStateJson['chapters'],
   audioOps: readonly AudioOp[],

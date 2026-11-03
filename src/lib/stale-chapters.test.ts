@@ -15,6 +15,14 @@ const ch = (id: number, state: string, characters: Record<string, unknown> | nul
   ({ id, title: `c${id}`, slug: `c${id}`, state, characters } as unknown as Chapter);
 
 describe('renderedChaptersForCharacter', () => {
+  it('leaves excluded chapters out, so the banner count matches the regenerate modal (#3919)', () => {
+    const excluded = { ...ch(1, 'done', { marlow: 3 }), excluded: true } as Chapter;
+    expect(renderedChaptersForCharacter('marlow', [excluded])).toEqual([]);
+    expect(
+      renderedChaptersForCharacter('marlow', [excluded, ch(2, 'done', { marlow: 1 })]),
+    ).toEqual([2]);
+  });
+
   it('returns ids of done chapters the character speaks in', () => {
     const chapters = [
       ch(1, 'done', { wren: 10, marlow: 4 }),

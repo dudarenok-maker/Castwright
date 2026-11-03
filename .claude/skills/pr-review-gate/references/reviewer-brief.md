@@ -901,7 +901,35 @@ recite:
     through the real jobs and the real downstream consumer (here the linker),
     not the merge function alone.
 
-68. **A degenerate input dismissed as "not a decision" without tracing who
+68. **Ids captured when a job starts, acted on later without re-checking each
+    still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
+    stored `remainingChapterIds` when it started; Approve enqueued and logged
+    them as they were, so a chapter excluded in between was regenerated into a
+    no-op, and a preview whose chapter was excluded elsewhere never fanned out
+    and said nothing. Checkable: for any list of ids stored in state, a queue
+    entry or a closure, find where it is read back and ask what can change the
+    qualifying predicate (excluded, deleted, moved, renamed) in between; each
+    such path must either re-filter at the point of use or drop the id where
+    the change happens, and a test should flip the predicate between capture
+    and use. (Numbered 68: #4006 and #4011 each held a pending 66, so 68 is taken;
+    renumber on merge if the order changes.)
+
+69. **A per-job cleanup keyed on a value its sibling jobs share** — PR #4001
+    pass 4 (#3919): a profile-change preview cancelled itself when "its"
+    queue entry finished without a review completion, but the check matched
+    on `bookId` + `chapterId`, which every queue entry for that chapter
+    shares; an ordinary regen of the same chapter, ahead of the preview's
+    own entry, cancelled a preview that had not run yet. Checkable: for any
+    cleanup, cancel or timeout that fires when a job ends, name the key it
+    matches on and list the other jobs that can carry the same key (same
+    chapter, book, character, id after a reissue); the check must key on the
+    job's own identity (its entry id, or a field only it carries), and a test
+    should finish a sibling job first and assert the cleanup does not fire.
+    Entry 55 (an id reissued after a delete) is the nearest. (Numbered 69:
+    66-68 are taken or reserved by open PRs; renumber on merge if the order
+    changes.)
+
+70. **A degenerate input dismissed as "not a decision" without tracing who
     writes it** — PR #4006 pass 2 (#3965, `groupHasNotLinkedEdge`): a row's
     own self-naming `notLinkedTo` edge was ignored as "not a decision between
     two rows". One writer does put a decision there: the seed's name bridge

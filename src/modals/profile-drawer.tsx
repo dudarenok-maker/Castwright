@@ -416,7 +416,7 @@ export function ProfileDrawer({
      stream: "the server already persisted it — this is local-only, no
      persist rule") so Save/Play behave as if this character had been
      designed, without waiting on a full cast refetch. */
-  async function useMyVoice(entry: VoiceLibraryEntry) {
+  async function assignMyVoice(entry: VoiceLibraryEntry) {
     if (!bookId) return;
     setLibraryActionError(null);
     setLibraryActionBusy(entry.voiceUuid);
@@ -517,7 +517,7 @@ export function ProfileDrawer({
      stays in My voices and is untouched on disk.
 
      Mirrors the `cleared` slots the route reports, the same
-     reconcile-from-the-response discipline `useMyVoice` uses for `written`. */
+     reconcile-from-the-response discipline `assignMyVoice` uses for `written`. */
   async function removeAssignedVoice(voiceUuid: string) {
     if (!bookId) return;
     setLibraryActionError(null);
@@ -535,7 +535,7 @@ export function ProfileDrawer({
           }),
         );
       }
-      /* Same Qwen-only derived state `useMyVoice` seeds on assign — drop it
+      /* Same Qwen-only derived state `assignMyVoice` seeds on assign — drop it
          when the qwen slot is the one that just went, or the drawer keeps
          offering Play/redesign against a voice this character no longer has.
          Guarded on the slot having actually pointed at THIS voice, matching
@@ -1381,7 +1381,7 @@ export function ProfileDrawer({
             {/* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my
                 voices", alongside the Qwen design sub-flow above. fs-38 Wave
                 3c Task 26 — widened from qwen-only to also cover coqui, the
-                other clone-capable engine (useMyVoice now routes the write
+                other clone-capable engine (assignMyVoice now routes the write
                 to whichever engine the character is actually on). "Save to
                 my voices" stays qwen-only below — it promotes the
                 character's currently-DESIGNED QWEN voice specifically, not
@@ -1438,7 +1438,7 @@ export function ProfileDrawer({
                           key={entry.voiceUuid}
                           type="button"
                           disabled={libraryActionBusy === entry.voiceUuid}
-                          onClick={() => void useMyVoice(entry)}
+                          onClick={() => void assignMyVoice(entry)}
                           data-testid={`profile-drawer-my-voice-${entry.voiceUuid}`}
                           className="px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-ink/4 hover:bg-magenta/15 hover:text-magenta text-ink/70 disabled:opacity-50 disabled:cursor-wait min-h-[44px] fine-pointer:min-h-0"
                         >
