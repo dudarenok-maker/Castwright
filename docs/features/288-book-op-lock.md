@@ -899,10 +899,18 @@ id are the same string. The rule, exactly:
   (`workspace/repaired-book-gate.ts`), and **persists it** (id, token, repair time) to
   `<workspace>/.repaired-book-gate.json` with an atomic write (owner decision, PR #4004 pass 3). Boot re-reads that file
   **before** the sweep, so the gate lasts **7 days from the repair, across restarts**. An entry older than 7 days is
-  dropped at load and ignored at check. A read of the book by a client (`GET /:bookId/state`) clears that book's
-  persisted entry early; the running process keeps refusing a tab that sends no token, and the next restart does not
-  gate that book. A damaged file fails closed: every entry still readable is kept (one with a broken token or time is
-  kept with a fresh token and a clock starting now), the file is rewritten whole, and nothing is ungated silently.
+  dropped at load and ignored at check. **Only a client that applied a full read clears a book's persisted entry early
+  (pass 4):** it sends `POST /api/repaired-books/ack/:bookId` carrying the token when it commits it
+  (`commitBookReadToken`), and the server forgets the persisted entry (and the manuscript scopes on it); a bare
+  `GET /:bookId/state` clears nothing, because most reads of it (a revisions-only reopen, a Voices peek at a series-mate,
+  the rebaseline modal) apply nothing to the book's slices, and an old-bundle tab never acks, so its book stays gated for
+  the full 7 days. The running process keeps refusing a tab that sends no token either way. A damaged file fails closed:
+  every entry still readable is kept (one with a broken token or time is kept with a fresh token and a clock starting
+  now), the file is rewritten whole, and nothing is ungated silently. A file that cannot be READ at boot (anything but
+  "absent": EBUSY, a locked file) is retried (100 ms, 300 ms), then **never overwritten** by this process's own entries:
+  persisting is skipped, the read is retried by the next gated write (at most once a second) and merged (memory wins) as
+  soon as it succeeds. Deleting a gated book drops its entry (`forgetRepairedBook`), so a fresh import minted with the
+  same id does not inherit the refusal.
 - `GET /api/books/:bookId/state` for a registered id returns the token in the `X-Book-Read-Token` response header.
 - Any non-GET/HEAD/OPTIONS request on `/api/books/:bookId/...` whose `:bookId` is registered must send the same token in
   `X-Book-Read-Token`. Without it, or with a different one, the answer is **409**
@@ -929,7 +937,8 @@ id are the same string. The rule, exactly:
   `updateStateAtDir`, `manuscript-edits.json`) and every route that takes a book id from a body or query. Gated, each
   by `refuseUnreadRepairedBooks` (409 with no token, nothing written; success with the named book's token):
   `POST /api/books/:bookId/cast/add-from-roster` and `POST /api/books/:bookId/cast/link-prior` (body `targetBookId`;
-  the path book is gated by the mount), and `PUT /api/voices/:voiceId/override` with `scope: 'series'` (body or query
+  the path book is gated by the mount), `POST` / `DELETE /api/books/:bookId/cast/:characterId/not-linked-to` (body
+  `otherBookId`, pass 4: it writes the other book's `cast.json` too), and `PUT /api/voices/:voiceId/override` with `scope: 'series'` (body or query
   `bookId`, which the series, hence every `cast.json` written, is resolved from). Confirmed safe, with why:
   `POST /api/voice-library/promote` (reads the book's character, writes only the voice library; the origin cast.json is
   never modified), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by voice uuid,
@@ -947,9 +956,17 @@ id are the same string. The rule, exactly:
   the body parser, keeps the request's tokens in an AsyncLocalStorage and stamps the skipped list on the
   `x-skipped-repaired-books` response header; the four JSON routes also carry it as `skippedBooks`
   (`{ bookId, bookTitle, reason: 'Reopen "<title>" to apply this change there.' }`). The client reads the header in
-  `bookFetch` and shows one info toast. With the mate's token echoed it is written. Known limit: an SSE design stream
-  flushes its headers before the walk, so it skips but cannot report. `repaired-book-gate-fanout.test.ts` pins both
-  directions per route.
+  `bookFetch` and shows one info toast. With the mate's token echoed it is written. **A write echoes every token the
+  tab has committed (pass 4):** a fan-out names its mates on the server, so the path book's token alone could never
+  satisfy the per-mate check; `bookFetch` therefore sends all committed tokens (comma-joined) on every non-read request.
+  A committed token means this tab applied a full read of that book since the repair, and a fan-out sends none of the
+  mate's content. So the toast's advice is true: reopen the skipped book, repeat the change, and it is written (the
+  workspace-scope override, the three-twin carrier and the series `voiceUuid` stamp included). **The SSE design streams
+  report the skip too (pass 4):** the job runs inside the request's scope, so `designed` (single), `character_designed`,
+  `variant_designed` and the terminal `idle` (bulk) carry `skippedBooks` when the voice write skipped a mate, and the
+  stream reader passes it to the same toast handler. `repaired-book-gate-fanout.test.ts` pins both
+  directions per route as SERVER-UNIT cases (the header is hand-set); the client half, that the real client sends
+  every committed token, is `src/lib/api-body-keyed-token.test.ts`.
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
@@ -971,17 +988,22 @@ whose slices still hold the other twin therefore does not arm the writes that sn
 and the change was not saved), marks the book for a full read (Layout re-reads it, which commits the token), and
 refreshes the Library; any book the open stage does not show (including one the slices still hold, on the Library) is
 read and committed straight away so the user's retry passes, because Layout reads only while the stage shows the book.
-Wherever a token is committed (that handler, and Layout's full read of a gated id) the book's kept saves are dropped
-first, a based `state` save included (`dropRetainedSaves(bookId, true, true)`): a save the middleware kept from before the
-commit was made without the token, and the commit must not arm it.
+Wherever a token is committed (that handler, and Layout's full read of a gated id) every save of that book that is still
+queued is discarded first, a based `state` save included, and a save behind a debounce timer or waiting out a retry too
+(`dropRetainedSaves(bookId, true, true, true)`, pass 4): such a save was built from slices that are not the snapshot the
+commit vouches for, and `bookFetch` attaches the token at SEND time, so the commit would arm it. A full read also
+**revokes** the book's committed token when it goes out and the commit re-arms it, so a save made while the read is out
+is refused (and the book re-read) instead of sent with a token committed before it. The handler's off-stage commit
+(a book the stage does not show) first **resets the slices** when they hold the refused book (`resetBookSlices`, as the
+Library Delete does): the token vouches for what the slices hold, and they held the other twin under that id. The commit
+sends the acknowledgement above.
 The persistence middleware already treats any 4xx on `PUT /state` as a final refusal, so the rejected save is dropped
 without a retry and a details commit is rolled back, its typed draft kept.
 
 What this closes: the stage-versus-slices hole (a book left and reopened keeps its slices), the stale Library row's
 Delete and Edit, the up-to-30 s poll gap, old bundles, and the direct `putBookState` callers (language guard, prosody
 flags, Cast and Analysing) that bypass the middleware. Residuals: a tab that held the id for more than 7 days after the
-repair, a book read by another client clearing the persisted entry (an old-bundle tab is then ungated at the next
-restart). The 409 body carries `bookId`, the book the refusal was scoped to (an id, never a path), so a
+repair (a read by another client no longer clears the persisted entry since pass 4: only a client's ack does). The 409 body carries `bookId`, the book the refusal was scoped to (an id, never a path), so a
 manuscriptId-keyed or body-keyed write from a tab that never read the book still reaches the handler, which re-reads
 that book and commits its token; the server's id wins over any book the client had remembered for the manuscriptId.
 
