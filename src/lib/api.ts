@@ -2481,8 +2481,11 @@ async function realGetBookState(
    coercion (see server/src/routes/book-state.ts). Returns null on
    404 so the caller can treat "no in-flight analysis" the same as
    "endpoint not reachable" — both equivalent to "no pill". */
-async function realGetAnalysisState(bookId: string): Promise<AnalysisStateResponse | null> {
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`);
+async function realGetAnalysisState(
+  bookId: string,
+  signal?: AbortSignal,
+): Promise<AnalysisStateResponse | null> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/analysis/state`, { signal });
   if (res.status === 404) return null;
   if (!res.ok)
     throw new Error(
@@ -2494,7 +2497,10 @@ async function realGetAnalysisState(bookId: string): Promise<AnalysisStateRespon
 /* Mock counterpart — returns null (no in-flight analysis) since mock
    mode has no disk-backed workspace nor a live analyzer. Layout's
    discovery effect treats null the same as 404 (no pill). */
-async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
+async function mockGetAnalysisState(
+  _bookId: string,
+  _signal?: AbortSignal,
+): Promise<AnalysisStateResponse | null> {
   await wait(20);
   return null;
 }
@@ -3109,6 +3115,9 @@ export class AnalysisError extends Error {
       persistent reasoning-overflow toast render it; the middleware
       copies it into `setHalted` and `pushToast`. */
   fixes?: AnalysisFailureFix[];
+  /** #3967 — on a `main_analysis_running` refusal: the writer it was refused against is
+      only still stopping, not live. Absent on every other error. */
+  draining?: boolean;
   constructor(
     message: string,
     code: string,
@@ -3132,6 +3141,12 @@ export class AnalysisError extends Error {
 }
 
 
+/* #3967 — carry an SSE error frame's `draining` onto the error, when it has one. */
+function withDraining(err: AnalysisError, draining: unknown): AnalysisError {
+  if (typeof draining === 'boolean') err.draining = draining;
+  return err;
+}
+
 /* #3435 decision A — a 409 refusal body (`{ error, message, draining? }`) as the
    same AnalysisError(message, code) the late-check SSE `error` frame becomes
    through each reader's `kind: 'error'` branch, so callers handle one shape.
@@ -3148,7 +3163,9 @@ function analysisRefusalFromBody(status: number, body: string, codes: readonly s
   /* #3829 - the restructure routes' shape: the curated sentence is in `error`, the code in `code`. */
   if (code === 'hints_out_of_sync' && typeof error === 'string' && error) return new AnalysisError(error, code);
   if (typeof error !== 'string' || !codes.includes(error)) return null;
-  return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
+  const refusal = new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
+  if (typeof (parsed as { draining?: unknown }).draining === 'boolean') refusal.draining = (parsed as { draining: boolean }).draining;
+  return refusal;
 }
 
 /* #3084 wave 3d review pass 4 (J) — the run engine/card a phase event carries after a fallback switch.
@@ -3320,14 +3337,17 @@ async function realAnalyseManuscript(
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
     } else if (payload.kind === 'error') {
-      throw new AnalysisError(
-        payload.message || 'Analysis failed.',
-        payload.code ?? 'unknown',
-        payload.detail,
-        payload.prevCharCount,
-        payload.nextCharCount,
-        payload.remediation,
-        payload.fixes,
+      throw withDraining(
+        new AnalysisError(
+          payload.message || 'Analysis failed.',
+          payload.code ?? 'unknown',
+          payload.detail,
+          payload.prevCharCount,
+          payload.nextCharCount,
+          payload.remediation,
+          payload.fixes,
+        ),
+        (payload as { draining?: unknown }).draining,
       );
     }
   };
@@ -6109,14 +6129,17 @@ async function realRunAnalysisForChapters(
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
     } else if (payload.kind === 'error') {
-      throw new AnalysisError(
-        payload.message || 'Subset analysis failed.',
-        payload.code ?? 'unknown',
-        payload.detail,
-        payload.prevCharCount,
-        payload.nextCharCount,
-        payload.remediation,
-        payload.fixes,
+      throw withDraining(
+        new AnalysisError(
+          payload.message || 'Subset analysis failed.',
+          payload.code ?? 'unknown',
+          payload.detail,
+          payload.prevCharCount,
+          payload.nextCharCount,
+          payload.remediation,
+          payload.fixes,
+        ),
+        (payload as { draining?: unknown }).draining,
       );
     }
   };
@@ -10714,7 +10737,7 @@ function _mockRoutedEngine(modelKey: TtsModelKey | undefined) {
    characters live in the redux `cast` slice, never round-tripped through
    `api.*`), so it only looks at the caller's own explicit `modelKey` —
    every real caller already sends its pending engine choice (see
-   profile-drawer.tsx's `useMyVoice`) — falling back to 'qwen' (the common
+   profile-drawer.tsx's `assignMyVoice`) — falling back to 'qwen' (the common
    case) when omitted. It also has no character name to interpolate into
    the message the way the server's `blockMessage`/`advisoryMessage` do —
    these mock strings name the voice and the reason, not the character.

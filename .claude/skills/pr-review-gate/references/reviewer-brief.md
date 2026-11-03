@@ -822,7 +822,17 @@ recite:
     and drive a test where the limit expires to see what then runs. Copying the
     retry is not the only acceptable remedy: the shipped one reads anyway on
     expiry, guarded by `castWrittenSince` so a read that post-dates a cast
-    save does not hydrate over it.
+    save does not hydrate over it. Copying the retry has two gaps of its own
+    (PR #4008 pass 2): a retry with a FIXED per-attempt bound never lands a read
+    slower than that bound (every attempt is aborted a second before it would
+    answer, so `readWithRetry` kept 9 reads open-and-aborted where the control
+    needed one), so drive a test where every attempt takes just over the bound,
+    not one that hangs once and then answers at once; and a bound on a re-sync
+    read whose expiry falls back to `null` must have that `null` checked for
+    what the client then acts on (Restructure's expired re-read left the
+    pre-restructure chapter list armed for a second merge; the analysis-stream
+    refusal re-read left a `running` snapshot the server had denied), because
+    the expiry path skips the hydrate the success path ran.
 
 61. **A timing threshold calibrated on a dev box that falls inside the CI
     runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host
@@ -883,6 +893,92 @@ recite:
     retired, delete each branch of the shared version in turn (and swap each
     sibling-family call) and confirm a direct test goes red; add the case
     for any that survives.
+
+67. **A merge that unions some fields and drops the field recording a user's
+    decision, reached through a guard a change then narrows** — PR #4006 pass
+    2 (#3965, `dedupePriorCastByName`): the same-name collapse kept the best
+    row and unioned `aliases`, but dropped every other field of the losing
+    row, `notLinkedTo` included. On `main` any cross-book decline blocked the
+    collapse outright, so a decline never reached the merge; scoping the gate
+    to the current book sent those groups into the merge, which erased a
+    decline held only by the row that lost rank, and the link the user
+    refused landed on the next run. Checkable: for every merge or collapse
+    that keeps one of N rows, list each field of the dropped rows and mark the
+    ones that record a user decision (not-the-same-person edges, locks,
+    overrides, dismissals); each must be unioned or carried, not silently
+    discarded. Then, for any change that narrows a guard in front of such a
+    path, ask which inputs the old guard kept out of it, and run those inputs
+    through the real jobs and the real downstream consumer (here the linker),
+    not the merge function alone.
+
+68. **Ids captured when a job starts, acted on later without re-checking each
+    still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
+    stored `remainingChapterIds` when it started; Approve enqueued and logged
+    them as they were, so a chapter excluded in between was regenerated into a
+    no-op, and a preview whose chapter was excluded elsewhere never fanned out
+    and said nothing. Checkable: for any list of ids stored in state, a queue
+    entry or a closure, find where it is read back and ask what can change the
+    qualifying predicate (excluded, deleted, moved, renamed) in between; each
+    such path must either re-filter at the point of use or drop the id where
+    the change happens, and a test should flip the predicate between capture
+    and use. (Numbered 68: #4006 and #4011 each held a pending 66, so 68 is taken;
+    renumber on merge if the order changes.)
+
+69. **A per-job cleanup keyed on a value its sibling jobs share** — PR #4001
+    pass 4 (#3919): a profile-change preview cancelled itself when "its"
+    queue entry finished without a review completion, but the check matched
+    on `bookId` + `chapterId`, which every queue entry for that chapter
+    shares; an ordinary regen of the same chapter, ahead of the preview's
+    own entry, cancelled a preview that had not run yet. Checkable: for any
+    cleanup, cancel or timeout that fires when a job ends, name the key it
+    matches on and list the other jobs that can carry the same key (same
+    chapter, book, character, id after a reissue); the check must key on the
+    job's own identity (its entry id, or a field only it carries), and a test
+    should finish a sibling job first and assert the cleanup does not fire.
+    Entry 55 (an id reissued after a delete) is the nearest. (Numbered 69:
+    66-68 are taken or reserved by open PRs; renumber on merge if the order
+    changes.)
+
+70. **A degenerate input dismissed as "not a decision" without tracing who
+    writes it** — PR #4006 pass 2 (#3965, `groupHasNotLinkedEdge`): a row's
+    own self-naming `notLinkedTo` edge was ignored as "not a decision between
+    two rows". One writer does put a decision there: the seed's name bridge
+    copies reject-orphan's same-book edge onto the re-minted orphan, so the
+    self-edge is the surviving record of a rejected pair, and ignoring it
+    fused the pair and deleted the rejection from both records. Checkable:
+    before calling a self-reference, empty value or no-op shape harmless,
+    list every writer of that field and read what each puts there; if one
+    writes a real decision in that shape, the shape needs a test through the
+    real jobs, not a comment saying it cannot matter.
+
+75. **A repair scheduled rather than applied, while the lock protecting the stale
+    state is released** — PR #4008 pass 4 (#3967): when a Restructure's
+    re-read expired or its remap was skipped, the fix was a mark that queues
+    Layout's full read. But `applyResponse` returned, and each handler's
+    `finally` lowered the edit lock, while the sentences still held the old
+    chapter ids; an edit in the window saved the whole stale list over the
+    route's rewrite, and the scheduled read is slowest in exactly the
+    condition that called for it (a stall). Checkable: for every "mark it and
+    let a later read repair it", ask what guards the state between the mark and
+    the repair, and whether that guard is released before the repair lands. A
+    repair that is only scheduled keeps the lock up until it lands (and comes
+    down on its landing, on its failure, and on leaving the book), or applies
+    the repair itself. Then drive the window: make an edit after the lock would
+    have come down and assert what reaches disk.
+
+76. **A per-book mark placed inside a cross-book slice-write guard** — PR #4008
+    pass 3 (#3967): Restructure's `markNeedsFullRead` sat inside the
+    `activeBookId === bookId` check that exists to stop a late result being
+    written into another book's slices. The mark is per book and writes no
+    slice, so it was dropped exactly when the user left the book, and
+    reopening then read revisions only and showed the pre-restructure list
+    (a second merge of the same ids swallowed the next chapter). The same
+    mark was also missing when a hydrate landed mid-request and the remap was
+    skipped. Checkable: for every guard that exists to stop a cross-book slice
+    write, list what else is inside it; anything keyed by book id that writes
+    no slice (a mark, a flag, a cache entry) belongs outside it. Then drive
+    the guard's false branch (leave the book before the read settles, once
+    with a hang and once with a prompt answer) and assert the mark.
 
 ### Keeping the catalogue current
 

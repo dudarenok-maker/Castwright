@@ -9,6 +9,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { castSlice } from '../store/cast-slice';
+import { bookMetaSlice, bookMetaActions } from '../store/book-meta-slice';
 import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
@@ -17,23 +18,24 @@ import { persistenceMiddleware } from '../store/persistence-middleware';
 import { restructureGuardMiddleware } from '../store/restructure-guard-middleware';
 
 const { holder, apiMock } = vi.hoisted(() => ({
-  holder: { store: null as null | { getState: () => unknown } },
+  holder: { store: null as null | { getState: () => unknown; subscribe: (l: () => void) => () => void } },
   apiMock: { refreshChapterTitles: vi.fn(), mergeChapters: vi.fn(), getBookState: vi.fn(), getLibrary: vi.fn(), putBookState: vi.fn() },
 }));
 vi.mock('../lib/api', async (orig) => ({ ...(await orig<typeof import('../lib/api')>()), api: apiMock }));
 vi.mock('../store', async () => {
   const rr = await import('react-redux');
-  return { useAppDispatch: rr.useDispatch, useAppSelector: rr.useSelector, store: { getState: () => holder.store!.getState() } };
+  return { useAppDispatch: rr.useDispatch, useAppSelector: rr.useSelector, store: { getState: () => holder.store!.getState(), subscribe: (l: () => void) => holder.store!.subscribe(l) } };
 });
 
 import { RestructureView } from './restructure';
+import { BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
 
 /* `guard` installs the real restructure guard (first in the chain, as in the app store):
    a user edit made mid-request is refused. Without it the store models a writer that
    bypasses the guard (a non-UI writer, or a write queued before the flag went up). */
 function makeStore(guard = false) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer },
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer, bookMeta: bookMetaSlice.reducer },
     middleware: (g) => (guard ? g().prepend(restructureGuardMiddleware) : g()),
   });
   holder.store = store;
@@ -95,7 +97,7 @@ describe('RestructureView — #3400 cross-book guard', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     // The user switches to book B (cache seeded) while A's re-read is in flight.
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
@@ -123,7 +125,7 @@ describe('RestructureView — #3400 cross-book slices', () => {
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
-    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1', expect.any(AbortSignal)));
     store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
     store.dispatch(
       manuscriptSlice.actions.hydrateFromBookState({
@@ -418,6 +420,12 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
    by a request that has been superseded. */
 describe('RestructureView — #3400 restructure flag', () => {
   const flag = (store: ReturnType<typeof makeStore>) => store.getState().ui.restructuringBooks['b1'] ? 'b1' : null;
+  /* A re-read that lands and is adopted: the slices take the restructure, so the lock is not held for a read. */
+  const LANDED = { state: { chapters: [] }, completedSlugs: [], revisions: null };
+  const holdBook = (store: ReturnType<typeof makeStore>) =>
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({ state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never, sentences: null }),
+    );
   async function startRefresh() {
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
@@ -426,6 +434,8 @@ describe('RestructureView — #3400 restructure flag', () => {
   it('is set while the request is in flight and cleared once it has been applied', async () => {
     const store = makeStore();
     let resolve!: (v: unknown) => void;
+    holdBook(store);
+    apiMock.getBookState.mockResolvedValue(LANDED);
     apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolve = r)));
     render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     expect(flag(store)).toBeNull();
@@ -449,6 +459,8 @@ describe('RestructureView — #3400 restructure flag', () => {
   it('stays up for a second request when the first, from a view that was left, finishes first', async () => {
     const store = makeStore();
     const resolvers: Array<(v: unknown) => void> = [];
+    holdBook(store);
+    apiMock.getBookState.mockResolvedValue(LANDED);
     apiMock.refreshChapterTitles.mockImplementation(() => new Promise((r) => resolvers.push(r)));
     const first = render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     await startRefresh();
@@ -466,9 +478,97 @@ describe('RestructureView — #3400 restructure flag', () => {
     await waitFor(() => expect(flag(store)).toBeNull());
   });
 
+  /* #3967 — the re-reads run with the flag up; one that never settles must not hold it. */
+  it.each(['getBookState', 'getLibrary'] as const)('is cleared when the %s re-read never settles', async (hung) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      holdBook(store);
+      if (hung === 'getLibrary') apiMock.getBookState.mockResolvedValue(LANDED);
+      apiMock[hung].mockReturnValue(new Promise(() => {}));
+      render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+      await startRefresh();
+      await waitFor(() => expect(apiMock[hung]).toHaveBeenCalled());
+      expect(flag(store)).toBe('b1');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BOOK_READ_TIMEOUT_MS * 2);
+      });
+      /* The expired book-state read left the slices on the old ids: the lock is held for
+         Layout's marked read (which clears the mark), not for the hung request. */
+      if (hung === 'getBookState') {
+        expect(flag(store)).toBe('b1');
+        act(() => {
+          store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+        });
+      }
+      await waitFor(() => expect(flag(store)).toBeNull());
+      /* The expired book-state read is aborted too, not left open. */
+      if (hung === 'getBookState') {
+        expect((apiMock.getBookState.mock.calls[0] as unknown[])[1]).toHaveProperty('aborted', true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3967 pass 2 — the re-read expiring must not leave the panel on the pre-restructure
+     list: the merge would stay armed and a second click would send the same ids again. */
+  it('applies the response chapters when the book-state re-read expires, so the merge is not armed on a stale list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      const OLD = [1, 2, 3, 4].map((id) => ({ id, title: `Old ${id}`, slug: `old-${id}`, duration: '', state: 'done' }));
+      const NEW = [
+        { id: 1, title: 'Old 1', slug: 'old-1', audioRenderedAt: '2026-01-01T00:00:00Z' },
+        { id: 2, title: 'Old 2', slug: 'old-2' },
+        { id: 3, title: 'Old 4', slug: 'old-4' },
+      ];
+      store.dispatch(
+        chaptersSlice.actions.hydrateFromBookState({ bookId: 'b1', chapters: OLD as never, completedSlugs: [], characters: [] } as never),
+      );
+      apiMock.mergeChapters.mockResolvedValue({ chapters: NEW, sentenceRemap: [], warnings: [] });
+      apiMock.getBookState.mockImplementation(
+        (_id: string, signal?: AbortSignal) =>
+          new Promise((res, rej) => {
+            const t = setTimeout(() => res({ state: { chapters: NEW }, completedSlugs: [], revisions: null }), 16_000);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              rej(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      );
+      render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+      fireEvent.click(screen.getByLabelText('Select chapter Old 2 for merge'));
+      fireEvent.click(screen.getByLabelText('Select chapter Old 3 for merge'));
+      fireEvent.click(screen.getByTestId('restructure-merge-button'));
+      fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+      await waitFor(() => expect(apiMock.mergeChapters).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+      expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+      /* A chapter whose audio the response records as rendered stays done, not Queued. */
+      expect(store.getState().chapters.chapters.map((c) => c.state === 'done')).toEqual([true, false, false]);
+      expect(screen.getByTestId('restructure-merge-button').textContent).not.toMatch(/\(2\)/);
+      /* The rest of the book's state is repaired by Layout's retrying full read. */
+      expect(store.getState().bookMeta.needsFullRead?.['b1']).toBeGreaterThan(0);
+      /* ...and the edit lock stays up until that read lands. */
+      expect(flag(store)).toBe('b1');
+      act(() => {
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      await waitFor(() => expect(flag(store)).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("book A's request ending does not lower book B's flag (pass-6 cross-book)", async () => {
     const store = makeStore();
     const resolvers: Array<(v: unknown) => void> = [];
+    holdBook(store);
+    apiMock.getBookState.mockResolvedValue(LANDED);
     apiMock.refreshChapterTitles.mockImplementation(() => new Promise((r) => resolvers.push(r)));
     const a = render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
     await startRefresh();
@@ -483,7 +583,106 @@ describe('RestructureView — #3400 restructure flag', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(store.getState().ui.restructuringBooks).toEqual({ b2: true });
     resolvers[1]({ sentenceRemap: [], warnings: [] });
+    /* b2's slices did not take the response, so its lock is held for the read (#3967)
+       and comes down with its mark, not with the request. */
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.b2 ?? 0).toBeGreaterThan(0));
+    act(() => {
+      store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b2', upTo: 99 }));
+    });
     await waitFor(() => expect(store.getState().ui.restructuringBooks).toEqual({}));
+  });
+});
+
+/* #3967 pass 3 — the mark that sends the book to a full read is per book and writes no
+   slice, so it must not depend on the book still being open (or on the slices having
+   taken this restructure): reopening the book otherwise reads revisions only and shows
+   the pre-restructure list. */
+describe('RestructureView — #3967 the book is marked whenever the slices did not take the restructure', () => {
+  const OLD4 = [1, 2, 3, 4].map((id) => ({ id, title: `Old ${id}`, slug: `old-${id}`, duration: '', state: 'done' }));
+  const NEW3 = [
+    { id: 1, title: 'Old 1', slug: 'old-1' },
+    { id: 2, title: 'Old 2', slug: 'old-2' },
+    { id: 3, title: 'Old 4', slug: 'old-4' },
+  ];
+  const mark = (store: ReturnType<typeof makeStore>) => store.getState().bookMeta.needsFullRead?.['b1'] ?? 0;
+  const reader = (ms: number) => (_id: string, signal?: AbortSignal) =>
+    new Promise((res, rej) => {
+      const t = setTimeout(() => res({ state: { chapters: NEW3 }, completedSlugs: [], revisions: null }), ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(t);
+        rej(new DOMException('aborted', 'AbortError'));
+      });
+    });
+  async function mergeThenLeave(store: ReturnType<typeof makeStore>, readMs: number) {
+    store.dispatch(chaptersSlice.actions.hydrateFromBookState({ bookId: 'b1', chapters: OLD4 as never, completedSlugs: [], characters: [] } as never));
+    apiMock.mergeChapters.mockResolvedValue({ chapters: NEW3, sentenceRemap: [], warnings: [] });
+    apiMock.getBookState.mockImplementation(reader(readMs));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByLabelText('Select chapter Old 2 for merge'));
+    fireEvent.click(screen.getByLabelText('Select chapter Old 3 for merge'));
+    fireEvent.click(screen.getByTestId('restructure-merge-button'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalled());
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+  }
+
+  it('marks the book when the user leaves while the re-read hangs, then it expires', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      await mergeThenLeave(store, 9_999_999);
+      expect(mark(store)).toBe(1);
+      /* the response's list is not adopted into a book that is no longer open */
+      expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the book when the user leaves and the re-read then answers, not adopted', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore();
+      await mergeThenLeave(store, 3_000);
+      expect(mark(store)).toBe(1);
+      /* the left book's slices are not overwritten by the late answer */
+      expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3, 4]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the book when a hydrate lands mid-request and the remap is skipped', async () => {
+    const store = makeStore();
+    const hydrateA = (sentences: unknown[]) =>
+      store.dispatch(
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+          sentences: sentences as never,
+        }),
+      );
+    const sentence = (chapterId: number) => ({ id: 1, chapterId, characterId: 'c', text: `s${chapterId}` });
+    const PRE = [1, 2, 3, 4].map(sentence);
+    store.dispatch(chaptersSlice.actions.hydrateFromBookState({ bookId: 'b1', chapters: OLD4 as never, completedSlugs: [], characters: [] } as never));
+    hydrateA(PRE);
+    let resolveRestructure!: (v: unknown) => void;
+    apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolveRestructure = r)));
+    apiMock.getBookState.mockResolvedValue({ state: { chapters: NEW3 }, completedSlugs: [], revisions: null });
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalledWith('b1'));
+    /* Layout's marked read, served before the POST, lands while it is out */
+    hydrateA(PRE);
+    resolveRestructure({ chapters: NEW3, sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(mark(store)).toBe(1);
   });
 });
 
@@ -637,5 +836,207 @@ describe('RestructureView — a failed save before a restructure aborts it (#342
     await waitFor(() => expect(apiMock.mergeChapters).toHaveBeenCalledWith('b1', [1, 2]));
     expect(events).toEqual(['put', 'merge']);
     expect(screen.queryByText(ABORT_MESSAGE)).toBeNull();
+  });
+});
+
+/* #3967 pass 4 — a restructure whose slices did not take the response keeps the edit lock
+   up until Layout's marked full read has landed: the sentences still hold the old chapter
+   ids, and an edit saved in that window would write them over the route's rewrite. */
+describe('RestructureView — #3967 the edit lock outlives a restructure the slices did not take', () => {
+  const OLD4 = [1, 2, 3, 4].map((id) => ({ id, title: `Old ${id}`, slug: `old-${id}`, duration: '', state: 'done' }));
+  const NEW3 = [
+    { id: 1, title: 'Old 1', slug: 'old-1' },
+    { id: 2, title: 'Old 2', slug: 'old-2' },
+    { id: 3, title: 'Old 4', slug: 'old-4' },
+  ];
+  const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+  const PRE = [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(3, 1, 'three'), sentence(4, 1, 'four')];
+  const POST = [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(2, 2, 'three'), sentence(3, 1, 'four')];
+  const locked = (store: ReturnType<typeof makeStore>) => !!store.getState().ui.restructuringBooks['b1'];
+  const mark = (store: ReturnType<typeof makeStore>) => store.getState().bookMeta.needsFullRead?.['b1'] ?? 0;
+  const keys = (store: ReturnType<typeof makeStore>) =>
+    store.getState().manuscript.sentences.map((x) => `${x.chapterId}:${x.id}:${x.text}`);
+  const hydrate = (store: ReturnType<typeof makeStore>, sentences: unknown[]) =>
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: sentences as never,
+      }),
+    );
+  const hangs = (_id: string, signal?: AbortSignal) =>
+    new Promise((_res, rej) => signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+  function seed(store: ReturnType<typeof makeStore>) {
+    store.dispatch(chaptersSlice.actions.hydrateFromBookState({ bookId: 'b1', chapters: OLD4 as never, completedSlugs: [], characters: [] } as never));
+    hydrate(store, PRE);
+  }
+  async function merge23() {
+    render(<Provider store={holder.store as never}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByLabelText('Select chapter Old 2 for merge'));
+    fireEvent.click(screen.getByLabelText('Select chapter Old 3 for merge'));
+    fireEvent.click(screen.getByTestId('restructure-merge-button'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+  }
+  /* Start a refresh-titles request, hold its answer, land a pre-POST hydrate meanwhile (the
+     remap is then skipped), answer, and wait for applyResponse to run to its end. */
+  async function refreshWithMidRequestHydrate(store: ReturnType<typeof makeStore>) {
+    let resolveRestructure!: (v: unknown) => void;
+    apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolveRestructure = r)));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalledWith('b1'));
+    hydrate(store, PRE);
+    resolveRestructure({ chapters: NEW3, sentenceRemap: [], warnings: [] });
+  }
+  const edit = (store: ReturnType<typeof makeStore>) =>
+    store.dispatch(manuscriptSlice.actions.setSentenceEmotion({ chapterId: 4, sentenceId: 1, emotion: 'sad' } as never));
+
+  it('P4-R3a re-read adopted, remap skipped: the manuscript is hydrated from the re-read and the lock comes down', async () => {
+    const store = makeStore(true);
+    seed(store);
+    apiMock.getBookState.mockResolvedValue({
+      state: { chapters: NEW3 },
+      completedSlugs: [],
+      revisions: null,
+      manuscriptEdits: { sentences: POST },
+    });
+    await refreshWithMidRequestHydrate(store);
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(locked(store)).toBe(false));
+    expect(keys(store)).toEqual(['1:1:one', '2:1:two', '2:2:three', '3:1:four']);
+  });
+
+  it('P4-R3b re-read expired: the lock stays up, an edit is refused, and it comes down when the full read lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore(true);
+      seed(store);
+      apiMock.getBookState.mockImplementation(hangs);
+      await refreshWithMidRequestHydrate(store);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+      expect(mark(store)).toBe(1);
+      expect(locked(store)).toBe(true);
+      edit(store);
+      expect(keys(store)).toEqual(['1:1:one', '2:1:two', '3:1:three', '4:1:four']);
+      expect(store.getState().manuscript.sentences.find((x) => x.chapterId === 4)?.emotion).toBeUndefined();
+      /* Layout's full read lands: it hydrates, then clears the marks it was issued under. */
+      act(() => {
+        hydrate(store, POST);
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      await waitFor(() => expect(locked(store)).toBe(false));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('P4-R1 expired re-read with the book open and its slices loaded: marked, and the lock is held until the read lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore(true);
+      seed(store);
+      apiMock.mergeChapters.mockResolvedValue({ chapters: NEW3, sentenceRemap: [], warnings: [] });
+      apiMock.getBookState.mockImplementation(hangs);
+      await merge23();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+      expect(store.getState().manuscript.bookId).toBe('b1');
+      expect(mark(store)).toBe(1);
+      expect(locked(store)).toBe(true);
+      act(() => {
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      await waitFor(() => expect(locked(store)).toBe(false));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a mark made while the read was in flight keeps the lock up: the read it supersedes does not lower it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore(true);
+      seed(store);
+      apiMock.getBookState.mockImplementation(hangs);
+      await refreshWithMidRequestHydrate(store);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+      act(() => {
+        store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'b1' }));
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      expect(mark(store)).toBe(2);
+      expect(locked(store)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaving and reopening the book before the read lands keeps edits refused until it does', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const store = makeStore(true);
+      seed(store);
+      apiMock.getBookState.mockImplementation(hangs);
+      await refreshWithMidRequestHydrate(store);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+      expect(locked(store)).toBe(true);
+      act(() => {
+        store.dispatch(uiActions.goHome());
+      });
+      act(() => {
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
+      });
+      // The mark is the lock: it outlives the navigation, so the gap edit is refused.
+      expect(mark(store)).toBe(1);
+      expect(locked(store)).toBe(true);
+      edit(store);
+      expect(store.getState().manuscript.sentences.find((x) => x.chapterId === 4)?.emotion).toBeUndefined();
+      act(() => {
+        hydrate(store, POST);
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      await waitFor(() => expect(locked(store)).toBe(false));
+      store.dispatch(
+        manuscriptSlice.actions.setSentenceEmotion({ chapterId: 3, sentenceId: 1, emotion: 'sad' } as never),
+      );
+      expect(store.getState().manuscript.sentences.find((x) => x.chapterId === 3)?.emotion).toBe('sad');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('P4-R2 control: a re-read that lands with the book open leaves no mark and no lock', async () => {
+    const store = makeStore(true);
+    seed(store);
+    apiMock.mergeChapters.mockResolvedValue({ chapters: NEW3, sentenceRemap: [], warnings: [] });
+    apiMock.getBookState.mockResolvedValue({ state: { chapters: NEW3 }, completedSlugs: [], revisions: null });
+    await merge23();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(locked(store)).toBe(false));
+    expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    expect(mark(store)).toBe(0);
+  });
+
+  it('a request that fails does not hold the lock for a read', async () => {
+    const store = makeStore(true);
+    seed(store);
+    apiMock.refreshChapterTitles.mockRejectedValue(new Error('boom'));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    await waitFor(() => expect(locked(store)).toBe(false));
+    expect(mark(store)).toBe(0);
   });
 });

@@ -62,6 +62,7 @@ import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
 import type { Character, BookExportJob, Revision } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { renderedChaptersForCharacter } from '../lib/stale-chapters';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
 import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
 import { isNotAFailureHaltCode } from '../lib/analysis-phase-state';
@@ -96,7 +97,6 @@ import { useAccessibilitySettings } from '../lib/use-accessibility-settings';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { useLanguageGuard } from '../hooks/use-language-guard';
 import { MiniPlayer } from './mini-player';
-import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
 import { StartGenerationModal } from '../modals/start-generation';
@@ -134,6 +134,7 @@ import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
 import { IconRefresh, IconWarning } from '../lib/icons';
+import { BOOK_READ_TIMEOUT_MS, attemptBoundMs, readWithRetry, retryDelayMs, within } from '../lib/book-read';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
@@ -188,37 +189,12 @@ export interface LayoutContext {
    doubling backoff (2 s, 4 s, 8 s, … capped at 30 s) until it lands, showing
    one deduped notice meanwhile. Each read is bounded at 15 s
    (BOOK_READ_TIMEOUT_MS), and an expired read is handled as a rejection
-   (#3426). */
+   (#3426). Every other book-state reader is bounded the same way (#3967):
+   ConfirmRoute, the Analysing view, the prosody trigger, the far-book read, the
+   rebaseline modal, the restructure re-reads, the bulk duplicate review, the
+   Voices foreign-cast read and the analysis-stream middleware's read. The
+   helpers live in lib/book-read.ts. */
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
-const REVISIONS_HYDRATE_RETRY_BASE_MS = 2000;
-const REVISIONS_HYDRATE_RETRY_MAX_MS = 30000;
-export const BOOK_READ_TIMEOUT_MS = 15000;
-const retryDelayMs = (attempt: number) =>
-  Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS);
-
-/* #3426 — settle `p`, or reject after `ms` if it hasn't. `onExpire` (after the
-   rejection) lets the caller abort the request; otherwise `p` is not cancelled
-   and its late answer is discarded. `timers` collects the bound's timer so the
-   caller's cleanup can clear it. */
-export function within<T>(
-  p: Promise<T>,
-  ms: number,
-  timers: Set<ReturnType<typeof setTimeout>>,
-  onExpire?: () => void,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      reject(new Error(`timed out after ${ms} ms`));
-      onExpire?.();
-    }, ms);
-    timers.add(timer);
-    p.then(
-      (v) => { clearTimeout(timer); timers.delete(timer); resolve(v); },
-      (e) => { clearTimeout(timer); timers.delete(timer); reject(e); },
-    );
-  });
-}
 
 /* Plan 286, OD2 — the unreadable-revisions.json toast fires at most once per
    book per session. Module-level so it survives across every book-open
@@ -468,18 +444,25 @@ export function Layout() {
     const farBookId = profileDuplicateOriented.far.voice.bookId;
     if (foreignCast?.bookId === farBookId) return;
     let cancelled = false;
-    api
-      .getBookState(farBookId)
+    /* #3967 — bounded (BOOK_READ_TIMEOUT_MS), an expired read retried until it
+       lands, and aborted on cleanup; an abort is a silent cancel. */
+    const ctrl = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    readWithRetry((signal) => api.getBookState(farBookId, signal), ctrl.signal, timers)
       .then((res) => {
         if (cancelled) return;
         const cast = res?.cast?.characters ?? [];
         setForeignCast({ bookId: farBookId, characters: cast });
       })
       .catch((err) => {
+        if (cancelled || (err as Error)?.name === 'AbortError') return;
         console.warn('[duplicate-review] foreign cast hydrate failed', (err as Error).message);
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+      timers.clear();
     };
   }, [duplicateReviewOpen, profileDuplicateOriented, foreignCast?.bookId]);
 
@@ -950,10 +933,19 @@ export function Layout() {
        revisions-only re-read is dropped silently instead (Task 18): the next
        30 s poll repairs it (on the ready stage; on Confirm and Analysing the
        next stage change does), and nothing else on this book was waiting on it.
-       A read that has not settled in 15 s is treated as a failed read (#3426). */
+       A read that has not settled in its attempt bound (15 s, doubling per retry
+       to 60 s: attemptBoundMs) is treated as a failed read (#3426, #3967). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     /* The attempt's request, aborted on expiry and on cleanup so the hydrate
-       never leaves two of its own reads of this book open (#3426). */
+       never leaves two of its own reads of this book open (#3426). Every other
+       mounted reader of the book (Confirm's entry re-read, the Analysing view,
+       the prosody trigger, the far-book and rebaseline reads) bounds its own
+       read the same way and aborts it on cleanup, so leaving one of those views
+       leaves no read open (#3967). Exceptions: the prosody read is aborted on
+       Layout unmount only, not on a book switch; the Restructure library
+       re-read is bounded but not aborted (api.getLibrary takes no signal); and
+       the analysis-stream middleware's read is aborted on expiry but not
+       retried. */
     let readCtrl: AbortController | null = null;
     const boundTimers = new Set<ReturnType<typeof setTimeout>>();
     /* The notice belongs to this book's read: dismissed on cleanup, so it
@@ -969,7 +961,7 @@ export function Layout() {
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
       const ctrl = new AbortController();
       readCtrl = ctrl;
-      within(api.getBookState(bookId, ctrl.signal), BOOK_READ_TIMEOUT_MS, boundTimers, () => ctrl.abort())
+      within(api.getBookState(bookId, ctrl.signal), attemptBoundMs(attempt), boundTimers, () => ctrl.abort())
         .then((res) => {
           if (cancelled) return;
           if (!revisionsOnly) {
@@ -1534,6 +1526,15 @@ export function Layout() {
      first await, so the library trigger and the open trigger never start a
      second, concurrent run for one book. */
   const prosodyInFlight = useRef<Set<string>>(new Set());
+  /* #3967 — the live book-state reads of detached runs; Layout unmounting
+     aborts them (a book-switch does not). */
+  const prosodyReads = useRef<Set<AbortController>>(new Set());
+  useEffect(
+    () => () => {
+      for (const c of prosodyReads.current) c.abort();
+    },
+    [],
+  );
   /* #3435 — the open book the open trigger has already run during this visit
      (or left to a run already in flight), the book it left to an in-flight
      run, and a tick that re-arms it. */
@@ -1581,12 +1582,18 @@ export function Layout() {
     if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
     prosodyInFlight.current.add(id);
     void (async () => {
-      // Detached: not tied to effect cleanup — survives a book-switch.
+      /* Detached: not tied to effect cleanup — survives a book-switch. Its
+         book-state read is bounded (BOOK_READ_TIMEOUT_MS), an expired read is
+         retried until it lands, and it is aborted when Layout unmounts, never
+         on a book-switch (#3967). */
       let pillActive = false;
       let skippedWork = false;
       let ctrl: AbortController | null = null;
+      const readCtrl = new AbortController();
+      const timers = new Set<ReturnType<typeof setTimeout>>();
+      prosodyReads.current.add(readCtrl);
       try {
-        const st = await api.getBookState(id);
+        const st = await readWithRetry((signal) => api.getBookState(id, signal), readCtrl.signal, timers);
         if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
         if (st.state.prosodyAnnotated) return;               // watermark → no-op
         /* The open trigger re-runs only a book marked unfinished — never one
@@ -1682,6 +1689,9 @@ export function Layout() {
            transition; one that started keeps its mark for the open trigger. */
         if (!pillActive) prosodyConsidered.current.delete(id);
       } finally {
+        timers.forEach(clearTimeout);
+        timers.clear();
+        prosodyReads.current.delete(readCtrl);
         if (ctrl && !background) {
           if (prosodyLibraryRuns.current.get(id) === ctrl) prosodyLibraryRuns.current.delete(id);
           if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
@@ -1774,18 +1784,6 @@ export function Layout() {
     runAutoProsody(id, { background: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProsodyBookId, completeKey, openProsodyBusy, prosodyRerunTick]);
-
-  if (ui.previewMode) {
-    return (
-      <PreviewListenerView
-        chapters={chapters}
-        characters={characters}
-        onExit={() => dispatch(uiActions.setPreviewMode(false))}
-        currentTrack={ui.currentTrack}
-        setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
-      />
-    );
-  }
 
   /* Top-bar TTS pill — shown whenever a book is in scope (Confirm Cast,
      Analysing, Ready). Books/upload don't render it since TTS only matters
@@ -2951,11 +2949,7 @@ export function Layout() {
                     JSON.stringify(prior.overrideTtsVoices ?? {}) !==
                       JSON.stringify(updated.overrideTtsVoices ?? {});
                   if (voiceChanged) {
-                    const affectedChapters = chapters
-                      .filter(
-                        (ch) => ch.state === 'done' && ch.characters && updated.id in ch.characters,
-                      )
-                      .map((ch) => ch.id);
+                    const affectedChapters = renderedChaptersForCharacter(updated.id, chapters);
                     if (affectedChapters.length > 0) {
                       dispatch(
                         uiActions.setStaleAudio({

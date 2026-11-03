@@ -1836,3 +1836,153 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(sentenceOf(store, 1)?.text).toBe('Hhhh… Hello.'); // queued: the control
   });
 });
+
+describe('prosody auto-trigger — the book-state read is bounded and aborted (#3967)', () => {
+  /* Reads made while the slices already hold b1 are the trigger's own (the
+     hydrate read runs before they do); each never settles on its own and
+     rejects like fetch does when its signal aborts. */
+  let signals: AbortSignal[];
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  function arm(store: ReturnType<typeof makeStore>) {
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) => {
+      if (id === 'b1' && store.getState().manuscript.manuscriptId === 'mns_b1') {
+        signals.push(signal ?? new AbortController().signal); // no signal passed → never aborts
+        return hung(signal);
+      }
+      return Promise.resolve({
+        ...defaultStateResponse(id),
+        state: { ...defaultStateResponse(id).state, prosodyAnnotated: false },
+      });
+    });
+  }
+  function renderAnyPath(store: ReturnType<typeof makeStore>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    signals = [];
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    runProsodyPassesMock.mockResolvedValue({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 });
+    putBookStateMock.mockResolvedValue({});
+    vi.mocked(api.getLibrary).mockImplementation(
+      async () => libResponse([makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')]) as never,
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(api.getLibrary).mockImplementation(async () => ({ authors: [] }) as never);
+  });
+
+  async function openAndAwaitRead(store: ReturnType<typeof makeStore>) {
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    const view = renderAnyPath(store);
+    await waitFor(() => expect(signals.length).toBeGreaterThan(0));
+    return view;
+  }
+
+  it('(a) timeout: a read that never answers is aborted after 15 s and no passes run', async () => {
+    const store = makeStore();
+    arm(store);
+    await openAndAwaitRead(store);
+    expect(signals[0].aborted).toBe(false);
+    await advance(15_500);
+    expect(signals[0].aborted).toBe(true);
+    expect(runProsodyPassesMock).not.toHaveBeenCalled();
+  });
+
+  it('(b) unmount: unmounting Layout aborts a read still in flight', async () => {
+    const store = makeStore();
+    arm(store);
+    const view = await openAndAwaitRead(store);
+    await advance(5_000);
+    expect(signals[0].aborted).toBe(false);
+    view.unmount();
+    expect(signals[0].aborted).toBe(true);
+  });
+
+  it('(c) book switch does not abort: the detached read survives opening another book', async () => {
+    const store = makeStore();
+    arm(store);
+    await openAndAwaitRead(store);
+    await advance(5_000);
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'cast_pending' }));
+    });
+    await advance(1_000);
+    expect(signals[0].aborted).toBe(false);
+  });
+
+  it('(d) an expired read is retried and detection then runs for the book', async () => {
+    const store = makeStore();
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) => {
+      const mine = id === 'b1' && store.getState().manuscript.manuscriptId === 'mns_b1';
+      if (mine && signals.length === 0) {
+        signals.push(signal ?? new AbortController().signal);
+        return hung(signal);
+      }
+      if (mine) signals.push(signal ?? new AbortController().signal);
+      return Promise.resolve({
+        ...defaultStateResponse(id),
+        state: { ...defaultStateResponse(id).state, prosodyAnnotated: false },
+      });
+    });
+    await openAndAwaitRead(store);
+    await advance(15_500);
+    expect(signals[0].aborted).toBe(true);
+    expect(runProsodyPassesMock).not.toHaveBeenCalled();
+    await advance(2_000);
+    await waitFor(() => expect(runProsodyPassesMock).toHaveBeenCalled());
+    expect(signals.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('(f) a read that takes 16 s on every attempt still lands and detection runs', async () => {
+    const store = makeStore();
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) => {
+      const mine = id === 'b1' && store.getState().manuscript.manuscriptId === 'mns_b1';
+      const body = {
+        ...defaultStateResponse(id),
+        state: { ...defaultStateResponse(id).state, prosodyAnnotated: false },
+      };
+      if (!mine) return Promise.resolve(body);
+      signals.push(signal ?? new AbortController().signal);
+      return new Promise((resolve, reject) => {
+        const t = setTimeout(() => resolve(body), 16_000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    });
+    await openAndAwaitRead(store);
+    await advance(300_000);
+    await waitFor(() => expect(runProsodyPassesMock).toHaveBeenCalled());
+  });
+
+  it('(e) unmounting while the retry timer is pending issues no further read', async () => {
+    const store = makeStore();
+    arm(store);
+    const view = await openAndAwaitRead(store);
+    await advance(15_500);
+    expect(signals).toHaveLength(1);
+    view.unmount();
+    await advance(60_000);
+    expect(signals).toHaveLength(1);
+  });
+});

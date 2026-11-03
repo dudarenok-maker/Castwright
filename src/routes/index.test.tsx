@@ -2120,6 +2120,60 @@ describe('ReadyRoute — Generate view local state is per book (#3435)', () => {
   });
 });
 
+describe('ReadyRoute — whole-book Regenerate anchors on an included chapter (#3919)', () => {
+  it('opens the regenerate modal on chapter 2 when chapter 1 is excluded', async () => {
+    const store = makeStore();
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Demo Author',
+            series: [
+              {
+                name: 'Standalones',
+                books: [makeBook({ bookId: 'b1', title: 'Book One', manuscriptId: 'mns-a', status: 'generating' })],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Book One' } as any,
+        sentences: null,
+        wordCount: 1000,
+        format: 'plaintext',
+      }),
+    );
+    store.dispatch(
+      chaptersActions.setChapters([
+        { id: 1, title: 'Prologue', duration: '00:30', state: 'done', progress: 1, excluded: true, characters: {} } as Chapter,
+        { id: 2, title: 'Chapter 2', duration: '00:30', state: 'done', progress: 1, characters: {} },
+      ]),
+    );
+    const layoutCtx = { showInfo: vi.fn(), showError: vi.fn(), pushToast: vi.fn() } as unknown as LayoutContext;
+    function LayoutShim() {
+      return <Outlet context={layoutCtx} />;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/generate']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route element={<LayoutShim />}>
+                <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /^Regenerate$/ }));
+    expect(store.getState().ui.regenChapter?.id).toBe(2);
+  });
+});
+
 describe('AnalysingRoute — local state is per book (#3435)', () => {
   /* AnalysingView's failed-row list is seeded from the book-state GET and
      never emptied by a book with no failures (the mount read returns early),

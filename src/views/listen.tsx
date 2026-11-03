@@ -37,7 +37,6 @@ interface Props {
   currentTrack: number | null;
   setCurrentTrack: (t: number | null) => void;
   onRegenerate: (ch: Chapter) => void;
-  onEnterPreview: () => void;
   /** fs-26 — open the per-line re-record fix for a re-record marker. Resolves
       the marker's playhead → chapter segment → character upstream (ListenRoute
       has the LayoutContext to mount the Fix-audio modal). */
@@ -68,7 +67,6 @@ export function ListenView({
   currentTrack,
   setCurrentTrack,
   onRegenerate,
-  onEnterPreview,
   onFixLine,
   bookMeta,
   bookCoverGradient,
@@ -185,7 +183,6 @@ export function ListenView({
         onChangeCover={() => openCoverPicker()}
         onPlayFromStart={(id) => setCurrentTrack(id)}
         onOpenExportModal={() => setExportModal({ tab: 'download' })}
-        onEnterPreview={onEnterPreview}
         onOpenRestructure={() => dispatch(uiActions.changeView('restructure'))}
         restructureDisabledReason={analysisRunning ? ANALYSIS_RUNNING_REASON : undefined}
         onReplaceManuscript={() => dispatch(uiActions.startReupload({ bookId }))}

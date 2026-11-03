@@ -3,7 +3,7 @@ import { CHAR_COLORS, shade } from '../lib/colors';
 import { IconArrow, IconCheck, IconLink, IconPlay, IconSparkle, IconSpinner } from '../lib/icons';
 import type { CharColor, Voice } from '../lib/types';
 
-type ButtonVariant = 'dark' | 'light' | 'ghost' | 'danger' | 'peach';
+type ButtonVariant = 'dark' | 'ghost' | 'danger' | 'peach';
 type ButtonSize = 'sm' | 'md';
 
 interface PrimaryButtonProps {
@@ -28,7 +28,6 @@ export function PrimaryButton({
 }: PrimaryButtonProps) {
   const styles: Record<ButtonVariant, string> = {
     dark: 'bg-ink text-canvas hover:bg-ink-soft',
-    light: 'bg-canvas text-ink hover:bg-white',
     ghost: 'bg-transparent text-ink border border-ink/15 hover:bg-ink/5',
     danger: 'bg-magenta text-white hover:opacity-90',
     peach: 'bg-peach text-ink hover:bg-peach/90',

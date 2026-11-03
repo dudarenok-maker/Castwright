@@ -41,6 +41,7 @@
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
+import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { AnalysisEngine } from '../lib/model-id';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
@@ -105,8 +106,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
      owns the book. Re-read the server's snapshot and restore it in the layout's
      cold-boot shape (layout.tsx), confirmed-book gate included, or clear it
      when the server has none. Never setPaused: its hook fires /pause, which
-     would abort the live subset. */
-  const restoreFromServer = async (snap: AnalysisStreamSnapshot): Promise<void> => {
+     would abort the live subset.
+     `runIsLive`: the refusal says a run is live (`subset_analysis_running`, or
+     `main_analysis_running` that is not draining). Then a read that fails or never
+     settles keeps the local snapshot: it is the record of that run. */
+  const restoreFromServer = async (snap: AnalysisStreamSnapshot, runIsLive: boolean): Promise<void> => {
     const bookId = snap.bookId;
     /* Staleness guard, the equivalent of the catch branches' `handle !==
        localHandle`: a snapshot dispatched while the re-read is in flight (a
@@ -114,18 +118,62 @@ export const analysisStreamMiddleware: Middleware = (store) => {
        server one must not overwrite it. */
     const current = () => (store.getState() as AnalysisRootState).analysis.activeStream;
     const atStart = current();
+    /* The clear is local (`applyExternalAnalysisSnapshot`, which the broadcast middleware
+       never sends): `clearActiveStream` is broadcast, and the receiving tabs, the one that
+       owns a live run included, would drop their pill on it. */
+    const clearLocal = () => dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+    /* #3967 — the first read is bounded and aborted like the book-state one below, and a
+       failure clears the same way (outer catch) unless the refusal says a run is live: for
+       `chapters_restructuring` or a draining main run, no run is live and the refused
+       `running` snapshot is stale, so a read that fails or never settles must not keep it. */
+    const stateCtrl = new AbortController();
+    const stateTimers = new Set<ReturnType<typeof setTimeout>>();
     try {
-      const server = bookId ? await api.getAnalysisState(bookId) : null;
+      let server: Awaited<ReturnType<typeof api.getAnalysisState>> = null;
+      if (bookId) {
+        try {
+          server = await within(api.getAnalysisState(bookId, stateCtrl.signal), BOOK_READ_TIMEOUT_MS, stateTimers, () =>
+            stateCtrl.abort(),
+          );
+        } finally {
+          stateTimers.forEach(clearTimeout);
+        }
+      }
       if (current() !== atStart) return;
       if (!server) {
-        dispatch(analysisActions.clearActiveStream());
+        clearLocal();
         return;
       }
       if (server.state !== 'running') {
-        const book = bookId ? await api.getBookState(bookId) : null;
+        /* #3967 — bounded and aborted at BOOK_READ_TIMEOUT_MS, and NOT retried: this is a
+           one-off with no mount lifecycle to cancel a retry loop, and a hang only holds up
+           this restore (nothing else in the handler waits on it). When the read fails or
+           expires, whether the book's cast is confirmed is unknown, and showing a
+           non-running snapshot on a confirmed book is what the gate below exists to stop;
+           but with no run live the local `running` is stale and its handle is closed, so no
+           tick would correct it — clear it; with one live, keep it. A genuine pill does not come back on its
+           own: Layout's cold-boot read runs only on a full read, so it returns on a reload
+           or after visiting another book (Analysing reads "Start analysis" meanwhile, a
+           non-`fresh` POST that still resumes, and the halt reason is lost). */
+        const readCtrl = new AbortController();
+        const readTimers = new Set<ReturnType<typeof setTimeout>>();
+        let book: Awaited<ReturnType<typeof api.getBookState>> = null;
+        if (bookId) {
+          try {
+            book = await within(api.getBookState(bookId, readCtrl.signal), BOOK_READ_TIMEOUT_MS, readTimers, () =>
+              readCtrl.abort(),
+            );
+          } catch (err) {
+            console.warn('[analysis-state] refusal re-read failed:', (err as Error)?.message);
+            if (!runIsLive && current() === atStart) clearLocal();
+            return;
+          } finally {
+            readTimers.forEach(clearTimeout);
+          }
+        }
         if (current() !== atStart) return;
         if (!shouldSurfaceColdBootAnalysisPill(book?.state.castConfirmed ?? false, server.state)) {
-          dispatch(analysisActions.clearActiveStream());
+          clearLocal();
           return;
         }
       }
@@ -154,6 +202,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       );
     } catch (err) {
       console.warn('[analysis-state] refusal re-read failed:', (err as Error)?.message);
+      if (!runIsLive && current() === atStart) clearLocal();
     }
   };
 
@@ -358,7 +407,10 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             e.code === 'chapters_restructuring')
         ) {
           closeHandle();
-          void restoreFromServer(snap);
+          void restoreFromServer(
+            snap,
+            e.code === 'subset_analysis_running' || (e.code === 'main_analysis_running' && e.draining !== true),
+          );
           return;
         }
         /* #3084 F7 — the persistent "reasoning overflow" notification is

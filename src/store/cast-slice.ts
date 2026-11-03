@@ -236,7 +236,7 @@ export const castSlice = createSlice({
     },
     /* fs-38 Wave 3c Task 26 — engine-parameterised sibling of
        setQwenOverrideName. The "use a My-voices entry" assign flow (profile
-       drawer's useMyVoice) can target ANY clone-capable engine's slot, not
+       drawer's assignMyVoice) can target ANY clone-capable engine's slot, not
        just qwen — setQwenOverrideName stays qwen-only because its OTHER
        caller (the bulk-design SSE stream, cast-design-stream-middleware.ts)
        only ever designs Qwen voices. Carries libraryUuid/provenance too: the

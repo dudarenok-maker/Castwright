@@ -236,6 +236,27 @@ vi.mock('../views/book-library', () => ({
 /* The Account view is mounted for the restore case; its update card is not under test. */
 vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
 
+/* The drawer is stood in for by one button so a test can drive Layout's own
+   onSave (the profile-save stale-audio nudge) without the drawer's form. The
+   stand-in is opt-in (`profileDrawerStub.on`, set by that describe only): every
+   other test renders the real drawer. */
+const profileDrawerStub = vi.hoisted(() => ({ on: false }));
+vi.mock('../modals/profile-drawer', async () => {
+  const actual = await vi.importActual<typeof import('../modals/profile-drawer')>('../modals/profile-drawer');
+  return {
+    ...actual,
+    ProfileDrawer: (p: Parameters<typeof actual.ProfileDrawer>[0]) =>
+      profileDrawerStub.on ? (
+        <button
+          data-testid="mock-profile-save"
+          onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
+        />
+      ) : (
+        <actual.ProfileDrawer {...p} />
+      ),
+  };
+});
+
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
@@ -260,6 +281,7 @@ import {
 import type { RootState } from '../store';
 import { modelLabel } from '../lib/model-label';
 import type { AnalyzerCatalog } from '../lib/types';
+import { StaleAudioBanner } from './stale-audio-banner';
 import { BooksRoute } from '../routes/index';
 import { AccountView } from '../views/account';
 import { createBookStateDisk } from '../test/book-state-disk';
@@ -5397,6 +5419,32 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
     }
   });
 
+  it('A5: a hydrate read that takes 16 s on every attempt lands on a later attempt (the bound grows)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      getBookStateMock.mockImplementation(
+        (_id: string, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            const t = setTimeout(() => resolve(bookStateFor('A', revState('A', null, 0, []))), 16000);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      );
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await advance(120000);
+      expect(store.getState().manuscript.bookId).toBe('A');
+      expect(getsOf('A')).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('A3: never more than one getBookState(A) is open across the retry schedule', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -5412,7 +5460,7 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
       const store = makeStore();
       openAt(store, 'A');
       renderLayoutAt(store, 'A');
-      for (let t = 0; t < 140; t++) await advance(1000); // attempts at 0, 17, 36, 59, 90, 135
+      for (let t = 0; t < 60; t++) await advance(5000); // attempts at 0, 17, 51, 119, 195, 285 (bound 15, 30, 60 s...)
       expect(getsOf('A').length).toBeGreaterThanOrEqual(6);
       expect(maxOpen).toBe(1);
     } finally {
@@ -5470,5 +5518,169 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Layout — the duplicate-review far-book read is bounded and aborted (#3967)', () => {
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  /* Different surface names ('Eliza' / 'Eliza Gray') — identical names read as already linked. */
+  const voice = (bookId: string) => ({
+    id: 'eliza', character: bookId === 'A' ? 'Eliza' : 'Eliza Gray', bookTitle: `Book ${bookId}`, bookId, attributes: [], usedIn: 1,
+    source: 'current', gradient: ['#000', '#fff'], ttsVoice: { provider: 'gemini', name: 'Kore', description: '' },
+  });
+  const libBook = (bookId: string) => ({
+    bookId, title: `Book ${bookId}`, author: 'Della Renwick', series: 'The Series', isStandalone: false,
+    status: 'cast_pending', tags: [],
+  });
+  const lib = { authors: [{ name: 'Della Renwick', series: [{ name: 'The Series', books: [libBook('A'), libBook('B')] }] }] };
+  const farReads = () => getBookStateMock.mock.calls.filter(([id]) => id === 'B');
+
+  /* Opens book A with Eliza's profile drawer up, then clicks the
+     "Possible duplicate of …" chip, which starts the far-book (B) read. */
+  async function openDuplicateReview() {
+    vi.mocked(api.getLibrary).mockResolvedValue(lib as never);
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: [voice('A'), voice('B')], dropped: [] } as never);
+    getBookStateMock.mockImplementation((id: string, signal?: AbortSignal) =>
+      id === 'B' ? hung(signal) : Promise.resolve(bookStateFor(id, revState(id, null, 0, []))));
+    const store = makeStore();
+    openAt(store, 'A');
+    const view = renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().cast.characters.length).toBeGreaterThan(0));
+    act(() => { store.dispatch(uiActions.setOpenProfileId('eliza')); });
+    fireEvent.click(await screen.findByRole('button', { name: /Possible duplicate of/i }));
+    await waitFor(() => expect(farReads().length).toBeGreaterThan(0));
+    return { store, view };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] } as never);
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: [], dropped: [] } as never);
+  });
+
+  it('(a) timeout: a far-book read that never answers is aborted after 15 s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await openDuplicateReview();
+      const signal = farReads()[0][1] as AbortSignal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      await advance(15_500);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(c) an expired far-book read is retried', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await openDuplicateReview();
+      /* the next far-book read answers with the far cast */
+      getBookStateMock.mockImplementation((id: string) =>
+        id === 'B'
+          ? Promise.resolve({
+              ...bookStateFor('B', revState('B', null, 0, [])),
+              cast: { characters: [{ id: 'eliza', voiceId: 'eliza', name: 'Eliza Gray' }] },
+            })
+          : Promise.resolve(bookStateFor(id, revState(id, null, 0, []))));
+      expect(farReads()).toHaveLength(1);
+      await advance(15_500);
+      await advance(2_000);
+      expect(farReads()).toHaveLength(2);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('[duplicate-review]'))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(d) closing the review while the retry timer is pending issues no further far-book read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = await openDuplicateReview();
+      await advance(15_500);
+      expect(farReads()).toHaveLength(1);
+      act(() => { store.dispatch(uiActions.setOpenProfileId(null)); });
+      await advance(60_000);
+      expect(farReads()).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('(b) closing the review before 15 s aborts the read with no [duplicate-review] warn', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { store } = await openDuplicateReview();
+      const signal = farReads()[0][1] as AbortSignal;
+      await advance(5_000);
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      /* Closing the profile drawer drops the candidate, so the effect cleans up. */
+      act(() => { store.dispatch(uiActions.setOpenProfileId(null)); });
+      await advance(100);
+      expect(signal.aborted).toBe(true);
+      await advance(20_000);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('[duplicate-review]'))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('Layout — the stale-audio banner and the regenerate modal agree on excluded chapters (#3919)', () => {
+  beforeEach(() => {
+    profileDrawerStub.on = true;
+  });
+  afterEach(() => {
+    profileDrawerStub.on = false;
+  });
+
+  const eliza = (n: number, excluded = false): Chapter =>
+    ({ id: n, title: `Chapter ${n}`, duration: '10:00', state: 'done', progress: 1, excluded, characters: { eliza: 'done' } }) as Chapter;
+
+  async function saveVoiceChange(chapters: Chapter[]) {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/A/cast']}>
+          <Routes><Route path="*" element={<><Layout /><StaleAudioBanner /></>} /></Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    act(() => {
+      store.dispatch(chaptersSlice.actions.setChapters(chapters));
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    fireEvent.click(await screen.findByTestId('mock-profile-save'));
+    return store;
+  }
+
+  it('names only the included chapter in the banner and lists the same one in the modal', async () => {
+    const store = await saveVoiceChange([eliza(1, true), eliza(4)]);
+    expect(store.getState().ui.staleAudio?.chapterIds).toEqual([4]);
+    expect(await screen.findByTestId('stale-audio-banner')).toHaveTextContent(/across 1 chapter\./);
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate…/ }));
+    const chips = await screen.findByTestId('regen-affected-chapters');
+    expect(chips.textContent).toMatch(/CH 04/);
+    expect(chips.textContent).not.toMatch(/CH 01/);
+  });
+
+  it('raises no banner when the character only speaks in an excluded chapter', async () => {
+    const store = await saveVoiceChange([eliza(1, true)]);
+    expect(store.getState().ui.staleAudio).toBeNull();
+    expect(screen.queryByTestId('stale-audio-banner')).toBeNull();
   });
 });
