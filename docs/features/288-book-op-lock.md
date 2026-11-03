@@ -940,7 +940,8 @@ snapshot (Layout's full hydrate) **commits** it, and only a committed token is e
 whose slices still hold the other twin therefore does not arm the writes that snapshot would make. On a 409
 `book_repaired_reload` the handler installed in `store/repaired-book-handler.ts` shows one toast (the book was repaired
 and the change was not saved), marks the book for a full read (Layout re-reads it, which commits the token), and
-refreshes the Library; a book the slices do not hold is read and committed straight away so the user's retry passes.
+refreshes the Library; any book the open stage does not show (including one the slices still hold, on the Library) is
+read and committed straight away so the user's retry passes, because Layout reads only while the stage shows the book.
 The persistence middleware already treats any 4xx on `PUT /state` as a final refusal, so the rejected save is dropped
 without a retry and a details commit is rolled back, its typed draft kept.
 

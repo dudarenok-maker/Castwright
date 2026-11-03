@@ -16,6 +16,14 @@ import { notificationsActions } from './notifications-slice';
 export const BOOK_REPAIRED_MESSAGE =
   'This book was repaired after a duplicate id was found, so your last change was not saved. Reloading it now.';
 
+/** True when the open stage is one Layout hydrates from disk, for this book. */
+function stageShows(state: unknown, bookId: string): boolean {
+  const stage = (state as { ui?: { stage?: { kind?: string; bookId?: string } } }).ui?.stage;
+  return (
+    (stage?.kind === 'analysing' || stage?.kind === 'confirm' || stage?.kind === 'ready') && stage.bookId === bookId
+  );
+}
+
 export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getState'>): void {
   setRepairedBookHandler((bookId) => {
     store.dispatch(
@@ -26,10 +34,12 @@ export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getS
       .getLibrary()
       .then(async (res) => {
         store.dispatch(libraryActions.hydrate(res));
-        /* A book these slices do not hold has no snapshot to be stale: read it so
-           the user's retry (Library delete, rename) carries the token. A book they
-           DO hold gets its token from the full read the mark above triggers. */
-        if ((store.getState() as { manuscript: { bookId: string | null } }).manuscript.bookId === bookId) return;
+        /* Only a book the STAGE shows gets its token from the full read the mark above
+           triggers (Layout reads on analysing/confirm/ready only). Any other book is read
+           here so the user's retry (Library delete, rename) carries the token: a tab on the
+           Library whose slices still hold the book has no read coming, and would otherwise
+           be refused on every retry. */
+        if (stageShows(store.getState(), bookId)) return;
         await api.getBookState(bookId);
         commitBookReadToken(bookId);
       })
