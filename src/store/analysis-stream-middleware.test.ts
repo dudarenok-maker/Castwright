@@ -91,6 +91,7 @@ vi.mock('../lib/api', () => {
 });
 
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
+import { selectAnalysisRunningForBook, selectBookHasForegroundWork } from './analysis-substage-selectors';
 import { AnalysisError } from '../lib/api';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 
@@ -1167,6 +1168,13 @@ describe('analysisStreamMiddleware — heartbeat keeps cross-view snapshot fresh
   });
 });
 
+/* #3967 pass 4 - the refusal of a start while the previous main run is still stopping. */
+function drainingRefusal(): AnalysisError {
+  const e = new AnalysisError('still stopping', 'main_analysis_running');
+  e.draining = true;
+  return e;
+}
+
 describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST', () => {
   const settle = async () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -1272,7 +1280,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
     let resolveBook!: (v: unknown) => void;
     getBookStateMock.mockReturnValueOnce(new Promise((r) => (resolveBook = r)));
-    lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+    lastCall().reject(drainingRefusal());
     await settle();
     expect(getBookStateMock).toHaveBeenCalledWith('b1');
     /* A Retry on this device starts while the book-state read is in flight. */
@@ -1283,7 +1291,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(store.getState().analysis.activeStream).toEqual(newer);
   });
 
-  it('#3967 — a book-state read that never settles is aborted at 15 s and warned; the stale running snapshot the server denied is cleared, not kept', async () => {
+  it('#3967 — a book-state read that never settles is aborted at 15 s and warned; the stale running snapshot of a draining run is cleared, not kept', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -1292,7 +1300,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
       getBookStateMock.mockReturnValueOnce(new Promise(() => {}));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await vi.advanceTimersByTimeAsync(0);
       expect(bookStateSignals).toHaveLength(1);
       expect(bookStateSignals[0]!.aborted).toBe(false);
@@ -1314,7 +1322,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await settle();
       expect(warn).toHaveBeenCalledWith('[analysis-state] refusal re-read failed:', '503');
       expect(store.getState().analysis.activeStream).toBeNull();
@@ -1331,7 +1339,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       getAnalysisStateMock.mockReturnValueOnce(new Promise(() => {}));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await vi.advanceTimersByTimeAsync(0);
       expect(analysisStateSignals).toHaveLength(1);
       expect(analysisStateSignals[0]!.aborted).toBe(false);
@@ -1353,7 +1361,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       let rejectRead!: (e: unknown) => void;
       getAnalysisStateMock.mockReturnValueOnce(new Promise((_r, rej) => (rejectRead = rej)));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await settle();
       const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
       store.dispatch(analysisActions.setActiveStream(newer));
@@ -1373,7 +1381,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
       getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
       getBookStateMock.mockRejectedValueOnce(new Error('500'));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await settle();
       expect(store.getState().analysis.activeStream).toBeNull();
 
@@ -1383,7 +1391,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
       let rejectBook!: (e: unknown) => void;
       getBookStateMock.mockReturnValueOnce(new Promise((_r, rej) => (rejectBook = rej)));
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await settle();
       const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
       store2.dispatch(analysisActions.setActiveStream(newer));
@@ -1408,7 +1416,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
       getBookStateMock.mockReturnValueOnce(
         new Promise((r) => setTimeout(() => r({ state: { castConfirmed: false } }), 16000)),
       );
-      lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+      lastCall().reject(drainingRefusal());
       await vi.advanceTimersByTimeAsync(120000);
       expect(store.getState().analysis.activeStream?.state).not.toBe('running');
     } finally {
@@ -1423,7 +1431,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
     getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
     getBookStateMock.mockResolvedValueOnce({ state: { castConfirmed: true } });
-    lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
+    lastCall().reject(drainingRefusal());
     await settle();
     expect(store.getState().analysis.activeStream).toBeNull();
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
@@ -1475,5 +1483,121 @@ describe('analysisStreamMiddleware — #3435 a subset handle ending in a not-a-f
     await settle();
     expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'analyzer-timeout' });
     expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+});
+
+/* #3967 pass 4 - a failed or hung state read clears the snapshot only when the refusal does
+   not say a run is live. A live run's snapshot is the one thing that keeps Retry disabled and
+   the layout's background emotion run off the book; clearing it would lose both. */
+describe('analysisStreamMiddleware - #3967 the refusal re-read failing keeps a live run snapshot', () => {
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  const facts = (store: ReturnType<typeof buildStore>) => {
+    const a = store.getState().analysis.activeStream;
+    return {
+      snapshot: a ? `${a.kind ?? 'main'}:${a.state}` : null,
+      runningForBook: selectAnalysisRunningForBook(store.getState() as never, 'b1'),
+      foregroundWork: selectBookHasForegroundWork(store.getState() as never, 'b1'),
+    };
+  };
+  function seeded(snap: AnalysisStreamSnapshot = baseSnapshot) {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(snap));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    return store;
+  }
+
+  it('P4-M1 subset_analysis_running, state read rejects: the snapshot stays running', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = seeded();
+      getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+      await settle();
+      expect(facts(store)).toEqual({ snapshot: 'main:running', runningForBook: true, foregroundWork: true });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('P4-M2 main_analysis_running (not draining), state read never settles: the snapshot stays running', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = seeded({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] });
+      getAnalysisStateMock.mockReturnValueOnce(new Promise(() => {}));
+      lastCall().reject(new AnalysisError('still running', 'main_analysis_running'));
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(facts(store)).toEqual({ snapshot: 'subset:running', runningForBook: true, foregroundWork: true });
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a book-state read that fails after a live-run refusal keeps the snapshot too (the server said a run is live)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = seeded();
+      getAnalysisStateMock.mockResolvedValueOnce({ manuscriptId: 'm1', phaseId: 1, phaseLabel: 'p', phaseProgress: 0.4, state: 'paused', engine: 'gemini', kind: 'main', lastTickAt: 42, writtenAt: 43 });
+      getBookStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+      await settle();
+      expect(store.getState().analysis.activeStream?.state).toBe('running');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('chapters_restructuring, state read rejects: no run is live, so the stale snapshot is cleared', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = seeded();
+      getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(new AnalysisError('The chapters of this book are being changed.', 'chapters_restructuring'));
+      await settle();
+      expect(facts(store)).toEqual({ snapshot: null, runningForBook: false, foregroundWork: false });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a draining main run, state read rejects: the snapshot is cleared', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const store = seeded();
+      getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(drainingRefusal());
+      await settle();
+      expect(store.getState().analysis.activeStream).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('the clear is local: it is not the broadcast analysis/clearActiveStream action, so it cannot wipe the owning tab pill', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const types: string[] = [];
+      const store = configureStore({
+        reducer: { analysis: analysisSlice.reducer, notifications: notificationsSlice.reducer },
+        middleware: (getDefault) =>
+          getDefault().concat(analysisStreamMiddleware, () => (next) => (action) => {
+            types.push((action as { type: string }).type);
+            return next(action);
+          }),
+      });
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+      getAnalysisStateMock.mockRejectedValueOnce(new Error('503'));
+      lastCall().reject(drainingRefusal());
+      await settle();
+      expect(store.getState().analysis.activeStream).toBeNull();
+      expect(types).not.toContain('analysis/clearActiveStream');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
