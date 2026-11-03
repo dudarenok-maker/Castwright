@@ -2,7 +2,7 @@
    7 days. The real sweep repairs a pair in a temp workspace; a "restart" is the gate's
    in-memory state being dropped and re-read from the file the sweep persisted. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -251,5 +251,93 @@ describe('a damaged gate file fails closed (#3713)', () => {
     rmSync(paths.repairedBookGateJsonPath(), { force: true });
     await gate.loadRepairedBookGate();
     expect(existsSync(paths.repairedBookGateJsonPath())).toBe(false);
+  });
+});
+
+/* PR #4004 pass 4 (minor): a gate file that cannot be READ at boot fails closed. */
+describe('an unreadable gate file at boot fails closed (#3713)', () => {
+  const ID = 'auth__ser__book';
+  const file = () => paths.repairedBookGateJsonPath();
+  const entry = (bookId: string) => ({ bookId, token: 'tok-' + bookId, repairedAt: new Date().toISOString() });
+  /* A directory where the file should be: readFile fails with EISDIR, not ENOENT -- the "exists but unreadable" shape. */
+  const makeUnreadable = () => {
+    rmSync(file(), { recursive: true, force: true });
+    mkdirSync(file(), { recursive: true });
+  };
+  const makeReadable = (...ids: string[]) => {
+    rmSync(file(), { recursive: true, force: true });
+    writeFileSync(file(), JSON.stringify({ version: 1, entries: ids.map(entry), manuscripts: [] }));
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(file(), { recursive: true, force: true });
+  });
+
+  it('is never overwritten by a fresh file: a repair in the same boot persists nothing over it', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await expect(gate.loadRepairedBookGate()).resolves.toBeUndefined();
+    await repairedPair();
+    expect(statSync(file()).isDirectory()).toBe(true); // still the thing we could not read
+    expect(await delStatus()).toBe(409); // the in-memory gate for this boot's repair holds
+  });
+
+  it('a read that fails once and then succeeds is retried at boot, and the entries are loaded', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    setTimeout(() => makeReadable('late__x__y'), 40);
+    await gate.loadRepairedBookGate();
+    expect(gate.repairedReadToken('late__x__y')).toBe('tok-late__x__y');
+  });
+
+  it('keeps refusing: once the file becomes readable the next gated write loads it, and the ids it names are refused', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    expect(gate.repairedReadToken('old__x__y')).toBeUndefined();
+    makeReadable('old__x__y');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+    const res = await request(app).delete('/api/books/old__x__y');
+    expect(res.status).toBe(409);
+    expect(gate.repairedReadToken('old__x__y')).toBe('tok-old__x__y');
+  });
+
+  it('a repair made while it was unreadable is merged with the file once it can be read, and both persist', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    await repairedPair();
+    makeReadable('old__x__y');
+    await gate.persistRepairedBookGate();
+    const ids = JSON.parse(readFileSync(file(), 'utf8')).entries.map((e: { bookId: string }) => e.bookId).sort();
+    expect(ids).toEqual([ID, 'old__x__y'].sort());
+  });
+});
+
+describe('deleting a gated book drops its gate entry (#3713)', () => {
+  const ID = 'auth__ser__book';
+  it('the entry is gone in memory and from the file, so a new book minted with the same id is not refused', async () => {
+    await repairedPair();
+    const token = gate.repairedReadToken(ID)!;
+    expect((await request(app).delete(`/api/books/${ID}`).set('X-Book-Read-Token', token)).status).toBe(204);
+    expect(gate.repairedReadToken(ID)).toBeUndefined();
+    expect(JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).entries.map((e: { bookId: string }) => e.bookId)).not.toContain(ID);
+    gate.__clearRepairedBookGateMemoryForTest();
+    await gate.loadRepairedBookGate();
+    expect(gate.repairedReadToken(ID)).toBeUndefined();
+  });
+
+  it('a refused delete (no token) leaves the entry alone', async () => {
+    await repairedPair();
+    expect((await request(app).delete(`/api/books/${ID}`)).status).toBe(409);
+    expect(gate.repairedReadToken(ID)).toBeTruthy();
+  });
+
+  it('deleting one gated book leaves another one\'s entry alone', async () => {
+    await repairedPair();
+    await gate.registerRepairedBook('other__id__x', null);
+    await request(app).delete(`/api/books/${ID}`).set('X-Book-Read-Token', gate.repairedReadToken(ID)!);
+    expect(gate.repairedReadToken('other__id__x')).toBeTruthy();
   });
 });

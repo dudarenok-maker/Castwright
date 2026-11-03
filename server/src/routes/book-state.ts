@@ -86,7 +86,7 @@ import {
   withBookPathClaim,
   type BookJobKind,
 } from '../workspace/book-op-lock.js';
-import { BOOK_READ_TOKEN_HEADER, repairedReadToken } from '../workspace/repaired-book-gate.js';
+import { BOOK_READ_TOKEN_HEADER, forgetRepairedBook, repairedReadToken } from '../workspace/repaired-book-gate.js';
 import {
   manuscriptFingerprint,
   sameFingerprint,
@@ -2549,6 +2549,9 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
     if (outcome.removed === 'removed' && state?.manuscriptId) {
       await clearAnalysisCache(state.manuscriptId);
     }
+    /* #3713: a gated book that is deleted takes its gate entry with it (a fresh import minted with the
+       same id must not inherit the refusal). */
+    if (outcome.removed === 'removed') await forgetRepairedBook(req.params.bookId);
     await pruneQueue();
     if (outcome.partly) {
       const refusal = bookOpRefusal(outcome.partly, 'delete')!;

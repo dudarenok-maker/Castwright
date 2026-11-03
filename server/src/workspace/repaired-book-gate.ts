@@ -114,10 +114,25 @@ function activeBook(bookId: string, now = Date.now()): BookEntry | undefined {
 
 let writing: Promise<void> = Promise.resolve();
 
+/** True while the persisted file exists but could not be READ (anything but "absent"). Its entries are
+ *  unknown, so the file is never overwritten with this process's own, and a gated write retries the read. */
+let unreadable = false;
+let lastReadAttempt = 0;
+const READ_RETRY_DELAYS_MS = [100, 300];
+const READ_RETRY_INTERVAL_MS = 1000;
+
 /** Write the live, unexpired, not-yet-read entries. Serialised; never rejects (the in-memory gate
- *  holds either way, and a failure is logged). */
+ *  holds either way, and a failure is logged). A file that could not be read is retried first and, if it
+ *  still cannot be, left untouched: overwriting it would drop every id it names (PR #4004 pass 4). */
 export function persistRepairedBookGate(): Promise<void> {
   const write = async (): Promise<void> => {
+    if (unreadable) {
+      await ingestGateFile(Date.now(), false);
+      if (unreadable) {
+        console.warn('[repaired-book-gate] the persisted gate is unreadable; not overwriting it (gate holds for this process)');
+        return;
+      }
+    }
     const now = Date.now();
     const iso = (t: number): string => new Date(t).toISOString();
     const entries = [...books]
@@ -160,17 +175,39 @@ function readTime(v: unknown, now: number): number {
   return Number.isNaN(t) ? now : t;
 }
 
+/** Read the file, retrying a read that fails for any reason but "absent" (a transient EBUSY, a virus scanner
+ *  holding it). `'absent'` is the common first-boot case; `null` is a file that stayed unreadable. */
+async function readGateFile(retry: boolean): Promise<string | 'absent' | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await readFile(repairedBookGateJsonPath(), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'absent';
+      if (!retry || attempt >= READ_RETRY_DELAYS_MS.length) {
+        console.warn('[repaired-book-gate] could not read the persisted gate; it will not be overwritten', err);
+        return null;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 /** Re-read the persisted gate (boot calls this BEFORE the sweep). Never throws. */
 export async function loadRepairedBookGate(now = Date.now()): Promise<void> {
-  let raw: string;
-  try {
-    raw = await readFile(repairedBookGateJsonPath(), 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-      console.warn('[repaired-book-gate] could not read the persisted gate; repaired ids are gated from this boot only', err);
-    }
+  await ingestGateFile(now, true);
+}
+
+/** Merge the file into memory (an id already held in memory keeps its entry: it is newer). Sets `unreadable`. */
+async function ingestGateFile(now: number, boot: boolean): Promise<void> {
+  lastReadAttempt = Date.now();
+  const read = await readGateFile(boot);
+  if (read === null) {
+    unreadable = true;
     return;
   }
+  unreadable = false;
+  if (read === 'absent') return;
+  const raw = read;
   let records: Record<string, unknown>[];
   let damaged = false;
   try {
@@ -186,8 +223,8 @@ export async function loadRepairedBookGate(now = Date.now()): Promise<void> {
     const repairedAt = readTime(r.repairedAt, now);
     if (isExpired(repairedAt, now)) continue;
     if (nonEmpty(r.manuscriptId)) {
-      manuscriptScopes.set(r.manuscriptId, { bookId: r.bookId, repairedAt, persist: true });
-    } else {
+      if (!manuscriptScopes.has(r.manuscriptId)) manuscriptScopes.set(r.manuscriptId, { bookId: r.bookId, repairedAt, persist: true });
+    } else if (!books.has(r.bookId)) {
       books.set(r.bookId, { token: nonEmpty(r.token) ? r.token : randomUUID(), repairedAt, persist: true });
     }
   }
@@ -195,7 +232,9 @@ export async function loadRepairedBookGate(now = Date.now()): Promise<void> {
   for (const s of manuscriptScopes.values()) {
     if (!books.has(s.bookId)) books.set(s.bookId, { token: randomUUID(), repairedAt: s.repairedAt, persist: true });
   }
-  if (damaged) {
+  /* Only the boot rewrites: a retry from inside a persist is followed by that persist's own whole-file write
+     (rewriting here would wait on the very chain that called it). */
+  if (damaged && boot) {
     console.warn(`[repaired-book-gate] the persisted gate file was damaged; kept ${books.size} id(s) and rewrote it`);
     await persistRepairedBookGate();
   }
@@ -235,10 +274,26 @@ export function markRepairedBookRead(bookId: string): Promise<void> {
   return persistRepairedBookGate();
 }
 
+/** A gated book was deleted: forget its entry (and its manuscript scopes), in memory and on disk. `mintBookId`
+ *  gives a fresh import with the same author, series and title the same id, and that new book must not inherit
+ *  the deleted one's refusal. */
+export function forgetRepairedBook(bookId: string): Promise<void> {
+  const had = books.delete(bookId);
+  let hadScope = false;
+  for (const [id, s] of manuscriptScopes) {
+    if (s.bookId === bookId) {
+      manuscriptScopes.delete(id);
+      hadScope = true;
+    }
+  }
+  return had || hadScope ? persistRepairedBookGate() : Promise.resolve();
+}
+
 /** What a process restart does to the in-memory gate (the file stays). */
 export function __clearRepairedBookGateMemoryForTest(): void {
   books.clear();
   manuscriptScopes.clear();
+  unreadable = false;
 }
 
 export function __resetRepairedBookGateForTest(): void {
@@ -268,14 +323,23 @@ function refuseUnlessRead(scopeBookId: string | undefined, req: Request, res: Re
 const isRead = (req: Request): boolean => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
 
 /** `app.use('/api/books/:bookId', ...)`: every content write, rename and delete on a repaired id. */
-export function repairedBookGate(req: Request, res: Response, next: NextFunction): void {
+export async function repairedBookGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (isRead(req) || LISTENER_WRITE_PATHS.has(req.path)) return next();
+  await retryUnreadableGate();
   refuseUnlessRead(String(req.params.bookId), req, res, next);
 }
 
+/** A gate file that could not be read at boot is retried by the next gated write (at most once a second), so the
+ *  ids it names are refused again as soon as it can be read instead of staying ungated for the whole boot. */
+async function retryUnreadableGate(): Promise<void> {
+  if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return;
+  await ingestGateFile(Date.now(), false);
+}
+
 /** `app.use('/api/manuscripts/:id', ...)`: the manuscriptId-keyed analysis writes. */
-export function repairedManuscriptGate(req: Request, res: Response, next: NextFunction): void {
+export async function repairedManuscriptGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (isRead(req)) return next();
+  await retryUnreadableGate();
   const scope = manuscriptScopes.get(String(req.params.id));
   refuseUnlessRead(scope && !isExpired(scope.repairedAt, Date.now()) ? scope.bookId : undefined, req, res, next);
 }
