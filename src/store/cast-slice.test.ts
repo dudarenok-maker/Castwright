@@ -109,6 +109,32 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(gen.voiceState).toBe('reused');
   });
 
+  it("never re-links a row to a book it declined (Don't reuse, #3992), and takes the next candidate", () => {
+    const cand = (fromBookId: string, score: number) => ({
+      voiceId: `v_${fromBookId}`,
+      fromBookId,
+      fromBookTitle: fromBookId,
+      fromCharacterId: 'wren',
+      score,
+    });
+    const declined = makeChar('wren', { voiceState: 'generated', declinedVoiceFrom: ['book-one'] });
+    const only = castSlice.reducer(
+      baseState([declined]),
+      castActions.applyVoiceMatches(matchResponse([{ characterId: 'wren', candidates: [cand('book-one', 0.9)] }])),
+    ).characters[0];
+    expect(only.matchedFrom).toBeUndefined();
+    expect(only.voiceState).toBe('generated');
+    expect(only.voiceId).toBeUndefined();
+
+    const next = castSlice.reducer(
+      baseState([declined]),
+      castActions.applyVoiceMatches(
+        matchResponse([{ characterId: 'wren', candidates: [cand('book-one', 0.9), cand('book-two', 0.5)] }]),
+      ),
+    ).characters[0];
+    expect(next.matchedFrom?.bookId).toBe('book-two');
+  });
+
   it('leaves characters with no candidates untouched', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),

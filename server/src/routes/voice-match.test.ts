@@ -5,8 +5,8 @@
    cast-merge.test.ts's lazy-import pattern: WORKSPACE_DIR must be set
    BEFORE workspace/paths.js loads so BOOKS_ROOT captures the tempdir. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -467,5 +467,65 @@ describe('voice-match router', () => {
     expect(voiceIds).not.toContain('v_marlow_es');
     /* Same-language siblings are unaffected. */
     expect(voiceIds).toContain('v_marlow');
+  });
+});
+
+/* #3992 pass-2 — Confirm's auto-match calls this route on every visit, so the
+   server has to honour the row's on-disk "Don't reuse" marker itself: a client
+   that re-applies the top candidate would otherwise re-link a declined row. */
+describe('voice-match router — honours the Don’t-reuse marker (#3992)', () => {
+  const castFile = (title: string) =>
+    join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  const marlowReq = { characters: [{ id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }] };
+  const setCurrentCast = (rows: object[] | string) =>
+    writeFileSync(castFile('Current Book'), typeof rows === 'string' ? rows : JSON.stringify({ characters: rows }));
+  const candidateBooks = (res: { body: { matches: Array<{ candidates: Array<{ fromBookId: string }> }> } }) =>
+    res.body.matches[0].candidates.map((c) => c.fromBookId);
+  afterEach(() => setCurrentCast([]));
+
+  it('control: with no marker both earlier books are candidates', async () => {
+    setCurrentCast([{ id: 'marlow', name: 'Marlow' }]);
+    const res = await callMatch(CURRENT_BOOK_ID, marlowReq);
+    expect(candidateBooks(res)).toEqual(
+      expect.arrayContaining([makeBookIdFn(AUTHOR, SERIES, 'Book One'), makeBookIdFn(AUTHOR, SERIES, 'Book Two')]),
+    );
+  });
+
+  it('drops a candidate from a book the row declined, and keeps the other', async () => {
+    const one = makeBookIdFn(AUTHOR, SERIES, 'Book One');
+    const two = makeBookIdFn(AUTHOR, SERIES, 'Book Two');
+    setCurrentCast([{ id: 'marlow', name: 'Marlow', declinedVoiceFrom: [one] }]);
+    const res = await callMatch(CURRENT_BOOK_ID, marlowReq);
+    expect(res.status).toBe(200);
+    expect(candidateBooks(res)).not.toContain(one);
+    expect(candidateBooks(res)).toContain(two);
+  });
+
+  it('drops a candidate holding a declined voice uuid, whatever its book', async () => {
+    const one = makeBookIdFn(AUTHOR, SERIES, 'Book One');
+    const original = readFileSync(castFile('Book One'), 'utf8');
+    try {
+      const rows = JSON.parse(original).characters.map((c: { id: string }) =>
+        c.id === 'marlow' ? { ...c, voiceUuid: 'u_declined' } : c,
+      );
+      writeFileSync(castFile('Book One'), JSON.stringify({ characters: rows }));
+      setCurrentCast([{ id: 'marlow', name: 'Marlow', declinedVoiceFrom: ['some-other-book'], declinedVoiceUuids: ['u_declined'] }]);
+      const res = await callMatch(CURRENT_BOOK_ID, marlowReq);
+      expect(candidateBooks(res)).not.toContain(one);
+    } finally {
+      writeFileSync(castFile('Book One'), original);
+    }
+  });
+
+  it('a book that is not on disk has no marker to read: unfiltered', async () => {
+    const res = await callMatch('no-such-book', marlowReq);
+    expect(res.status).toBe(200);
+  });
+
+  it('an unreadable cast.json fails the request with a path-free sentence instead of reading as "no marker"', async () => {
+    setCurrentCast('{"characters":[{"id":');
+    const res = await callMatch(CURRENT_BOOK_ID, marlowReq);
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
   });
 });

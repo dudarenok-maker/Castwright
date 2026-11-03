@@ -798,8 +798,12 @@ export const castSlice = createSlice({
       s.characters = s.characters.map((c) => {
         const m = byId[c.id];
         if (!m || !m.candidates?.length) return c;
-        const top = m.candidates[0];
         if (c.voiceState === 'locked' || c.voiceState === 'tuned') return c;
+        /* #3992 — never re-link a row to a book it declined ("Don't reuse"). The
+           server already drops these from the response; this keeps a stale or
+           third-party response from re-linking a row the client knows is declined. */
+        const top = m.candidates.find((cand) => !(cand.fromBookId && c.declinedVoiceFrom?.includes(cand.fromBookId)));
+        if (!top) return c;
         return {
           ...c,
           voiceId: top.voiceId,
