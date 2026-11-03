@@ -7,10 +7,11 @@
    id-drifted twin. A gate that ignores `bookId` then reads that edge as a
    decline between the two group members, so an interrupted run's two-row prior
    never heals. Same-book edges (cast-reject-orphan writes them) must still
-   block at every gate. Each of the six `currentBookId` arguments at the
-   analysis.ts call sites (remapFreshToPriorIds, mergeAnalysisResultWithExistingCast
-   and dedupePriorCastByName, main and subset) is pinned by a case that goes
-   red when that one argument alone is removed. */
+   block at every gate. The `currentBookId` arguments at the analysis.ts call
+   sites (remapFreshToPriorIds, mergeAnalysisResultWithExistingCast and
+   dedupePriorCastByName, main and subset) are each pinned by a case that goes
+   red when that one argument alone is removed; the merge call's is pinned by
+   the reserved-prior-row case, the one join only the merge makes. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -635,23 +636,27 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
   );
 
   it.each(['main', 'subset'] as const)(
-    'a surname drift past a cross-book edge still joins the locked row (%s job)',
+    'a reserved prior row still joins its fresh name past a cross-book edge (%s job)',
     async (kind) => {
-      /* The remap matches exact names only, so a surname drift reaches the
-         merge's own name-fallback gate alone. */
+      /* The remap refuses a reserved prior id, so this join is made by the
+         merge's own name-fallback gate alone: it joins only when that gate reads
+         the cross-book edge as book-scoped (currentBookId threaded). */
       const prior: CastRow = {
-        ...LOCKED_TOM,
-        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom-weir' }],
+        id: 'unknown-male',
+        name: 'Timkin',
+        voiceId: 'v_tim',
+        voiceState: 'locked',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'timkin' }],
       };
-      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, prior], 'Old Tom Weir');
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, prior], 'Timkin');
       try {
-        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom-weir', 'Old Tom Weir')], {
-          speaker: 'old-tom-weir',
+        await run(manuscriptId, bookDir, [NARR, rosterRow('timkin', 'Timkin')], {
+          speaker: 'timkin',
           subset: kind === 'subset',
         });
-        const rows = readCast(bookDir).filter((c) => String(c.name).startsWith('Old Tom'));
+        const rows = named(bookDir, 'Timkin');
         expect(rows).toHaveLength(1);
-        expect(rows[0].voiceId).toBe('v_tom');
+        expect(rows[0].voiceId).toBe('v_tim');
       } finally {
         await cleanup(manuscriptId, bookDir);
       }
