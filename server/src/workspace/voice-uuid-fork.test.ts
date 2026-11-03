@@ -270,11 +270,14 @@ describe('findLinkFollowers (#3992)', () => {
     expect(await findFollowers(two, { id: 'c2' }, U)).toEqual([]);
   });
 
-  it('a link with no characterId follows (any row of the named book)', async () => {
+  it('a link with no characterId follows the row with the SAME id, and only that one (pass 3)', async () => {
     reset();
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
-    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID } }]);
-    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
+    book('Three', THREE_ID, [
+      { id: 'c2', voiceUuid: U, matchedFrom: { bookId: TWO_ID } },
+      { id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID } },
+    ]);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c2']);
   });
 
   it('a cycle terminates and reports each row once', async () => {
@@ -282,7 +285,7 @@ describe('findLinkFollowers (#3992)', () => {
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     book('Three', THREE_ID, [
       { id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } },
-      { id: 'c3b', voiceUuid: U, matchedFrom: { bookId: THREE_ID } },
+      { id: 'c3b', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
     ]);
     book('Four', FOUR_ID, [
       { id: 'c4', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
@@ -380,7 +383,10 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
     const three = chain();
     expect(await findAncestor(three, { id: 'c', voiceUuid: 'other', matchedFrom: link(TWO_ID) })).toBeNull();
     expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toBeNull();
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
+    expect(await findAncestor(three, { id: 'zzz', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
+    // no characterId: the same id in the linked book is the source (the follower rule's reading)
+    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) });
+    expect(found && 'dir' in found && found.characterId).toBe('c');
     expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: { characterId: 'c' } })).toBeNull();
   });
 

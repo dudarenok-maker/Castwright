@@ -18,9 +18,11 @@
       follower of X (below). That is the earlier book whose bytes must be kept.
 
    A FOLLOWER of X is a row, in another book, holding U whose `matchedFrom` names
-   B's bookId with a characterId that is absent or resolves to X (through B's live
-   cast and id history), or that names an already-found follower the same way, so
-   a chain Book Three -> Book Two -> X is found end to end. A bookId-less
+   B's bookId with a characterId that resolves to X (through B's live cast and id
+   history), or that names an already-found follower the same way, so a chain Book
+   Three -> Book Two -> X is found end to end. A `matchedFrom` with a bookId but no
+   characterId names the row with the SAME id as the follower in that book, here
+   and in the walk up (findDeclinedAncestor). A bookId-less
    `matchedFrom` could point at anyone, so it is NOT a follower: it stays on U (and
    so counts as a holder), and neither is a row in a book with no bookId (it cannot
    be locked by id). Followers move to the new uuid together with X, in one
@@ -192,7 +194,10 @@ async function walkFollowers(
         if (visited.has(key)) continue;
         const mf = y.matchedFrom as MatchedFrom;
         if (!mf?.bookId || mf.bookId !== node.bookId) continue;
-        if (mf.characterId && !(await namesNode(mf.characterId))) continue;
+        /* A link with a bookId but no characterId names the row with the SAME id in
+           that book (series books share character ids): the walk up reads it the
+           same way (findDeclinedAncestor). */
+        if (!(await namesNode(mf.characterId ?? y.id))) continue;
         visited.add(key);
         followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
         queue.push({ dir: book.dir, bookId: book.bookId, characterId: y.id, rows: book.rows });
@@ -264,6 +269,7 @@ export async function findDeclinedAncestor(
   const { books, unreadable } = await loadOtherBooks(resolve(bookDir));
   const visited = new Set<string>([rowKey(bookDir, character.id)]);
   let mf = character.matchedFrom as MatchedFrom;
+  let walkerId = character.id;
   while (mf?.bookId) {
     const target = books.find((b) => b.bookId === mf?.bookId);
     if (!target) {
@@ -273,11 +279,8 @@ export async function findDeclinedAncestor(
       return null;
     }
     const rows = target.rows;
-    let row: CastRow | undefined;
-    if (mf.characterId) {
-      const resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(target.dir));
-      row = resolver.resolve(mf.characterId)?.character;
-    }
+    const resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(target.dir));
+    const row: CastRow | undefined = resolver.resolve(mf.characterId ?? walkerId)?.character;
     if (!row) return null;
     if (!holds(row)) {
       return uuid && row.voiceUuid && declinesVoice(row, { voiceUuid: uuid })
@@ -292,6 +295,7 @@ export async function findDeclinedAncestor(
       : await shouldMintApartFromLegacyKey(target.dir, row as LegacyRow);
     if (mustFork) return { dir: target.dir, characterId: row.id };
     mf = row.matchedFrom as MatchedFrom;
+    walkerId = row.id;
   }
   return null;
 }

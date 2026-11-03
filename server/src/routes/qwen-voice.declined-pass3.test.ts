@@ -427,3 +427,34 @@ describe('pass-3 4 — the legacy-key path in three books matches the uuid path�
     expect(legacyOneIntact()).toBe(true);
   });
 });
+
+describe('pass-3 minor — a bookId link with no characterId reads the same in the walk and the follower rule', () => {
+  const bookOnly = (t: Title) => ({ matchedFrom: { bookId: ids[t], bookTitle: t, confidence: 1 } });
+
+  it('designing the follower walks up to the declined source and never overwrites Book One', async () => {
+    seedChain();
+    writeBook('Book Three', [{ ...baseRow, ...bookOnly('Book Two') }]);
+    expect((await design('Book Three')).status).toBe(200);
+    expect(book1Intact()).toBe(true);
+    expect(requestedVoiceIds).toHaveLength(1);
+    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+  });
+
+  it('designing the source still moves that follower with it (the rules agree)', async () => {
+    seedChain();
+    writeBook('Book Three', [{ ...baseRow, ...bookOnly('Book Two') }]);
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('failure path: a link with no characterId to a character the source does not have is no follower and is not walked', async () => {
+    seedChain();
+    writeBook('Book Three', [{ ...baseRow, id: 'other', ...bookOnly('Book Two') }]);
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared'); // not moved: no row of Book Two is its source
+  });
+});
