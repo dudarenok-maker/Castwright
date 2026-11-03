@@ -1059,7 +1059,6 @@ function ListenRoute({ bookId }: { bookId: string }) {
       currentTrack={currentTrack}
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
       onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
-      onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
       onFixLine={async (marker) => {
         /* fs-26 — resolve the re-record marker's playhead to the chapter audio
            segment it sits in, then open the Fix-audio modal pre-scoped to that

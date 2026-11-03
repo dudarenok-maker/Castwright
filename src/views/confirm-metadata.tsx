@@ -88,10 +88,6 @@ export function ConfirmMetadataView() {
     return Boolean(candidate.author || candidate.series || candidate.seriesPosition);
   }, [candidate]);
 
-  if (!candidate) {
-    return null; // App.tsx only renders us when a candidate exists.
-  }
-
   const libraryBooks = useAppSelector((s) => s.library.books);
 
   const trimmedAuthor = author.trim();
@@ -120,6 +116,10 @@ export function ConfirmMetadataView() {
       ) ?? null
     );
   }, [isStandalone, trimmedSeries, seriesPosNum, libraryBooks]);
+
+  if (!candidate) {
+    return null; // App.tsx only renders us when a candidate exists.
+  }
 
   async function handleSubmit(): Promise<void> {
     if (!candidate || !canSubmit) return;

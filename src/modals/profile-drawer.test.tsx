@@ -2070,7 +2070,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
 
   /* Fix wave 2 (review) — the "ordering trap". The engine picker's choice is
      held in LOCAL drawer state (`engineChoice`) and only written onto
-     `character.ttsEngine` on Save; useMyVoice fires the assign IMMEDIATELY,
+     `character.ttsEngine` on Save; assignMyVoice fires the assign IMMEDIATELY,
      ahead of Save. A character with NO saved ttsEngine (so the "My voices"
      group is hidden until Qwen is picked) proves the assign call reads the
      drawer's PENDING engine choice, not the character's still-empty saved
@@ -2136,7 +2136,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
 
   /* fs-38 Wave 3c Task 26 — coqui is the OTHER clone-capable engine
      (tts-voice-mapping.ts resolveTtsVoiceForCharacter's coqui branch).
-     "My voices" now surfaces there too, and useMyVoice must route the
+     "My voices" now surfaces there too, and assignMyVoice must route the
      optimistic write to the coqui slot instead of hardcoding qwen. */
   it('lists "My voices" entries when Coqui is the effective engine', () => {
     renderDrawer(
@@ -2466,7 +2466,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
   /* fs-38 Wave 3c, Task 29 [EX-15] — the mock layer now genuinely rejects an
      assign (revoked/not-ready/wrong-engine 409s — see api.ts's
      `_mockAssignGuardError`), so this is the first test able to observe
-     what useMyVoice does on a REAL rejection rather than the old
+     what assignMyVoice does on a REAL rejection rather than the old
      unconditional `{ updated: 1 }`. It surfaces the rejection instead of
      optimistically showing success: no cast-slice write, and the inline
      error renders. */
