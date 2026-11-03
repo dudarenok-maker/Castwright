@@ -1,21 +1,33 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import type { AppInfo } from '../lib/types';
+import type { AppInfo, Character } from '../lib/types';
 
-const h = vi.hoisted(() => ({ info: null as unknown }));
+const h = vi.hoisted(() => ({
+  info: null as unknown,
+  putBookState: vi.fn(),
+  getLibrary: vi.fn(async () => ({ authors: [] })),
+  getBookState: vi.fn(async () => ({})),
+}));
+vi.mock('../lib/api', () => ({
+  api: { putBookState: h.putBookState, getLibrary: h.getLibrary, getBookState: h.getBookState },
+}));
 vi.mock('../lib/use-app-info', () => ({
   useAppInfo: () => ({ info: h.info, error: null, refresh: vi.fn(async () => {}) }),
 }));
 
 import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
+import { persistenceMiddleware } from '../store/persistence-middleware';
+import { castActions } from '../store/cast-slice';
+import { installRepairedBookHandler, BOOK_REPAIRED_MESSAGE } from '../store/repaired-book-handler';
+import { __resetBookReadTokensForTest, bookFetch } from '../lib/book-read-token';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { chaptersSlice } from '../store/chapters-slice';
-import { bookMetaSlice } from '../store/book-meta-slice';
+import { bookMetaSlice, bookMetaActions } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 
 const repair = {
@@ -37,7 +49,12 @@ const info = (repairs: (typeof repair)[]): AppInfo =>
   }) as AppInfo;
 
 /** `stage` is the view the tab is on; the slices hold `openBookId` either way (leaving a book keeps them). */
-function makeStore(openBookId: string, manuscriptId: string | null, stage: 'ready' | 'books' = 'ready') {
+function makeStore(
+  openBookId: string,
+  manuscriptId: string | null,
+  stage: 'ready' | 'books' = 'ready',
+  withPersistence = false,
+) {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -56,7 +73,10 @@ function makeStore(openBookId: string, manuscriptId: string | null, stage: 'read
             : { kind: 'books' },
       },
     } as never,
-    middleware: (gDM) => gDM({ serializableCheck: false, immutableCheck: false }),
+    middleware: (gDM) => {
+      const base = gDM({ serializableCheck: false, immutableCheck: false });
+      return withPersistence ? base.concat(persistenceMiddleware) : base;
+    },
   });
   /* The tab loaded this book: its slices carry its identity. */
   store.dispatch(manuscriptActions.resetForBook(openBookId));
@@ -167,5 +187,65 @@ describe('DuplicateBookRepairReread (#3713)', () => {
     h.info = info([repair]);
     view.rerender(tree(store));
     expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBe(mark);
+  });
+});
+
+describe('the rebind meets the server gate (#3713)', () => {
+  const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as Character;
+  const accepted = { writes: 0 };
+  const toasts = (store: S) =>
+    (store.getState() as unknown as { notifications: { toasts: { message: string }[] } }).notifications.toasts.map(
+      (t) => t.message,
+    );
+
+  beforeEach(() => {
+    __resetBookReadTokensForTest();
+    accepted.writes = 0;
+    h.putBookState.mockReset();
+    h.getLibrary.mockClear();
+    /* The gate: every write on the repaired id is refused until a token is echoed, and no token is committed here. */
+    vi.stubGlobal('fetch', async (_u: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') return new Response('{}', { headers: { 'x-book-read-token': 'tok' } });
+      if (new Headers(init?.headers).get('x-book-read-token') !== 'tok') {
+        return new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
+      }
+      accepted.writes += 1;
+      return new Response('{}');
+    });
+    h.putBookState.mockImplementation(async (id: string, req: unknown) => {
+      const res = await bookFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
+      if (!res.ok) {
+        const body = (await res.json()) as { code?: string };
+        throw Object.assign(new Error(`Book state PUT failed (${res.status}): refused`), { code: body.code });
+      }
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('an edit queued on the copy tab when it is rebound is refused (the old id belongs to the kept twin), and the user is told', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    h.info = info([]);
+    const store = makeStore('a__s__t', 'm_loser', 'ready', true);
+    installRepairedBookHandler(store);
+    const view = render(tree(store));
+    act(() => void store.dispatch(castActions.setCharacters([eliza('Stale')])));
+    h.info = info([{ ...repair, reassignedManuscriptId: 'm_loser' }]);
+    view.rerender(tree(store));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(3000)));
+    expect(root(store).ui.stage.bookId).toBe('a__s__t-2');
+    expect(accepted.writes).toBe(0);
+    expect(toasts(store)).toContain(BOOK_REPAIRED_MESSAGE);
+    err.mockRestore();
+  });
+
+  it('an uncommitted details draft typed on the copy tab survives the rebind', () => {
+    h.info = info([]);
+    const store = makeStore('a__s__t', 'm_loser', 'ready', true);
+    act(() => void store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed' })));
+    const view = render(tree(store));
+    h.info = info([{ ...repair, reassignedManuscriptId: 'm_loser' }]);
+    view.rerender(tree(store));
+    expect(root(store).ui.stage.bookId).toBe('a__s__t-2');
+    expect((store.getState() as unknown as { bookMeta: { draft: unknown } }).bookMeta.draft).toEqual({ title: 'Typed' });
   });
 });
