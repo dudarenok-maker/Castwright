@@ -5582,8 +5582,13 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
       /* wire-level record of every PUT: which slice, and the token it carried */
       puts: [] as Array<{ slice: string; token: string | null; status: number }>,
       readDelay: 0,
+      acks: [] as Array<string | null>,
     };
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/repaired-books/ack/')) {
+        server.acks.push(new Headers(init?.headers).get('x-book-read-token'));
+        return new Response(null, { status: 204 });
+      }
       /* Only the book routes are modelled; anything else (queue, config) is a network failure. */
       if (!url.startsWith('/api/books/')) throw new Error('no network');
       const method = (init?.method ?? 'GET').toUpperCase();
@@ -5811,6 +5816,25 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     expect(server.puts.filter((p) => p.status === 200)).toEqual([]);
     expect(drops().length).toBeGreaterThan(0);
     expect(drops().every((a) => a.dropBased === true)).toBe(true);
+  });
+
+  /* PR #4004 pass 4, finding 5: the full read the stage triggers acknowledges its token to the server;
+     a revisions-only reopen read (no hydrate) does not. */
+  it('the full read of a repaired id acknowledges its token once; the revisions-only reopen read acknowledges nothing', async () => {
+    const server = fakeServer();
+    server.gated = true;
+    const store = makeStoreWithScopeAndPersistence();
+    installRepairedBookHandler(store);
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
+    await settle();
+    expect(server.acks).toEqual(['tok']);
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await settle(300);
+    expect(server.acks).toEqual(['tok']); // the slices were kept: a revisions-only read, no new commit
   });
 
   it('CONTROL: a full read of an id that was never repaired keeps based state saves (the P2 rule)', async () => {

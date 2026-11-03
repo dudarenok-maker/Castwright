@@ -67,7 +67,12 @@ export function rememberManuscriptBook(manuscriptId: unknown, bookId: string): v
 /** The caller just applied a full read of `bookId` as the book's snapshot: its writes may echo the token. */
 export function commitBookReadToken(bookId: string): void {
   const token = issued.get(bookId);
-  if (token) tokens.set(bookId, token);
+  if (!token) return;
+  tokens.set(bookId, token);
+  /* PR #4004 pass 4: the server forgets the book's persisted gate entry only on THIS acknowledgement,
+     never on a bare read. Best effort: a lost ack leaves the book gated for the rest of its 7 days,
+     which refuses a stale tab rather than let one write. It carries the token it acknowledges. */
+  void bookFetch(`/api/repaired-books/ack/${encodeURIComponent(bookId)}`, { method: 'POST' }).catch(() => {});
 }
 
 /** A full read of `bookId` is going out (PR #4004 pass 4): until it lands and is applied, the slices are not

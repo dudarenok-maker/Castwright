@@ -1073,6 +1073,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/repaired-books/ack/{bookId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge a full read of a book whose duplicate bookId was repaired
+         * @description #3713 — after a duplicate-bookId repair the server refuses a write on the repaired id
+         *     unless the request echoes the `X-Book-Read-Token` that `GET /api/books/{bookId}/state`
+         *     hands out (409 `book_repaired_reload` otherwise), for 7 days across restarts. A client
+         *     that APPLIED a full read of the book as its snapshot sends this, carrying the token, and
+         *     only then does the server forget the book's persisted gate entry (this process keeps
+         *     refusing a tab with no token; the next restart does not). A bare state read clears
+         *     nothing. An id that is not gated is a quiet 204.
+         */
+        post: operations["ackRepairedBookRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/listen-stats": {
         parameters: {
             query?: never;
@@ -9433,6 +9459,35 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ackRepairedBookRead: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Book-Read-Token"?: string;
+            };
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Acknowledged (or the id is not gated) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request did not carry this book's read token; nothing was cleared */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

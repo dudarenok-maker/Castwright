@@ -25,6 +25,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books/:bookId', gate.repairedBookGate);
   app.use('/api/manuscripts/:id', gate.repairedManuscriptGate);
+  const { repairedBookAckRouter } = await import('../routes/repaired-book-ack.js');
+  app.use('/api/repaired-books', repairedBookAckRouter);
   app.post('/api/manuscripts/:id/analysis', (_req, res) => res.status(202).end());
   app.use('/api/books', bookStateRouter);
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -135,24 +137,76 @@ describe('the 7-day lifetime (#3713)', () => {
   });
 });
 
-describe('cleared early by a full read (#3713)', () => {
-  it('a read stops the gate surviving the NEXT restart, but this process keeps refusing a tab with no token', async () => {
-    await repairedPair();
-    expect((await request(app).get('/api/books/auth__ser__book/state')).status).toBe(200);
-    expect(await delStatus()).toBe(409);
+/* PR #4004 pass 4, finding 5: only a client that APPLIED a full read clears the persisted gate, by
+   acknowledging it (`POST /api/repaired-books/ack/:bookId`, sent when it commits the token). A bare
+   `GET /state` is most of the endpoint's traffic and applies nothing. */
+describe('cleared early only by a client that applied a full read (#3713)', () => {
+  const ID = 'auth__ser__book';
+  const restart = async () => {
     gate.__clearRepairedBookGateMemoryForTest();
     await gate.loadRepairedBookGate();
+  };
+  const ack = (token?: string) => {
+    const r = request(app).post(`/api/repaired-books/ack/${ID}`);
+    return (token === undefined ? r : r.set('X-Book-Read-Token', token)).send({});
+  };
+  const cast = (token?: string) => {
+    const r = request(app).put(`/api/books/${ID}/state`);
+    return (token === undefined ? r : r.set('X-Book-Read-Token', token)).send({ slice: 'cast', patch: { characters: [] } });
+  };
+
+  it('ONE plain GET of the state, a restart, then an untokened cast PUT (the v1.14.0 shape): still 409', async () => {
+    await repairedPair();
+    expect((await request(app).get(`/api/books/${ID}/state`)).status).toBe(200);
+    await restart();
+    expect((await cast()).status).toBe(409);
+    expect(await delStatus()).toBe(409);
+  });
+
+  it('the client\'s ack stops the gate surviving the NEXT restart, but this process keeps refusing a tab with no token', async () => {
+    await repairedPair();
+    const token = (await request(app).get(`/api/books/${ID}/state`)).headers['x-book-read-token'];
+    expect((await ack(token)).status).toBe(204);
+    expect(await delStatus()).toBe(409);
+    await restart();
     expect(await delStatus()).not.toBe(409);
   });
 
-  it('a read of one repaired book leaves another one\'s persisted gate alone', async () => {
+  it('an ack without the token is refused and clears nothing', async () => {
+    await repairedPair();
+    const res = await ack();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+    await restart();
+    expect(await delStatus()).toBe(409);
+  });
+
+  it('an ack carrying another book\'s token clears nothing', async () => {
     await repairedPair();
     await gate.registerRepairedBook('other__id__x', null);
-    await request(app).get('/api/books/auth__ser__book/state');
-    gate.__clearRepairedBookGateMemoryForTest();
-    await gate.loadRepairedBookGate();
+    expect((await ack(gate.repairedReadToken('other__id__x')!)).status).toBe(409);
+    await restart();
+    expect(await delStatus()).toBe(409);
+  });
+
+  it('an ack for an id that is not gated is a quiet 204', async () => {
+    expect((await request(app).post('/api/repaired-books/ack/never__repaired__x').send({})).status).toBe(204);
+  });
+
+  it('an ack of one repaired book leaves another one\'s persisted gate alone', async () => {
+    await repairedPair();
+    await gate.registerRepairedBook('other__id__x', null);
+    await ack(gate.repairedReadToken(ID)!);
+    await restart();
     expect(gate.repairedReadToken('other__id__x')).toBeTruthy();
-    expect(gate.repairedReadToken('auth__ser__book')).toBeUndefined();
+    expect(gate.repairedReadToken(ID)).toBeUndefined();
+  });
+
+  it('a shared-manuscriptId scope is forgotten with the book\'s ack', async () => {
+    await repairedPair(true);
+    await ack(gate.repairedReadToken(ID)!);
+    await restart();
+    expect((await request(app).post('/api/manuscripts/m_copy/analysis').send({})).status).toBe(202);
   });
 });
 

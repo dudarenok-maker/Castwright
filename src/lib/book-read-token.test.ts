@@ -13,7 +13,10 @@ const stateRead = (token?: string) =>
   new Response('{}', { status: 200, headers: token ? { 'x-book-read-token': token } : {} });
 const repairedRefusal = (bookId?: string) =>
   new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload', ...(bookId ? { bookId } : {}) }), { status: 409 });
-const echoed = (call: number) => new Headers((fetchMock.mock.calls[call][1] as RequestInit | undefined)?.headers).get('x-book-read-token');
+/* The commit's acknowledgement (`/api/repaired-books/ack/…`) is not one of the calls under test. */
+const calls = () => fetchMock.mock.calls.filter(([url]) => !String(url).startsWith('/api/repaired-books/ack/'));
+const acks = () => fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/repaired-books/ack/'));
+const echoed = (call: number) => new Headers((calls()[call][1] as RequestInit | undefined)?.headers).get('x-book-read-token');
 
 beforeEach(() => {
   __resetBookReadTokensForTest();
@@ -50,6 +53,45 @@ describe('bookFetch (#3713)', () => {
     expect(echoed(1)).toBeNull();
     await bookFetch('/api/books/b2', { method: 'DELETE' });
     expect(echoed(2)).toBe('tok');
+  });
+
+  /* PR #4004 pass 4, finding 5: the server forgets the persisted gate only on the client's ack. */
+  describe('the acknowledgement of a committed token', () => {
+    const readAs = (token?: string) =>
+      fetchMock.mockImplementation(async (_u: string, init?: RequestInit) =>
+        (init?.method ?? 'GET') === 'GET' ? stateRead(token) : new Response(null, { status: 204 }),
+      );
+
+    it('a READ alone sends no acknowledgement; the commit sends one, carrying the token it acknowledges', async () => {
+      readAs('tok');
+      await bookFetch('/api/books/b1/state');
+      expect(acks()).toHaveLength(0);
+      commitBookReadToken('b1');
+      expect(acks()).toHaveLength(1);
+      const [url, init] = acks()[0] as [string, RequestInit];
+      expect(url).toBe('/api/repaired-books/ack/b1');
+      expect(init.method).toBe('POST');
+      expect(new Headers(init.headers).get('x-book-read-token')).toBe('tok');
+    });
+
+    it('a commit with no issued token (nothing was repaired) sends nothing', async () => {
+      readAs();
+      await bookFetch('/api/books/b1/state');
+      commitBookReadToken('b1');
+      expect(acks()).toHaveLength(0);
+    });
+
+    it('a failing acknowledgement is swallowed: the token stays committed', async () => {
+      fetchMock.mockImplementation(async (_u: string, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'GET') return stateRead('tok');
+        throw new Error('down');
+      });
+      await bookFetch('/api/books/b1/state');
+      expect(() => commitBookReadToken('b1')).not.toThrow();
+      await new Promise((r) => setTimeout(r, 0));
+      await bookFetch('/api/books/b1/state', { method: 'PUT' }).catch(() => {});
+      expect(echoed(1)).toBe('tok');
+    });
   });
 
   it('commits nothing for a read that carried no token (nothing was repaired)', async () => {

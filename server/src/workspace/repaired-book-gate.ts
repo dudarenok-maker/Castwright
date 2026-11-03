@@ -11,12 +11,17 @@
    repaired ids, their tokens and repair times are persisted to
    `<workspace>/.repaired-book-gate.json` (atomic write), and the boot re-reads them
    BEFORE the sweep runs, so an old-bundle tab (it knows nothing of the token, so it
-   sends none) stays refused until it reloads. A read of the book by a client clears
-   that book's PERSISTED entry (this process keeps refusing a tab with no token; the
-   next restart does not), and an entry older than 7 days is dropped at load and
-   ignored at check. A damaged file fails CLOSED: every entry still readable is kept
-   (one with a broken token or time is kept with a fresh one), and the file is
-   rewritten whole; it never silently ungates.
+   sends none) stays refused until it reloads. A client that APPLIED a full read of the
+   book acknowledges it (`POST /api/repaired-books/ack/:bookId`, routes/repaired-book-ack.ts,
+   pass 4) and that clears the book's PERSISTED entry (this process keeps refusing a tab
+   with no token; the next restart does not). A bare `GET /state` clears nothing: most
+   reads of it apply nothing to the book's slices, and an old-bundle tab never acks. An
+   entry older than 7 days is dropped at load and ignored at check. A damaged file fails
+   CLOSED: every entry still readable is kept (one with a broken token or time is kept
+   with a fresh one), and the file is rewritten whole. A file that cannot be READ at boot
+   (anything but "absent") is retried, and if it stays unreadable it is never overwritten
+   by a fresh one: this boot gates what it can learn and refuses to persist (see
+   `loadRepairedBookGate`). Deleting a gated book drops its entry (`forgetRepairedBook`).
 
    Gate book CONTENT only (pass 3, owner decision): a write that can overwrite the
    twin's content or identity (cast, manuscript, state slices, rename, delete, analysis,
@@ -222,12 +227,12 @@ export function repairedReadToken(bookId: string): string | undefined {
 
 /** A client read `bookId`: its persisted entry (and any manuscript scope on it) is forgotten, so the
  *  NEXT restart no longer gates it. This process keeps gating a tab that sends no token. */
-export function markRepairedBookRead(bookId: string): void {
+export function markRepairedBookRead(bookId: string): Promise<void> {
   const e = books.get(bookId);
-  if (!e || !e.persist) return;
+  if (!e || !e.persist) return Promise.resolve();
   e.persist = false;
   for (const s of manuscriptScopes.values()) if (s.bookId === bookId) s.persist = false;
-  void persistRepairedBookGate();
+  return persistRepairedBookGate();
 }
 
 /** What a process restart does to the in-memory gate (the file stays). */

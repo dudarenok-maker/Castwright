@@ -18,6 +18,7 @@ import { castTierRouter } from './routes/cast-tier.js';
 import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
+import { repairedBookAckRouter } from './routes/repaired-book-ack.js';
 import { castRejectOrphanRouter } from './routes/cast-reject-orphan.js';
 import { castLinkOrphanRouter } from './routes/cast-link-orphan.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
@@ -296,6 +297,7 @@ app.use('/api/library', seriesMemoryRouter); // fe-40 — GET /api/library/serie
 app.use('/api', repairedFanOutScope); // series fan-outs skip a repaired mate this request echoed no token for
 app.use('/api/books/:bookId', repairedBookGate);
 app.use('/api/manuscripts/:id', repairedManuscriptGate);
+app.use('/api/repaired-books', repairedBookAckRouter); // POST /ack/:bookId -- a tab applied the full read: forget the persisted gate entry
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis

@@ -12,8 +12,10 @@ import {
 } from './book-read-token';
 
 const fetchMock = vi.fn();
+/* The calls under test: the commit's acknowledgement (`/api/repaired-books/ack/…`) is not one of them. */
+const calls = () => fetchMock.mock.calls.filter(([url]) => !String(url).startsWith('/api/repaired-books/ack/'));
 const tokenOf = (call: number) =>
-  new Headers((fetchMock.mock.calls[call][1] as RequestInit | undefined)?.headers).get('x-book-read-token');
+  new Headers((calls()[call][1] as RequestInit | undefined)?.headers).get('x-book-read-token');
 const ok = () => new Response(JSON.stringify({ updated: 1, cleared: [], written: [] }), { status: 200 });
 
 async function readAndCommit(bookId: string, token: string) {
