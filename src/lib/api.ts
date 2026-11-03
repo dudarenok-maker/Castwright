@@ -138,7 +138,7 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
-import { bookFetch as fetch, bookFetchFor, rememberManuscriptBook } from './book-read-token';
+import { bookFetch as fetch, bookFetchFor, rememberManuscriptBook, reportSkippedBookList } from './book-read-token';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -6664,6 +6664,8 @@ interface CastDesignStreamEvent {
   url?: string;
   viaFallback?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
+  /** `designed` / `character_designed` / `variant_designed` / `idle`: repaired series-mates the write skipped (#3713). */
+  skippedBooks?: unknown;
 }
 
 /** Status of a possibly-live design job (the layout cold-boot probe reads this
@@ -6709,6 +6711,9 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
   let buffer = '';
 
   const handle = (e: CastDesignStreamEvent) => {
+    /* #3713 (PR #4004 pass 4): a design's voice write left a repaired series-mate alone. The headers
+       flushed before the job ran, so the stream carries the list; same toast as a plain series write. */
+    if (e.skippedBooks !== undefined) reportSkippedBookList(e.skippedBooks);
     switch (e.type) {
       case 'resume_from':
         if (e.mode === 'first' || e.mode === 'redesign') {

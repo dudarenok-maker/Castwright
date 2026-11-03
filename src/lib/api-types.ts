@@ -3617,6 +3617,23 @@ export interface components {
             code?: ("sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown") | components["schemas"]["FailureCode"];
             /** @description error only — human-readable abort message. */
             message?: string;
+            /**
+             * @description #3713 — present on `character_designed`, `variant_designed` and the terminal `idle` ONLY when the
+             *     design's voice write left a repaired series-mate alone because the request echoed no read token for
+             *     it (the stream's headers flushed before the job ran, so the list rides the events). Cumulative for
+             *     the job. Absent otherwise.
+             */
+            skippedBooks?: components["schemas"]["SkippedRepairedBook"][];
+        };
+        /**
+         * @description #3713 — a series-mate a fan-out left alone: a book whose duplicate bookId was repaired and that the
+         *     request echoed no read token for. The user reopens it, then repeats the change.
+         */
+        SkippedRepairedBook: {
+            bookId: string;
+            bookTitle: string;
+            /** @description A sentence for the UI: Reopen "<title>" to apply this change there. */
+            reason: string;
         };
         /** @description GET /api/books/{bookId}/cast/design/status response. */
         CastDesignStatusResponse: {
@@ -3688,6 +3705,11 @@ export interface components {
             persona?: string;
             /** @description preview_ready / designed only. */
             voiceUuid?: string;
+            /**
+             * @description #3713 — `designed` only, and only when the design's series-wide voice write left a repaired
+             *     series-mate alone because the request echoed no read token for it. Absent otherwise.
+             */
+            skippedBooks?: components["schemas"]["SkippedRepairedBook"][];
             /** @description designed only. */
             voiceId?: string;
             /** @description designed only. */

@@ -331,6 +331,13 @@ export function skippedRepairedBooks(): SkippedRepairedBook[] {
   return [...(fanOutScope.getStore()?.skipped.values() ?? [])];
 }
 
+/** `{ skippedBooks }` for an SSE event when this request's fan-outs skipped a repaired mate, else `{}` (PR #4004
+ *  pass 4): a design job runs inside the request's scope, so the stream can say what its writes left alone. */
+export function skippedBooksField(): { skippedBooks?: SkippedRepairedBook[] } {
+  const skippedBooks = skippedRepairedBooks();
+  return skippedBooks.length > 0 ? { skippedBooks } : {};
+}
+
 /** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the
  *  header comment): every named book that is gated must have its token echoed. Answers the 409
  *  itself; returns true when it did, so the handler returns. */

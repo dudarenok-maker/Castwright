@@ -48,12 +48,20 @@ export function setSkippedBooksHandler(handler: ((books: SkippedRepairedBook[]) 
   onSkipped = handler;
 }
 
+/** The skipped list a design SSE event carries (`skippedBooks`, PR #4004 pass 4): the same toast as a header. */
+export function reportSkippedBookList(list: unknown): void {
+  if (!onSkipped || !Array.isArray(list) || list.length === 0) return;
+  const books = list.filter(
+    (b): b is SkippedRepairedBook => !!b && typeof b.bookId === 'string' && typeof b.bookTitle === 'string',
+  );
+  if (books.length > 0) onSkipped(books);
+}
+
 function reportSkippedBooks(res: Response): void {
   const raw = res.headers?.get?.(SKIPPED_BOOKS_HEADER);
-  if (!raw || !onSkipped) return;
+  if (!raw) return;
   try {
-    const list: unknown = JSON.parse(decodeURIComponent(raw));
-    if (Array.isArray(list) && list.length > 0) onSkipped(list as SkippedRepairedBook[]);
+    reportSkippedBookList(JSON.parse(decodeURIComponent(raw)));
   } catch {
     /* a malformed header is no reason to fail the request */
   }

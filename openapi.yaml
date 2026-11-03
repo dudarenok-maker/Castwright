@@ -5429,6 +5429,25 @@ components:
             silent English design; `unsupported_language` fires for a
             stated language with no sidecar mapping.
         message: { type: string, description: error only — human-readable abort message. }
+        skippedBooks:
+          type: array
+          description: |
+            #3713 — present on `character_designed`, `variant_designed` and the terminal `idle` ONLY when the
+            design's voice write left a repaired series-mate alone because the request echoed no read token for
+            it (the stream's headers flushed before the job ran, so the list rides the events). Cumulative for
+            the job. Absent otherwise.
+          items: { $ref: '#/components/schemas/SkippedRepairedBook' }
+
+    SkippedRepairedBook:
+      type: object
+      required: [bookId, bookTitle, reason]
+      description: |
+        #3713 — a series-mate a fan-out left alone: a book whose duplicate bookId was repaired and that the
+        request echoed no read token for. The user reopens it, then repeats the change.
+      properties:
+        bookId: { type: string }
+        bookTitle: { type: string }
+        reason: { type: string, description: 'A sentence for the UI: Reopen "<title>" to apply this change there.' }
 
     CastDesignStatusResponse:
       type: object
@@ -5498,6 +5517,12 @@ components:
         previewUrl: { type: string, description: preview_ready only. }
         persona: { type: string, description: preview_ready only — the persona text the preview was designed from. }
         voiceUuid: { type: string, description: preview_ready / designed only. }
+        skippedBooks:
+          type: array
+          description: |
+            #3713 — `designed` only, and only when the design's series-wide voice write left a repaired
+            series-mate alone because the request echoed no read token for it. Absent otherwise.
+          items: { $ref: '#/components/schemas/SkippedRepairedBook' }
         voiceId: { type: string, description: designed only. }
         url: { type: string, description: designed only. }
         code:

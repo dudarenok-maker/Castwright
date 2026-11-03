@@ -23,6 +23,7 @@ import type { Request, Response } from '../http.js';
 import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { skippedBooksField } from '../workspace/repaired-book-gate.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
@@ -198,6 +199,7 @@ async function runSingleDesign(
       voiceId,
       url,
       voiceUuid: characterForDesign.voiceUuid,
+      ...skippedBooksField(),
     });
   } catch (e) {
     /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and

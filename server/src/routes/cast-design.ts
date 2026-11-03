@@ -35,6 +35,7 @@ import type { Request, Response } from '../http.js';
 import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { skippedBooksField } from '../workspace/repaired-book-gate.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -684,7 +685,7 @@ async function runDesignJob(
               });
             } else {
               job.done += 1;
-              broadcast(job, { type: 'character_designed', characterId, voiceId });
+              broadcast(job, { type: 'character_designed', characterId, voiceId, ...skippedBooksField() });
             }
           } else {
             /* Variant path — record the slot and propagate it across the
@@ -706,7 +707,8 @@ async function runDesignJob(
                  differently than it always was before this task. */
               job.done += 1;
               broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
-                ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
+                ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}),
+                ...skippedBooksField() });
             }
           }
           break;
@@ -801,6 +803,7 @@ async function runDesignJob(
     skipped: job.skipped,
     clonedSkips: job.clonedSkips,
     failures: job.failures,
+    ...skippedBooksField(),
   });
 }
 
