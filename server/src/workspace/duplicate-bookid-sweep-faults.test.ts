@@ -296,6 +296,39 @@ describe('failure paths of the locked repair', () => {
     expect(repair.reassignedManuscriptId).toBeNull();
   });
 
+  /* PR #4004 pass 4 -- the manuscriptId gate follows a re-minted id to the book that carries it; when a
+     group member's state.json cannot be read at that point the carrier is unknown, and the scope stays on
+     the group's id (fails closed: the id's writes are still refused until a read of THAT book). */
+  const scopedBookIdOf = (manuscriptId: string): string | undefined =>
+    (JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).manuscripts as Array<{ manuscriptId: string; bookId: string }>)
+      .find((m) => m.manuscriptId === manuscriptId)?.bookId;
+  const seedSharedLosers = () => {
+    seed('A', 'W', 'dup', 3, 'm_win');
+    seed('A', 'L1', 'dup', 0, 'm_pair');
+    seed('A', 'L2', 'dup', 0, 'm_pair');
+  };
+
+  it('control: with every member readable the manuscriptId gate follows the id to its carrier', async () => {
+    seedSharedLosers();
+    await sweep.repairDuplicateBookIds();
+    expect(scopedBookIdOf('m_pair')).toBeDefined();
+    expect(scopedBookIdOf('m_pair')).not.toBe('dup');
+  });
+
+  it('a group member whose state.json is unreadable while the scope is chosen leaves the scope on the group id', async () => {
+    seedSharedLosers();
+    const winner = join(paths.BOOKS_ROOT, 'A', 'S', 'W');
+    let repaired = 0;
+    /* After the LAST loser's locked repair, before the re-scope pass reads the members. */
+    hooks.afterWithBookOp = () => {
+      if (++repaired === 2) hooks.unreadable.add(winner);
+    };
+
+    await sweep.repairDuplicateBookIds();
+    expect(scopedBookIdOf('m_pair')).toBe('dup');
+    expect(warned().some((l) => l.includes('could not re-scope'))).toBe(false);
+  });
+
   it('a manuscriptId that moved after the read is left where it is, and nothing is rekeyed from the old id', async () => {
     seed('A', 'W', 'dup', 3, 'm_shared');
     const loser = seed('A', 'L', 'dup', 0, 'm_shared');
