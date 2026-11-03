@@ -41,6 +41,7 @@ interface CastRow {
   id: string;
   voiceUuid?: string | null;
   matchedFrom?: unknown;
+  declinedVoiceFrom?: string[] | null;
 }
 
 interface CastFile {
@@ -209,6 +210,46 @@ export async function findLinkFollowers(
   uuid: string,
 ): Promise<LinkFollower[]> {
   return (await scanLinkFollowers(bookDir, character, uuid)).followers;
+}
+
+/* #3992 — read-only: the declined row a LINKED row's voice really belongs to.
+   A row X with a `matchedFrom` never forks itself (the link says it shares by
+   design), but its source may be a declined row that has not forked yet (Book
+   Three linked to Book Two, which declined Book One's voice): designing X under
+   the shared uuid would overwrite Book One. Walks X's link chain UP, among rows
+   holding `uuid`, following each `matchedFrom` through the target book's live cast
+   and id history, and returns the first row `shouldForkSharedVoiceUuid` says must
+   fork, or null when the chain ends, leaves `uuid`, loops, or reaches a book that
+   cannot be read or named (nothing is known to protect then, which is how it
+   behaved before #3992). Writes nothing and takes no lock. */
+export async function findDeclinedAncestor(
+  bookDir: string,
+  character: { id: string; voiceUuid?: string | null; matchedFrom?: unknown },
+): Promise<{ dir: string; characterId: string } | null> {
+  const uuid = character.voiceUuid;
+  if (!uuid) return null;
+  const { books } = await loadOtherBooks(resolve(bookDir));
+  const visited = new Set<string>([rowKey(bookDir, character.id)]);
+  let mf = character.matchedFrom as MatchedFrom;
+  while (mf?.bookId) {
+    const target = books.find((b) => b.bookId === mf?.bookId);
+    if (!target) return null;
+    const rows = target.rows;
+    let row: CastRow | undefined;
+    if (mf.characterId) {
+      const resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(target.dir));
+      row = resolver.resolve(mf.characterId)?.character;
+    }
+    if (!row || row.voiceUuid !== uuid) return null;
+    const key = rowKey(target.dir, row.id);
+    if (visited.has(key)) return null;
+    visited.add(key);
+    if (await shouldForkSharedVoiceUuid(target.dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])) {
+      return { dir: target.dir, characterId: row.id };
+    }
+    mf = row.matchedFrom as MatchedFrom;
+  }
+  return null;
 }
 
 /* An unreadable other book is treated as a possible HOLDER of the uuid (and, in

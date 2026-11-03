@@ -63,6 +63,7 @@ import {
   shouldMintApartFromLegacyKey,
   isVariantUsedByOtherVoiceUuid,
   scanLinkFollowers,
+  findDeclinedAncestor,
   readBookId,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
@@ -475,8 +476,30 @@ async function forkIfSharedLocked(
   uuid: string,
   character: CastCharacter,
 ): Promise<string | undefined> {
-  if (!(await shouldForkSharedVoiceUuid(bookDir, character))) return uuid;
-  return forkSharedVoiceUuid(bookDir, characterId, uuid);
+  if (await shouldForkSharedVoiceUuid(bookDir, character)) {
+    return forkSharedVoiceUuid(bookDir, characterId, uuid);
+  }
+  /* A LINKED row shares by design, unless the row it links to (up its chain) is a
+     declined one that has not forked: then it is a follower of that row, and
+     designing it under the shared uuid would overwrite the earlier book. Fork the
+     ancestor (this row moves with it, as one of its followers), then design under
+     the uuid that left on this row. */
+  const linked = (character as { matchedFrom?: unknown }).matchedFrom;
+  if (linked) {
+    const ancestor = await findDeclinedAncestor(bookDir, { ...character, matchedFrom: linked });
+    if (ancestor) {
+      await forkSharedVoiceUuid(ancestor.dir, ancestor.characterId, uuid);
+      const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+      if (!after) throw new CharacterGoneError();
+      if (after.voiceUuid === uuid) {
+        /* The fork did not carry this row (the link changed under us): designing
+           now would write the earlier book's file, so fail rather than guess. */
+        throw new Error('The voice could not be separated from the earlier book; try again.');
+      }
+      return after.voiceUuid ?? undefined;
+    }
+  }
+  return uuid;
 }
 
 /* #3992 — the variant path's uuid resolver. Forks a declined shared uuid (so a

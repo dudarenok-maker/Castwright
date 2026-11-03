@@ -7,6 +7,7 @@ let root: string;
 let shouldFork: typeof import('./voice-uuid-fork.js').shouldForkSharedVoiceUuid;
 let shouldMintApart: typeof import('./voice-uuid-fork.js').shouldMintApartFromLegacyKey;
 let findFollowers: typeof import('./voice-uuid-fork.js').findLinkFollowers;
+let findAncestor: typeof import('./voice-uuid-fork.js').findDeclinedAncestor;
 let scanFollowers: typeof import('./voice-uuid-fork.js').scanLinkFollowers;
 
 const U = 'uuid-shared';
@@ -40,6 +41,7 @@ beforeAll(async () => {
     shouldMintApartFromLegacyKey: shouldMintApart,
     findLinkFollowers: findFollowers,
     scanLinkFollowers: scanFollowers,
+    findDeclinedAncestor: findAncestor,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -290,5 +292,59 @@ describe('findLinkFollowers (#3992)', () => {
     writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
     book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
     expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
+  });
+});
+
+describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
+  const THREE = 'book-three-id';
+  const FOUR = 'book-four-id';
+  const link = (bookId: string, characterId: string | null = 'c') => ({ bookId, ...(characterId ? { characterId } : {}) });
+
+  function chain() {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, declinedVoiceFrom: DECLINED }]);
+    return book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+  }
+
+  it('returns the declined row a linked row follows', async () => {
+    const three = chain();
+    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) });
+    expect(found && [basename(found.dir), found.characterId]).toEqual(['Two', 'c']);
+  });
+
+  it('walks several links up', async () => {
+    chain();
+    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
+    const found = await findAncestor(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) });
+    expect(found && basename(found.dir)).toBe('Two');
+  });
+
+  it('null when nothing up the chain declined: a plain link shares by design', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) }]);
+    expect(await findAncestor(two, { id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) })).toBeNull();
+  });
+
+  it('null when the linked row no longer holds the uuid, has no uuid to follow, or names no character', async () => {
+    const three = chain();
+    expect(await findAncestor(three, { id: 'c', voiceUuid: 'other', matchedFrom: link(TWO_ID) })).toBeNull();
+    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toBeNull();
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: { characterId: 'c' } })).toBeNull();
+  });
+
+  it('terminates on a link cycle', async () => {
+    reset();
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
+  });
+
+  it('null when the book it links to cannot be read: no throw', async () => {
+    const three = chain();
+    writeFileSync(join(root, 'books', 'Author', 'Series', 'Two', '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
   });
 });
