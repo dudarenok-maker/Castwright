@@ -71,6 +71,62 @@ describe('remapFreshToPriorIds', () => {
     expect(r.rewrites).toEqual({});
   });
 
+  /* #3965 — the gate is scoped by book. A cross-book object entry says
+     nothing about a same-book join. */
+  it('T1: ignores a cross-book edge the seed copied onto an id-drifted twin', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'old-tom-2', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] }],
+      [{ characterId: 'old-tom-2' }],
+      [
+        {
+          id: 'old-tom',
+          name: 'Old Tom',
+          voiceId: 'v_tom',
+          voiceState: 'locked',
+          notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+        },
+      ],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({ 'old-tom-2': 'old-tom' });
+    expect(r.characters[0].id).toBe('old-tom');
+    expect(r.sentences[0].characterId).toBe('old-tom');
+  });
+
+  it('T2: ignores a prior-side cross-book edge only', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'x', name: 'Alden' }],
+      [],
+      [{ id: 'alden', name: 'Alden', notLinkedTo: [{ bookId: 'book-1', characterId: 'x' }] }],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({ x: 'alden' });
+  });
+
+  it('T3: a same-book edge still blocks', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'x', name: 'Alden' }],
+      [],
+      [{ id: 'alden', name: 'Alden', notLinkedTo: [{ bookId: 'book-2', characterId: 'x' }] }],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('T4: a bare-string edge still blocks when currentBookId is given', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'x', name: 'Alden' }],
+      [],
+      [{ id: 'alden', name: 'Alden', notLinkedTo: ['x'] }],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
   /* Additional regression, not in the task-10 brief's Step 1 list: a rewrite
      target must never collide with an id another fresh character is already
      using this run — that would silently merge two distinct people onto one

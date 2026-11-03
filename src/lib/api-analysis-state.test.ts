@@ -29,7 +29,7 @@ describe('api.getAnalysisState — cold-boot rehydration wire contract', () => {
 
     const got = await api.getAnalysisState('book-id-1');
     expect(got).toBeNull();
-    expect(fetchMock).toHaveBeenCalledWith('/api/books/book-id-1/analysis/state');
+    expect(fetchMock).toHaveBeenCalledWith('/api/books/book-id-1/analysis/state', { signal: undefined });
   });
 
   it('returns the snapshot body on 200', async () => {
@@ -102,6 +102,8 @@ describe('api.getAnalysisState — cold-boot rehydration wire contract', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await api.getAnalysisState('weird id/with slashes');
-    expect(fetchMock).toHaveBeenCalledWith('/api/books/weird%20id%2Fwith%20slashes/analysis/state');
+    expect(fetchMock).toHaveBeenCalledWith('/api/books/weird%20id%2Fwith%20slashes/analysis/state', {
+      signal: undefined,
+    });
   });
 });

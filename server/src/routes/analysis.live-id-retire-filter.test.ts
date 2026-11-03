@@ -90,9 +90,10 @@ vi.mock('../store/remap-fresh-to-prior.js', async (importOriginal) => {
       sentences: S[],
       priorCast: ReadonlyArray<{ id: string } & Record<string, unknown>>,
       priorRewrites?: Readonly<Record<string, string>>,
+      currentBookId?: string,
     ) => {
       if (!fresh.some((f) => f.id === 'brann')) {
-        return actual.remapFreshToPriorIds(fresh, sentences, priorCast, priorRewrites);
+        return actual.remapFreshToPriorIds(fresh, sentences, priorCast, priorRewrites, currentBookId);
       }
       return {
         characters: fresh.map((c) => (c.id === 'brann' ? { ...c, id: 'brann-weir' } : c)),
