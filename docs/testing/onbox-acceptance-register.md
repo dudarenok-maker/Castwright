@@ -741,7 +741,9 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > untouched, the decline survives re-analysis, and a book linked to the redesigned one follows
 > it) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same change. Row is
 > owed; not run here. Reworded 2026-11-03 (PR #4007 pass 2): steps 9 (a decline made on Confirm) and 10
-> (designing the follower first) added; no count change.
+> (designing the follower first) added; no count change. Reworded 2026-11-04 (PR #4007 pass 3): steps 11 to 15
+added (stale tab, a follower the fork could not see, a torn unrelated book, a legacy three-book series,
+switching books mid-decline); no count change.
 >
 > **Prior change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
 > locked or tuned character's voice whole, and no fresh row inherits a link it was not joined
@@ -6405,8 +6407,13 @@ The automated tests prove the fork against fixture workspaces. Only a real Qwen 
 8. **A chain follows the middle book.** With a Book 3 whose character links to Book 2's (its `matchedFrom` names Book 2, the same `voiceUuid`): decline Book 2's link to Book 1 and redesign Book 2's character. Book 3's character moves to Book 2's new `voiceUuid` in the same write and plays Book 2's new voice; Book 1 is untouched and Book 3 is still linked to Book 2. A character that links to Book 2 without a book id (a manual Assign) stays on Book 1's voice.
 9. **Confirm: Don't reuse sticks and re-analysis does not re-link.** Re-analyse Book 2 so it lands on Confirm, open a linked character's "Matched from … see why" drawer and press Don't reuse there. The row unlinks at once and `cast.json` carries `declinedVoiceFrom` and `declinedVoiceUuids` with no `matchedFrom`, even before the autosave lands. Re-analyse again: Confirm's auto-match does not link it back (no "Reused" badge), and a redesign still leaves Book 1's `qwen-<old>.pt` unchanged. With the server stopped when you press Don't reuse, a toast says the decline was not saved and the link still shows.
 10. **Design the follower first.** With a Book 3 linked to Book 2, which declined Book 1 and has not been redesigned: redesign Book 3's character (not Book 2's). Book 2 and Book 3 both move to one new `voiceUuid`, Book 3 is still linked to Book 2, and Book 1's `qwen-<old>.pt` is unchanged.
+11. **A stale tab cannot bring the variants back.** With Book 1 and Book 2 sharing a uuid and both showing a designed emotion variant, decline Book 2's link, open its drawer and start Design and compare, then Cancel and edit the character (Lock, rename). Book 2's `cast.json` keeps its new `voiceUuid` and has no `variants` map; leave a second tab open on Book 2 from before the redesign and save from it: still no `variants`, and an emotion-tagged line renders in Book 2 with no `voice_not_designed`.
+12. **A follower the fork could not see.** Rename Book 3's `cast.json` aside, redesign Book 2's character, put the file back, then redesign Book 3's character: it moves to Book 2's new `voiceUuid`, Book 3 is still linked to Book 2 and Book 1's `qwen-<old>.pt` is unchanged. With Book 2's `cast.json` renamed aside, redesigning Book 3's character fails with a message that names no path, and nothing is written.
+13. **A torn unrelated book does not re-fork.** After step 2, rename an unrelated book's `cast.json` aside and design one more emotion on Book 2's character, twice. Book 2 keeps its `voiceUuid` and both variants, and `voices/qwen/` gains no new `qwen-<id>` family.
+14. **Legacy series with a third book.** In a three-book series whose characters have no `voiceUuid` (designed before uuids), with Book 3 linked to Book 2 (which declined Book 1), redesign Book 2's character, then repeat on a fresh copy redesigning Book 3's character first. Book 2 and Book 3 end on one new uuid, Book 1 has no `voiceUuid` and still plays `qwen-<voiceId>.pt` unchanged.
+15. **Don't reuse then switch books.** Press Don't reuse on a linked character in Book 2 and open Book 3 at once, while the server is slow to answer: Book 3's linked character keeps its link, and re-opening Book 2 shows the decline.
 
-*Needs:* the GPU box with the Qwen sidecar and a series of two books (three for steps 8 and 10) with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+*Needs:* the GPU box with the Qwen sidecar and a series of two books (three for steps 8, 10, 12 and 14) with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
 ## Group B — local Ollama analyzer only
 
