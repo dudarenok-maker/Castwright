@@ -120,6 +120,8 @@ export function preserveDeclinedVoiceFromOnCastWrite<T extends { id: string }>(
     const merged = { ...(inc as Record<string, unknown>) };
     if (old.declinedVoiceFrom === undefined) delete merged.declinedVoiceFrom;
     else merged.declinedVoiceFrom = old.declinedVoiceFrom;
+    if (old.declinedVoiceUuids === undefined) delete merged.declinedVoiceUuids;
+    else merged.declinedVoiceUuids = old.declinedVoiceUuids;
     return merged as T;
   });
 }

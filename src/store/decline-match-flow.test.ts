@@ -34,7 +34,7 @@ function makeStore(characters: Character[], stage: 'ready' | 'books' = 'ready') 
 
 beforeEach(() => {
   vi.mocked(api.declineVoiceLink).mockReset();
-  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'] });
+  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] });
 });
 
 describe('declineMatchFlow (#3992)', () => {

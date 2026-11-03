@@ -4578,7 +4578,8 @@ paths:
       summary: Record that a series voice link was declined ("Don't reuse") — #3992
       operationId: declineVoiceLink
       description: |
-        Appends `fromBookId` to the character's `declinedVoiceFrom` marker so the
+        Appends `fromBookId` to the character's `declinedVoiceFrom` marker (and the
+        voice uuid it holds to `declinedVoiceUuids`) so the
         decline survives re-analysis and a later redesign forks the shared voice
         instead of overwriting the earlier book's. Single-book write; `fromBookId`
         need not be resolvable (a deleted book's id is still a valid decline).
@@ -4603,9 +4604,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [declinedVoiceFrom]
+                required: [declinedVoiceFrom, declinedVoiceUuids]
                 properties:
                   declinedVoiceFrom:
+                    type: array
+                    items: { type: string }
+                  declinedVoiceUuids:
                     type: array
                     items: { type: string }
         '400':
@@ -8705,6 +8709,14 @@ components:
             linker and the analysis merge (never re-linked to a declined book) and
             by the voice-design fork (only a marked row forks the shared
             `voiceUuid`).
+        declinedVoiceUuids:
+          type: array
+          items: { type: string }
+          description: |
+            The `voiceUuid`s that were declined, recorded with `declinedVoiceFrom`
+            (#3992): "not THIS voice" also excludes any other book holding the
+            same uuid, so declining Book Two cannot re-link the row to Book One
+            when both hold one voice. Server-owned like `declinedVoiceFrom`.
         tone:
           type: object
           properties:

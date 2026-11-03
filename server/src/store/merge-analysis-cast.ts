@@ -28,6 +28,7 @@
 
 import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
+import { declinesVoice } from './declined-voice.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 
@@ -43,6 +44,7 @@ export const PRESERVED_VOICE_FIELDS = [
   'voiceStyle',
   'notLinkedTo',
   'declinedVoiceFrom',
+  'declinedVoiceUuids',
 ] as const;
 
 type CastRecord = { id: string } & Record<string, unknown>;
@@ -477,11 +479,13 @@ function mergeCore<T extends { id: string }>(
     // never grafted on. The linker and the seed already honour the marker, so
     // this is the backstop for a join they did not see (roster dedup moved it);
     // the prior row's own voice is then taken whole, exactly like a pinned row.
-    const freshLinkBookId = (f as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId;
+    const freshMatchedBookId = (f as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId;
     const declinedFreshLink =
-      typeof freshLinkBookId === 'string' &&
-      Array.isArray(old.declinedVoiceFrom) &&
-      (old.declinedVoiceFrom as unknown[]).includes(freshLinkBookId);
+      typeof freshMatchedBookId === 'string' &&
+      declinesVoice(old, {
+        bookId: freshMatchedBookId,
+        voiceUuid: (f as { voiceUuid?: string | null }).voiceUuid,
+      });
     const takesVoiceWhole =
       old.voiceState === 'locked' ||
       old.voiceState === 'tuned' ||
@@ -624,7 +628,13 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     from the UNIQUE prior narrator-id row by id class, whatever either is named
     (two or more prior narrator-id rows are ambiguous: nothing is bridged). */
 export function seedReuseGuardsFromPriorCast<
-  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown; declinedVoiceFrom?: unknown },
+  T extends {
+    id: string;
+    notLinkedTo?: unknown;
+    matchedFrom?: unknown;
+    declinedVoiceFrom?: unknown;
+    declinedVoiceUuids?: unknown;
+  },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
   if (!existing.length) return;
   const byId = new Map(existing.map((c) => [c.id, c]));
@@ -687,6 +697,8 @@ export function seedReuseGuardsFromPriorCast<
     // prevents a link), so it takes the same loose candidate set.
     if (f.declinedVoiceFrom === undefined && nlFrom?.declinedVoiceFrom !== undefined)
       f.declinedVoiceFrom = nlFrom.declinedVoiceFrom as T['declinedVoiceFrom'];
+    if (f.declinedVoiceUuids === undefined && nlFrom?.declinedVoiceUuids !== undefined)
+      f.declinedVoiceUuids = nlFrom.declinedVoiceUuids as T['declinedVoiceUuids'];
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
       f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }

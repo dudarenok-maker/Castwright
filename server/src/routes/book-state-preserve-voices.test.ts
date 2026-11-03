@@ -785,7 +785,18 @@ describe('book-state PUT cast — declinedVoiceFrom is server-owned (#3992)', ()
 
   it('cannot plant a marker on a row that has none', async () => {
     writeBook(bookDir, bookId, [char()]);
-    await put([char({ declinedVoiceFrom: ['HIJACK'] })]);
+    await put([char({ declinedVoiceFrom: ['HIJACK'], declinedVoiceUuids: ['HIJACK'] })]);
     expect(onDiskCast().characters[0].declinedVoiceFrom).toBeUndefined();
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toBeUndefined();
+  });
+
+  it('keeps the declined voice uuids the same way (pass-2 V)', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'], declinedVoiceUuids: ['u_shared'] })]);
+    await put([char({ name: 'Renamed' })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
+    await put([char({ declinedVoiceUuids: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
+    await put([char({ declinedVoiceUuids: [] })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
   });
 });

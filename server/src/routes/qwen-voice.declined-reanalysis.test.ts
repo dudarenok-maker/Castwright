@@ -55,6 +55,7 @@ let audioDir: string;
 let app: Express;
 let bookOneId: string;
 let bookTwoId: string;
+let bookThreeId: string;
 let requestedVoiceIds: string[];
 const fetchMock = vi.fn();
 
@@ -131,6 +132,7 @@ beforeAll(async () => {
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
+  bookThreeId = makeBookId(AUTHOR, SERIES, 'Book Three');
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
@@ -182,16 +184,20 @@ afterAll(() => {
 /* The analysis route's main-job order, with the DEFAULT disk-walking resolvers.
    `seed: false` skips the guard seeding, which is how a row the seed's name bridge
    misses (roster dedup moved the join) reaches the merge with a fresh link. */
-async function reanalyse(opts: { seed?: boolean } = {}): Promise<Record<string, any>> {
+async function reanalyse(
+  opts: { seed?: boolean; title?: string; id?: string } = {},
+): Promise<Record<string, any>> {
+  const title = opts.title ?? 'Book Two';
+  const id = opts.id ?? bookTwoId;
   const M = await import('../store/merge-analysis-cast.js');
   const L = await import('../workspace/series-reuse-link.js');
   const R = await import('../store/remap-fresh-to-prior.js');
   const D = await import('../analyzer/roster-dedup.js');
-  const prior = readRows('Book Two');
+  const prior = readRows(title);
   const fresh = freshRoster() as any[];
   if (opts.seed !== false) M.seedReuseGuardsFromPriorCast(prior, fresh);
-  await L.pruneStaleReuseLinks(bookTwoId, fresh);
-  await L.linkSeriesReuseAtAnalysis(bookTwoId, fresh);
+  await L.pruneStaleReuseLinks(id, fresh);
+  await L.linkSeriesReuseAtAnalysis(id, fresh);
   const cumulative = D.stripEstablishedAsciiRewrites(D.composeRewrites({}, {}), prior, fresh);
   const remappedToPrior = R.remapFreshToPriorIds(fresh, [], prior, cumulative);
   const remapped = M.applyRewriteToPriorCast(prior, cumulative);
@@ -329,5 +335,49 @@ describe('#3992 — the series linker on its own', () => {
     const { linked, row } = await linkFresh({});
     expect(linked).toBe(1);
     expect(row.matchedFrom?.bookId).toBe(bookOneId);
+  });
+});
+
+describe('#3992 pass-2 V — the marker names a voice, not only a book', () => {
+  /* Book Two is linked to Book One (both hold u_shared). Book Three declined
+     Book Two's voice. Linking Book Three to Book One would hand it the very same
+     u_shared, so the decline has to cover every book holding that voice. */
+  const seedThree = (marker: Record<string, unknown>) => {
+    writeBook('Book One', 1, bookOneId, [{ ...voiced }]);
+    writeBook('Book Two', 2, bookTwoId, [
+      { ...voiced, matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } },
+    ]);
+    writeBook('Book Three', 3, bookThreeId, [{ ...voiced, ...marker }]);
+  };
+
+  it('re-analysis does not link Book Three to Book One, which holds the declined voice', async () => {
+    seedThree({ declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] });
+    const merged = await reanalyse({ title: 'Book Three', id: bookThreeId });
+    expect(merged.matchedFrom).toBeUndefined();
+    expect(merged.declinedVoiceUuids).toEqual(['u_shared']);
+
+    writeRows('Book Three', [merged]);
+    expect((await design(bookThreeId)).status).toBe(200);
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('the merge backstop drops a fresh link whose voice uuid was declined, whatever its book', async () => {
+    seedThree({
+      declinedVoiceFrom: [bookTwoId],
+      declinedVoiceUuids: ['u_shared'],
+      voiceUuid: 'u_own',
+      overrideTtsVoices: { qwen: { name: 'qwen-u_own' } },
+    });
+    const merged = await reanalyse({ title: 'Book Three', id: bookThreeId, seed: false });
+    expect(merged.matchedFrom).toBeUndefined();
+    expect(merged.voiceUuid).toBe('u_own');
+  });
+
+  it('control: a link to a book holding a DIFFERENT voice is still made', async () => {
+    writeBook('Book One', 1, bookOneId, [{ ...voiced, voiceUuid: 'u_other', overrideTtsVoices: { qwen: { name: 'qwen-u_other' } } }]);
+    writeBook('Book Two', 2, bookTwoId, [{ ...voiced }]);
+    writeBook('Book Three', 3, bookThreeId, [{ ...voiced, declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] }]);
+    const merged = await reanalyse({ title: 'Book Three', id: bookThreeId });
+    expect(merged.matchedFrom?.bookId).toBe(bookOneId);
   });
 });

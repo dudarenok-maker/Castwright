@@ -29,7 +29,9 @@ export const castDeclineVoiceLinkRouter = Router();
 
 interface CastRow {
   id: string;
+  voiceUuid?: string | null;
   declinedVoiceFrom?: string[];
+  declinedVoiceUuids?: string[];
 }
 interface CastFile {
   characters: CastRow[];
@@ -58,16 +60,27 @@ castDeclineVoiceLinkRouter.post(
         if (idx === -1) {
           return res.status(404).json({ error: `Character "${characterId}" not found.` });
         }
-        const existing = cast.characters[idx].declinedVoiceFrom ?? [];
-        if (!existing.includes(fromBookId)) {
+        const row = cast.characters[idx];
+        const existing = row.declinedVoiceFrom ?? [];
+        /* The voice being declined is the uuid the row holds right now (a linked
+           row shares its source's). Recording it makes the decline cover every
+           book holding that voice, not only `fromBookId`. */
+        const uuids = row.declinedVoiceUuids ?? [];
+        const addUuid = !!row.voiceUuid && !uuids.includes(row.voiceUuid);
+        if (!existing.includes(fromBookId) || addUuid) {
           cast.characters[idx] = {
-            ...cast.characters[idx],
-            declinedVoiceFrom: [...existing, fromBookId],
+            ...row,
+            declinedVoiceFrom: existing.includes(fromBookId) ? existing : [...existing, fromBookId],
+            ...(addUuid ? { declinedVoiceUuids: [...uuids, row.voiceUuid as string] } : {}),
           };
           await writeJsonAtomic(castJsonPath(bookDir), cast);
           console.log(`[cast-decline-voice-link] ${bookId}/${characterId} declined the voice of ${fromBookId}`);
         }
-        return res.json({ declinedVoiceFrom: cast.characters[idx].declinedVoiceFrom ?? [fromBookId] });
+        const done = cast.characters[idx];
+        return res.json({
+          declinedVoiceFrom: done.declinedVoiceFrom ?? [fromBookId],
+          declinedVoiceUuids: done.declinedVoiceUuids ?? [],
+        });
       }),
     );
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });

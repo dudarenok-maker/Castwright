@@ -58,6 +58,9 @@ export const characterSchema = z
      declined from ("Don't reuse"). Server-owned, written by POST
      /:bookId/cast/:characterId/decline-voice-link. Optional + additive. */
     declinedVoiceFrom: z.array(z.string().min(1)).optional(),
+    /* The voiceUuids that were declined, recorded with the books above: "not THIS
+     voice" also excludes another book holding the same uuid. Same ownership. */
+    declinedVoiceUuids: z.array(z.string().min(1)).optional(),
     tone: toneSchema.optional(),
     /* Optional voice-shaping hints. The skill prompt asks for these so the
      TTS picker doesn't have to scrape pronouns out of the description. Kept
@@ -236,7 +239,7 @@ export const requiredToneSchema = z
 export const analyzerCharacterSchema = characterSchema
   /* #3992 — `declinedVoiceFrom` is server-owned (the decline route is its only
      writer); the analyzer is never asked for it, so it stays out of the grammar. */
-  .omit({ declinedVoiceFrom: true })
+  .omit({ declinedVoiceFrom: true, declinedVoiceUuids: true })
   .extend({
     tone: requiredToneSchema,
     gender: z.enum(['male', 'female', 'neutral']),

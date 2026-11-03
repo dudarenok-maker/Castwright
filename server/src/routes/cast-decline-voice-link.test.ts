@@ -89,11 +89,29 @@ describe('POST decline-voice-link', () => {
   it('records the declined book on the row, and only that row', async () => {
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [] });
     const rows = readRows('Book Two');
     expect(rows[0].declinedVoiceFrom).toEqual([oneId]);
     expect(rows[1].declinedVoiceFrom).toBeUndefined();
     expect(readRows('Book One')[0].declinedVoiceFrom).toBeUndefined();
+  });
+
+  it('records the voice uuid the row holds, so the decline covers every book holding that voice (pass-2 V)', async () => {
+    writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_shared' })]);
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'] });
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+    // a repeat is a no-op, and a row that has since forked adds its new uuid
+    await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+    writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_new', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'] })]);
+    await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared', 'u_new']);
+  });
+
+  it('records no uuid for a row that has none', async () => {
+    await decline(twoId, 'wren', { fromBookId: oneId });
+    expect('declinedVoiceUuids' in readRows('Book Two')[0]).toBe(false);
   });
 
   it('is idempotent and accumulates distinct books', async () => {
@@ -150,6 +168,16 @@ describe('cast/link-prior clears the marker for the book it links to', () => {
   it('removes the field entirely when it was the last entry', async () => {
     writeBook('Book Two', twoId, [wren({ declinedVoiceFrom: [oneId] })]);
     expect((await link()).status).toBe(200);
+    expect('declinedVoiceFrom' in readRows('Book Two')[0]).toBe(false);
+  });
+
+  it('drops the re-linked voice uuid from declinedVoiceUuids too (pass-2 V)', async () => {
+    writeBook('Book One', oneId, [wren({ voiceUuid: 'u_shared' })]);
+    writeBook('Book Two', twoId, [
+      wren({ voiceUuid: 'u_shared', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared', 'u_keep'] }),
+    ]);
+    expect((await link()).status).toBe(200);
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_keep']);
     expect('declinedVoiceFrom' in readRows('Book Two')[0]).toBe(false);
   });
 

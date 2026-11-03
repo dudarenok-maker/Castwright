@@ -4957,6 +4957,7 @@ export interface DeclineVoiceLinkArgs {
 }
 export interface DeclineVoiceLinkResponse {
   declinedVoiceFrom: string[];
+  declinedVoiceUuids: string[];
 }
 
 async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
@@ -4983,7 +4984,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
 
 async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   await wait(80);
-  return { declinedVoiceFrom: [args.fromBookId] };
+  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [] };
 }
 
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task

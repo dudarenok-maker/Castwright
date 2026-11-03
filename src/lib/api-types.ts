@@ -2931,7 +2931,8 @@ export interface paths {
         put?: never;
         /**
          * Record that a series voice link was declined ("Don't reuse") —
-         * @description Appends `fromBookId` to the character's `declinedVoiceFrom` marker so the
+         * @description Appends `fromBookId` to the character's `declinedVoiceFrom` marker (and the
+         *     voice uuid it holds to `declinedVoiceUuids`) so the
          *     decline survives re-analysis and a later redesign forks the shared voice
          *     instead of overwriting the earlier book's. Single-book write; `fromBookId`
          *     need not be resolvable (a deleted book's id is still a valid decline).
@@ -6196,6 +6197,13 @@ export interface components {
              *     `voiceUuid`).
              */
             declinedVoiceFrom?: string[];
+            /**
+             * @description The `voiceUuid`s that were declined, recorded with `declinedVoiceFrom`
+             *     (#3992): "not THIS voice" also excludes any other book holding the
+             *     same uuid, so declining Book Two cannot re-link the row to Book One
+             *     when both hold one voice. Server-owned like `declinedVoiceFrom`.
+             */
+            declinedVoiceUuids?: string[];
             tone?: {
                 warmth?: number;
                 pace?: number;
@@ -12841,6 +12849,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         declinedVoiceFrom: string[];
+                        declinedVoiceUuids: string[];
                     };
                 };
             };

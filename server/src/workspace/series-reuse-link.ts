@@ -38,6 +38,7 @@ import { scanLibraryCharacters, type LibraryCharacterRecord } from './library-ca
 import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
 import { readStateJsonWithRecovery } from './state-migrate.js';
+import { declinesVoice } from '../store/declined-voice.js';
 import { scoreOne, type CharacterMatchInput, type LibraryVoice } from '../routes/voice-match.js';
 import { resolveReusedVoiceFields, type CastLoader } from '../tts/hydrate-reused-voice.js';
 import { createWorkspaceCastLoader } from '../tts/hydrate-reused-voice-workspace.js';
@@ -97,6 +98,8 @@ export interface LinkableCharacter {
   notLinkedTo?: { bookId: string; characterId: string }[];
   /** #3992 — earlier books this row's voice link was declined from. */
   declinedVoiceFrom?: string[];
+  /** #3992 — the voice uuids declined with them. */
+  declinedVoiceUuids?: string[];
 }
 
 /* Walk the books tree once, returning bookId → seriesPosition for every book
@@ -384,8 +387,9 @@ export async function linkSeriesReuseAtAnalysis(
       ) ||
       /* #3992 — "Don't reuse": the user declined THIS book's voice for the row.
          Narrower than the edge above (it says nothing about being the same
-         person), so it only skips that one book; an earlier one still links. */
-      (c.declinedVoiceFrom ?? []).includes(v.bookId);
+         person), so it skips that one book and any book holding the same voice
+         uuid; a different voice still links. */
+      declinesVoice(c, v);
 
     /* Stable-key pass FIRST: a character that kept its deterministic write key
        (`voiceId ?? id`) across books IS the same voice, even when the analyzer

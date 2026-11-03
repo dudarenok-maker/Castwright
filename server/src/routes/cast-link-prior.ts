@@ -247,13 +247,22 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
        reuse" of it. The marker is server-owned (the cast PUT takes it from disk),
        so this is the only place the client's re-link can clear it. */
     const declinedFrom = (source as { declinedVoiceFrom?: string[] }).declinedVoiceFrom ?? [];
-    const declineCleared = declinedFrom.includes(targetBookId);
+    const declinedUuids = (source as { declinedVoiceUuids?: string[] }).declinedVoiceUuids ?? [];
+    const targetUuid = (target as { voiceUuid?: string | null }).voiceUuid;
+    const declineCleared =
+      declinedFrom.includes(targetBookId) || (!!targetUuid && declinedUuids.includes(targetUuid));
     const remainingDeclined = declinedFrom.filter((b) => b !== targetBookId);
+    const remainingUuids = declinedUuids.filter((u) => u !== targetUuid);
 
     if (voiceIdChanged || shouldDenormaliseVoice || profileChanged || declineCleared) {
       const mergedSource: PersistedCharacter = {
         ...source,
-        ...(declineCleared ? { declinedVoiceFrom: remainingDeclined.length ? remainingDeclined : undefined } : {}),
+        ...(declineCleared
+          ? {
+              declinedVoiceFrom: remainingDeclined.length ? remainingDeclined : undefined,
+              declinedVoiceUuids: remainingUuids.length ? remainingUuids : undefined,
+            }
+          : {}),
         voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
         evidence: mergedEvidence,
         attributes: mergedAttributes,
