@@ -364,3 +364,66 @@ describe('pass-3 3 — an unreadable book anywhere does not re-fork a row that a
     expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
   });
 });
+
+describe('pass-3 4 — the legacy-key path in three books matches the uuid path’s shape', () => {
+  const legacy = {
+    ...baseRow,
+    voiceUuid: undefined,
+    overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
+  };
+  const legacyStrays = () => readdirSync(qwenDir()).filter((f) => !f.startsWith('qwen-v_wren'));
+  const legacyOneIntact = () =>
+    readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT) &&
+    readRow('Book One').voiceUuid === undefined;
+  function seedLegacyChain(opts: { three?: boolean } = { three: true }) {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, declinedVoiceFrom: [ids['Book One']] }]);
+    if (opts.three !== false) writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two') }]);
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
+  }
+
+  it('designing Book Two mints apart for Two AND Three (a real follower), and never stamps Book One', async () => {
+    seedLegacyChain();
+    expect((await design('Book Two')).status).toBe(200);
+    const two = readRow('Book Two').voiceUuid;
+    expect(two).toBeTruthy();
+    expect(readRow('Book Three').voiceUuid).toBe(two);
+    expect(legacyOneIntact()).toBe(true);
+    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+  });
+
+  it('designing Book Three FIRST walks up to the declined Book Two and does the same', async () => {
+    seedLegacyChain();
+    expect((await design('Book Three')).status).toBe(200);
+    const two = readRow('Book Two').voiceUuid;
+    expect(two).toBeTruthy();
+    expect(readRow('Book Three').voiceUuid).toBe(two);
+    expect(readRow('Book Three').matchedFrom?.bookId).toBe(ids['Book Two']);
+    expect(legacyOneIntact()).toBe(true);
+    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+  });
+
+  it('control: without Book Three Book One stays on the legacy key', async () => {
+    seedLegacyChain({ three: false });
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBeTruthy();
+    expect(legacyOneIntact()).toBe(true);
+  });
+
+  it('failure path: a failed write to the follower stamps nothing and leaves no stray copies', async () => {
+    seedLegacyChain();
+    failWriteIn.text = 'Book Three';
+    const res = await design('Book Two');
+    failWriteIn.text = null;
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(readRow('Book Two').voiceUuid).toBeUndefined();
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
+    expect(legacyStrays()).toEqual([]);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(legacyOneIntact()).toBe(true);
+  });
+});

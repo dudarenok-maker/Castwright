@@ -40,7 +40,9 @@ import { declinesVoice } from '../store/declined-voice.js';
 
 interface CastRow {
   id: string;
+  voiceId?: string | null;
   voiceUuid?: string | null;
+  overrideTtsVoices?: { qwen?: { name?: string } } | null;
   matchedFrom?: unknown;
   declinedVoiceFrom?: string[] | null;
   declinedVoiceUuids?: string[] | null;
@@ -138,13 +140,22 @@ export interface LinkFollower {
 
 const rowKey = (dir: string, id: string): string => `${resolve(dir)}|${id}`;
 
+/* What "holds the shared voice" means for a walk: a row on the uuid, or (for a row
+   that never got a uuid) a row on the same legacy key `qwen-<voiceId ?? id>`. */
+export type VoiceHolds = (row: CastRow) => boolean;
+const holdsUuid = (uuid: string): VoiceHolds => (y) => y.voiceUuid === uuid;
+export const holdsLegacyKey =
+  (linkId: string): VoiceHolds =>
+  (y) =>
+    !y.voiceUuid && (y.voiceId ?? y.id) === linkId;
+
 /* Breadth-first walk from X over `matchedFrom` links, among rows holding `uuid`.
    A row already visited (X itself, one reached by another path, or one that names
    its own book) is never revisited, so a cycle ends. */
 async function walkFollowers(
   selfDir: string,
   character: { id: string },
-  uuid: string,
+  holds: VoiceHolds,
   others: OtherBook[],
 ): Promise<LinkFollower[]> {
   const selfBookId = await readBookId(selfDir);
@@ -176,7 +187,7 @@ async function walkFollowers(
          so it cannot be moved with X: it stays on U. */
       if (!book.bookId) continue;
       for (const y of book.rows) {
-        if (y.voiceUuid !== uuid) continue;
+        if (!holds(y)) continue;
         const key = rowKey(book.dir, y.id);
         if (visited.has(key)) continue;
         const mf = y.matchedFrom as MatchedFrom;
@@ -199,19 +210,20 @@ async function walkFollowers(
 export async function scanLinkFollowers(
   bookDir: string,
   character: { id: string },
-  uuid: string,
+  voice: string | VoiceHolds,
 ): Promise<{ followers: LinkFollower[]; unreadableDirs: string[] }> {
   const selfDir = resolve(bookDir);
   const { books, unreadableDirs } = await loadOtherBooks(selfDir);
-  return { followers: await walkFollowers(selfDir, character, uuid, books), unreadableDirs };
+  const holds = typeof voice === 'string' ? holdsUuid(voice) : voice;
+  return { followers: await walkFollowers(selfDir, character, holds, books), unreadableDirs };
 }
 
 export async function findLinkFollowers(
   bookDir: string,
   character: { id: string },
-  uuid: string,
+  voice: string | VoiceHolds,
 ): Promise<LinkFollower[]> {
-  return (await scanLinkFollowers(bookDir, character, uuid)).followers;
+  return (await scanLinkFollowers(bookDir, character, voice)).followers;
 }
 
 /* #3992 — read-only: the declined row a LINKED row's voice really belongs to.
@@ -238,10 +250,17 @@ export type DeclinedAncestor = { dir: string; characterId: string } | { voiceUui
 
 export async function findDeclinedAncestor(
   bookDir: string,
-  character: { id: string; voiceUuid?: string | null; matchedFrom?: unknown },
+  character: {
+    id: string;
+    voiceId?: string | null;
+    voiceUuid?: string | null;
+    matchedFrom?: unknown;
+  },
 ): Promise<DeclinedAncestor> {
+  /* A row with no uuid shares the earlier book's LEGACY key instead, and the same
+     walk applies with the legacy reading of "holds" and of "must mint apart". */
   const uuid = character.voiceUuid;
-  if (!uuid) return null;
+  const holds = uuid ? holdsUuid(uuid) : holdsLegacyKey(character.voiceId ?? character.id);
   const { books, unreadable } = await loadOtherBooks(resolve(bookDir));
   const visited = new Set<string>([rowKey(bookDir, character.id)]);
   let mf = character.matchedFrom as MatchedFrom;
@@ -260,15 +279,18 @@ export async function findDeclinedAncestor(
       row = resolver.resolve(mf.characterId)?.character;
     }
     if (!row) return null;
-    if (row.voiceUuid !== uuid) {
-      return row.voiceUuid && declinesVoice(row, { voiceUuid: uuid }) ? { voiceUuid: row.voiceUuid } : null;
+    if (!holds(row)) {
+      return uuid && row.voiceUuid && declinesVoice(row, { voiceUuid: uuid })
+        ? { voiceUuid: row.voiceUuid }
+        : null;
     }
     const key = rowKey(target.dir, row.id);
     if (visited.has(key)) return null;
     visited.add(key);
-    if (await shouldForkSharedVoiceUuid(target.dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])) {
-      return { dir: target.dir, characterId: row.id };
-    }
+    const mustFork = uuid
+      ? await shouldForkSharedVoiceUuid(target.dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])
+      : await shouldMintApartFromLegacyKey(target.dir, row as LegacyRow);
+    if (mustFork) return { dir: target.dir, characterId: row.id };
     mf = row.matchedFrom as MatchedFrom;
   }
   return null;
@@ -316,7 +338,7 @@ export async function shouldForkSharedVoiceUuid(
   const { books, unreadable } = await loadOtherBooks(selfDir);
   if (unreadable && character.declinedVoiceUuids?.includes(uuid)) return true;
   const followed = new Set(
-    (await walkFollowers(selfDir, character, uuid, books)).map((f) => rowKey(f.dir, f.characterId)),
+    (await walkFollowers(selfDir, character, holdsUuid(uuid), books)).map((f) => rowKey(f.dir, f.characterId)),
   );
   return books.some((b) =>
     b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))),
@@ -329,9 +351,10 @@ export async function shouldForkSharedVoiceUuid(
    that legacy key with the earlier book. The series mint would stamp the earlier
    book too and move ITS render key onto the redesign, so the row must mint a uuid
    of its own instead. True only when ANOTHER book's row has the same
-   `voiceId ?? id`, no uuid and a designed qwen slot of its own, and does not
-   link back to X. A row whose own slot is empty (nobody designed yet) never
-   trips it. */
+   `voiceId ?? id`, no uuid and a designed qwen slot of its own, and is not a
+   FOLLOWER of X (links to it by bookId, transitively: same reading as the uuid
+   fork, so a bookId-less link is a holder). A row whose own slot is empty (nobody
+   designed yet) never trips it. */
 export async function shouldMintApartFromLegacyKey(
   bookDir: string,
   character: LegacyRow,
@@ -339,32 +362,22 @@ export async function shouldMintApartFromLegacyKey(
   if (character.voiceUuid || character.matchedFrom) return false;
   if (!character.declinedVoiceFrom?.length) return false; // not declined: shares by design
   if (!character.overrideTtsVoices?.qwen?.name) return false;
-  const linkId = character.voiceId ?? character.id;
 
   const selfDir = resolve(bookDir);
-  const linksToSelf = await makeLinksToSelf(bookDir, character);
-
-  let hasHolder = false;
-  for (const authorName of listDirs(BOOKS_ROOT)) {
-    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
-      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
-        const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        if (resolve(otherDir) === selfDir) continue;
-        const cast = await readOtherBookCast<{ characters?: LegacyRow[] }>(otherDir);
-        if (cast === UNREADABLE) {
-          hasHolder = true; // unknown, so a possible holder (see shouldForkSharedVoiceUuid)
-          continue;
-        }
-        for (const y of cast?.characters ?? []) {
-          if (y.voiceUuid || (y.voiceId ?? y.id) !== linkId) continue;
-          if (!y.overrideTtsVoices?.qwen?.name) continue;
-          hasHolder = true;
-          if (await linksToSelf(y.matchedFrom as MatchedFrom)) return false;
-        }
-      }
-    }
-  }
-  return hasHolder;
+  const holds = holdsLegacyKey(character.voiceId ?? character.id);
+  const { books, unreadable } = await loadOtherBooks(selfDir);
+  if (unreadable) return true; // unknown, so a possible holder (see shouldForkSharedVoiceUuid)
+  /* The followers of X (rows linking to it, transitively) move with it, so they are
+     not the earlier book. Any OTHER designed holder of the key is, and the earlier
+     book's render key must not move. */
+  const followed = new Set(
+    (await walkFollowers(selfDir, character, holds, books)).map((f) => rowKey(f.dir, f.characterId)),
+  );
+  return books.some((b) =>
+    b.rows.some(
+      (y) => holds(y) && !!y.overrideTtsVoices?.qwen?.name && !followed.has(rowKey(b.dir, y.id)),
+    ),
+  );
 }
 
 interface LegacyRow {
@@ -377,38 +390,6 @@ interface LegacyRow {
 }
 
 type MatchedFrom = { bookId?: string; characterId?: string } | null | undefined;
-
-/* Does another book's `matchedFrom` link back to X (the character in
-   `bookDir`)? Only one naming X's bookId counts, when its characterId is absent
-   or resolves to X. Resolved through X's own book (live cast + id history) so a
-   retired id still matches; no second id matcher. A bookId-less one (a manual
-   Assign writes one) could point at anyone, so it is NOT a link to X: that row is
-   a holder of the legacy key, the same reading as the uuid fork's followers (see
-   the header). Counting it as a link would end the scan at the first such row and
-   hand the series mint, which moves the earlier book's render key, back to X. */
-async function makeLinksToSelf(
-  bookDir: string,
-  character: { id: string },
-): Promise<(mf: MatchedFrom) => Promise<boolean>> {
-  const selfBookId = await readBookId(bookDir);
-  let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
-  const namesSelf = async (characterId: string): Promise<boolean> => {
-    if (characterId === character.id) return true;
-    if (!resolver) {
-      const cast = await readJson<CastFile>(castJsonPath(bookDir));
-      const history = await loadCastIdHistory(bookDir);
-      resolver = buildCastResolver<CastRow>(cast?.characters ?? [], history);
-    }
-    return resolver.resolve(characterId)?.character.id === character.id;
-  };
-  return async (mf) => {
-    if (!mf?.bookId) return false;
-    if (selfBookId && mf.bookId === selfBookId) {
-      return !mf.characterId || (await namesSelf(mf.characterId));
-    }
-    return false;
-  };
-}
 
 /* #3992 — read-only: does some OTHER character, under a DIFFERENT base
    `voiceUuid` than `ownUuid`, still name `variantId` among its

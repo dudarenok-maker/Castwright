@@ -63,6 +63,8 @@ import {
   shouldMintApartFromLegacyKey,
   isVariantUsedByOtherVoiceUuid,
   scanLinkFollowers,
+  holdsLegacyKey,
+  type VoiceHolds,
   findDeclinedAncestor,
   readBookId,
 } from '../workspace/voice-uuid-fork.js';
@@ -310,53 +312,53 @@ const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
 
-/* #3992 — a no-uuid row that shares a designed legacy key (`qwen-<voiceId>`)
-   with the earlier book gets a uuid of its own, book-scoped, with the legacy
-   family copied first so a Cancel leaves it on the earlier bytes rather than on
-   nothing. Does NOT stamp other books: their render key stays `qwen-<voiceId>`.
-   Caller holds the design lock. */
-async function mintUuidApartFromLegacyKey(
+/* #3992 — a no-uuid row that shares a designed legacy key (`qwen-<voiceId>`) with
+   the earlier book gets a uuid of its own, with the legacy family copied first so a
+   Cancel leaves it on the earlier bytes rather than on nothing. The rows linking to
+   it (transitively) move with it, exactly as in the uuid fork. Other books keep
+   their render key `qwen-<voiceId>`. Caller holds the design lock. */
+function mintUuidApartFromLegacyKey(
   bookDir: string,
   characterId: string,
-  legacyKey: string,
+  linkId: string,
 ): Promise<string | undefined> {
-  const newUuid = nanoid();
-  const copied = await copyBaseFamily(legacyKey, `qwen-${newUuid}`);
-  try {
-    return await withCastLock(bookDir, async () => {
-      const fresh = await readJson<CastFile>(castJsonPath(bookDir));
-      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-      if (!fresh || idx === -1) {
-        throw new CharacterGoneError();
-      }
-      const x = fresh.characters[idx];
-      if (x.voiceUuid) {
-        await removeFiles(copied);
-        return x.voiceUuid;
-      }
-      const linkId = x.voiceId ?? x.id;
-      for (let i = 0; i < fresh.characters.length; i++) {
-        const c = fresh.characters[i];
-        if ((c.voiceId ?? c.id) === linkId && !c.voiceUuid) {
-          fresh.characters[i] = withForkedUuid(c, newUuid);
-        }
-      }
-      await writeJsonAtomic(castJsonPath(bookDir), fresh);
-      return newUuid;
-    });
-  } catch (e) {
-    /* ANY throw (the lock timing out before the callback ran, a vanished
-       character, a failed write) leaves nothing stamped, so the copies are strays. */
-    await removeFiles(copied);
-    throw e;
-  }
+  return forkSharedVoice(bookDir, characterId, {
+    key: `qwen-${linkId}`,
+    holds: holdsLegacyKey(linkId),
+    stillApplies: async (x) =>
+      !x.voiceUuid && !(x as { matchedFrom?: unknown }).matchedFrom && (await shouldMintApartFromLegacyKey(bookDir, x)),
+  });
 }
 
 /* #3992 — see ensureCharacterVoiceUuid. Caller holds the design lock. */
-async function forkSharedVoiceUuid(
+function forkSharedVoiceUuid(
   bookDir: string,
   characterId: string,
   oldUuid: string,
+): Promise<string | undefined> {
+  return forkSharedVoice(bookDir, characterId, {
+    key: `qwen-${oldUuid}`,
+    holds: (c) => c.voiceUuid === oldUuid,
+    stillApplies: async (x) =>
+      x.voiceUuid === oldUuid &&
+      !(x as { matchedFrom?: unknown }).matchedFrom &&
+      (await shouldForkSharedVoiceUuid(bookDir, x)),
+  });
+}
+
+/* The shared voice a fork separates X from: the storage key whose base family is
+   copied, how to tell a row that holds it, and the decision re-made inside the locks
+   (the uuid fork and the legacy-key mint differ only in these three). */
+interface SharedVoice {
+  key: string;
+  holds: VoiceHolds;
+  stillApplies: (x: CastCharacter) => Promise<boolean>;
+}
+
+async function forkSharedVoice(
+  bookDir: string,
+  characterId: string,
+  shared: SharedVoice,
 ): Promise<string | undefined> {
   const newUuid = nanoid();
   /* The books that follow X (link to it, transitively) move with it. Their book-ops
@@ -366,10 +368,10 @@ async function forkSharedVoiceUuid(
      following in between is left alone, and one that started following in between
      is left on U (never a write outside the lock set). The design is a registered
      job, so no book-op of X's is held here. */
-  const scanned = (await scanLinkFollowers(bookDir, { id: characterId }, oldUuid)).followers;
+  const scanned = (await scanLinkFollowers(bookDir, { id: characterId }, shared.holds)).followers;
   const xBookId = await readBookId(bookDir);
   if (!xBookId) throw new Error('Cannot fork a voice for a book that has no bookId.');
-  const copied = await copyBaseFamily(`qwen-${oldUuid}`, `qwen-${newUuid}`);
+  const copied = await copyBaseFamily(shared.key, `qwen-${newUuid}`);
   const cleanup = (): Promise<void> => removeFiles(copied);
 
   /* Set only when a follower could not be rolled back: it still points at the
@@ -387,7 +389,7 @@ async function forkSharedVoiceUuid(
           throw new CharacterGoneError();
         }
         const x = fresh.characters[idx];
-        if (x.voiceUuid !== oldUuid || (x as { matchedFrom?: unknown }).matchedFrom || !(await shouldForkSharedVoiceUuid(bookDir, x))) {
+        if (!(await shared.stillApplies(x))) {
           await cleanup();
           return x.voiceUuid ?? undefined;
         }
@@ -398,7 +400,7 @@ async function forkSharedVoiceUuid(
         const written: Array<{ dir: string; before: CastFile }> = [];
         try {
           const locked = new Set(lockedDirs.map((d) => resolve(d)));
-          const { followers, unreadableDirs } = await scanLinkFollowers(bookDir, x, oldUuid);
+          const { followers, unreadableDirs } = await scanLinkFollowers(bookDir, x, shared.holds);
           /* A book the first scan found as a follower, locked on that basis, that
              cannot be read now is NOT skipped: skipping it would leave a row linked
              to X on U while X moves to U', and a later redesign of it would then
@@ -423,7 +425,7 @@ async function forkSharedVoiceUuid(
             );
             let changed = false;
             const characters = cast.characters.map((c) => {
-              if (c.voiceUuid !== oldUuid || !linkIds.has(c.voiceId ?? c.id)) return c;
+              if (!shared.holds(c) || !linkIds.has(c.voiceId ?? c.id)) return c;
               changed = true;
               return withForkedUuid(c, newUuid);
             });
@@ -435,7 +437,7 @@ async function forkSharedVoiceUuid(
           const linkId = x.voiceId ?? x.id;
           for (let i = 0; i < fresh.characters.length; i++) {
             const c = fresh.characters[i];
-            if ((c.voiceId ?? c.id) === linkId && c.voiceUuid === oldUuid) {
+            if ((c.voiceId ?? c.id) === linkId && shared.holds(c)) {
               fresh.characters[i] = withForkedUuid(c, newUuid);
             }
           }
@@ -635,8 +637,28 @@ export async function ensureCharacterVoiceUuid(
       /* #3992 — a declined row that never got a uuid and shares the earlier
          book's designed legacy key must not take the series mint below, which
          would stamp the earlier book and move its render key. */
+      const linkId = character.voiceId ?? character.id;
       if (await shouldMintApartFromLegacyKey(bookDir, character)) {
-        return mintUuidApartFromLegacyKey(bookDir, characterId, qwenStorageKey(character, characterId));
+        return mintUuidApartFromLegacyKey(bookDir, characterId, linkId);
+      }
+      /* A LINKED legacy row shares by design, unless the row it links to (up its
+         chain) is a declined one still on the legacy key: then it is a follower of
+         that row, and the series mint below would stamp the earlier book. Mint the
+         ancestor apart (this row moves with it), then design under the uuid that
+         landed on this row. */
+      if ((character as { matchedFrom?: unknown }).matchedFrom) {
+        const ancestor = await findDeclinedAncestor(bookDir, character);
+        if (ancestor && 'dir' in ancestor) {
+          await mintUuidApartFromLegacyKey(ancestor.dir, ancestor.characterId, linkId);
+          const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+          if (!after) throw new CharacterGoneError();
+          if (!after.voiceUuid) {
+            /* The mint did not carry this row (the link changed under us): the series
+               mint would stamp the earlier book, so fail rather than guess. */
+            throw new Error('The voice could not be separated from the earlier book; try again.');
+          }
+          return after.voiceUuid;
+        }
       }
       /* forEachMatchingCastCharacter takes its own per-book cast lock as it
          walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
