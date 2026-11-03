@@ -78,7 +78,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
        (bookId, chapterId). An entry is removed when its CHAPTER's stream
        closes (that chapter finished). The mapping survives the entry leaving
        the queue snapshot, so we can still DELETE it + reconcile per chapter. */
-    const inFlight = new Map<string, { bookId: string; chapterId: number }>();
+    const inFlight = new Map<string, { bookId: string; chapterId: number; review: boolean }>();
 
     /* Entries we've fired a DELETE for but haven't yet seen leave the queue
        snapshot (the server round-trip is async). They must NOT be re-claimed
@@ -119,7 +119,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
          pending so STEP 2 can't re-claim it before the snapshot catches up.
          Chapter-level: completing ch3's stream DELETEs ch3's entry without
          waiting on a sibling ch4 of the same book. */
-      for (const [entryId, { bookId, chapterId }] of [...inFlight.entries()]) {
+      for (const [entryId, { bookId, chapterId, review }] of [...inFlight.entries()]) {
         if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
           /* Loud-fallback gate: the worker PARKED this chapter (entry flipped to
@@ -202,12 +202,13 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                re-claim it before the snapshot catches up. Idempotent for an
                already-gone id; the next /api/queue snapshot reconciles. */
             completed.add(entryId);
-            /* #3919 — the preview's own entry is done-pruned but no review
+            /* #3919 — the preview's own entry (only it carries `review`; an ordinary
+               entry for the same chapter must not cancel it) is done-pruned but no review
                completion ever armed it (the chapter was excluded elsewhere, or
                an Include was rolled back): the rest would never fan out, and
                nothing says so. Drop it and tell the user. */
             const pv = (storeApi.getState() as DispatcherRootState).ui.previewRegen;
-            if (pv && pv.bookId === bookId && pv.previewChapterId === chapterId && pv.completed === undefined) {
+            if (review && pv && pv.bookId === bookId && pv.previewChapterId === chapterId && pv.completed === undefined) {
               dispatch(uiActions.clearPreviewForBook(bookId));
               dispatch(
                 notificationsActions.pushToast({
@@ -251,7 +252,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
 
         /* Claim synchronously before any await so a back-to-back snapshot
            tick can't double-claim. */
-        inFlight.set(e.id, { bookId: e.bookId, chapterId: e.chapterId });
+        inFlight.set(e.id, { bookId: e.bookId, chapterId: e.chapterId, review: e.review != null });
         slots--;
 
         /* Flip the entry to in_progress at the moment of claim — one entry =

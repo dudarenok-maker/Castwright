@@ -897,6 +897,21 @@ recite:
     and use. (Numbered 68: #4006 and #4011 each held a pending 66, so 68 is taken;
     renumber on merge if the order changes.)
 
+69. **A per-job cleanup keyed on a value its sibling jobs share** — PR #4001
+    pass 4 (#3919): a profile-change preview cancelled itself when "its"
+    queue entry finished without a review completion, but the check matched
+    on `bookId` + `chapterId`, which every queue entry for that chapter
+    shares; an ordinary regen of the same chapter, ahead of the preview's
+    own entry, cancelled a preview that had not run yet. Checkable: for any
+    cleanup, cancel or timeout that fires when a job ends, name the key it
+    matches on and list the other jobs that can carry the same key (same
+    chapter, book, character, id after a reissue); the check must key on the
+    job's own identity (its entry id, or a field only it carries), and a test
+    should finish a sibling job first and assert the cleanup does not fire.
+    Entry 55 (an id reissued after a delete) is the nearest. (Numbered 69:
+    66-68 are taken or reserved by open PRs; renumber on merge if the order
+    changes.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

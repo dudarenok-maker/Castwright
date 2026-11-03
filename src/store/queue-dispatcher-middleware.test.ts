@@ -322,7 +322,9 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
         note: '',
       }),
     );
-    seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+    seed(store, [
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3, review: { characterId: 'c1', triggeredBy: 'x' } }),
+    ]);
     await flushMicro();
     completeStream('book-A', 3);
     await flushMicro();
@@ -330,6 +332,73 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     expect(store.getState().notifications.toasts).toEqual([
       expect.objectContaining({ kind: 'warn', dedupeKey: 'preview-never-rendered:book-A' }),
     ]);
+  });
+
+  it('#3919 an ordinary entry for the preview’s chapter finishing does not cancel the preview', async () => {
+    const store = makeStore(1);
+    store.dispatch(
+      uiSlice.actions.setPreviewRegen({
+        bookId: 'book-A',
+        characterId: 'c1',
+        previewChapterId: 3,
+        remainingChapterIds: [4],
+        reason: 'voice',
+        note: '',
+      }),
+    );
+    seed(store, [
+      entry({ id: 'ordinary', bookId: 'book-A', chapterId: 3, order: 0 }),
+      entry({
+        id: 'preview',
+        bookId: 'book-A',
+        chapterId: 3,
+        order: 1,
+        review: { characterId: 'c1', triggeredBy: 'x' },
+      }),
+    ]);
+    await flushMicro();
+    completeStream('book-A', 3);
+    await flushMicro();
+    expect(store.getState().ui.previewRegen).not.toBeNull();
+    expect(store.getState().notifications.toasts).toEqual([]);
+    /* The preview's own entry opens next (a second stream for chapter 3). The
+       review completion that arms it is the stream middleware's job (not in
+       this store), so arm it by hand: the entry's close then leaves it alone. */
+    expect(streamGenerationMock).toHaveBeenCalledTimes(2);
+    const cur = store.getState().ui.previewRegen!;
+    store.dispatch(
+      uiSlice.actions.setPreviewRegen({ ...cur, completed: { reviewOutcome: 'recorded', stubFallback: false } }),
+    );
+    (streamGenerationMock.mock.calls[1][0] as { onTick: (ev: GenerationTick) => void }).onTick({
+      type: 'idle',
+    } as GenerationTick);
+    await flushMicro();
+    expect(store.getState().ui.previewRegen?.completed).toMatchObject({ reviewOutcome: 'recorded' });
+  });
+
+  it('#3919 a review entry finishing for another chapter or book leaves the preview alone', async () => {
+    const store = makeStore(2);
+    store.dispatch(
+      uiSlice.actions.setPreviewRegen({
+        bookId: 'book-A',
+        characterId: 'c1',
+        previewChapterId: 3,
+        remainingChapterIds: [4],
+        reason: 'voice',
+        note: '',
+      }),
+    );
+    const review = { characterId: 'c2', triggeredBy: 'x' };
+    seed(store, [
+      entry({ id: 'otherCh', bookId: 'book-A', chapterId: 9, order: 0, review }),
+      entry({ id: 'otherBook', bookId: 'book-B', chapterId: 3, order: 1, review }),
+    ]);
+    await flushMicro();
+    completeStream('book-A', 9);
+    completeStream('book-B', 3);
+    await flushMicro();
+    expect(store.getState().ui.previewRegen).not.toBeNull();
+    expect(store.getState().notifications.toasts).toEqual([]);
   });
 
   it('#3919 leaves a preview alone once its chapter reported a review completion', async () => {
