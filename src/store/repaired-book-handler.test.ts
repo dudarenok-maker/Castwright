@@ -143,6 +143,42 @@ describe('the repaired-book handler (#3713)', () => {
     warn.mockRestore();
   });
 
+  /* PR #4004 pass 5: a series fan-out skips a repaired mate it holds no token for and says so in a header. */
+  describe('a series fan-out that skipped a repaired book', () => {
+    const skippedResponse = (list: unknown) =>
+      new Response('{}', { headers: { 'x-skipped-repaired-books': encodeURIComponent(JSON.stringify(list)) } });
+
+    it('toasts once, as info, naming each skipped book and what to do', async () => {
+      const store = makeStore('other');
+      fetchMock.mockResolvedValueOnce(
+        skippedResponse([
+          { bookId: 'b9', bookTitle: 'Wëird "Title"', reason: 'x' },
+          { bookId: 'b8', bookTitle: 'Second', reason: 'x' },
+        ]),
+      );
+      await bookFetch('/api/voices/v1/override', { method: 'PUT' });
+      const toasts = root(store).notifications.toasts.filter((t) => (t as { kind?: string }).kind === 'info');
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toContain('Wëird "Title"');
+      expect(toasts[0].message).toContain('Second');
+      expect(toasts[0].message).toMatch(/reopen/i);
+    });
+
+    it('a response without the header toasts nothing', async () => {
+      const store = makeStore('other');
+      fetchMock.mockResolvedValueOnce(new Response('{}'));
+      await bookFetch('/api/voices/v1/override', { method: 'PUT' });
+      expect(root(store).notifications.toasts).toHaveLength(0);
+    });
+
+    it('a malformed header is ignored, not thrown', async () => {
+      const store = makeStore('other');
+      fetchMock.mockResolvedValueOnce(new Response('{}', { headers: { 'x-skipped-repaired-books': '%7Bnot-json' } }));
+      await expect(bookFetch('/api/voices/v1/override', { method: 'PUT' })).resolves.toBeDefined();
+      expect(root(store).notifications.toasts).toHaveLength(0);
+    });
+  });
+
   it('a failing Library refresh is logged, not thrown', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     h.getLibrary.mockRejectedValue(new Error('down'));

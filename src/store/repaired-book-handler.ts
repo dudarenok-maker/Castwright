@@ -8,7 +8,7 @@
 
 import type { Store } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
-import { commitBookReadToken, setRepairedBookHandler } from '../lib/book-read-token';
+import { commitBookReadToken, setRepairedBookHandler, setSkippedBooksHandler } from '../lib/book-read-token';
 import { bookMetaActions } from './book-meta-slice';
 import { dropRetainedSaves } from './persistence-middleware';
 import { libraryActions } from './library-slice';
@@ -26,6 +26,17 @@ function stageShows(state: unknown, bookId: string): boolean {
 }
 
 export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getState'>): void {
+  /* A series fan-out skipped a repaired mate this tab holds no token for: one info toast naming them. */
+  setSkippedBooksHandler((books) => {
+    const titles = books.map((b) => `"${b.bookTitle}"`).join(', ');
+    store.dispatch(
+      notificationsActions.pushToast({
+        kind: 'info',
+        message: `Applied to the rest of the series. Reopen ${titles} to apply this change there.`,
+        dedupeKey: `book-repaired-skipped:${books.map((b) => b.bookId).join(',')}`,
+      }),
+    );
+  });
   setRepairedBookHandler((bookId) => {
     store.dispatch(
       notificationsActions.pushToast({ kind: 'error', message: BOOK_REPAIRED_MESSAGE, dedupeKey: `book-repaired:${bookId}` }),

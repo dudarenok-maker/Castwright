@@ -38,10 +38,20 @@
      PUT    /api/voices/:voiceId/override             (scope 'series': body or query bookId)
    Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
    library); voice-library revoke and DELETE /:uuid, and PUT /api/voices/:id/override with scope 'workspace'
-   (keyed by voice, name no book); the series fan-out of series-patch / voice-override-linked / cast/tier /
-   voice-style (path book gated; the series-mates are matched by voice id or name, not named by the client);
-   /api/queue/* (writes the queue); POST /api/books and /api/import (mint a new book); library-sync-manifest
-   (a query bookId only selects a manifest). See plan 288, "Every other write".
+   (keyed by voice, name no book); /api/queue/* (writes the queue); POST /api/books and /api/import (mint a
+   new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
+
+   A series fan-out SKIPS a repaired mate, it does not refuse (pass 5, owner decision). Series-patch,
+   voice-override-linked, cast/tier, the series scope of PUT /api/voices/:id/override, and the design writers that
+   propagate a voice or variant across the series (single-design, cast-design, qwen-voice) match their mates by
+   voice id or name, so the client never names them and cannot hold their token. Refusing would make the write
+   impossible; writing would land on the wrong twin. Each fan-out calls `skipUnreadRepairedBook` per mate (the
+   shared `forEachMatchingCastCharacter` walker does it itself): a gated mate this request echoed no token for is
+   left byte-identical and reported, the rest of the series updates. `repairedFanOutScope` (mounted once in
+   app.ts) holds the request's tokens in an AsyncLocalStorage and stamps the skipped list on the response header
+   `x-skipped-repaired-books`; series-patch, voice-override-linked, cast/tier and the series override also put it
+   in the body as `skippedBooks` ({ bookId, bookTitle, reason: 'Reopen "<title>" to apply this change there.' }).
+   With the mate's token echoed it is written.
 
    Scope keys are bookIds. The kept twin's manuscriptId, when the sweep had to
    re-mint the loser's because they shared it, is registered too, so
@@ -50,6 +60,7 @@
 
    Mounted once, in app.ts, ahead of every `/api/books/:bookId` router. */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -260,6 +271,57 @@ export function repairedManuscriptGate(req: Request, res: Response, next: NextFu
   if (isRead(req)) return next();
   const scope = manuscriptScopes.get(String(req.params.id));
   refuseUnlessRead(scope && !isExpired(scope.repairedAt, Date.now()) ? scope.bookId : undefined, req, res, next);
+}
+
+/* ---- series fan-out: skip, don't refuse (pass 5, owner decision) ---- */
+
+/** A series-mate a fan-out left alone, with the sentence the UI shows for it. */
+export interface SkippedRepairedBook {
+  bookId: string;
+  bookTitle: string;
+  reason: string;
+}
+interface FanOutScope {
+  tokens: string[];
+  skipped: Map<string, SkippedRepairedBook>;
+}
+const fanOutScope = new AsyncLocalStorage<FanOutScope>();
+
+/** The response header that carries the skipped list (URI-encoded JSON), so the client reports a skip for any
+ *  route, whatever its body (a 204, a plain count) looks like. Set when the headers are written. */
+export const SKIPPED_BOOKS_HEADER = 'x-skipped-repaired-books';
+
+/** `app.use('/api', ...)`, after the body parser: remembers the tokens THIS request echoed for the whole async
+ *  chain it starts (the fan-out walkers, a design job it launches), and stamps the skipped list on the response.
+ *  Outside a request (a unit test of a walker, boot code) there is no scope and nothing is ever skipped. */
+export function repairedFanOutScope(req: Request, res: Response, next: NextFunction): void {
+  const scope: FanOutScope = { tokens: echoedTokens(req), skipped: new Map() };
+  const writeHead = res.writeHead as (...args: unknown[]) => Response;
+  res.writeHead = function (this: Response, ...args: unknown[]): Response {
+    if (scope.skipped.size > 0 && !this.headersSent) {
+      this.setHeader(SKIPPED_BOOKS_HEADER, encodeURIComponent(JSON.stringify([...scope.skipped.values()])));
+    }
+    return writeHead.apply(this, args);
+  } as Response['writeHead'];
+  fanOutScope.run(scope, next);
+}
+
+/** A series-scope fan-out onto a series-mate the client did not name: true when that mate is a gated repaired
+ *  book this request holds no token for, so the caller must leave its files alone. The skip is recorded for the
+ *  response; the rest of the series updates. A mate whose token the request echoed (or a book that is not
+ *  gated) is not skipped. */
+export function skipUnreadRepairedBook(bookId: string, bookTitle: string): boolean {
+  const scope = fanOutScope.getStore();
+  if (!scope) return false;
+  const token = activeBook(bookId)?.token;
+  if (token === undefined || scope.tokens.includes(token)) return false;
+  scope.skipped.set(`${bookId}\u0000${bookTitle}`, { bookId, bookTitle, reason: `Reopen "${bookTitle}" to apply this change there.` });
+  return true;
+}
+
+/** What this request's fan-outs skipped so far (empty outside a request). */
+export function skippedRepairedBooks(): SkippedRepairedBook[] {
+  return [...(fanOutScope.getStore()?.skipped.values() ?? [])];
 }
 
 /** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the

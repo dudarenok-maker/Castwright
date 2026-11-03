@@ -25,7 +25,10 @@
 
    `updated` always contains the source book on success (even for a
    standalone — `failed` is empty in that case). HTTP 207 (Multi-Status)
-   when `failed.length > 0`; 200 otherwise. */
+   when `failed.length > 0`; 200 otherwise.
+
+   A series-mate that is a repaired book (#3713) this request echoed no read token for is left
+   untouched and listed in `skippedBooks: [{ bookId, bookTitle, reason }]` (present only then). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -36,6 +39,7 @@ import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
+import { skipUnreadRepairedBook, skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -172,6 +176,9 @@ castSeriesPatchRouter.post(
     if (!('siblingTargets' in sourceStep)) return sourceStep;
 
     for (const t of sourceStep.siblingTargets) {
+      /* #3713 pass 5 -- a gated repaired mate this request echoed no token for is left alone and
+         reported in `skippedBooks`; the rest of the series still updates. */
+      if (skipUnreadRepairedBook(t.bookId, t.bookTitle)) continue;
       try {
         /* BOOK_GONE (deleted since the scan) is skipped, as before. */
         await withBookOp(t.bookId, async (sibling) => {
@@ -202,10 +209,12 @@ castSeriesPatchRouter.post(
       `[cast-series-patch] source=${bookId}/${characterId} updated=${updated.length} failed=${failed.length}`,
     );
 
+    const skippedBooks = skippedRepairedBooks();
+    const extra = skippedBooks.length > 0 ? { skippedBooks } : {};
     if (failed.length > 0) {
-      return res.status(207).json({ updated, failed });
+      return res.status(207).json({ updated, failed, ...extra });
     }
-    return res.status(200).json({ updated, failed });
+    return res.status(200).json({ updated, failed, ...extra });
   },
 );
 

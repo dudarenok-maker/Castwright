@@ -933,15 +933,23 @@ id are the same string. The rule, exactly:
   `bookId`, which the series, hence every `cast.json` written, is resolved from). Confirmed safe, with why:
   `POST /api/voice-library/promote` (reads the book's character, writes only the voice library; the origin cast.json is
   never modified), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by voice uuid,
-  name no book), `PUT /api/voices/:voiceId/override` with `scope: 'workspace'` (names no book), the series fan-out of
-  `series-patch`, `voice-override-linked`, `cast/tier` and the voice-style writers (the path book is gated; the
-  series-mates they also write are matched by voice id or name, which the client does not name and cannot hold a token
-  for), `POST /api/queue/*` (writes the queue, not a book file), `POST /api/books` and `POST /api/import` (mint a
+  name no book), `PUT /api/voices/:voiceId/override` with `scope: 'workspace'` (names no book), `POST /api/queue/*` (writes the queue, not a book file), `POST /api/books` and `POST /api/import` (mint a
   new book), `library-sync-manifest` (its `bookId` query only selects a manifest; the uuid migration it writes is
   derived from the same file). The 409 body names the book the refusal was scoped to, so the client re-reads the right
   one; the `link-prior`, `add-from-roster` and override client calls use `bookFetchFor` to echo the tokens.
-  **Open design question for the owner:** a series-scope fan-out onto a repaired series-mate the client did not name is
-  not refused (gating it would demand tokens for books the client never read, so the write could never succeed).
+  **Series fan-out skips a repaired series-mate (owner decision, PR #4004 pass 5).** The mates of `series-patch`,
+  `voice-override-linked`, `cast/tier`, the series scope of `PUT /api/voices/:voiceId/override` and the design writers
+  that propagate a voice or variant (`single-design`, `cast-design`, `qwen-voice`) are matched by voice id or name, so
+  the client never names them and cannot hold their token: refusing would make the write impossible, writing would land
+  on the wrong twin. Instead each fan-out calls `skipUnreadRepairedBook` (next to `refuseUnreadRepairedBooks`; the shared
+  `forEachMatchingCastCharacter` walker does it itself), which leaves a gated mate this request echoed no token for
+  byte-identical and records it; the rest of the series updates. `repairedFanOutScope`, mounted once in `app.ts` after
+  the body parser, keeps the request's tokens in an AsyncLocalStorage and stamps the skipped list on the
+  `x-skipped-repaired-books` response header; the four JSON routes also carry it as `skippedBooks`
+  (`{ bookId, bookTitle, reason: 'Reopen "<title>" to apply this change there.' }`). The client reads the header in
+  `bookFetch` and shows one info toast. With the mate's token echoed it is written. Known limit: an SSE design stream
+  flushes its headers before the walk, so it skips but cannot report. `repaired-book-gate-fanout.test.ts` pins both
+  directions per route.
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.

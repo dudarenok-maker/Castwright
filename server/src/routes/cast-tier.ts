@@ -7,7 +7,8 @@
    under its book-op, since the series walker skips standalones.
 
    Body:  { voiceId: string, ttsModelKey: 'qwen3-tts-1.7b' | null }
-   Response: { updated: number }
+   Response: { updated: number, skippedBooks?: [{ bookId, bookTitle, reason }] } -- skippedBooks names a
+   repaired series-mate this request echoed no token for (left untouched, #3713).
 
    Mounted at /api/books in app.ts, so the handler path is RELATIVE
    (/:bookId/cast/tier). */
@@ -16,6 +17,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { applyTierToCastFiles } from './voices.js';
 
 export const castTierRouter = Router();
@@ -61,5 +63,7 @@ castTierRouter.post('/:bookId/cast/tier', async (req: Request, res: Response) =>
     seriesInfo ?? undefined,
   );
 
-  return res.json({ updated });
+  /* #3713 pass 5 -- repaired series-mates this request had no token for, left untouched. */
+  const skippedBooks = skippedRepairedBooks();
+  return res.json({ updated, ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
 });

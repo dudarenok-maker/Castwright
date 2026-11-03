@@ -34,6 +34,31 @@ export function setRepairedBookHandler(handler: ((bookId: string) => void) | nul
   onRepaired = handler;
 }
 
+/** A series fan-out left a repaired series-mate alone because this tab holds no token for it (PR #4004 pass 5):
+ *  the server names it in this response header, whatever the route's body looks like. */
+const SKIPPED_BOOKS_HEADER = 'X-Skipped-Repaired-Books';
+export interface SkippedRepairedBook {
+  bookId: string;
+  bookTitle: string;
+  reason: string;
+}
+let onSkipped: ((books: SkippedRepairedBook[]) => void) | null = null;
+
+export function setSkippedBooksHandler(handler: ((books: SkippedRepairedBook[]) => void) | null): void {
+  onSkipped = handler;
+}
+
+function reportSkippedBooks(res: Response): void {
+  const raw = res.headers?.get?.(SKIPPED_BOOKS_HEADER);
+  if (!raw || !onSkipped) return;
+  try {
+    const list: unknown = JSON.parse(decodeURIComponent(raw));
+    if (Array.isArray(list) && list.length > 0) onSkipped(list as SkippedRepairedBook[]);
+  } catch {
+    /* a malformed header is no reason to fail the request */
+  }
+}
+
 /** A book-state read told us this book's manuscriptId: its writes echo that book's token. */
 export function rememberManuscriptBook(manuscriptId: unknown, bookId: string): void {
   if (typeof manuscriptId === 'string' && manuscriptId !== '') manuscriptBooks.set(manuscriptId, bookId);
@@ -55,6 +80,7 @@ export function __resetBookReadTokensForTest(): void {
   tokens.clear();
   manuscriptBooks.clear();
   onRepaired = null;
+  onSkipped = null;
 }
 
 function pathOf(input: RequestInfo | URL): string | null {
@@ -93,6 +119,7 @@ async function send(
     sent = { ...init, headers };
   }
   const res = await (sent === undefined ? globalThis.fetch(input) : globalThis.fetch(input, sent));
+  reportSkippedBooks(res);
   if (!tracked) return res;
 
   const method = (init?.method ?? 'GET').toUpperCase();

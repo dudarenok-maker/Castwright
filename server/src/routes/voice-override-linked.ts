@@ -26,7 +26,9 @@
 
    Body: { override: { engine, name } | null }  (null clears the engine map).
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
-   failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200. */
+   failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200.
+   A series-mate that is a repaired book (#3713) this request echoed no read token for is left
+   untouched and listed in `skippedBooks: [{ bookId, bookTitle, reason }]` (present only then). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -35,6 +37,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
+import { skipUnreadRepairedBook, skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -186,6 +189,9 @@ voiceOverrideLinkedRouter.post(
     const { canonicalVoiceId, canonicalVoiceUuid, byBook, series } = sourceStep;
 
     for (const [siblingBookId, { bookTitle, ids }] of byBook) {
+      /* #3713 pass 5 -- a gated repaired mate this request echoed no token for is left alone and
+         reported in `skippedBooks`; the rest of the series still updates. */
+      if (skipUnreadRepairedBook(siblingBookId, bookTitle)) continue;
       try {
       await withBookOp(siblingBookId, async (sibling) => {
         /* Re-apply the scope on the FRESH state: a book renamed out of the
@@ -219,7 +225,10 @@ voiceOverrideLinkedRouter.post(
         `updated=${updated.length} failed=${failed.length}`,
     );
 
-    return res.status(failed.length > 0 ? 207 : 200).json({ canonicalVoiceId, updated, failed });
+    const skippedBooks = skippedRepairedBooks();
+    return res
+      .status(failed.length > 0 ? 207 : 200)
+      .json({ canonicalVoiceId, updated, failed, ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
   },
 );
 

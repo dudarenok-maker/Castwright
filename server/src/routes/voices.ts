@@ -39,7 +39,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseUnreadRepairedBooks, skipUnreadRepairedBook, skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
@@ -793,6 +793,11 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       });
     }
     const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
+    /* #3713 pass 5 -- repaired series-mates this request had no token for, left untouched. */
+    const skippedBooks = skippedRepairedBooks();
+    if (updated === 0 && skipped.length === 0 && skippedBooks.length > 0) {
+      return res.status(200).json({ updated, skippedBooks });
+    }
     if (updated === 0 && skipped.length === 0) {
       const where = seriesFilter
         ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`
@@ -809,8 +814,8 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
         skipped,
       });
     }
-    if (skipped.length > 0) {
-      return res.status(200).json({ updated, skipped });
+    if (skipped.length > 0 || skippedBooks.length > 0) {
+      return res.status(200).json({ updated, ...(skipped.length > 0 ? { skipped } : {}), ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
     }
     res.status(204).end();
   } catch (e) {
@@ -956,6 +961,9 @@ export async function forEachMatchingCastCharacter(
             }
             return bookUpdated;
           });
+        /* #3713 pass 5 -- a gated repaired mate this request holds no token for is left alone
+           and reported; the rest of the series updates. */
+        if (state.bookId && skipUnreadRepairedBook(state.bookId, state.title || state.bookId)) continue;
         if (!state.bookId) {
           /* A book whose state.json lacks a bookId can never be matched by the
              resolver, so no route can move it: it still receives the write, under
