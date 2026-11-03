@@ -739,4 +739,33 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
       }
     },
   );
+
+  it.each(['main', 'subset'] as const)(
+    'a voiced narrator renamed to a character name does not stop the locked row keeping its id (%s job, #3954)',
+    async (kind) => {
+      /* The roster carries NO narrator row, so the prior narrator is not taken
+         over by id and would reach the remap's candidate set. It must not make
+         the name ambiguous: the locked row `w2` keeps its id. */
+      const narrator: CastRow = { id: 'narrator', name: 'Wren', voiceId: 'v_narr', lines: 0 };
+      const locked: CastRow = {
+        id: 'w2',
+        name: 'Wren',
+        voiceId: 'v_w2',
+        voiceState: 'locked',
+        lines: 3,
+      };
+      const { manuscriptId, bookDir } = mkBook([narrator, locked], 'Wren');
+      try {
+        await run(manuscriptId, bookDir, [rosterRow('wren-new', 'Wren')], {
+          speaker: 'wren-new',
+          subset: kind === 'subset',
+        });
+        const rows = readCast(bookDir).filter((c) => c.id !== 'narrator');
+        expect(rows.map((r) => r.id)).toEqual(['w2']);
+        expect(rows[0].voiceId).toBe('v_w2');
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 });
