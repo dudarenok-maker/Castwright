@@ -414,7 +414,13 @@ export const uiSlice = createSlice({
         replaced, its chapters restructured, or the book deleted. Chapter ids
         may now mean different chapters, and the server dropped any pending
         entry for the touched chapters, so the preview cannot be resumed: drop it.
-        The new take stays as the chapter's audio (nothing is restored). Only a
+        The new take stays as the chapter's audio (nothing is restored). Also
+        used when the preview's own chapter is excluded (#3919): there the
+        server deletes the chapter's audio and keeps the queue entry, so
+        neither of those holds. The queue dispatcher also calls it (#3919)
+        when the preview's own entry is done-pruned with no review completion
+        (a halt, another tab, an Include rolled back): there the queue entry
+        is already dropped and the audio may be a new take. Only a
         preview of THAT book; a no-op otherwise. An open stub player is closed by
         the watcher's rule 2 (Task 21), since its stub is gone. */
     clearPreviewForBook: (s, a: PayloadAction<string>) => {

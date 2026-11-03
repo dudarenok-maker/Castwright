@@ -1001,9 +1001,12 @@ function ReadyViewSwitch({
             /* Whole-book regenerate: chapter 1 + scope='forward' covers
                every chapter while reusing the per-chapter modal. The scope
                override is cleared by setRegenChapter(null) on close. */
-            if (chapters.length === 0) return;
+            /* #3919 — anchor on the first INCLUDED chapter: an excluded one
+               never renders, so "Just this chapter" would be a no-op. */
+            const anchor = chapters.find((ch) => !ch.excluded);
+            if (!anchor) return;
             dispatch(uiActions.setRegenInitialScope('forward'));
-            dispatch(uiActions.setRegenChapter(chapters[0]));
+            dispatch(uiActions.setRegenChapter(anchor));
           }}
           onRegenerateCharacterInChapter={(charId, chapterId) =>
             dispatch(
