@@ -62,7 +62,7 @@ import {
   shouldForkSharedVoiceUuid,
   shouldMintApartFromLegacyKey,
   isVariantUsedByOtherVoiceUuid,
-  findLinkFollowers,
+  scanLinkFollowers,
   readBookId,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
@@ -359,7 +359,7 @@ async function forkSharedVoiceUuid(
      following in between is left alone, and one that started following in between
      is left on U (never a write outside the lock set). The design is a registered
      job, so no book-op of X's is held here. */
-  const scanned = await findLinkFollowers(bookDir, { id: characterId }, oldUuid);
+  const scanned = (await scanLinkFollowers(bookDir, { id: characterId }, oldUuid)).followers;
   const xBookId = await readBookId(bookDir);
   if (!xBookId) throw new Error('Cannot fork a voice for a book that has no bookId.');
   const copied = await copyBaseFamily(`qwen-${oldUuid}`, `qwen-${newUuid}`);
@@ -380,22 +380,24 @@ async function forkSharedVoiceUuid(
         return x.voiceUuid ?? undefined;
       }
 
-      let wrote = false;
+      /* Every book written so far, with the cast it had before: a failure at any
+         later write puts these back (see the catch), so a follower is never left
+         on the new uuid while the row it links to is still on the old one. */
+      const written: Array<{ dir: string; before: CastFile }> = [];
       try {
-        /* Followers first. A failure after this point leaves a follower on the copy
-           and X on U (X retries as a fresh fork), never X on U' with a follower
-           still on the earlier book's key. */
         const locked = new Set(lockedDirs.map((d) => resolve(d)));
-        const live = (await findLinkFollowers(bookDir, x, oldUuid)).filter((f) => locked.has(resolve(f.dir)));
+        const { followers, unreadableDirs } = await scanLinkFollowers(bookDir, x, oldUuid);
+        /* A book the first scan found as a follower, locked on that basis, that
+           cannot be read now is NOT skipped: skipping it would leave a row linked
+           to X on U while X moves to U', and a later redesign of it would then
+           overwrite the earlier book. Fail the fork; nothing has been written. */
+        const unreadable = new Set(unreadableDirs);
+        if (scanned.some((f) => unreadable.has(resolve(f.dir)))) {
+          throw new Error('A book in this series could not be read while the voice was being forked; try again.');
+        }
+        const live = followers.filter((f) => locked.has(resolve(f.dir)));
         for (const dir of new Set(live.map((f) => resolve(f.dir)))) {
-          let cast: CastFile | null;
-          try {
-            cast = await readJson<CastFile>(castJsonPath(dir));
-          } catch (e) {
-            /* Readable a moment ago, not now: leave that book on U, don't fail X. */
-            console.warn(`[qwen-voice] fork: skipping follower book, cast.json unreadable: ${(e as Error).message}`);
-            continue;
-          }
+          const cast = await readJson<CastFile>(castJsonPath(dir));
           if (!cast?.characters) continue;
           const followerIds = new Set(live.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
           const linkIds = new Set(
@@ -409,7 +411,7 @@ async function forkSharedVoiceUuid(
           });
           if (!changed) continue;
           await writeJsonAtomic(castJsonPath(dir), { ...cast, characters });
-          wrote = true;
+          written.push({ dir, before: cast });
         }
 
         const linkId = x.voiceId ?? x.id;
@@ -421,9 +423,20 @@ async function forkSharedVoiceUuid(
         }
         await writeJsonAtomic(castJsonPath(bookDir), fresh);
       } catch (e) {
-        /* Nothing written yet: the copies are strays, remove them. Once a follower
-           has been written it points at them, so they stay. */
-        if (!wrote) await cleanup();
+        /* Put every follower already written back (still inside the locks, so
+           nothing else has touched them). Restored: the copies are strays, remove
+           them. A restore that fails leaves that follower on the copy, so the
+           copies stay, and the original failure is the one reported. */
+        let restored = true;
+        for (const w of written.reverse()) {
+          try {
+            await writeJsonAtomic(castJsonPath(w.dir), w.before);
+          } catch (restoreErr) {
+            restored = false;
+            console.error('[qwen-voice] fork: could not roll a follower back', restoreErr);
+          }
+        }
+        if (restored) await cleanup();
         throw e;
       }
       return newUuid;

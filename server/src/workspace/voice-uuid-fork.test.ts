@@ -7,6 +7,7 @@ let root: string;
 let shouldFork: typeof import('./voice-uuid-fork.js').shouldForkSharedVoiceUuid;
 let shouldMintApart: typeof import('./voice-uuid-fork.js').shouldMintApartFromLegacyKey;
 let findFollowers: typeof import('./voice-uuid-fork.js').findLinkFollowers;
+let scanFollowers: typeof import('./voice-uuid-fork.js').scanLinkFollowers;
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -38,6 +39,7 @@ beforeAll(async () => {
     shouldForkSharedVoiceUuid: shouldFork,
     shouldMintApartFromLegacyKey: shouldMintApart,
     findLinkFollowers: findFollowers,
+    scanLinkFollowers: scanFollowers,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -266,6 +268,19 @@ describe('findLinkFollowers (#3992)', () => {
     );
     book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2_old' } }]);
     expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
+  });
+
+  it('scanLinkFollowers reports the folders it could not read, so a caller can tell an invisible follower (pass-2 F)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
+    const scan = await scanFollowers(two, { id: 'c2' }, U);
+    expect(scan.followers.map((f) => f.characterId)).toEqual(['c3']);
+    expect(scan.unreadableDirs.map((d) => basename(d))).toEqual(['Bad']);
+    reset();
+    expect((await scanFollowers(book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]), { id: 'c2' }, U)).unreadableDirs).toEqual([]);
   });
 
   it('an unreadable book in the way is skipped, not thrown', async () => {

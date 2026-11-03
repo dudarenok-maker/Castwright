@@ -370,23 +370,21 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(book1Intact()).toBe(true);
   });
 
-  it('a failed write to Book Two AFTER the follower moved keeps the copies the follower points at; a retry then forks Book Two alone', async () => {
+  it('a failed write to Book Two AFTER the follower moved rolls the follower back and removes the copies; the retry forks the pair together (pass-2 F)', async () => {
     seedChain();
     failWriteIn.text = 'Book Two';
     const res = await design('Book Two');
     expect(res.status).toBe(500);
-    const followerUuid = readRow('Book Three').voiceUuid;
-    expect(followerUuid).not.toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-    expect(existsSync(join(qwenDir(), `qwen-${followerUuid}.pt`))).toBe(true);
+    expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);
     expect(book1Intact()).toBe(true);
 
     failWriteIn.text = null;
     expect((await design('Book Two')).status).toBe(200);
     const two = readRow('Book Two').voiceUuid;
     expect(two).not.toBe('u_shared');
-    expect(two).not.toBe(followerUuid); // Three no longer holds u_shared, so it is not re-followed
-    expect(readRow('Book Three').voiceUuid).toBe(followerUuid);
+    expect(readRow('Book Three').voiceUuid).toBe(two);
     expect(book1Intact()).toBe(true);
   });
   it('inside a follower book only the follower’s own voice moves: a same-voiceId sibling follows it, an unrelated voice sharing the uuid does not', async () => {

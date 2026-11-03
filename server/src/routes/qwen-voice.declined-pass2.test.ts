@@ -4,7 +4,7 @@
    being overwritten. Book One holds the shared voice u_shared; Book Two declined
    it; Book Three follows Book Two. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -20,11 +20,14 @@ vi.mock('undici', async (importOriginal) => {
   };
 });
 const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
-const failWriteIn = vi.hoisted(() => ({ text: null as string | null }));
+const failWriteIn = vi.hoisted(() => ({ text: null as string | null, skip: 0 }));
+/* Runs once, in the middle of the fork's copy step (after the scan, before the
+   locks), to simulate a book changing under it. */
+const copyHook = vi.hoisted(() => ({ fn: null as null | (() => void) }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const writeFile = async (path: unknown, ...rest: unknown[]) => {
-    if (failWriteIn.text && String(path).includes(failWriteIn.text)) {
+    if (failWriteIn.text && String(path).includes(failWriteIn.text) && failWriteIn.skip-- <= 0) {
       throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${String(path)}'`), {
         code: 'EBUSY',
         syscall: 'open',
@@ -33,7 +36,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
   };
-  return { ...actual, default: { ...actual, writeFile }, writeFile };
+  const copyFile = async (...a: unknown[]) => {
+    const hook = copyHook.fn;
+    copyHook.fn = null;
+    hook?.();
+    return (actual.copyFile as (...x: unknown[]) => Promise<void>)(...a);
+  };
+  return { ...actual, default: { ...actual, writeFile, copyFile }, writeFile, copyFile };
 });
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -151,6 +160,8 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   failWriteIn.text = null;
+  failWriteIn.skip = 0;
+  copyHook.fn = null;
   requestedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
@@ -237,5 +248,64 @@ describe('pass-2 U — an unreadable earlier book is a holder, not an absence', 
     expect(readRow('Book Two').voiceUuid).toBeTruthy();
     expect(readRow('Book One').voiceUuid).toBeUndefined();
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
+  });
+});
+
+const strays = () => readdirSync(qwenDir()).filter((f) => !f.startsWith('qwen-u_shared'));
+
+describe('pass-2 F — a follower never ends on a different uuid from the row it links to', () => {
+  it('a failed write of the declining row rolls the follower back, so the retry forks them together', async () => {
+    seedChain();
+    failWriteIn.text = 'Book Two';
+    const failed = await design('Book Two');
+    expect(failed.status).toBe(500);
+    expect(JSON.stringify(failed.body)).not.toContain(workspaceRoot);
+    // nothing moved: both still on the shared voice, no copy left behind
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
+    expect(strays()).toEqual([]);
+
+    failWriteIn.text = null;
+    expect((await design('Book Two')).status).toBe(200);
+    const two = readRow('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe(two);
+    expect(readRow('Book Three').matchedFrom?.bookId).toBe(ids['Book Two']);
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('if the rollback ALSO fails the follower stays on the copy and the copy is kept, so nothing points at a missing .pt', async () => {
+    seedChain();
+    // the follower's write passes, then every later cast write fails: the declining row's, then the rollback
+    failWriteIn.text = 'cast.json';
+    failWriteIn.skip = 1;
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    failWriteIn.text = null;
+    const three = readRow('Book Three').voiceUuid;
+    expect(three).not.toBe('u_shared');
+    expect(readFileSync(join(qwenDir(), `qwen-${three}.pt`)).equals(ORIG_PT)).toBe(true);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('a follower that became unreadable after the scan fails the fork instead of being skipped', async () => {
+    seedChain();
+    const goodThree = readFileSync(castPath('Book Three'), 'utf8');
+    copyHook.fn = () => writeFileSync(castPath('Book Three'), '{"characters":[{"id":');
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    // nothing was stamped and nothing was designed or left behind
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([]);
+    expect(strays()).toEqual([]);
+    expect(book1Intact()).toBe(true);
+
+    // readable again: the retry forks the pair together
+    writeFileSync(castPath('Book Three'), goodThree);
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
   });
 });

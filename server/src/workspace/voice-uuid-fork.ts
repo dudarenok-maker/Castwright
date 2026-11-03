@@ -92,6 +92,8 @@ interface OtherBooks {
   books: OtherBook[];
   /** Some other book's cast.json could not be read, so what it holds is unknown. */
   unreadable: boolean;
+  /** Those books' folders. */
+  unreadableDirs: string[];
 }
 
 /* Every OTHER book's readable cast, with its bookId. An unreadable cast.json is
@@ -100,7 +102,7 @@ interface OtherBooks {
    the fork decisions read it as a possible HOLDER (see shouldForkSharedVoiceUuid). */
 async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
   const out: OtherBook[] = [];
-  let unreadable = false;
+  const unreadableDirs: string[] = [];
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -108,7 +110,7 @@ async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
         if (resolve(dir) === selfDir) continue;
         const cast = await readOtherBookCast<CastFile>(dir);
         if (cast === UNREADABLE) {
-          unreadable = true;
+          unreadableDirs.push(resolve(dir));
           continue;
         }
         if (!cast?.characters?.length) continue;
@@ -122,7 +124,7 @@ async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
       }
     }
   }
-  return { books: out, unreadable };
+  return { books: out, unreadable: unreadableDirs.length > 0, unreadableDirs };
 }
 
 export interface LinkFollower {
@@ -186,15 +188,27 @@ async function walkFollowers(
   return followers;
 }
 
-/* Every row in another book that follows X (see the header), transitively.
-   Read-only and lock-free; qwen-voice.ts re-runs it inside the locks it takes. */
+/* Every row in another book that follows X (see the header), transitively, and
+   the folders of the books that could not be read (a follower there would be
+   invisible). Read-only and lock-free; qwen-voice.ts re-runs it inside the locks
+   it takes and fails the fork when a book it already locked as a follower has
+   become unreadable. */
+export async function scanLinkFollowers(
+  bookDir: string,
+  character: { id: string },
+  uuid: string,
+): Promise<{ followers: LinkFollower[]; unreadableDirs: string[] }> {
+  const selfDir = resolve(bookDir);
+  const { books, unreadableDirs } = await loadOtherBooks(selfDir);
+  return { followers: await walkFollowers(selfDir, character, uuid, books), unreadableDirs };
+}
+
 export async function findLinkFollowers(
   bookDir: string,
   character: { id: string },
   uuid: string,
 ): Promise<LinkFollower[]> {
-  const selfDir = resolve(bookDir);
-  return walkFollowers(selfDir, character, uuid, (await loadOtherBooks(selfDir)).books);
+  return (await scanLinkFollowers(bookDir, character, uuid)).followers;
 }
 
 /* An unreadable other book is treated as a possible HOLDER of the uuid (and, in
