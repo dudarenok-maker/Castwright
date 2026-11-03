@@ -740,7 +740,8 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > followed by a redesign gives the later book its own voice and leaves the earlier book's voice
 > untouched, the decline survives re-analysis, and a book linked to the redesigned one follows
 > it) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same change. Row is
-> owed; not run here.
+> owed; not run here. Reworded 2026-11-03 (PR #4007 pass 2): steps 9 (a decline made on Confirm) and 10
+> (designing the follower first) added; no count change.
 >
 > **Prior change: 2026-10-31 (#3920, PR #3934), 73 → 74.** Row **B108** (re-analysis keeps a
 > locked or tuned character's voice whole, and no fresh row inherits a link it was not joined
@@ -6402,8 +6403,10 @@ The automated tests prove the fork against fixture workspaces. Only a real Qwen 
 6. **Controls.** A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork. A character that was never declined but shares a uuid with an earlier book without a link (Book 2 confirmed before Book 1) is not forked either: designing it twice leaves both books on one uuid.
 7. **Don't reuse sticks across re-analysis.** After step 1 (before and after the redesign), re-analyse Book 2. The character stays unlinked (no `matchedFrom`, no "Reused" badge), its `cast.json` row still carries `declinedVoiceFrom: [<Book 1's bookId>]`, and it keeps its voice (the shared one before the redesign, the new one after). Redesigning it afterwards still leaves Book 1's `qwen-<old>.pt` unchanged. Linking it to Book 1 again by hand (link to an earlier character) clears the marker for that book.
 8. **A chain follows the middle book.** With a Book 3 whose character links to Book 2's (its `matchedFrom` names Book 2, the same `voiceUuid`): decline Book 2's link to Book 1 and redesign Book 2's character. Book 3's character moves to Book 2's new `voiceUuid` in the same write and plays Book 2's new voice; Book 1 is untouched and Book 3 is still linked to Book 2. A character that links to Book 2 without a book id (a manual Assign) stays on Book 1's voice.
+9. **Confirm: Don't reuse sticks and re-analysis does not re-link.** Re-analyse Book 2 so it lands on Confirm, open a linked character's "Matched from … see why" drawer and press Don't reuse there. The row unlinks at once and `cast.json` carries `declinedVoiceFrom` and `declinedVoiceUuids` with no `matchedFrom`, even before the autosave lands. Re-analyse again: Confirm's auto-match does not link it back (no "Reused" badge), and a redesign still leaves Book 1's `qwen-<old>.pt` unchanged. With the server stopped when you press Don't reuse, a toast says the decline was not saved and the link still shows.
+10. **Design the follower first.** With a Book 3 linked to Book 2, which declined Book 1 and has not been redesigned: redesign Book 3's character (not Book 2's). Book 2 and Book 3 both move to one new `voiceUuid`, Book 3 is still linked to Book 2, and Book 1's `qwen-<old>.pt` is unchanged.
 
-*Needs:* the GPU box with the Qwen sidecar and a series of two books (three for step 8) with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+*Needs:* the GPU box with the Qwen sidecar and a series of two books (three for steps 8 and 10) with a linked character. *Criteria:* this row; issue #3992. Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
 ## Group B — local Ollama analyzer only
 

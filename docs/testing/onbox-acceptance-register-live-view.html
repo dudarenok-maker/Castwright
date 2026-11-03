@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="71" data-publish-id="12d2aa0a5952"></div>
+  <div hidden data-published-as="72" data-publish-id="5c1d49b27f42"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -855,8 +855,10 @@
         <li><strong>Controls.</strong> A character still linked (no decline) keeps sharing the source uuid; redesigning the source character in Book 1 while Book 2 is linked does not fork. A character that was never declined but shares a uuid with an earlier book without a link (Book 2 confirmed before Book 1) is not forked either: designing it twice leaves both books on one uuid.</li>
         <li><strong>Don&#39;t reuse sticks across re-analysis.</strong> After the decline (before and after the redesign), re-analyse Book 2. The character stays unlinked (no <code>matchedFrom</code>, no &#8220;Reused&#8221; badge), its <code>cast.json</code> row still carries <code>declinedVoiceFrom: [&lt;Book 1&#39;s bookId&gt;]</code>, and it keeps its voice (the shared one before the redesign, the new one after). Redesigning it afterwards still leaves Book 1&#39;s <code>qwen-&lt;old&gt;.pt</code> unchanged. Linking it to Book 1 again by hand (link to an earlier character) clears the marker for that book.</li>
         <li><strong>A chain follows the middle book.</strong> With a Book 3 whose character links to Book 2&#39;s (its <code>matchedFrom</code> names Book 2, the same <code>voiceUuid</code>): decline Book 2&#39;s link to Book 1 and redesign Book 2&#39;s character. Book 3&#39;s character moves to Book 2&#39;s new <code>voiceUuid</code> in the same write and plays Book 2&#39;s new voice; Book 1 is untouched and Book 3 is still linked to Book 2. A character that links to Book 2 without a book id (a manual Assign) stays on Book 1&#39;s voice.</li>
+        <li><strong>Confirm: Don&#39;t reuse sticks and re-analysis does not re-link.</strong> Re-analyse Book 2 so it lands on Confirm, open a linked character&#39;s &#8220;Matched from &#8230; see why&#8221; drawer and press Don&#39;t reuse there. The row unlinks at once and <code>cast.json</code> carries <code>declinedVoiceFrom</code> and <code>declinedVoiceUuids</code> with no <code>matchedFrom</code>, even before the autosave lands. Re-analyse again: Confirm&#39;s auto-match does not link it back (no &#8220;Reused&#8221; badge), and a redesign still leaves Book 1&#39;s <code>qwen-&lt;old&gt;.pt</code> unchanged. With the server stopped when you press Don&#39;t reuse, a toast says the decline was not saved and the link still shows.</li>
+        <li><strong>Design the follower first.</strong> With a Book 3 linked to Book 2, which declined Book 1 and has not been redesigned: redesign Book 3&#39;s character (not Book 2&#39;s). Book 2 and Book 3 both move to one new <code>voiceUuid</code>, Book 3 is still linked to Book 2, and Book 1&#39;s <code>qwen-&lt;old&gt;.pt</code> is unchanged.</li>
         </ul>
-        <p class="src">the GPU box with the Qwen sidecar and a series of two books (three for the chain step) with a linked character &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3992">#3992</a></p>
+        <p class="src">the GPU box with the Qwen sidecar and a series of two books (three for the chain and follower steps) with a linked character &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3992">#3992</a></p>
       </div>
     </details>
 
