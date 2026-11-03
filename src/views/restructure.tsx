@@ -71,15 +71,32 @@ export function RestructureView({ bookId }: Props) {
   const beginRestructure = useCallback(() => {
     dispatch(uiActions.setRestructuringBook(bookId));
     const epoch = store.getState().ui.restructureEpochs[bookId];
-    return () => {
+    const lower = () => {
       if (store.getState().ui.restructureEpochs[bookId] === epoch) {
         dispatch(uiActions.clearRestructuringBook(bookId));
       }
     };
+    /* #3967 — `holdForRead`: the slices did not take the response, so they still hold
+       the old chapter ids and an edit now would save them over the route's rewrite.
+       Keep the lock up until Layout's marked full read has landed (it clears the book's
+       marks), or the book is no longer the open one: with the book left, nothing edits it
+       here, and the lock must not outlive the screen that raised it. */
+    return (holdForRead = false) => {
+      if (!holdForRead) return lower();
+      const done = () =>
+        (store.getState().bookMeta.needsFullRead?.[bookId] ?? 0) === 0 ||
+        activeBookId(store.getState()) !== bookId;
+      if (done()) return lower();
+      const unsubscribe = store.subscribe(() => {
+        if (!done()) return;
+        unsubscribe();
+        lower();
+      });
+    };
   }, [bookId, dispatch]);
 
   const applyResponse = useCallback(
-    async (res: ChapterRestructureResponse, hydrateSeqAtStart: number) => {
+    async (res: ChapterRestructureResponse, hydrateSeqAtStart: number): Promise<boolean> => {
       // OD31 — the restructure dropped any pending entry for the touched
       // chapters, so the preview's book can't resume it: clear it here.
       dispatch(uiActions.clearPreviewForBook(bookId));
@@ -150,12 +167,26 @@ export function RestructureView({ bookId }: Props) {
         activeBookId(after) === bookId &&
         after.manuscript.bookId === bookId &&
         (after.manuscript.hydrateSeq ?? 0) === hydrateSeqAtStart;
+      let slicesTookIt = remapped;
       if (remapped) {
         dispatch(
           manuscriptActions.applyChapterRestructure({
             sentenceRemap: res.sentenceRemap ?? [],
           }),
         );
+      } else if (adoptedFresh && fresh && activeBookId(after) === bookId && after.manuscript.bookId === bookId) {
+        /* #3967 — a hydrate landed mid-request, so the slice holds sentences keyed to the
+           old chapters and the remap does not apply. The adopted re-read is a full
+           book-state read: its sentences are the route's rewrite, so take them (as
+           Layout's own hydrate does) rather than leave the old keys on screen. */
+        dispatch(
+          manuscriptActions.hydrateFromBookState({
+            state: fresh.state,
+            sentences: fresh.manuscriptEdits?.sentences ?? null,
+            mergedAwayKeys: fresh.manuscriptEdits?.mergedAwayKeys,
+          }),
+        );
+        slicesTookIt = true;
       }
       /* #3967 — the mark is per book and writes no slice, so it must not sit behind the
          guards above that stop a cross-book slice write (leaving the book dropped it, and
@@ -180,6 +211,8 @@ export function RestructureView({ bookId }: Props) {
           }),
         );
       }
+      /* #3967 — the caller keeps the edit lock up while the slices still hold the old ids. */
+      return !adoptedFresh || !slicesTookIt;
     },
     [bookId, dispatch],
   );
@@ -188,18 +221,19 @@ export function RestructureView({ bookId }: Props) {
     async (chapterIds: number[]) => {
       setBusy(true);
       const endRestructure = beginRestructure();
+      let holdForRead = false;
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
         await flushQueuedSaves();
         const res = await api.mergeChapters(bookId, chapterIds);
-        await applyResponse(res, hydrateSeqAtStart);
+        holdForRead = await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Merge failed.');
         throw e;
       } finally {
         setBusy(false);
-        endRestructure();
+        endRestructure(holdForRead);
       }
     },
     [bookId, applyResponse, flushQueuedSaves, beginRestructure],
@@ -209,18 +243,19 @@ export function RestructureView({ bookId }: Props) {
     async (chapterId: number, afterSentenceId: number) => {
       setBusy(true);
       const endRestructure = beginRestructure();
+      let holdForRead = false;
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
         await flushQueuedSaves();
         const res = await api.splitChapter(bookId, chapterId, afterSentenceId);
-        await applyResponse(res, hydrateSeqAtStart);
+        holdForRead = await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Split failed.');
         throw e;
       } finally {
         setBusy(false);
-        endRestructure();
+        endRestructure(holdForRead);
       }
     },
     [bookId, applyResponse, flushQueuedSaves, beginRestructure],
@@ -230,18 +265,19 @@ export function RestructureView({ bookId }: Props) {
     async (order: number[]) => {
       setBusy(true);
       const endRestructure = beginRestructure();
+      let holdForRead = false;
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
         await flushQueuedSaves();
         const res = await api.reorderChapters(bookId, order);
-        await applyResponse(res, hydrateSeqAtStart);
+        holdForRead = await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Reorder failed.');
         throw e;
       } finally {
         setBusy(false);
-        endRestructure();
+        endRestructure(holdForRead);
       }
     },
     [bookId, applyResponse, flushQueuedSaves, beginRestructure],
@@ -251,18 +287,19 @@ export function RestructureView({ bookId }: Props) {
     async (chapterId: number, excluded: boolean) => {
       setBusy(true);
       const endRestructure = beginRestructure();
+      let holdForRead = false;
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
         await flushQueuedSaves();
         const res = await api.excludeChapters(bookId, [chapterId], excluded);
-        await applyResponse(res, hydrateSeqAtStart);
+        holdForRead = await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Exclude failed.');
         throw e;
       } finally {
         setBusy(false);
-        endRestructure();
+        endRestructure(holdForRead);
       }
     },
     [bookId, applyResponse, flushQueuedSaves, beginRestructure],
@@ -271,18 +308,19 @@ export function RestructureView({ bookId }: Props) {
   const handleRefreshTitles = useCallback(async () => {
     setBusy(true);
     const endRestructure = beginRestructure();
+    let holdForRead = false;
     setErrorBanner(null);
     try {
       const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
       await flushQueuedSaves();
       const res = await api.refreshChapterTitles(bookId);
-      await applyResponse(res, hydrateSeqAtStart);
+      holdForRead = await applyResponse(res, hydrateSeqAtStart);
     } catch (e) {
       setErrorBanner((e as Error).message || 'Refresh chapter names failed.');
       throw e;
     } finally {
       setBusy(false);
-      endRestructure();
+      endRestructure(holdForRead);
     }
   }, [bookId, applyResponse, flushQueuedSaves, beginRestructure]);
 
