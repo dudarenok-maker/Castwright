@@ -36,7 +36,8 @@ import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildAnalyzerPickerGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
-import { BOOK_READ_TIMEOUT_MS, Layout, type LayoutContext, within } from '../components/layout';
+import { Layout, type LayoutContext } from '../components/layout';
+import { BOOK_READ_TIMEOUT_MS, readWithRetry, within } from '../lib/book-read';
 import { PairShell } from '../views/pair';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
@@ -731,17 +732,26 @@ export function ConfirmRoute() {
      cast.json on entry (the same path that already works on a manual reload)
      surfaces those voices. Runs once per book.
      #3916 (owner decision, 2026-10-30) — the read follows the rule that a book
-     read is never issued while one of its saves is queued or in flight (#3395
-     S3): it sends and waits for queued saves first, bounded at 15 s (on expiry
-     it reads anyway: a stalled save must not mean no read at all, and
+     read is not issued while one of its saves is queued or in flight (#3395
+     S3): each read sends and waits for queued saves first, bounded at 15 s (on
+     expiry it reads anyway: a stalled save must not mean no read at all, and
      castWrittenSince below still refuses to hydrate over a cast save in
-     flight). It is stamped with beginFullRead;
+     flight). The retry of an EXPIRED read (#3967, inside readWithRetry) does
+     not flush again; it keeps the stamp its first attempt took, which only
+     makes castWrittenSince more cautious, so a save made while it was out
+     still stops it from overwriting. It is stamped with beginFullRead;
      if a cast save could post-date what it read (castWrittenSince) it does NOT
-     put that older cast over the slice, it reads again — at most 3 reads in
-     all — and after the last one it keeps the slice as it is. */
+     put that older cast over the slice, it reads again — at most 3 reads that
+     ANSWER (an expired attempt is retried and does not count) — and after the
+     last one it keeps the slice as it is.
+     #3967 — each attempt is bounded (15 s, growing on later attempts), an
+     expired read is retried on the hydrate's schedule until it lands, and it
+     is aborted when the route is left, so re-entering Confirm never piles up
+     open reads. */
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
+    const life = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const attempt = (n: number): void => {
       const writes = dispatch(flushBookPersistence(bookId)) as unknown;
@@ -753,7 +763,7 @@ export function ConfirmRoute() {
         .then(() => {
           if (cancelled) return undefined;
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
-          return api.getBookState(bookId).then((res) => {
+          return readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers).then((res) => {
             if (cancelled) return;
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
@@ -781,6 +791,7 @@ export function ConfirmRoute() {
     attempt(0);
     return () => {
       cancelled = true;
+      life.abort();
       timers.forEach(clearTimeout);
     };
   }, [bookId, dispatch]);

@@ -59,7 +59,7 @@ const setVoiceOverrideLinked = vi.fn(
     failed: [],
   }),
 );
-const getBookState = vi.fn(async (_bookId: string) => null as unknown);
+const getBookState = vi.fn(async (_bookId: string, _signal?: AbortSignal) => null as unknown);
 /* The whole-series aggregation fetch. Default: no series-mates (single-book
    workspace), so the modal works from the anchor cast alone — the pre-
    aggregation baseline. Individual tests override it to inject siblings. */
@@ -72,7 +72,7 @@ vi.mock('../lib/api', () => ({
     generateAllVoiceStyles: () => generateAllVoiceStyles(),
     setVoiceOverrideLinked: (...args: unknown[]) =>
       setVoiceOverrideLinked(...(args as [string, string])),
-    getBookState: (...args: unknown[]) => getBookState(...(args as [string])),
+    getBookState: (...args: unknown[]) => getBookState(...(args as [string, AbortSignal?])),
     getSeriesCast: (...args: unknown[]) => getSeriesCast(...(args as [string])),
   },
 }));
@@ -294,7 +294,7 @@ describe('RebaselineModal — cast sourcing', () => {
         <RebaselineModalContainer bookId="book-2" />
       </Provider>,
     );
-    await waitFor(() => expect(getBookState).toHaveBeenCalledWith('book-2'));
+    await waitFor(() => expect(getBookState).toHaveBeenCalledWith('book-2', expect.any(AbortSignal)));
     /* The principal cast is seeded from book-2's fetched cast (Brann + Hart),
        NOT the open book's redux cast (Maerin + Marlow). */
     await waitFor(() => {
@@ -995,5 +995,64 @@ describe('RebaselineModal — design guard (#3084 W4)', () => {
     expect(store.getState().rebaseline.status).toBe('setup');
     expect(designQwenVoice).not.toHaveBeenCalled();
     expect(haltActiveGeneration).not.toHaveBeenCalled();
+  });
+});
+
+describe('RebaselineModal — the target-cast read is bounded and aborted (#3967)', () => {
+  /* never settles on its own; rejects like fetch does when its signal aborts */
+  const hung = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('(a) timeout: a read that never answers is aborted after 15 s and the error shows', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getBookState.mockImplementation(async (_id: string, signal?: AbortSignal) => hung(signal));
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-2" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getBookState).toHaveBeenCalled());
+    const signal = getBookState.mock.calls[0][1] as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    await advance(15_500);
+    expect(signal.aborted).toBe(true);
+    expect(screen.getByText(/Could not load that series/)).toBeInTheDocument();
+    err.mockRestore();
+  });
+
+  it('(b) unmount before 15 s aborts the read and logs nothing', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getBookState.mockImplementation(async (_id: string, signal?: AbortSignal) => hung(signal));
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    const view = render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-2" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getBookState).toHaveBeenCalled());
+    const signal = getBookState.mock.calls[0][1] as AbortSignal;
+    await advance(5_000);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    view.unmount();
+    await advance(20_000);
+    expect(signal.aborted).toBe(true);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
   });
 });

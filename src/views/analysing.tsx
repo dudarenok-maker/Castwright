@@ -29,6 +29,7 @@ import { ModelControlPill, type ModelControlState } from '../components/ModelCon
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
 import { FailureFixList } from '../components/failure-fix-list';
+import { readWithRetry } from '../lib/book-read';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
@@ -912,8 +913,14 @@ export function AnalysingView({
        key) never arms castIncomplete, even if the mount read was cancelled
        before it answered. */
     const isMountRead = bookStateRefreshKey === 0;
-    api
-      .getBookState(bookId)
+    /* #3967 — bounded, retried and aborted like Layout's hydrate: cleanup
+       (unmount or a refresh) aborts the read and its pending retry; one that
+       never answers is retried until it lands, warning once. */
+    const ctrl = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    readWithRetry((signal) => api.getBookState(bookId, signal), ctrl.signal, timers, (n) => {
+      if (n === 0) console.warn('[analysing] failed-chapter hydrate skipped: read timed out, retrying');
+    })
       .then((res) => {
         if (cancelled || res === null) return;
         const titles: Record<number, string> = {};
@@ -980,10 +987,17 @@ export function AnalysingView({
         });
       })
       .catch((err) => {
+        /* An abort from cleanup is a silent cancel. A timeout never lands here
+           (readWithRetry retries it and warns once via onExpire); a read that
+           fails outright still warns. */
+        if (err?.name === 'AbortError' || cancelled) return;
         console.warn('[analysing] failed-chapter hydrate skipped:', err.message);
       });
     return () => {
       cancelled = true;
+      ctrl.abort();
+      timers.forEach(clearTimeout);
+      timers.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, bookStateRefreshKey]);
