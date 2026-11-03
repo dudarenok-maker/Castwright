@@ -692,12 +692,14 @@ function priorVoiceRank(c: CastRecord): number {
   return 0;
 }
 
-/** True when any two rows in the group are explicitly marked not-the-same-person
-    via notLinkedTo (by the other member's id). Conservative: any such edge blocks
-    collapsing the whole group, mirroring Tier-1's gender-conflict skip. Goes
-    through the shared book-scoped `notLinkedToId` (#3965): a cross-book edge
-    copied onto an id-drifted twin is not a decision between these two rows, but
-    a same-book edge (reject-orphan's) still blocks. */
+/** True when the group holds a recorded not-the-same-person decision: a row's
+    notLinkedTo naming another member's id, a row's own same-book self-edge (the
+    seed's copy of a rejected pair), or one row declining the series link
+    another carries in matchedFrom (`declinesLinkOf`). Conservative: any such
+    decision blocks collapsing the whole group, mirroring Tier-1's gender-conflict
+    skip. The id checks go through the shared book-scoped `notLinkedToId` (#3965):
+    a cross-book edge copied onto an id-drifted twin is not a decision between
+    these rows, but a same-book edge (reject-orphan's) still blocks. */
 function groupHasNotLinkedEdge(
   group: ReadonlyArray<CastRecord>,
   currentBookId: string | undefined,
@@ -705,8 +707,9 @@ function groupHasNotLinkedEdge(
   for (const c of group) {
     for (const other of group) {
       // `other === c` is deliberate: a row's own same-book self-edge is the
-      // seed's surviving record of a rejected pair (reject-orphan writes it onto
-      // the re-minted orphan), and fusing the pair would delete that rejection.
+      // seed's surviving record of a rejected pair (reject-orphan writes its edge
+      // onto the live character, and the seed's name bridge copies it onto the
+      // re-minted orphan), and fusing the pair would delete that rejection.
       // The book scope still drops a cross-book self-id.
       if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
       if (other !== c && declinesLinkOf(c, other)) return true;
