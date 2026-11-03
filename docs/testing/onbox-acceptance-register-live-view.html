@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="70" data-publish-id="6910dc0ec5eb"></div>
+  <div hidden data-published-as="71" data-publish-id="1b676acad98c"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -972,10 +972,12 @@
         <ul>
         <li>The character still has the voice you assigned (on main it falls back to Book One&#39;s) and the &#8220;Continuity preserved&#8221; footer is gone.</li>
         </ul>
-        <p><b>Setup C: a locked character still on its default pick.</b> Take a Book Two character with no voice assigned by you (its Cast row shows the default pick), in a book where the analyzer may give that name a surname on a re-run. Press <b>Lock</b> in its profile drawer without assigning a voice, and note by ear what it sounds like in a short preview. Then <b>Re-analyse manuscript</b> (Confirm cast). Observe:</p>
+        <p><b>Setup C: a locked character still on its default pick.</b> Take a Book Two character with no voice assigned by you (its Cast row shows the default pick), in a book where the analyzer may give that name a surname on a re-run. <b>Record its name on the Cast row before</b> the run. Press <b>Lock</b> in its profile drawer without assigning a voice, and note by ear what it sounds like in a short preview. Then <b>Re-analyse manuscript</b> (Confirm cast), and <b>record the name again after</b>. If the name did not change (the row gained no surname), the setup was <b>not exercised</b>: record it as not exercised, not as a pass, and try another character or book. When the name did change, observe:</p>
         <ul>
         <li>The character still sounds the same, and the Cast shows one row for it, not a second default-voice row.</li>
         </ul>
+        <p><b>Setup C, interrupted variant.</b> Same character and same before/after name record. After Lock, press <b>Re-analyse manuscript</b>, stop the analysis part-way (cancel it, or stop Ollama), then resume it and let it finish. The same not-exercised rule applies. Observe one locked row with its voice, not a locked row with no lines beside a default-voice row that holds them.</p>
+        <p>Two owner rulings also apply to what you see. A fresh id that you earlier merged into another character follows that recorded merge, not a name match. A series link you declined for a character is never handed to its same-name twin.</p>
         <p>The id-drift case, a locked character whose id changes between analyses, was fixed by <a href="https://github.com/dudarenok-maker/Castwright/issues/3965">#3965</a>, so a duplicate default-voice row of that shape now is a failure of this row.</p>
         <p>The similarly-named-character case (&#8220;Brann&#8221; and &#8220;Brann Weir&#8221;) is not a bullet here: roster dedup collapses that shape on a real run, and where a distinct survivor remains the linker may legitimately link it to Book One, which would read as a failure on correct code. It is pinned by the <code>series-reuse-link.test.ts</code> and <code>merge-analysis-cast.test.ts</code> fixtures instead.</p>
         <p class="src">a real local Ollama analyzer and a real two-book series &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3920">#3920</a> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3934">#3934</a> &#183; no per-feature run sheet</p>
