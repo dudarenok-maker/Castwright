@@ -64,15 +64,16 @@ function pathOf(input: RequestInfo | URL): string | null {
 }
 
 /** The bookId a request is scoped to, and whether it is the book-state read. */
-function scopeOf(path: string): { bookId: string | null; isStateRead: boolean } {
+function scopeOf(path: string): { bookId: string | null; isStateRead: boolean; tracked: boolean } {
   const book = /^\/api\/books\/([^/]+)(\/.*)?$/.exec(path);
   if (book) {
     const id = decodeURIComponent(book[1]);
-    return { bookId: id, isStateRead: book[2] === '/state' };
+    return { bookId: id, isStateRead: book[2] === '/state', tracked: true };
   }
   const ms = /^\/api\/manuscripts\/([^/]+)(\/|$)/.exec(path);
-  if (ms) return { bookId: manuscriptBooks.get(decodeURIComponent(ms[1])) ?? null, isStateRead: false };
-  return { bookId: null, isStateRead: false };
+  /* A manuscript-keyed write is tracked even when no book is remembered for the id: the server's 409 names it. */
+  if (ms) return { bookId: manuscriptBooks.get(decodeURIComponent(ms[1])) ?? null, isStateRead: false, tracked: true };
+  return { bookId: null, isStateRead: false, tracked: false };
 }
 
 /** Send `input` scoped to `bookIds`: echo their committed tokens (comma-joined), and on a
@@ -82,6 +83,7 @@ async function send(
   init: RequestInit | undefined,
   bookIds: readonly string[],
   isStateRead: boolean,
+  tracked = bookIds.length > 0,
 ): ReturnType<typeof fetch> {
   const echo = bookIds.map((id) => tokens.get(id)).filter((t): t is string => !!t).join(',');
   let sent = init;
@@ -91,7 +93,7 @@ async function send(
     sent = { ...init, headers };
   }
   const res = await (sent === undefined ? globalThis.fetch(input) : globalThis.fetch(input, sent));
-  if (bookIds.length === 0) return res;
+  if (!tracked) return res;
 
   const method = (init?.method ?? 'GET').toUpperCase();
   if (isStateRead && method === 'GET' && res.ok) {
@@ -99,8 +101,13 @@ async function send(
     if (token) issued.set(bookIds[0], token);
   } else if (res.status === 409 && method !== 'GET' && typeof res.clone === 'function') {
     try {
-      const body = (await res.clone().json()) as { code?: unknown };
-      if (body?.code === BOOK_REPAIRED_RELOAD) for (const id of bookIds) onRepaired?.(id);
+      const body = (await res.clone().json()) as { code?: unknown; bookId?: unknown };
+      if (body?.code === BOOK_REPAIRED_RELOAD) {
+        /* The server names the book the refusal was scoped to; that is the one to re-read. Absent (an
+           older server), fall back to the books this request was scoped to. */
+        const named = typeof body.bookId === 'string' && body.bookId !== '' ? [body.bookId] : bookIds;
+        for (const id of named) onRepaired?.(id);
+      }
     } catch {
       /* not JSON: an ordinary 409 */
     }
@@ -111,7 +118,7 @@ async function send(
 export const bookFetch: typeof fetch = (input, init) => {
   const path = pathOf(input);
   const scope = path === null ? null : scopeOf(path);
-  return send(input, init, scope?.bookId ? [scope.bookId] : [], scope?.isStateRead ?? false);
+  return send(input, init, scope?.bookId ? [scope.bookId] : [], scope?.isStateRead ?? false, scope?.tracked ?? false);
 };
 
 /** `fetch` for a write that names its book(s) in the body or query, not the path

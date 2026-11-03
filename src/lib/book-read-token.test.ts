@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   __resetBookReadTokensForTest,
   bookFetch,
+  bookFetchFor,
   commitBookReadToken,
   rememberManuscriptBook,
   setRepairedBookHandler,
@@ -10,8 +11,8 @@ import {
 const fetchMock = vi.fn();
 const stateRead = (token?: string) =>
   new Response('{}', { status: 200, headers: token ? { 'x-book-read-token': token } : {} });
-const repairedRefusal = () =>
-  new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
+const repairedRefusal = (bookId?: string) =>
+  new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload', ...(bookId ? { bookId } : {}) }), { status: 409 });
 const echoed = (call: number) => new Headers((fetchMock.mock.calls[call][1] as RequestInit | undefined)?.headers).get('x-book-read-token');
 
 beforeEach(() => {
@@ -84,6 +85,45 @@ describe('bookFetch (#3713)', () => {
     expect(handler).toHaveBeenCalledWith('a__s__t');
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe('book_repaired_reload');
+  });
+
+  /* PR #4004 pass 3: the server names the book the refusal was for, so a manuscript-keyed write from a
+     tab that never read the book (no remembered scope) still reaches the handler. */
+  it('a manuscript-keyed 409 with no remembered book hands the handler the bookId the server named', async () => {
+    const handler = vi.fn();
+    setRepairedBookHandler(handler);
+    fetchMock.mockResolvedValue(repairedRefusal('c__s__t'));
+    const res = await bookFetch('/api/manuscripts/m_unknown/analysis', { method: 'POST' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith('c__s__t');
+    expect(res.status).toBe(409);
+  });
+
+  it('the bookId the server named wins over the remembered one (the id moved to another book)', async () => {
+    const handler = vi.fn();
+    setRepairedBookHandler(handler);
+    rememberManuscriptBook('m_pair', 'winner');
+    fetchMock.mockResolvedValue(repairedRefusal('loser__new'));
+    await bookFetch('/api/manuscripts/m_pair/analysis', { method: 'POST' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith('loser__new');
+  });
+
+  it('a refusal of a two-book write names the refused book only', async () => {
+    const handler = vi.fn();
+    setRepairedBookHandler(handler);
+    fetchMock.mockResolvedValue(repairedRefusal('b2'));
+    await bookFetchFor(['b1', 'b2'])('/api/library-cast/override', { method: 'POST' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith('b2');
+  });
+
+  it('a refusal on an untracked path with a bookId in its body does not reach the handler', async () => {
+    const handler = vi.fn();
+    setRepairedBookHandler(handler);
+    fetchMock.mockResolvedValue(repairedRefusal('b2'));
+    await bookFetch('/api/library', { method: 'POST' });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('an ordinary 409, a 409 on a read, and a non-JSON 409 leave the handler alone', async () => {

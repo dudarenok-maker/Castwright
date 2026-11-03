@@ -226,7 +226,9 @@ function refuseUnlessRead(scopeBookId: string | undefined, req: Request, res: Re
     next();
     return;
   }
-  res.status(409).json({ error: BOOK_REPAIRED_MESSAGE, code: BOOK_REPAIRED_RELOAD });
+  /* `bookId`: the book the refusal is scoped to (an id, never a path), so a client that does not know which
+     book a manuscriptId-keyed or body-keyed write belongs to can re-read the right one. */
+  res.status(409).json({ error: BOOK_REPAIRED_MESSAGE, code: BOOK_REPAIRED_RELOAD, bookId: scopeBookId });
 }
 
 const isRead = (req: Request): boolean => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';

@@ -954,8 +954,9 @@ What this closes: the stage-versus-slices hole (a book left and reopened keeps i
 Delete and Edit, the up-to-30 s poll gap, old bundles, and the direct `putBookState` callers (language guard, prosody
 flags, Cast and Analysing) that bypass the middleware. Residuals: a tab that held the id for more than 7 days after the
 repair, a book read by another client clearing the persisted entry (an old-bundle tab is then ungated at the next
-restart), and a manuscriptId-keyed write from a tab that never read the book (no token to find the book by, so the
-409 is shown as an ordinary failure).
+restart). The 409 body carries `bookId`, the book the refusal was scoped to (an id, never a path), so a
+manuscriptId-keyed or body-keyed write from a tab that never read the book still reaches the handler, which re-reads
+that book and commits its token; the server's id wins over any book the client had remembered for the manuscriptId.
 
 ### Reference classes
 

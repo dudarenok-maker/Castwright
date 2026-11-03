@@ -87,6 +87,15 @@ describe('the repaired-id write gate (#3713)', () => {
     expect(repair.newBookId).not.toBe('auth__ser__book');
   });
 
+  it('the 409 body names the book the refusal is scoped to, as an id and nothing else (PR #4004 pass 3)', async () => {
+    await repairedPair(true);
+    const byBook = await request(app).delete('/api/books/auth__ser__book');
+    expect(byBook.body.bookId).toBe('auth__ser__book');
+    const byManuscript = await request(app).post('/api/manuscripts/m_copy/analysis').send({});
+    expect(byManuscript.body.bookId).toBe('auth__ser__book');
+    expect(Object.keys(byBook.body).sort()).toEqual(['bookId', 'code', 'error']);
+  });
+
   it('the 409 body names no path', async () => {
     await repairedPair(false);
     const res = await request(app).delete('/api/books/auth__ser__book');
@@ -181,6 +190,7 @@ describe('the repaired manuscriptId gate (#3713)', () => {
     await repairedPair(true);
     const refused = await request(app).post('/api/manuscripts/m_copy/analysis').send({});
     expect(refused.status).toBe(409);
+    expect(refused.body.bookId).toBe('auth__ser__book');
     expect(refused.body.code).toBe('book_repaired_reload');
     const token = gate.repairedReadToken('auth__ser__book')!;
     const ok = await request(app).post('/api/manuscripts/m_copy/analysis').set('X-Book-Read-Token', token).send({});
