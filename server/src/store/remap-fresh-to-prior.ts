@@ -34,7 +34,7 @@
 import { normaliseForMatch } from '../util/text-match.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
-import { isVoicedOrReused, surnameTolerantMatch } from './merge-analysis-cast.js';
+import { declinesLinkOf, isVoicedOrReused, surnameTolerantMatch } from './merge-analysis-cast.js';
 import { notLinkedToId } from './not-linked-to-scope.js';
 
 type PriorCastRow = { id: string } & Record<string, unknown>;
@@ -141,10 +141,19 @@ export function remapFreshToPriorIds<
      remap's form of mergeCore's "dropped by id"), and the selection rule
      decides among the survivors: exactly one voiced/reused row wins, else
      exactly one row in total, else the name is ambiguous and no row is
-     chosen. Every guard below then runs on the chosen pair, unchanged and in
-     the same order as before this widening. */
+     chosen — and a set in which one survivor declines (`notLinkedTo`) the
+     series link another carries in `matchedFrom` is ambiguous too, whatever
+     the voiced rule would pick (#3965, the same `declinesLinkOf` decision
+     `mergeCore` refuses a collapse on: the remap would otherwise hand the
+     declined link to the voiced twin's id). Every guard below then runs on
+     the chosen pair, unchanged and in the same order as before this widening. */
   const choosePrior = (rows: ReadonlyArray<PriorCastRow>): PriorCastRow | undefined => {
     const eligible = rows.filter((p) => !freshIds.has(priorIdAfter(p.id)));
+    // Over `eligible`, not `rows`: a row the fresh roster already took over by
+    // id is not a candidate, so it is not a twin whose decision matters here.
+    if (eligible.some((c) => eligible.some((o) => o !== c && declinesLinkOf(c, o)))) {
+      return undefined;
+    }
     const voiced = eligible.filter(isVoicedOrReused);
     if (voiced.length === 1) return voiced[0];
     if (voiced.length === 0 && eligible.length === 1) return eligible[0];

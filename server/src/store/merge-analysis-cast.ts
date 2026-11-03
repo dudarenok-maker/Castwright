@@ -730,7 +730,7 @@ function groupHasNotLinkedEdge(
     cannot see it; but a collapse keeps one row and would hand the declined link
     to the survivor, for the next run's linker to land (#3965). Matched on the
     link's own (bookId, characterId); a bare string matches by characterId. */
-function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
+export function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
   const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
   if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
   return (c.notLinkedTo as unknown[]).some((entry) => {

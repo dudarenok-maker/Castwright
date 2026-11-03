@@ -384,6 +384,44 @@ describe('remapFreshToPriorIds', () => {
     expect(r.rewrites).toEqual({ 'alden-vane': 'alden-locked' });
   });
 
+  it('R7 decline: a twin declining the voiced row’s series link keeps the name ambiguous (#3965/#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'old-tom-2', name: 'Old Tom' }],
+      [],
+      [
+        {
+          id: 'thomas',
+          name: 'Old Tom',
+          voiceState: 'reused',
+          matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+        },
+        {
+          id: 'old-tom',
+          name: 'Old Tom',
+          notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+        },
+      ],
+    );
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('R7 decline control: without the decline the voiced twin still wins (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'old-tom-2', name: 'Old Tom' }],
+      [],
+      [
+        {
+          id: 'thomas',
+          name: 'Old Tom',
+          voiceState: 'reused',
+          matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+        },
+        { id: 'old-tom', name: 'Old Tom' },
+      ],
+    );
+    expect(r.rewrites).toEqual({ 'old-tom-2': 'thomas' });
+  });
+
   it('R8: a same-book notLinkedTo edge blocks the tolerant join (#3954)', () => {
     const r = remapFreshToPriorIds(
       [{ id: 'wren-ashby', name: 'Wren Ashby' }],
