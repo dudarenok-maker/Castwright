@@ -330,11 +330,9 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         speaker: 'old-tom-2',
         onCall: abortAtFirstPhase1(),
       }).catch(() => {});
-      expect(
-        named(bookDir, 'Old Tom')
-          .map((r) => r.id)
-          .sort(),
-      ).toEqual(['old-tom', 'old-tom-2']);
+      // The snapshot runs the same name-join remap as the final write (#3954),
+      // so an exact-name id drift no longer leaves the split on disk either.
+      expect(named(bookDir, 'Old Tom').map((r) => r.id)).toEqual(['old-tom']);
 
       await run(manuscriptId, bookDir, tomRoster, { speaker: 'old-tom-2' });
       const rows = named(bookDir, 'Old Tom');
@@ -344,6 +342,65 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
     } finally {
       await cleanup(manuscriptId, bookDir);
     }
+  });
+
+  /* #3954 review finding 1 — the kept PRIOR id must survive an interrupted
+     run. A surname drift ("Wren" -> "Wren Ashby") is a name join the remap
+     settles by keeping `w2`; the interim snapshot used to persist the fresh
+     `wren-ashby` instead, and the resume's held-by-another-prior-row guard then
+     refused the join for good. */
+  describe('a surname drift keeps the locked row across an interrupted run', () => {
+    const LOCKED_WREN: CastRow = {
+      id: 'w2',
+      name: 'Wren',
+      voiceUuid: 'U-wren',
+      voiceState: 'locked',
+    };
+    const wrenRoster = [NARR, rosterRow('wren-ashby', 'Wren Ashby')];
+    const wrenRows = (bookDir: string): CastRow[] =>
+      readCast(bookDir).filter((c) => c.id !== 'narrator');
+
+    it('control: an uninterrupted run ends with the one locked row', async () => {
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...LOCKED_WREN }], 'Wren Ashby');
+      try {
+        await run(manuscriptId, bookDir, wrenRoster, { speaker: 'wren-ashby' });
+        const rows = wrenRows(bookDir);
+        expect(rows.map((r) => r.id)).toEqual(['w2']);
+        expect(rows[0].voiceUuid).toBe('U-wren');
+        expect(rows[0].voiceState).toBe('locked');
+        expect(rows[0].lines).toBe(3);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    });
+
+    it.each(['main', 'subset'] as const)(
+      'an interrupted run then a resumed one ends with the same one row (%s job)',
+      async (kind) => {
+        const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...LOCKED_WREN }], 'Wren Ashby');
+        try {
+          await run(manuscriptId, bookDir, wrenRoster, {
+            speaker: 'wren-ashby',
+            subset: kind === 'subset',
+            onCall: abortAtFirstPhase1(),
+          }).catch(() => {});
+          // The snapshot never persisted the drifted fresh id.
+          expect(wrenRows(bookDir).map((r) => r.id)).toEqual(['w2']);
+
+          await run(manuscriptId, bookDir, wrenRoster, {
+            speaker: 'wren-ashby',
+            subset: kind === 'subset',
+          });
+          const rows = wrenRows(bookDir);
+          expect(rows.map((r) => r.id)).toEqual(['w2']);
+          expect(rows[0].voiceUuid).toBe('U-wren');
+          expect(rows[0].voiceState).toBe('locked');
+          if (kind === 'main') expect(rows[0].lines).toBe(3);
+        } finally {
+          await cleanup(manuscriptId, bookDir);
+        }
+      },
+    );
   });
 
   it('a book already split by the bug heals on re-analysis (main job)', async () => {

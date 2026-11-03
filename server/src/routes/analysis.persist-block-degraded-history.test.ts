@@ -615,9 +615,11 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (path === historyPath) {
           historyReadCount += 1;
-          // Read 1 is the remap's own history read (#3954, which fails open on
-          // a degraded file); read 2 is the persist block's capture.
-          if (historyReadCount === 2) {
+          // Reads 1-4 are the interim snapshots' remap history reads (three
+          // chapters + the stage-1 snapshot, #3954), read 5 is the final
+          // remap's own (all fail open on a degraded file); read 6 is the
+          // persist block's capture.
+          if (historyReadCount === 6) {
             // The one-shot blip — a transient EBUSY/EPERM, not a damaged
             // file. loadCastIdHistoryWithStatus's own try/catch turns this
             // into a 'degraded' verdict exactly as it would a real one.

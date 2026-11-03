@@ -1133,6 +1133,33 @@ function previewFoldForLiveView(
   return foldMinorCast(deduped, [], { nameOnly: true, language }).characters;
 }
 
+/* #3954 review finding 1 — the three interim cast.json snapshots run the same
+   fresh→prior name-join remap the authoritative write does, BEFORE the overlay.
+   Without it an interrupted run persists the drifted fresh id ("Wren Ashby")
+   next to the locked prior row ("Wren"); on resume that interim row holds the
+   fresh id, so the remap's "another prior row holds the fresh id" guard refuses
+   the join and the split is permanent (the locked row's lines go to an
+   unlocked default-voice duplicate). Fixing the SNAPSHOT rather than loosening
+   that guard keeps the guard sound: an unlocked voiceless row holding the
+   fresh id is indistinguishable, on resume, from a genuinely distinct
+   character, but the snapshot knows the row it is about to write came from
+   this join. Best-effort like the snapshot itself: it returns only the roster
+   and records no retirement (the authoritative write records it, from the same
+   pair), so a timeout or a clobber leaves nothing diverged. Partial interim
+   rosters are safe here, unlike the overlay's own name-fallback: the remap only
+   rewrites a FRESH row's id onto a prior id, never drops or retires a prior
+   row, and every snapshot is recomputed from scratch. */
+async function remapInterimToPriorIds<T extends { id: string }>(
+  interim: T[],
+  priorCast: Parameters<typeof remapFreshToPriorIds>[2],
+  bookDir: string,
+  bookId: string | null | undefined,
+): Promise<T[]> {
+  const idHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+  return remapFreshToPriorIds(interim, [], priorCast, {}, bookId ?? undefined, idHistory)
+    .characters;
+}
+
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
    have it, and attach to each character. */
@@ -5734,7 +5761,15 @@ export async function runMainAnalyzerJob(
                  here may simply not have been reached yet, so it must not be
                  able to swap a persisted id. Only §4.4's five listed sites
                  record retirements, and none of them is this one. */
-              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
+              const mergedInterim = overlayInterimCastForLiveView(
+                priorCastForMerge,
+                await remapInterimToPriorIds(
+                  interim,
+                  priorCastForMerge,
+                  recordRef.bookDir,
+                  recordRef.bookId,
+                ),
+              );
               await castBase!.writeChecked(
                 { characters: mergedInterim },
                 reportCastConflict('interim'),
@@ -5995,7 +6030,15 @@ export async function runMainAnalyzerJob(
             // `overlayInterimCastForLiveView` has no name-fallback and
             // produces no retirements — see the interim-write comment above
             // for the full rationale.
-            const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
+            const mergedStage1 = overlayInterimCastForLiveView(
+              priorCastForMerge,
+              await remapInterimToPriorIds(
+                stage1Cast,
+                priorCastForMerge,
+                recordRef.bookDir,
+                recordRef.bookId,
+              ),
+            );
             await castBase!.writeChecked(
               { characters: mergedStage1 },
               reportCastConflict('stage1'),
@@ -8778,7 +8821,15 @@ export async function runSubsetAnalyzerJob(
               // write below clobbers it. `overlayInterimCastForLiveView` has
               // no name-fallback and produces no retirements — see the main
               // route's interim-write comment for the full rationale.
-              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
+              const mergedInterim = overlayInterimCastForLiveView(
+                priorCastForMerge,
+                await remapInterimToPriorIds(
+                  interim,
+                  priorCastForMerge,
+                  record.bookDir,
+                  record.bookId,
+                ),
+              );
               await castBase!.writeChecked(
                 { characters: mergedInterim },
                 reportCastConflict('subset-interim'),
