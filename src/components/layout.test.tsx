@@ -237,18 +237,25 @@ vi.mock('../views/book-library', () => ({
 vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
 
 /* The drawer is stood in for by one button so a test can drive Layout's own
-   onSave (the profile-save stale-audio nudge) without the drawer's form. */
-vi.mock('../modals/profile-drawer', () => ({
-  ProfileDrawer: (p: {
-    character: { voiceId?: string };
-    onSave: (c: unknown, m: { hadConflict: boolean }) => void;
-  }) => (
-    <button
-      data-testid="mock-profile-save"
-      onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
-    />
-  ),
-}));
+   onSave (the profile-save stale-audio nudge) without the drawer's form. The
+   stand-in is opt-in (`profileDrawerStub.on`, set by that describe only): every
+   other test renders the real drawer. */
+const profileDrawerStub = vi.hoisted(() => ({ on: false }));
+vi.mock('../modals/profile-drawer', async () => {
+  const actual = await vi.importActual<typeof import('../modals/profile-drawer')>('../modals/profile-drawer');
+  return {
+    ...actual,
+    ProfileDrawer: (p: Parameters<typeof actual.ProfileDrawer>[0]) =>
+      profileDrawerStub.on ? (
+        <button
+          data-testid="mock-profile-save"
+          onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
+        />
+      ) : (
+        <actual.ProfileDrawer {...p} />
+      ),
+  };
+});
 
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
@@ -5631,6 +5638,13 @@ describe('Layout — the duplicate-review far-book read is bounded and aborted (
 });
 
 describe('Layout — the stale-audio banner and the regenerate modal agree on excluded chapters (#3919)', () => {
+  beforeEach(() => {
+    profileDrawerStub.on = true;
+  });
+  afterEach(() => {
+    profileDrawerStub.on = false;
+  });
+
   const eliza = (n: number, excluded = false): Chapter =>
     ({ id: n, title: `Chapter ${n}`, duration: '10:00', state: 'done', progress: 1, excluded, characters: { eliza: 'done' } }) as Chapter;
 
