@@ -600,4 +600,49 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
       }
     },
   );
+
+  it.each(['main', 'subset'] as const)(
+    'an id-drifted speaker neither takes the link its same-name twin declined nor loses the decline (%s job)',
+    async (kind) => {
+      /* The two same-name prior rows stay apart (one declines the link the other
+         carries), so the drifted speaker `old-tom-2` has no by-id prior and
+         reaches the name fallback with an ambiguous name: the seed must still
+         hand it the decline, and the merge must refuse the linked twin. */
+      const linked: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const declining: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, linked, declining], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, tomRoster, {
+          speaker: 'old-tom-2',
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Old Tom');
+        const speaker = rows.find((r) => r.lines === 3);
+        expect(speaker?.matchedFrom).toBeUndefined();
+        expect(speaker?.voiceUuid).toBeUndefined();
+        expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(rows.find((r) => r.id === 'thomas')?.matchedFrom).toBeDefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 });

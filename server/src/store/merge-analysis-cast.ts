@@ -356,7 +356,8 @@ function mergeCore<T extends { id: string }>(
   }
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
     notLinkedToId(cand, f.id, currentBookId) ||
-    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId);
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
+    declinesLinkOf(f as unknown as CastRecord, cand);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
@@ -422,7 +423,8 @@ function mergeCore<T extends { id: string }>(
         if (
           cand &&
           !notLinkedToId(cand, f.id, currentBookId) &&
-          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId)
+          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
+          !declinesLinkOf(f as unknown as CastRecord, cand)
         ) {
           old = cand;
           claimedByName.add(cand.id);
@@ -651,6 +653,22 @@ export function seedReuseGuardsFromPriorCast<
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
+    // a fresh row with no by-id prior (an id-drifted speaker) would get no
+    // decline at all, and the merge's name fallback could then hand it a link a
+    // twin declined. Union every same-name prior row's declines onto it: a
+    // spurious copy only prevents a link, which fails safe.
+    if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
+      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+        let union: unknown[] | undefined;
+        for (const old of existing) {
+          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
+          if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
+        }
+        if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];
+      }
+    }
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
       f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }

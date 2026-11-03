@@ -524,6 +524,33 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('a fresh row that declines the link a prior row carries in matchedFrom does not name-join it (#3965)', () => {
+    const existing: C[] = [
+      {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1',
+        voiceState: 'reused',
+        matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'old-tom-2', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] } as C,
+    ];
+    const { characters, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2');
+    expect(retirements).toEqual([]);
+    const joined = characters.find((c) => c.id === 'old-tom-2');
+    expect(joined?.matchedFrom).toBeUndefined();
+    expect(joined?.voiceId).toBeUndefined();
+    // The same fresh row without the decline does join (control).
+    const control = mergeAnalysisResultWithExistingCast(
+      existing,
+      [{ id: 'old-tom-2', name: 'Old Tom' } as C],
+      'book-2',
+    );
+    expect(control.retirements).toEqual([{ from: 'thomas', to: 'old-tom-2' }]);
+  });
+
   it('book scoping: the claim-once count ignores a cross-book edge too, so a doubly-claimed prior stays unwelded (#3965 T5)', () => {
     // 'Bran' is a surname-tolerant candidate for BOTH fresh rows. consumable()
     // must count both (the Kell edge names another book), see the prior
@@ -911,6 +938,48 @@ describe('seedReuseGuardsFromPriorCast', () => {
     const fresh: C[] = [{ id: 'ольга', name: 'Ольга' }];
     seedReuseGuardsFromPriorCast(existing, fresh);
     expect(fresh[0].matchedFrom).toBeUndefined();
+  });
+
+  it('an ambiguous same-name prior pair seeds the UNION of their notLinkedTo onto a no-by-id fresh row (#3965)', () => {
+    const existing: C[] = [
+      { id: 'thomas', name: 'Old Tom', matchedFrom: { bookId: 'book-1', characterId: 'old-tom' } },
+      {
+        id: 'old-tom',
+        name: 'Old Tom',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      },
+      {
+        id: 'old-tom-b',
+        name: 'Old Tom',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }, { bookId: 'book-3', characterId: 'q' }],
+      },
+    ];
+    const fresh: C[] = [{ id: 'old-tom-2', name: 'Old Tom' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([
+      { bookId: 'book-1', characterId: 'old-tom' },
+      { bookId: 'book-3', characterId: 'q' },
+    ]);
+    // matchedFrom stays unbridged on an ambiguous name.
+    expect(fresh[0].matchedFrom).toBeUndefined();
+    // Inputs untouched.
+    expect(existing[1].notLinkedTo).toHaveLength(1);
+  });
+
+  it('the ambiguous-name union is skipped when the fresh name is shared or the narrator id (#3965)', () => {
+    const existing: C[] = [
+      { id: 'a', name: 'Olga', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] },
+      { id: 'b', name: 'Olga' },
+    ];
+    const shared: C[] = [
+      { id: 'n1', name: 'Olga' },
+      { id: 'n2', name: 'Olga' },
+    ];
+    seedReuseGuardsFromPriorCast(existing, shared);
+    expect(shared.every((f) => f.notLinkedTo === undefined)).toBe(true);
+    const narr: C[] = [{ id: 'narrator', name: 'Olga' }];
+    seedReuseGuardsFromPriorCast(existing, narr);
+    expect(narr[0].notLinkedTo).toBeUndefined();
   });
 
   it('id match takes precedence over the name-fallback', () => {
