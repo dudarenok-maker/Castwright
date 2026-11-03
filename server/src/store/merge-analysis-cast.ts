@@ -671,6 +671,15 @@ export function seedReuseGuardsFromPriorCast<
     return bridge.byName.get(key);
   };
 
+  const sameNameTwinDeclines = (f: T): boolean => {
+    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+    if (!key) return false;
+    const twins = existing.filter(
+      (old) => !NARRATOR_CHARACTER_IDS.includes(old.id) && nameOf(old) === key,
+    );
+    return twins.some((c) => twins.some((o) => o !== c && declinesLinkOf(c, o)));
+  };
+
   for (const f of fresh) {
     const byIdRow = byId.get(f.id);
     // #3920 (A2): a fresh narrator row never takes a matchedFrom name-fallback
@@ -679,7 +688,15 @@ export function seedReuseGuardsFromPriorCast<
     // never by name.
     const isNarrator = NARRATOR_CHARACTER_IDS.includes(f.id);
     const nlFrom = byIdRow ?? (isNarrator ? uniquePriorNarrator : bridged(f, looseBridge));
-    const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
+    /* #3954 finding 7, the #3965 owner rule: a link is never copied onto a row
+       that a same-name twin declines it for. The strict bridge skips a twin a
+       fresh row holds by id, so the declining twin can drop out and leave the
+       linked twin as the lone candidate, while the decline union below copies
+       the decline: a matchedFrom beside a notLinkedTo naming the same link.
+       Treated as an ambiguous bridge (no link bridged) rather than patching the
+       one record, so the seed refuses the same set every other gate refuses. */
+    const bridgedMf = isNarrator ? undefined : bridged(f, strictBridge);
+    const mfFrom = byIdRow ?? (bridgedMf && sameNameTwinDeclines(f) ? undefined : bridgedMf);
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
     // #3965: two or more same-name prior rows make the loose bridge ambiguous, so

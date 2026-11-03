@@ -1014,6 +1014,23 @@ describe('seedReuseGuardsFromPriorCast', () => {
     expect(fresh[0].matchedFrom).toBeUndefined();
   });
 
+  it('the seed never copies a link a same-name twin declines, even when the declining twin is skipped by the strict bridge (#3954 finding 7)', () => {
+    const existing: C[] = [
+      { id: 'thomas', name: 'Old Tom', matchedFrom: { bookId: 'book-1', characterId: 'old-tom' } },
+      { id: 'old-tom', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] },
+    ];
+    // A fresh row holds the declining twin's id under another name, so the
+    // strict bridge sees only `thomas` for "Old Tom".
+    const fresh: C[] = [
+      { id: 'old-tom', name: 'Tom' },
+      { id: 'old-tom-2', name: 'Old Tom' },
+    ];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    const speaker = fresh.find((f) => f.id === 'old-tom-2');
+    expect(speaker?.matchedFrom).toBeUndefined();
+    expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+  });
+
   it('the ambiguous-name union is skipped when the fresh name is shared or the narrator id (#3965)', () => {
     const existing: C[] = [
       { id: 'a', name: 'Olga', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] },

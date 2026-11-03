@@ -691,4 +691,52 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
       }
     },
   );
+
+  it.each(['main', 'subset'] as const)(
+    'a Phase-0b roster that reuses the decliner id under another name does not write a link with its own decline (%s job, #3954)',
+    async (kind) => {
+      /* Roster [old-tom "Tom", old-tom-2 "Old Tom"]: the strict bridge skips the
+         declining twin (a fresh row holds its id), leaving the linked twin as
+         the only candidate, so the seed copied matchedFrom next to a
+         notLinkedTo naming the same link. */
+      const linked: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const declining: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, linked, declining], 'Old Tom');
+      try {
+        await run(
+          manuscriptId,
+          bookDir,
+          [NARR, rosterRow('old-tom', 'Tom'), rosterRow('old-tom-2', 'Old Tom')],
+          { speaker: 'old-tom-2', subset: kind === 'subset' },
+        );
+        const rows = readCast(bookDir);
+        const speaker = rows.find((r) => r.id === 'old-tom-2');
+        expect(speaker).toBeDefined();
+        expect(speaker?.matchedFrom).toBeUndefined();
+        expect(speaker?.voiceUuid).toBeUndefined();
+        expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(rows.find((r) => r.id === 'thomas')?.matchedFrom).toBeDefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 });
