@@ -328,6 +328,12 @@ function mergeCore<T extends { id: string }>(
         if (surnameTolerantMatch(key, nameOf(old))) matches.push(old);
       }
     }
+    /* #3965 owner rule, #3954 finding 3: a candidate set in which one row
+       declines (`notLinkedTo`) the series link another carries (`matchedFrom`)
+       is ambiguous, whatever the voiced rule would pick; the lone voiced twin
+       would otherwise hand the declined link to the drifted speaker, and the
+       remap's own refusal (`choosePrior`) would have no effect end to end. */
+    if (matches.some((c) => matches.some((o) => o !== c && declinesLinkOf(c, o)))) continue;
     const voiced = matches.filter(isVoicedOrReused);
     if (voiced.length === 1) {
       tolerantCandidateByName.set(key, voiced[0]);
@@ -683,10 +689,27 @@ export function seedReuseGuardsFromPriorCast<
     // spurious copy only prevents a link, which fails safe.
     if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
       const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+      // The exact-name set, or — when the name is not ambiguous exactly — the
+      // surname-tolerant set, but only when it holds a twin pair where one row
+      // declines the link the other carries: that is the set mergeCore's
+      // tolerant fallback refuses (#3954 finding 3), and the decline must still
+      // reach the drifted speaker. Widening only for that pair keeps an
+      // unrelated tolerant sibling's decline off the speaker.
+      const tolerantRows = existing.filter(
+        (old) =>
+          !NARRATOR_CHARACTER_IDS.includes(old.id) && surnameTolerantMatch(key, nameOf(old)),
+      );
+      const tolerantTwins = tolerantRows.some((c) =>
+        tolerantRows.some((o) => o !== c && declinesLinkOf(c, o)),
+      );
+      if (key && freshNameCounts.get(key) === 1 && (looseBridge.ambiguous.has(key) || tolerantTwins)) {
         let union: unknown[] | undefined;
         for (const old of existing) {
-          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
+          if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+          const inSet = looseBridge.ambiguous.has(key)
+            ? nameOf(old) === key
+            : tolerantRows.includes(old);
+          if (!inSet) continue;
           if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
         }
         if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];

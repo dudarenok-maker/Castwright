@@ -645,4 +645,50 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
       }
     },
   );
+
+  it.each(['main', 'subset'] as const)(
+    'a surname-drifted speaker neither takes the link its same-name twin declined nor loses the decline (%s job, #3954)',
+    async (kind) => {
+      /* Same twins, but the analyzer returns the speaker under a SURNAME-drifted
+         name. The remap refuses the pair (6b94de46); mergeCore's tolerant
+         fallback must refuse too, and the seed's decline union must reach the
+         speaker, or the declined link lands on it and the decliner is retired. */
+      const linked: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const declining: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, linked, declining], 'Old Tom Weir');
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom-weir', 'Old Tom Weir')], {
+          speaker: 'old-tom-weir',
+          subset: kind === 'subset',
+        });
+        const rows = readCast(bookDir);
+        const speaker = rows.find((r) => r.id === 'old-tom-weir');
+        expect(speaker).toBeDefined();
+        expect(speaker?.matchedFrom).toBeUndefined();
+        expect(speaker?.voiceUuid).toBeUndefined();
+        expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(rows.find((r) => r.id === 'thomas')?.matchedFrom).toBeDefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 });
