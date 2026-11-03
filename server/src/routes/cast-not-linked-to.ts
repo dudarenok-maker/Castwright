@@ -22,6 +22,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 
 export const castNotLinkedToRouter = Router();
 
@@ -61,6 +62,10 @@ castNotLinkedToRouter.post(
           'not-linked-to is for CROSS-book pairs; use cast/merge for same-book duplicates.',
       });
     }
+    /* #3713 (PR #4004 pass 4): the pair is written to the OTHER book's cast.json too, and a stale
+       tab's character id there may name a different row than the user saw. The path book is gated
+       by the mount. */
+    if (refuseUnreadRepairedBooks([otherBookId], req, res)) return;
 
     /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
        resolved UNDER the locks so a rename of either book lands after this. */
@@ -177,6 +182,8 @@ castNotLinkedToRouter.delete(
         error: 'not-linked-to is for CROSS-book pairs; nothing same-book to unmark.',
       });
     }
+    /* #3713 (PR #4004 pass 4): same as the POST -- the other book's edge is removed too. */
+    if (refuseUnreadRepairedBooks([otherBookId], req, res)) return;
 
     /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
        resolved UNDER the locks so a rename of either book lands after this. */

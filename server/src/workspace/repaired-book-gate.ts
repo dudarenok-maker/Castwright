@@ -36,6 +36,8 @@
      POST   /api/books/:bookId/cast/add-from-roster   (body targetBookId; the path book by the mount)
      POST   /api/books/:bookId/cast/link-prior        (body targetBookId; the path book by the mount)
      PUT    /api/voices/:voiceId/override             (scope 'series': body or query bookId)
+     POST   /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
+     DELETE /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
    Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
    library); voice-library revoke and DELETE /:uuid, and PUT /api/voices/:id/override with scope 'workspace'
    (keyed by voice, name no book); /api/queue/* (writes the queue); POST /api/books and /api/import (mint a

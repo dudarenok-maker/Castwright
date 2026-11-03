@@ -24,12 +24,14 @@ beforeAll(async () => {
   gate = await import('./repaired-book-gate.js');
   const { castAddFromRosterRouter } = await import('../routes/cast-add-from-roster.js');
   const { castLinkPriorRouter } = await import('../routes/cast-link-prior.js');
+  const { castNotLinkedToRouter } = await import('../routes/cast-not-linked-to.js');
   const { voicesRouter } = await import('../routes/voices.js');
   app = express();
   app.use(express.json());
   app.use('/api/books/:bookId', gate.repairedBookGate);
   app.use('/api/books', castAddFromRosterRouter);
   app.use('/api/books', castLinkPriorRouter);
+  app.use('/api/books', castNotLinkedToRouter);
   app.use('/api/voices', voicesRouter);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -154,5 +156,45 @@ describe('PUT /voices/:id/override (series scope) with a repaired bookId (#3713)
     await repaired();
     const res = await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } });
     expect(res.status).not.toBe(409);
+  });
+});
+
+describe('POST and DELETE /books/:id/cast/:characterId/not-linked-to with a repaired otherBookId (#3713, pass 4)', () => {
+  const body = { otherBookId: DUP, otherCharacterId: 'c0' };
+  const url = `/api/books/${SRC}/cast/c0/not-linked-to`;
+
+  it('POST, no token: 409 naming the other book, and neither cast.json changes', async () => {
+    await repaired();
+    const before = [read(src), read(kept)];
+    const res = await request(app).post(url).send(body);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+    expect(res.body.bookId).toBe(DUP);
+    expect([read(src), read(kept)]).toEqual(before);
+  });
+
+  it('POST, with the other book\'s token: the pair is written on both sides', async () => {
+    await repaired();
+    const res = await request(app).post(url).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    expect(res.status).toBe(200);
+    expect(JSON.parse(read(kept)).characters[0].notLinkedTo).toEqual([{ bookId: SRC, characterId: 'c0' }]);
+  });
+
+  it('DELETE, no token: 409 and the edge the kept twin carries stays', async () => {
+    await repaired();
+    await request(app).post(url).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body).expect(200);
+    const before = [read(src), read(kept)];
+    const res = await request(app).delete(url).send(body);
+    expect(res.status).toBe(409);
+    expect(res.body.bookId).toBe(DUP);
+    expect([read(src), read(kept)]).toEqual(before);
+  });
+
+  it('DELETE, with the other book\'s token: the edge is removed', async () => {
+    await repaired();
+    const token = gate.repairedReadToken(DUP)!;
+    await request(app).post(url).set('X-Book-Read-Token', token).send(body).expect(200);
+    await request(app).delete(url).set('X-Book-Read-Token', token).send(body).expect(200);
+    expect(JSON.parse(read(kept)).characters[0].notLinkedTo).toEqual([]);
   });
 });

@@ -76,6 +76,17 @@ describe('body-keyed cast writers carry the repaired-id token', () => {
     expect(tokenOf(1)).toBe('tok1');
   });
 
+  it('markNotLinkedTo and its undo echo the path book\'s and the other book\'s tokens (pass 4)', async () => {
+    await readAndCommit('src', 'tokS');
+    await readAndCommit('tgt', 'tokT');
+    fetchMock.mockImplementation(async () => ok());
+    const args = { bookId: 'src', characterId: 'c0', otherBookId: 'tgt', otherCharacterId: 'c1' };
+    await api.notLinkedTo(args);
+    await api.removeNotLinkedTo(args);
+    expect(tokenOf(2)!.split(',').sort()).toEqual(['tokS', 'tokT']);
+    expect(tokenOf(3)!.split(',').sort()).toEqual(['tokS', 'tokT']);
+  });
+
   it('sends no header for a book with no committed token (nothing repaired)', async () => {
     fetchMock.mockResolvedValue(ok());
     await api.assignLibraryVoice('lib-1', { bookId: 'b9', characterId: 'c1' });

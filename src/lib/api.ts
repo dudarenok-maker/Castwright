@@ -4902,7 +4902,8 @@ export interface NotLinkedToResponse {
 
 async function realNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
   const { bookId, characterId, ...body } = args;
-  const res = await fetch(
+  /* #3713 (PR #4004 pass 4): the server writes the other book's cast.json too, so it asks for that token. */
+  const res = await bookFetchFor([bookId, args.otherBookId])(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
     {
       method: 'POST',
@@ -4939,7 +4940,7 @@ async function mockNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToRespon
    castActions.removeNotLinked + the foreign-cast cache counterpart. */
 async function realRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
   const { bookId, characterId, ...body } = args;
-  const res = await fetch(
+  const res = await bookFetchFor([bookId, args.otherBookId])(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
     {
       method: 'DELETE',
