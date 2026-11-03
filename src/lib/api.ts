@@ -138,6 +138,7 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
+import { bookFetch as fetch, rememberManuscriptBook } from './book-read-token';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -2473,7 +2474,10 @@ async function realGetBookState(
     throw new Error(
       `Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
-  return res.json();
+  const body = await res.json();
+  /* #3713 — a manuscript-keyed write (Analyse) echoes this book's repaired-id read token. */
+  rememberManuscriptBook(body?.manuscriptId, bookId);
+  return body;
 }
 
 /* Cold-boot rehydration for the top-bar AnalysisPill (plan 32, E2).

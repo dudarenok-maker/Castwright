@@ -1,19 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import type { AppInfo, Character } from '../lib/types';
+import type { AppInfo } from '../lib/types';
 
-const h = vi.hoisted(() => ({ info: null as unknown, putBookState: vi.fn().mockResolvedValue(undefined) }));
+const h = vi.hoisted(() => ({ info: null as unknown }));
 vi.mock('../lib/use-app-info', () => ({
   useAppInfo: () => ({ info: h.info, error: null, refresh: vi.fn(async () => {}) }),
 }));
-vi.mock('../lib/api', () => ({ api: { putBookState: h.putBookState } }));
 
 import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
-import { persistenceMiddleware, beginFullRead, learnSliceRevisions } from '../store/persistence-middleware';
 import { uiSlice } from '../store/ui-slice';
-import { castSlice, castActions } from '../store/cast-slice';
+import { castSlice } from '../store/cast-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { chaptersSlice } from '../store/chapters-slice';
@@ -38,9 +36,8 @@ const info = (repairs: (typeof repair)[]): AppInfo =>
     duplicateBookIdRepairs: repairs,
   }) as AppInfo;
 
-const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as Character;
-
-function makeStore(openBookId: string, manuscriptId: string | null) {
+/** `stage` is the view the tab is on; the slices hold `openBookId` either way (leaving a book keeps them). */
+function makeStore(openBookId: string, manuscriptId: string | null, stage: 'ready' | 'books' = 'ready') {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -52,14 +49,19 @@ function makeStore(openBookId: string, manuscriptId: string | null) {
       notifications: notificationsSlice.reducer,
     } as never,
     preloadedState: {
-      ui: { stage: { kind: 'ready', bookId: openBookId, view: 'cast', currentChapterId: 3, openProfileId: null } },
+      ui: {
+        stage:
+          stage === 'ready'
+            ? { kind: 'ready', bookId: openBookId, view: 'cast', currentChapterId: 3, openProfileId: null }
+            : { kind: 'books' },
+      },
     } as never,
-    middleware: (gDM) => gDM({ serializableCheck: false, immutableCheck: false }).concat(persistenceMiddleware),
+    middleware: (gDM) => gDM({ serializableCheck: false, immutableCheck: false }),
   });
   /* The tab loaded this book: its slices carry its identity. */
   store.dispatch(manuscriptActions.resetForBook(openBookId));
   store.dispatch(
-    manuscriptActions.hydrateFromBookState({ state: { manuscriptId, title: 'T', chapters: [] } as never } as never),
+    manuscriptActions.hydrateFromBookState({ state: { bookId: openBookId, manuscriptId, title: 'T', chapters: [] } as never } as never),
   );
   return store;
 }
@@ -76,70 +78,52 @@ const tree = (store: S) => (
     <DuplicateBookRepairReread />
   </Provider>
 );
-const castPuts = () => h.putBookState.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'cast');
-const setCast = (store: S, name: string) => act(() => void store.dispatch(castActions.setCharacters([eliza(name)])));
 
 beforeEach(() => {
   vi.useFakeTimers();
-  h.putBookState.mockClear();
   h.info = null;
 });
 afterEach(() => vi.useRealTimers());
 
 describe('DuplicateBookRepairReread (#3713)', () => {
-  it('a repair already in the first /api/info answer changes nothing (the tab loaded after the sweep)', async () => {
+  it('a repair already in the first /api/info answer changes nothing (the tab loaded after the sweep)', () => {
     h.info = info([repair]);
     const store = makeStore('a__s__t', 'm_x');
     const view = render(tree(store));
     h.info = info([repair]); // the next poll lists it again
     view.rerender(tree(store));
     expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeUndefined();
-    setCast(store, 'Eliza');
-    await act(async () => void (await vi.advanceTimersByTimeAsync(2000)));
-    expect(castPuts()).toHaveLength(1);
   });
 
-  it('a repair that appears later, for the open id: marks a full read and sends no stale cast save', async () => {
+  it('a repair that appears later, for the open id: marks a full read of that id and stays on it', () => {
     h.info = info([]);
     const store = makeStore('a__s__t', 'm_x');
     const view = render(tree(store));
-    /* A cast edit already queued in its debounce when the repair is learned. */
-    setCast(store, 'Stale');
     h.info = info([repair]);
     view.rerender(tree(store));
     expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeGreaterThan(0);
-    expect(root(store).ui.stage.bookId).toBe('a__s__t'); // cannot tell which twin: stays on the id
-    setCast(store, 'Stale again');
-    await act(async () => void (await vi.advanceTimersByTimeAsync(5000)));
-    expect(castPuts()).toHaveLength(0);
+    expect(root(store).ui.stage.bookId).toBe('a__s__t');
   });
 
-  it('saves resume once the re-read lands (a full read begun after the hold)', async () => {
+  it('a tab that LEFT the book but still holds its slices is marked too (reopening must not trust them)', () => {
     h.info = info([]);
-    const store = makeStore('a__s__t', 'm_x');
+    const store = makeStore('a__s__t', 'm_x', 'books');
+    expect(root(store).ui.stage.bookId).toBeUndefined();
     const view = render(tree(store));
     h.info = info([repair]);
     view.rerender(tree(store));
-    const seq = store.dispatch(beginFullRead('a__s__t') as never) as unknown as number;
-    store.dispatch(learnSliceRevisions('a__s__t', undefined, seq) as never);
-    setCast(store, 'Fresh');
-    await act(async () => void (await vi.advanceTimersByTimeAsync(2000)));
-    expect(castPuts()).toHaveLength(1);
+    expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeGreaterThan(0);
   });
 
-  it('a tab proven to hold the re-minted twin moves to the new id and sends nothing stale', async () => {
+  it('a tab proven to hold the re-minted twin moves to the new id and reads it', () => {
     h.info = info([]);
     const store = makeStore('a__s__t', 'm_loser');
     const view = render(tree(store));
-    setCast(store, 'Stale');
     h.info = info([{ ...repair, reassignedManuscriptId: 'm_loser' }]);
     view.rerender(tree(store));
     expect(root(store).ui.stage.bookId).toBe('a__s__t-2');
     expect(root(store).manuscript.bookId).toBe('a__s__t-2');
     expect(root(store).bookMeta.needsFullRead?.['a__s__t-2']).toBeGreaterThan(0);
-    setCast(store, 'Stale again');
-    await act(async () => void (await vi.advanceTimersByTimeAsync(5000)));
-    expect(h.putBookState).not.toHaveBeenCalled();
   });
 
   it("a tab whose manuscriptId is not the loser's (the kept twin) re-reads the same id", () => {
@@ -152,16 +136,25 @@ describe('DuplicateBookRepairReread (#3713)', () => {
     expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeGreaterThan(0);
   });
 
-  it('a tab open on another book is left alone', async () => {
+  it('a tab with no manuscript loaded is not taken for the loser when the record names none', () => {
+    h.info = info([]);
+    const store = makeStore('a__s__t', null);
+    const view = render(tree(store));
+    expect(root(store).manuscript.manuscriptId).toBeNull();
+    h.info = info([repair]); // reassignedManuscriptId: null
+    view.rerender(tree(store));
+    expect(root(store).ui.stage.bookId).toBe('a__s__t');
+    expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeGreaterThan(0);
+    expect(root(store).bookMeta.needsFullRead?.['a__s__t-2']).toBeUndefined();
+  });
+
+  it('a tab on another book is left alone', () => {
     h.info = info([]);
     const store = makeStore('other', 'm_o');
     const view = render(tree(store));
     h.info = info([repair]);
     view.rerender(tree(store));
     expect(root(store).bookMeta.needsFullRead?.['a__s__t']).toBeUndefined();
-    setCast(store, 'Eliza');
-    await act(async () => void (await vi.advanceTimersByTimeAsync(2000)));
-    expect(castPuts()).toHaveLength(1);
   });
 
   it('acts once per repair: a later poll that lists it again does nothing more', () => {

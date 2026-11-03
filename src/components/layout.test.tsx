@@ -238,6 +238,9 @@ vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
 vi.mock('./duplicate-book-repair-banner', () => ({
   DuplicateBookRepairBanner: () => <div data-testid="duplicate-book-repair-banner-mount" />,
 }));
+vi.mock('./duplicate-book-repair-reread', () => ({
+  DuplicateBookRepairReread: () => <div data-testid="duplicate-book-repair-reread-mount" />,
+}));
 
 vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
@@ -246,6 +249,8 @@ vi.mock('../store/prosody-thunk', () => ({
 import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests, type LayoutContext } from './layout';
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
+import { bookFetch, __resetBookReadTokensForTest } from '../lib/book-read-token';
+import { installRepairedBookHandler, BOOK_REPAIRED_MESSAGE } from '../store/repaired-book-handler';
 import { revisionsActions } from '../store/revisions-slice';
 import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
@@ -2206,6 +2211,20 @@ describe('Layout — duplicate-bookId repair banner (#3713)', () => {
       </Provider>,
     );
     expect(await screen.findByTestId('duplicate-book-repair-banner-mount')).toBeInTheDocument();
+  });
+
+  it('mounts the DuplicateBookRepairReread (the poll-driven re-read)', async () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    expect(await screen.findByTestId('duplicate-book-repair-reread-mount')).toBeInTheDocument();
   });
 });
 
@@ -5489,5 +5508,154 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+/* #3713 / PR #4004 pass 2 — the server's repaired-id write gate, end to end through the
+   real Layout, the real persistence middleware, the real `bookFetch` and the real
+   refused-write handler. A fake server answers `fetch` the way the gate does: a book
+   state read hands out a token; a write to the repaired id without it is a 409. */
+describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)', () => {
+  const PREV = 'a__s__t';
+  const row = (id: string, name: string) => ({ id, name, role: '', color: 'narrator' }) as Character;
+  const names = (s: ReturnType<ReturnType<typeof makeStoreWithScopeAndPersistence>['getState']>) =>
+    s.cast.characters.map((c) => c.name);
+  const settle = (ms = 60) => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+  const LOSER = [row('l', 'Loser Row')];
+  const WINNER = [row('a', 'Winner A'), row('b', 'Winner B'), row('c', 'Winner C')];
+
+  function fakeServer() {
+    const server = { gated: false, cast: LOSER as Character[], ms: 'm_loser', castPuts: 0, deletes: 0 };
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      /* Only the book routes are modelled; anything else (queue, config) is a network failure. */
+      if (!url.startsWith('/api/books/')) throw new Error('no network');
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const headers = new Headers(init?.headers);
+      if (method === 'GET') {
+        return new Response('{}', { headers: server.gated ? { 'x-book-read-token': 'tok' } : {} });
+      }
+      if (server.gated && headers.get('x-book-read-token') !== 'tok') {
+        return new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
+      }
+      if (method === 'DELETE') {
+        server.deletes += 1;
+        return new Response(null, { status: 204 });
+      }
+      const req = JSON.parse(String(init?.body ?? '{}')) as { slice: string; patch: { characters?: Character[] } };
+      if (req.slice === 'cast') {
+        server.castPuts += 1;
+        server.cast = req.patch.characters ?? server.cast;
+      }
+      return new Response('{}', { status: 200 });
+    });
+    getBookStateMock.mockImplementation(async (id: string) => {
+      await bookFetch(`/api/books/${id}/state`);
+      const base = bookStateFor(id, revState(id, null, 0, []));
+      return { ...base, state: { ...base.state, manuscriptId: server.ms, title: 'T' }, cast: { characters: server.cast } };
+    });
+    putBookStateMock.mockImplementation(async (id: string, req: unknown) => {
+      const res = await bookFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
+      if (!res.ok) {
+        const body = (await res.json()) as { code?: string };
+        throw Object.assign(new Error(`Book state PUT failed (${res.status}): refused`), { code: body.code });
+      }
+      return undefined;
+    });
+    deleteBookMock.mockImplementation(async (id: string) => {
+      const res = await bookFetch(`/api/books/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`delete refused (${res.status})`);
+    });
+    return server;
+  }
+
+  function renderWithLibrary(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${PREV}/cast`]}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<BooksRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  async function openLoserTab() {
+    const server = fakeServer();
+    const store = makeStoreWithScopeAndPersistence();
+    installRepairedBookHandler(store);
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
+    await settle();
+    return { server, store };
+  }
+  /* The restart: the sweep gave the id to the other twin. No poll has landed. */
+  const sweep = (server: ReturnType<typeof fakeServer>) => {
+    server.gated = true;
+    server.cast = WINNER;
+    server.ms = 'm_winner';
+  };
+
+  beforeEach(() => __resetBookReadTokensForTest());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('left the book before the sweep, reopened it, edited: the kept twin is untouched, the user is told, the book is re-read, later edits land', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    expect(store.getState().manuscript.bookId).toBe(PREV); // the slices are kept
+    sweep(server);
+
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await settle(150);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
+    await settle(900);
+
+    expect(server.cast).toEqual(WINNER);
+    expect(server.castPuts).toBe(0);
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
+
+    /* A client that has read the book since can still write. */
+    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the re-read'))); });
+    await settle(900);
+    expect(server.castPuts).toBe(1);
+    expect(server.cast.map((c) => c.name)).toContain('Edited after the re-read');
+  });
+
+  it('open the whole time, edited before the poll lands: refused, told, re-read, and the next edit lands', async () => {
+    const { server, store } = await openLoserTab();
+    sweep(server);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
+    await settle(900);
+    expect(server.cast).toEqual(WINNER);
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
+    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the re-read'))); });
+    await settle(900);
+    expect(server.castPuts).toBe(1);
+  });
+
+  it('a stale Library row: Delete on the repaired id is refused, deletes nothing, and tells the user', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    sweep(server);
+    libraryEdit.current = { book: { bookId: PREV, title: 'T' }, patch: {} };
+    fireEvent.click(await screen.findByTestId('library-delete'));
+    await settle(300);
+    expect(server.deletes).toBe(0);
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
+  });
+
+  it('CONTROL: with no repair the same edit goes through, untouched by the gate', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
+    await settle(900);
+    expect(server.castPuts).toBe(1);
+    expect(store.getState().notifications.toasts.map((t) => t.message)).not.toContain(BOOK_REPAIRED_MESSAGE);
   });
 });

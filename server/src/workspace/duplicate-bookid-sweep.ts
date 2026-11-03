@@ -43,6 +43,7 @@ import {
   manuscriptHintsJsonPath,
   scriptReviewLedgerJsonPath,
 } from './paths.js';
+import { __resetRepairedBookGateForTest, registerRepairedBook } from './repaired-book-gate.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 
 export interface DuplicateBookIdGroup {
@@ -172,6 +173,7 @@ export function getDuplicateBookIdRepairs(): readonly DuplicateBookIdRepair[] {
 
 export function __resetDuplicateBookIdRepairsForTest(): void {
   repairs = [];
+  __resetRepairedBookGateForTest();
 }
 
 export function __setDuplicateBookIdRepairsForTest(next: DuplicateBookIdRepair[]): void {
@@ -335,7 +337,11 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
             if (wrote === null) return null;
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
             if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
-            return { newBookId: wrote.newBookId, reassignedManuscriptId: wrote.oldMs && !wrote.newMs ? wrote.oldMs : null };
+            return {
+              newBookId: wrote.newBookId,
+              reassignedManuscriptId: wrote.oldMs && !wrote.newMs ? wrote.oldMs : null,
+              remintedFrom: wrote.newMs ? wrote.oldMs : null,
+            };
           },
           { hintDir: loserDir },
         );
@@ -351,6 +357,9 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
           `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
             `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${result.newBookId}"`,
         );
+        /* The repaired id now names a different folder than a client that held it
+           across the restart saw: its writes are refused until it has read the book. */
+        registerRepairedBook(group.bookId, result.remintedFrom);
         done.push({
           previousBookId: group.bookId,
           newBookId: result.newBookId,

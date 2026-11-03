@@ -14,6 +14,7 @@ import {
   IconWaveform,
 } from '../lib/icons';
 import { api } from '../lib/api';
+import { bookFetch } from '../lib/book-read-token';
 import { deriveIssues } from '../lib/chapter-issues';
 import { parseDuration, formatTime } from '../lib/time';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
@@ -616,7 +617,7 @@ export function MiniPlayer({
       const { days } = accRef.current.drain();
       const nz = days.filter((d) => d.seconds > 0);
       if (!nz.length) return;
-      void fetch(`/api/books/${encodeURIComponent(bookId)}/listen-stats`, {
+      void bookFetch(`/api/books/${encodeURIComponent(bookId)}/listen-stats`, {
         method: 'PUT',
         keepalive: true,
         headers: { 'Content-Type': 'application/json' },

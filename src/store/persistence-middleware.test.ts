@@ -16,7 +16,6 @@ import {
   learnSliceRevisions,
   landedFieldsSince,
   castWrittenSince,
-  holdBookSaves,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
@@ -24,7 +23,7 @@ import { changeLogSlice } from './change-log-slice';
 import { createBookStateDisk } from '../test/book-state-disk';
 import type { Character, SliceRevision } from '../lib/types';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
-import { uiSlice } from './ui-slice';
+import { uiSlice, uiActions } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
 import { bookMetaSlice, bookMetaActions, selectEffectiveMeta } from './book-meta-slice';
 
@@ -2786,93 +2785,44 @@ describe('castWrittenSince (#3916)', () => {
   });
 });
 
-describe('holdBookSaves (#3713)', () => {
-  const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as Character;
+describe('a repaired book (#3713)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+  });
+  afterEach(() => vi.useRealTimers());
 
-  function makeHoldStore() {
-    return configureStore({
-      reducer: {
-        ui: uiSlice.reducer,
-        cast: castSlice.reducer,
-        manuscript: manuscriptSlice.reducer,
-        changeLog: changeLogSlice.reducer,
-        bookMeta: bookMetaSlice.reducer,
-        notifications: notificationsSlice.reducer,
-      } as never,
-      preloadedState: {
-        ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
-        bookMeta: { draft: null, saved: {}, prosodyEnabled: {} },
-      } as never,
-      middleware: (gDM) => gDM().concat(persistenceMiddleware),
-    });
-  }
-  type S = ReturnType<typeof makeHoldStore>;
-  const rename = (store: S, name: string) => store.dispatch(castActions.setCharacters([eliza(name)]));
-  const castPuts = () => putBookState.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'cast');
+  it('a details commit the server refuses as book_repaired_reload is sent once, rolled back, and keeps the typed draft', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    putBookState.mockRejectedValue(
+      Object.assign(
+        new Error('Book state PUT failed (409): This book was repaired after a duplicate id was found.'),
+        { code: 'book_repaired_reload' },
+      ),
+    );
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'New Title' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.runAllTimersAsync();
 
-  it('a queued cast save in its debounce is discarded, not sent', async () => {
-    const store = makeHoldStore();
-    rename(store, 'Eliza');
-    store.dispatch(holdBookSaves('b1'));
-    await advance(2000);
-    expect(castPuts()).toHaveLength(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    const state = store.getState() as {
+      notifications: { toasts: { message: string }[] };
+      bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
+    };
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(state.bookMeta.draft?.title).toBe('New Title');
+    expect(state.notifications.toasts.map((t) => t.message).join('\n')).toContain('repaired');
+    err.mockRestore();
   });
 
-  it('a cast edit made while the book is held is not sent', async () => {
-    const store = makeHoldStore();
-    store.dispatch(holdBookSaves('b1'));
-    rename(store, 'Eliza');
-    await advance(2000);
-    expect(castPuts()).toHaveLength(0);
-  });
-
-  it('a cast save kept after a give-up is discarded too', async () => {
-    putBookState.mockRejectedValue(new Error('network down'));
-    const store = makeHoldStore();
-    rename(store, 'Eliza');
-    await advance(30_000); // debounce, then the retry ladder, then the give-up keeps the save
-    const sentBefore = putBookState.mock.calls.length;
-    expect(sentBefore).toBeGreaterThan(0);
-    store.dispatch(holdBookSaves('b1'));
-    store.dispatch(flushBookPersistence('b1'));
-    await advance(30_000);
-    expect(putBookState.mock.calls.length).toBe(sentBefore);
-  });
-
-  it('leaving the held book does not flush anything for it', async () => {
-    const store = makeHoldStore();
-    rename(store, 'Eliza');
-    store.dispatch(holdBookSaves('b1'));
-    store.dispatch({ type: 'ui/goHome' });
-    await advance(2000);
-    expect(castPuts()).toHaveLength(0);
-  });
-
-  it('a full read begun BEFORE the hold does not release it', async () => {
-    const store = makeHoldStore();
-    const early = store.dispatch(beginFullRead('b1')) as unknown as number;
-    store.dispatch(holdBookSaves('b1'));
-    store.dispatch(learnSliceRevisions('b1', undefined, early));
-    rename(store, 'Eliza');
-    await advance(2000);
-    expect(castPuts()).toHaveLength(0);
-  });
-
-  it('a full read begun after the hold releases it: later edits persist again', async () => {
-    const store = makeHoldStore();
-    store.dispatch(holdBookSaves('b1'));
-    const seq = store.dispatch(beginFullRead('b1')) as unknown as number;
-    store.dispatch(learnSliceRevisions('b1', undefined, seq));
-    rename(store, 'Eliza');
-    await advance(2000);
-    expect(castPuts()).toHaveLength(1);
-  });
-
-  it("holding one book leaves another book's saves alone", async () => {
-    const store = makeHoldStore();
-    store.dispatch(holdBookSaves('b2'));
-    rename(store, 'Eliza');
-    await advance(2000);
-    expect(castPuts()).toHaveLength(1);
+  it('a rebind of the open book keeps its uncommitted details draft; opening another book still clears it', () => {
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed' }));
+    store.dispatch(uiActions.rebindBook({ from: 'b1', to: 'b1-2' }));
+    expect((store.getState() as { bookMeta: { draft: unknown } }).bookMeta.draft).toEqual({ title: 'Typed' });
+    store.dispatch(uiActions.openBook({ id: 'other', status: 'complete' }));
+    expect((store.getState() as { bookMeta: { draft: unknown } }).bookMeta.draft).toBeNull();
   });
 });

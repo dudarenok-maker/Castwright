@@ -85,6 +85,7 @@ import { UpdateNotifierBanner } from './update-notifier-banner';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { DuplicateBookRepairBanner } from './duplicate-book-repair-banner';
 import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
+import { commitBookReadToken } from '../lib/book-read-token';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -1100,6 +1101,9 @@ export function Layout() {
                 analysis: res.analysis,
               }),
             );
+            /* #3713 — the slices now ARE this book's disk snapshot: the server's
+               repaired-id write gate (lib/book-read-token.ts) may let their saves through. */
+            commitBookReadToken(bookId);
           }
           /* Always carry `bookId` — even when `res.revisions` is null (no
              revisions.json yet for a freshly-imported book) — so the slice's

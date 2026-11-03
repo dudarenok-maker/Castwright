@@ -889,6 +889,46 @@ exposed on `GET /api/info` as `duplicateBookIdRepairs` and rendered as a dismiss
 life of the server process. The server log line is the durable record. **Accepted residual:** a restart before
 the UI is opened loses the banner, but not the log line.
 
+### Repaired-id write gate (owner decision, PR #4004 pass 2)
+
+After the sweep repairs a group, the server **refuses any write, rename or delete on the repaired id** from a client that
+has not read that book since the repair. The repaired id is `previousBookId`: the twin that kept it and the loser's old
+id are the same string. The rule, exactly:
+
+- The sweep registers each repaired `previousBookId` in an in-memory map, id to a random token
+  (`workspace/repaired-book-gate.ts`). It lives for this process only, so a restart (no duplicate left to repair) ends it.
+- `GET /api/books/:bookId/state` for a registered id returns the token in the `X-Book-Read-Token` response header.
+- Any non-GET/HEAD/OPTIONS request on `/api/books/:bookId/...` whose `:bookId` is registered must send the same token in
+  `X-Book-Read-Token`. Without it, or with a different one, the answer is **409**
+  `{ error, code: 'book_repaired_reload' }`. The message is a fixed, path-free sentence.
+- When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it, the kept twin's manuscriptId is
+  registered too, scoped to the same token, so `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId)
+  is gated the same way.
+- One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
+  ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
+  pins that order against `app.ts` itself.
+
+An **old bundle** knows nothing of the token, so it sends none and is refused too: absence of a token is the refusal,
+which is what closes the tab that survives an upgrade other than the in-app card. The gate does not cover the enumerated
+workspace-level writers that are not under `/:bookId` (voice and voice-library assignments, `library-cast/override`):
+they are keyed by voice, not by a book id.
+
+**Client** (`lib/book-read-token.ts`, `bookFetch`, used by every `fetch` in `lib/api.ts` and by the mini-player's
+keepalive flush): a book-state read only **issues** the token; the caller that applied the read as the book's full
+snapshot (Layout's full hydrate) **commits** it, and only a committed token is echoed. A revisions-only read of a book
+whose slices still hold the other twin therefore does not arm the writes that snapshot would make. On a 409
+`book_repaired_reload` the handler installed in `store/repaired-book-handler.ts` shows one toast (the book was repaired
+and the change was not saved), marks the book for a full read (Layout re-reads it, which commits the token), and
+refreshes the Library; a book the slices do not hold is read and committed straight away so the user's retry passes.
+The persistence middleware already treats any 4xx on `PUT /state` as a final refusal, so the rejected save is dropped
+without a retry and a details commit is rolled back, its typed draft kept.
+
+What this closes: the stage-versus-slices hole (a book left and reopened keeps its slices), the stale Library row's
+Delete and Edit, the up-to-30 s poll gap, old bundles, and the direct `putBookState` callers (language guard, prosody
+flags, Cast and Analysing) that bypass the middleware. Residuals: a tab that held the id across two restarts (the gate
+is in memory), and a manuscriptId-keyed write from a tab that never read the book (no token to find the book by, so the
+409 is shown as an ordinary failure).
+
 ### Reference classes
 
 None is remapped (decision 2). Each is classified by where it is actually keyed.
@@ -904,7 +944,7 @@ None is remapped (decision 2). Each is classified by where it is actually keyed.
 | cast-id-history | `<bookDir>/.audiobook/cast-id-history.json` (`castIdHistoryPath`, `store/cast-id-history.ts:197-198`); its write lock is keyed by `bookDir`, not `bookId` (`:546`) | folder-local: unaffected, each twin keeps its own |
 | Export manifests | `<bookDir>/.audiobook/export-manifests/<exportId>.json` (`bookExportManifestsDir`); each manifest embeds `bookId` and a `downloadUrl` built from it, and `routes/export.ts` filters on `job.bookId` (`rehydrateBook`, `revokeStaleSameFormat`) | folder-local data holding an id: **rewritten** for the re-minted loser (old id to new id, `downloadUrl` re-pointed) inside the same `withBookOp` span as its `state.json` write, after it. Per manifest best-effort: a manifest that cannot be rewritten is logged and left untouched with its artifact, and the book stays reachable under the new id (the `state.json` write is authoritative); that one export is then not listed |
 | Frontend hash route | `#/books/<bookId>/...` (`src/lib/router.ts:18-22`, `:75-86`) | id-keyed: stays with the twin that keeps the id |
-| Open tab (in-memory slices) | A tab alive across the restart holds one twin's cast, manuscript and chapters under `previousBookId`; a first cast save carries no `baseRevision`, so the server would write that snapshot into whichever twin now owns the id (PR #4004 pass 1) | **re-read** (`duplicate-book-repair-reread.tsx`, mounted beside the banner). When a repair first appears in `/api/info` after the tab had an answer without it and the tab has `previousBookId` open, the persistence middleware **holds** the book (`holdBookSaves`: queued, kept and debounced saves discarded, no new one sent until a full read begun after the hold lands) and the book is marked for a full read. The repair record carries `reassignedManuscriptId` (the loser's manuscriptId before the repair, `null` when it was shared and re-minted): a tab whose `manuscript.manuscriptId` equals it provably holds the loser, so it rebinds to `newBookId`, resets its slices and reads that. Otherwise the tab cannot tell which twin it holds and re-reads the id, ending on whichever folder owns it now (the kept twin). A repair already in the tab's first `/api/info` answer needs nothing. Not covered: the up-to-30 s poll gap before the repair is seen (a save in that gap can still reach the id), a save already in flight when the hold lands, and the direct `putBookState` callers outside the middleware (prosody flags, language guard, library edit) |
+| Open tab (in-memory slices) | A tab alive across the restart holds one twin's cast, manuscript and chapters under `previousBookId`; a first cast save carries no `baseRevision`, so the server would write that snapshot into whichever twin now owns the id (PR #4004 pass 1) | **refused by the server, then re-read** (see "Repaired-id write gate" below). `duplicate-book-repair-reread.tsx`, mounted beside the banner, makes the re-read happen as soon as the poll shows the repair, instead of at the first refused save: when a repair first appears in `/api/info` after the tab had an answer without it and the tab's slices hold `previousBookId` (open, or left behind on another view, which keeps them), the book is marked for a full read. The repair record carries `reassignedManuscriptId` (the loser's manuscriptId before the repair, `null` when it was shared and re-minted): an open tab whose `manuscript.manuscriptId` equals it provably holds the loser, so it rebinds to `newBookId` (`ui.rebindBook`, which keeps an uncommitted details draft), resets its slices and reads that. Otherwise it re-reads the id, ending on whichever folder owns it now. A repair already in the tab's first `/api/info` answer needs nothing. There is no client-side save hold any more (the pass 1 `holdBookSaves` was removed): it could only see the open stage, the poll and the persistence middleware, and the gate covers what it missed |
 
 A bookmarked or open route, queue entry, share link or backup history for the id therefore follows the winner. A
 re-minted loser starts with a new id, an empty server-side queue and share table, and no backup history under the
