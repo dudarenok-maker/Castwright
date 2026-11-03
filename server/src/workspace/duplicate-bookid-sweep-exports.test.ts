@@ -150,6 +150,26 @@ describe('exports of the re-minted loser', () => {
     expect(existsSync(join(loser, 'exports', 't.m4b'))).toBe(true);
   }, 30_000);
 
+  it('a manifest that names another book, a non-manifest file and a corrupt manifest are left byte for byte', async () => {
+    const { loser } = canonical();
+    seedExport(loser, 'expMine', 'mine.m4b');
+    const dir = paths.bookExportManifestsDir(loser);
+    const foreign = join(dir, 'expForeign.json');
+    const foreignBody = JSON.stringify({ id: 'expForeign', bookId: 'another__book', downloadUrl: '/api/books/another__book/exports/expForeign/download' });
+    writeFileSync(foreign, foreignBody);
+    const corrupt = join(dir, 'expCorrupt.json');
+    writeFileSync(corrupt, '{not json');
+    const note = join(dir, 'notes.txt');
+    writeFileSync(note, JSON.stringify({ bookId: 'a__s__t' }));
+
+    const [repair] = await sweep.repairDuplicateBookIds();
+
+    expect(readFileSync(foreign, 'utf8')).toBe(foreignBody);
+    expect(readFileSync(corrupt, 'utf8')).toBe('{not json');
+    expect(readFileSync(note, 'utf8')).toBe(JSON.stringify({ bookId: 'a__s__t' }));
+    expect(JSON.parse(readFileSync(join(dir, 'expMine.json'), 'utf8')).bookId).toBe(repair.newBookId);
+  }, 30_000);
+
   it('a manifest that cannot be rewritten leaves the book reachable under its new id', async () => {
     const { loser } = canonical();
     const stuck = seedExport(loser, 'expStuck', 'stuck.m4b');

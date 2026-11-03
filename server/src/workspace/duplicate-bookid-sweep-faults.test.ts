@@ -14,6 +14,9 @@ const hooks = vi.hoisted(() => ({
   beforeWithBookOp: null as null | ((hintDir: string | undefined) => void),
   dropHint: false,
   onMint: null as null | (() => void),
+  afterMint: null as null | (() => void),
+  /* Dirs whose state.json read fails (EPERM) while armed. */
+  unreadable: new Set<string>(),
 }));
 
 vi.mock('./state-migrate.js', async (importOriginal) => {
@@ -38,9 +41,17 @@ vi.mock('./book-op-lock.js', async (importOriginal) => {
       const o = hooks.dropHint ? { ...opts, hintDir: undefined } : opts;
       return (actual.withBookOp as (...a: unknown[]) => unknown)(bookId, fn, o);
     }) as typeof actual.withBookOp,
+    readBookStateOrThrow: async (dir: string) => {
+      if (hooks.unreadable.has(dir)) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, open '${dir}'`), { code: 'EPERM' });
+      }
+      return actual.readBookStateOrThrow(dir);
+    },
     takenBookIds: async (...args: Parameters<typeof actual.takenBookIds>) => {
       hooks.onMint?.();
-      return actual.takenBookIds(...args);
+      const taken = await actual.takenBookIds(...args);
+      hooks.afterMint?.();
+      return taken;
     },
   };
 });
@@ -87,6 +98,8 @@ afterEach(() => {
   hooks.beforeWithBookOp = null;
   hooks.dropHint = false;
   hooks.onMint = null;
+  hooks.afterMint = null;
+  hooks.unreadable.clear();
   warn.mockClear();
   rmSync(join(root, 'books'), { recursive: true, force: true });
   lock.__bookDirIndexForTest().clear();
@@ -94,7 +107,7 @@ afterEach(() => {
   sweep.__resetDuplicateBookIdRepairsForTest();
 });
 
-function seed(author: string, title: string, bookId: string, rendered = 0): string {
+function seed(author: string, title: string, bookId: string, rendered = 0, manuscriptId = `m_${title}`): string {
   const dir = join(paths.BOOKS_ROOT, author, 'S', title);
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   const chapters: unknown[] = [];
@@ -110,7 +123,7 @@ function seed(author: string, title: string, bookId: string, rendered = 0): stri
     paths.stateJsonPath(dir),
     JSON.stringify({
       bookId,
-      manuscriptId: `m_${title}`,
+      manuscriptId,
       title,
       author,
       series: 'S',
@@ -252,5 +265,38 @@ describe('failure paths of the locked repair', () => {
     await held;
     await run;
     expect(idOf(loser)).not.toBe('dup');
+  });
+
+  const msOf = (dir: string): string => JSON.parse(readFileSync(paths.stateJsonPath(dir), 'utf8')).manuscriptId;
+  const setMs = (dir: string, manuscriptId: string): void => {
+    const p = paths.stateJsonPath(dir);
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), manuscriptId }));
+  };
+
+  it('a twin whose state.json cannot be read when the loser is checked counts as sharing its manuscriptId', async () => {
+    const w = seed('A', 'W', 'dup', 3, 'm_win');
+    const loser = seed('A', 'L', 'dup', 0, 'm_lose');
+    /* After detection and the resolve, under the claim: the winner's state.json can no longer be read. */
+    hooks.afterMint = () => hooks.unreadable.add(w);
+
+    const [repair] = await sweep.repairDuplicateBookIds();
+    /* A spare id costs a cache; an alias would cost data. */
+    expect(msOf(loser)).not.toBe('m_lose');
+    expect(msOf(loser)).toMatch(/^mns_/);
+    expect(idOf(loser)).toBe(repair.newBookId);
+    expect(repair.reassignedManuscriptId).toBeNull();
+  });
+
+  it('a manuscriptId that moved after the read is left where it is, and nothing is rekeyed from the old id', async () => {
+    seed('A', 'W', 'dup', 3, 'm_shared');
+    const loser = seed('A', 'L', 'dup', 0, 'm_shared');
+    const analysisState = paths.analysisStateJsonPath(loser);
+    writeFileSync(analysisState, JSON.stringify({ manuscriptId: 'm_shared', state: 'paused' }));
+    hooks.afterMint = () => setMs(loser, 'm_moved'); // between the shared check's read and the locked write
+
+    const [repair] = await sweep.repairDuplicateBookIds();
+    expect(idOf(loser)).toBe(repair.newBookId);
+    expect(msOf(loser)).toBe('m_moved');
+    expect(JSON.parse(readFileSync(analysisState, 'utf8')).manuscriptId).toBe('m_shared');
   });
 });
