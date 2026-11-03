@@ -33,7 +33,7 @@ export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getS
     store.dispatch(
       notificationsActions.pushToast({
         kind: 'info',
-        message: `Applied to the rest of the series. Reopen ${titles} to apply this change there.`,
+        message: `Applied to the rest of the series. Reopen ${titles}, then repeat the change, to apply it there.`,
         dedupeKey: `book-repaired-skipped:${books.map((b) => b.bookId).join(',')}`,
       }),
     );

@@ -7,6 +7,7 @@ import {
   __resetBookReadTokensForTest,
   bookFetch,
   commitBookReadToken,
+  revokeBookReadToken,
   setRepairedBookHandler,
 } from './book-read-token';
 
@@ -101,5 +102,68 @@ describe('body-keyed cast writers carry the repaired-id token', () => {
     );
     await expect(api.assignLibraryVoice('lib-1', { bookId: 'b1', characterId: 'c1' })).rejects.toThrow();
     expect(handler).toHaveBeenCalledWith('b1');
+  });
+});
+
+/* PR #4004 pass 4, finding 4: a series fan-out names its mates on the server, so the request can only
+   satisfy the server's per-mate check if the client echoes EVERY token it has committed. These drive
+   the real client calls; the server half (a mate whose token is echoed is written, one whose token is
+   not is skipped) is `repaired-book-gate-fanout.test.ts` (server) and `repaired-book-gate-client-header`. */
+describe('a series fan-out echoes every committed token, not only the path book\'s', () => {
+  const echoed = (call: number) => (tokenOf(call) ?? '').split(',').filter(Boolean).sort();
+
+  it('a series-patch from "src" carries the token of a kept twin this tab read', async () => {
+    await readAndCommit('twin', 'tokT');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ updated: [], failed: [] }), { status: 200 }));
+    await api.seriesPatchCharacter({ bookId: 'src', characterId: 'c0', patch: { gender: 'male' } as never });
+    expect(echoed(1)).toEqual(['tokT']);
+  });
+
+  it('voice-override-linked and the cast tier carry it too', async () => {
+    await readAndCommit('twin', 'tokT');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ updated: 0, updatedBooks: [], failed: [] }), { status: 200 }));
+    await api.setVoiceOverrideLinked('src', 'c0', null);
+    await api.setCastTier('src', 'v1', null);
+    expect(echoed(1)).toEqual(['tokT']);
+    expect(echoed(2)).toEqual(['tokT']);
+  });
+
+  it('the series and workspace scopes of a voice override carry it', async () => {
+    await readAndCommit('twin', 'tokT');
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+    await api.setVoiceOverride('v1', { engine: 'kokoro', name: 'af_heart' }, { scope: 'series', bookId: 'src' });
+    await api.setVoiceOverride('v1', { engine: 'kokoro', name: 'af_heart' });
+    expect(echoed(1)).toEqual(['tokT']);
+    expect(echoed(2)).toEqual(['tokT']);
+  });
+
+  it('two committed twins are both echoed, each once', async () => {
+    await readAndCommit('t1', 'tok1');
+    await readAndCommit('t2', 'tok2');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ updated: 0 }), { status: 200 }));
+    await api.setCastTier('t1', 'v1', null);
+    expect(echoed(2)).toEqual(['tok1', 'tok2']);
+  });
+
+  it('a read still echoes only its own book\'s token', async () => {
+    await readAndCommit('t1', 'tok1');
+    await readAndCommit('t2', 'tok2');
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    await bookFetch('/api/books/t1/state');
+    expect(echoed(2)).toEqual(['tok1']);
+  });
+
+  it('a token revoked for a full read in flight is not echoed', async () => {
+    await readAndCommit('twin', 'tokT');
+    revokeBookReadToken('twin');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ updated: 0 }), { status: 200 }));
+    await api.setCastTier('src', 'v1', null);
+    expect(tokenOf(1)).toBeNull();
+  });
+
+  it('nothing committed: no header (an unrepaired workspace is untouched)', async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ updated: 0 }), { status: 200 }));
+    await api.setCastTier('src', 'v1', null);
+    expect(tokenOf(0)).toBeNull();
   });
 });

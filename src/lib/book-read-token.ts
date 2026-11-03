@@ -117,7 +117,13 @@ async function send(
   isStateRead: boolean,
   tracked = bookIds.length > 0,
 ): ReturnType<typeof fetch> {
-  const echo = bookIds.map((id) => tokens.get(id)).filter((t): t is string => !!t).join(',');
+  /* A write echoes EVERY token this tab has committed (PR #4004 pass 4): a series fan-out names its
+     mates on the server, never in the request, so the path book's token alone could never satisfy the
+     server's per-mate check. A committed token means this tab hydrated that book since the repair,
+     and the fan-out sends none of the mate's content. A read echoes only its own book's. */
+  const method0 = (init?.method ?? 'GET').toUpperCase();
+  const ids = method0 === 'GET' || method0 === 'HEAD' ? bookIds : [...tokens.keys()];
+  const echo = [...new Set(ids.map((id) => tokens.get(id)).filter((t): t is string => !!t))].join(',');
   let sent = init;
   if (echo) {
     const headers = new Headers(init?.headers);

@@ -42,12 +42,14 @@ describe('bookFetch (#3713)', () => {
     expect(echoed(2)).toBe('tok');
   });
 
-  it('echoes only on the book it was issued for', async () => {
-    fetchMock.mockResolvedValueOnce(stateRead('tok')).mockResolvedValue(new Response('{}'));
+  it('a READ echoes only its own book\'s token; a WRITE echoes every committed one (pass 4, fan-out)', async () => {
+    fetchMock.mockResolvedValueOnce(stateRead('tok')).mockImplementation(async () => new Response('{}'));
     await bookFetch('/api/books/b1/state');
     commitBookReadToken('b1');
-    await bookFetch('/api/books/b2', { method: 'DELETE' });
+    await bookFetch('/api/books/b2/state');
     expect(echoed(1)).toBeNull();
+    await bookFetch('/api/books/b2', { method: 'DELETE' });
+    expect(echoed(2)).toBe('tok');
   });
 
   it('commits nothing for a read that carried no token (nothing was repaired)', async () => {
@@ -73,8 +75,9 @@ describe('bookFetch (#3713)', () => {
     rememberManuscriptBook('m_1', 'b1');
     await bookFetch('/api/manuscripts/m_1/analysis', { method: 'POST' });
     expect(echoed(1)).toBe('tok');
+    /* any committed token rides every write now: the server picks the one it asks for */
     await bookFetch('/api/manuscripts/m_other/analysis', { method: 'POST' });
-    expect(echoed(2)).toBeNull();
+    expect(echoed(2)).toBe('tok');
   });
 
   it('a 409 book_repaired_reload on a write tells the handler which book, and the caller still sees the response', async () => {

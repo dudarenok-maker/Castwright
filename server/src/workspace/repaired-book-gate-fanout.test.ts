@@ -1,7 +1,12 @@
 /* #3713 / PR #4004 pass 5 (owner decision) -- a series-scope fan-out SKIPS a repaired series-mate it holds no
    token for, and writes it when the request echoes the token. The mates of a fan-out are matched by voice id or
    name, so the client never names them: refusing would make the write impossible, writing would land on the wrong
-   twin. The real sweep repairs a pair in a temp workspace and the real routers serve it. */
+   twin. The real sweep repairs a pair in a temp workspace and the real routers serve it.
+
+   SERVER-UNIT: the `X-Book-Read-Token` headers below are set by hand, standing for what the client sends. What the
+   REAL client sends (every token the tab has committed, comma-joined, on every write) is pinned on the other side of
+   the wire by `src/lib/api-body-keyed-token.test.ts` ("a series fan-out echoes every committed token"); the
+   "client wire shape" block here feeds the server exactly that shape. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,6 +38,11 @@ beforeAll(async () => {
   app.use('/api/books', voiceOverrideLinkedRouter);
   app.use('/api/books', castTierRouter);
   app.use('/api/voices', voicesRouter);
+  /* The series voiceUuid stamp a design job runs (a fan-out onto every series-mate). */
+  const { ensureCharacterVoiceUuid } = await import('../routes/qwen-voice.js');
+  app.post('/api/__stamp', async (_req, res) => {
+    res.json({ uuid: await ensureCharacterVoiceUuid(src, 'c0', { author: 'Auth', series: 'Ser' }) });
+  });
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 }, 120_000);
@@ -191,5 +201,68 @@ describe('PUT /voices/:id/override (series scope) with a repaired series-mate (#
     const res = await request(app).put('/api/voices/c0/override').send(body);
     expect(res.status).toBe(200);
     expect(skippedIds(res.body)).toContain(DUP);
+  });
+});
+
+/* PR #4004 pass 4, finding 4. The client echoes every token it has committed on every write, comma-joined: a
+   series-mate it read since the repair is written, one it never read is still skipped. */
+describe('client wire shape: every committed token, comma-joined (#3713, pass 4)', () => {
+  const sendPatch = (token: string | null) => {
+    const r = request(app).post(`/api/books/${SRC}/cast/c0/series-patch`);
+    return (token === null ? r : r.set('X-Book-Read-Token', token)).send({ gender: 'male' });
+  };
+
+  it('the mate\'s token among unrelated ones: the mate is written, nothing skipped', async () => {
+    await repaired();
+    const res = await sendPatch(`some-other-book-token,${gate.repairedReadToken(DUP)!}`);
+    expect(res.status).toBe(200);
+    expect(skippedIds(res.body)).toEqual([]);
+    expect(JSON.parse(read(kept)).characters[0].gender).toBe('male');
+  });
+
+  it('only unrelated tokens: the mate is still skipped, byte-identical', async () => {
+    await repaired();
+    const before = mates();
+    const res = await sendPatch('some-other-book-token,another');
+    expect(skippedIds(res.body)).toContain(DUP);
+    expect(mates()).toEqual(before);
+  });
+
+  it('the tab read the kept twin and the series-patch comes from the other book: written, not skipped; a second patch too', async () => {
+    await repaired();
+    for (const gender of ['male', 'female']) {
+      const res = await request(app)
+        .post(`/api/books/${SRC}/cast/c0/series-patch`)
+        .set('X-Book-Read-Token', gate.repairedReadToken(DUP)!)
+        .send({ gender });
+      expect(skippedIds(res.body)).toEqual([]);
+      expect(JSON.parse(read(kept)).characters[0].gender).toBe(gender);
+    }
+  });
+
+  it('the workspace scope of a voice override reaches the kept twin with its token, and skips it without', async () => {
+    await repaired();
+    const before = mates();
+    const skipped = await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } });
+    expect(skippedIds(skipped.body)).toContain(DUP);
+    expect(mates()).toEqual(before);
+    const res = await request(app)
+      .put('/api/voices/c0/override')
+      .set('X-Book-Read-Token', gate.repairedReadToken(DUP)!)
+      .send({ override: { engine: 'kokoro', name: 'af_heart' } });
+    expect(res.status).toBe(204);
+    expect(read(kept)).toContain('af_heart');
+  });
+
+  it('the series voiceUuid stamp reaches the kept twin with its token, and leaves it unstamped without', async () => {
+    await repaired();
+    const without = await request(app).post('/api/__stamp').send({});
+    expect(without.body.uuid).toBeTruthy();
+    expect(JSON.parse(read(src)).characters[0].voiceUuid).toBe(without.body.uuid);
+    expect(JSON.parse(read(kept)).characters[0].voiceUuid).toBeUndefined();
+    /* the source is clean again, as it would be before the design that mints the uuid */
+    writeFileSync(paths.castJsonPath(src), JSON.stringify({ characters: [{ id: 'c0', name: 'Rhea' }] }));
+    const withToken = await request(app).post('/api/__stamp').set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send({});
+    expect(JSON.parse(read(kept)).characters[0].voiceUuid).toBe(withToken.body.uuid);
   });
 });
