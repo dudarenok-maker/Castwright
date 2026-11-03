@@ -79,13 +79,11 @@ export function RestructureView({ bookId }: Props) {
     /* #3967 — `holdForRead`: the slices did not take the response, so they still hold
        the old chapter ids and an edit now would save them over the route's rewrite.
        Keep the lock up until Layout's marked full read has landed (it clears the book's
-       marks), or the book is no longer the open one: with the book left, nothing edits it
-       here, and the lock must not outlive the screen that raised it. */
+       marks). It is keyed to the mark, not to the book staying open: leaving and reopening
+       the book before the read lands must find it still locked. */
     return (holdForRead = false) => {
       if (!holdForRead) return lower();
-      const done = () =>
-        (store.getState().bookMeta.needsFullRead?.[bookId] ?? 0) === 0 ||
-        activeBookId(store.getState()) !== bookId;
+      const done = () => (store.getState().bookMeta.needsFullRead?.[bookId] ?? 0) === 0;
       if (done()) return lower();
       const unsubscribe = store.subscribe(() => {
         if (!done()) return;

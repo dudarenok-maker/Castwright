@@ -583,6 +583,12 @@ describe('RestructureView — #3400 restructure flag', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(store.getState().ui.restructuringBooks).toEqual({ b2: true });
     resolvers[1]({ sentenceRemap: [], warnings: [] });
+    /* b2's slices did not take the response, so its lock is held for the read (#3967)
+       and comes down with its mark, not with the request. */
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.b2 ?? 0).toBeGreaterThan(0));
+    act(() => {
+      store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b2', upTo: 99 }));
+    });
     await waitFor(() => expect(store.getState().ui.restructuringBooks).toEqual({}));
   });
 });
@@ -973,7 +979,7 @@ describe('RestructureView — #3967 the edit lock outlives a restructure the sli
     }
   });
 
-  it('leaving the book lowers a lock held for the read (no path leaves it raised)', async () => {
+  it('leaving and reopening the book before the read lands keeps edits refused until it does', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const store = makeStore(true);
@@ -988,8 +994,23 @@ describe('RestructureView — #3967 the edit lock outlives a restructure the sli
       act(() => {
         store.dispatch(uiActions.goHome());
       });
-      await waitFor(() => expect(locked(store)).toBe(false));
+      act(() => {
+        store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
+      });
+      // The mark is the lock: it outlives the navigation, so the gap edit is refused.
       expect(mark(store)).toBe(1);
+      expect(locked(store)).toBe(true);
+      edit(store);
+      expect(store.getState().manuscript.sentences.find((x) => x.chapterId === 4)?.emotion).toBeUndefined();
+      act(() => {
+        hydrate(store, POST);
+        store.dispatch(bookMetaActions.clearNeedsFullRead({ bookId: 'b1', upTo: 1 }));
+      });
+      await waitFor(() => expect(locked(store)).toBe(false));
+      store.dispatch(
+        manuscriptSlice.actions.setSentenceEmotion({ chapterId: 3, sentenceId: 1, emotion: 'sad' } as never),
+      );
+      expect(store.getState().manuscript.sentences.find((x) => x.chapterId === 3)?.emotion).toBe('sad');
     } finally {
       vi.useRealTimers();
     }
