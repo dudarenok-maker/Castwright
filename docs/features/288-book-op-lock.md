@@ -916,6 +916,12 @@ id are the same string. The rule, exactly:
 - When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it, the kept twin's manuscriptId is
   registered too, scoped to the same token, so `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId)
   is gated the same way.
+- **Body-keyed writers are gated by the book they name (pass 3).** `POST /api/library-cast/override` writes both
+  `sourceBookId`'s and `targetBookId`'s `cast.json`, and `POST` / `DELETE /api/voice-library/:uuid/assign` write
+  `bookId`'s (body, and query for the DELETE), so the path mount cannot see them. Each calls
+  `refuseUnreadRepairedBooks` first, which requires the token of every named book that is gated (the header may carry
+  several, comma-joined). Their client calls (`bookFetchFor` in `lib/book-read-token.ts`, used by
+  `overrideLibraryCast`, `assignLibraryVoice`, `unassignLibraryVoice`) echo the committed tokens of the books they name.
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
@@ -924,7 +930,9 @@ An **old bundle** knows nothing of the token, so it sends none and is refused to
 The refusal is **silent** in an old bundle (v1.14.0 logs a failed `PUT /state` to the console and shows nothing, so the
 edits stay on screen unsaved), which is why the release notes tell users to **reload any tab left open across the
 upgrade**. With the 7-day persistence, such a tab stays refused until it reloads, even across further restarts within the
-week. `PUT /voices/:voiceId/override` and revoke are keyed by voice, not by a book id, and are not gated.
+week. `PUT /voices/:voiceId/override` and revoke are keyed by voice, not by a book id, and are not gated. (An earlier
+revision of this section said the override and assign writers were all "keyed by voice"; that is true of those two
+only, and `library-cast/override` and `assign` name a book in the request and are gated as above.)
 
 **Client** (`lib/book-read-token.ts`, `bookFetch`, used by every `fetch` in `lib/api.ts` and by the mini-player's
 keepalive flush): a book-state read only **issues** the token; the caller that applied the read as the book's full

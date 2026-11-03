@@ -208,9 +208,12 @@ export function __resetRepairedBookGateForTest(): void {
 /** Paths under `/api/books/:bookId` whose writes are per-listener records, not book content. */
 const LISTENER_WRITE_PATHS: ReadonlySet<string> = new Set(['/listen-progress', '/shelf-status', '/listen-stats']);
 
+/** The tokens a request echoes: the header may carry several, comma-joined, for a write that names two books. */
+const echoedTokens = (req: Request): string[] => (req.get(BOOK_READ_TOKEN_HEADER) ?? '').split(',').map((t) => t.trim());
+
 function refuseUnlessRead(scopeBookId: string | undefined, req: Request, res: Response, next: NextFunction): void {
   const token = scopeBookId === undefined ? undefined : activeBook(scopeBookId)?.token;
-  if (token === undefined || req.get(BOOK_READ_TOKEN_HEADER) === token) {
+  if (token === undefined || echoedTokens(req).includes(token)) {
     next();
     return;
   }
@@ -230,4 +233,19 @@ export function repairedManuscriptGate(req: Request, res: Response, next: NextFu
   if (isRead(req)) return next();
   const scope = manuscriptScopes.get(String(req.params.id));
   refuseUnlessRead(scope && !isExpired(scope.repairedAt, Date.now()) ? scope.bookId : undefined, req, res, next);
+}
+
+/** Gate a write that names its book(s) in the request BODY or query, not the path (library-cast/override,
+ *  voice-library assign): every named book that is gated must have its token echoed. Answers the 409
+ *  itself; returns true when it did, so the handler returns. */
+export function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): boolean {
+  for (const id of bookIds) {
+    if (typeof id !== 'string' || id === '') continue;
+    let passed = false;
+    refuseUnlessRead(id, req, res, () => {
+      passed = true;
+    });
+    if (!passed) return true;
+  }
+  return false;
 }

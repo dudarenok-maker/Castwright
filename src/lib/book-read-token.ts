@@ -70,10 +70,15 @@ function scopeOf(path: string): { bookId: string | null; isStateRead: boolean } 
   return { bookId: null, isStateRead: false };
 }
 
-export const bookFetch: typeof fetch = async (input, init) => {
-  const path = pathOf(input);
-  const scope = path === null ? null : scopeOf(path);
-  const echo = scope?.bookId ? tokens.get(scope.bookId) : undefined;
+/** Send `input` scoped to `bookIds`: echo their committed tokens (comma-joined), and on a
+ *  `book_repaired_reload` refusal of a write tell the handler about each of them. */
+async function send(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  bookIds: readonly string[],
+  isStateRead: boolean,
+): ReturnType<typeof fetch> {
+  const echo = bookIds.map((id) => tokens.get(id)).filter((t): t is string => !!t).join(',');
   let sent = init;
   if (echo) {
     const headers = new Headers(init?.headers);
@@ -81,19 +86,33 @@ export const bookFetch: typeof fetch = async (input, init) => {
     sent = { ...init, headers };
   }
   const res = await (sent === undefined ? globalThis.fetch(input) : globalThis.fetch(input, sent));
-  if (!scope?.bookId) return res;
+  if (bookIds.length === 0) return res;
 
   const method = (init?.method ?? 'GET').toUpperCase();
-  if (scope.isStateRead && method === 'GET' && res.ok) {
+  if (isStateRead && method === 'GET' && res.ok) {
     const token = res.headers?.get?.(BOOK_READ_TOKEN_HEADER);
-    if (token) issued.set(scope.bookId, token);
+    if (token) issued.set(bookIds[0], token);
   } else if (res.status === 409 && method !== 'GET' && typeof res.clone === 'function') {
     try {
       const body = (await res.clone().json()) as { code?: unknown };
-      if (body?.code === BOOK_REPAIRED_RELOAD) onRepaired?.(scope.bookId);
+      if (body?.code === BOOK_REPAIRED_RELOAD) for (const id of bookIds) onRepaired?.(id);
     } catch {
       /* not JSON: an ordinary 409 */
     }
   }
   return res;
+}
+
+export const bookFetch: typeof fetch = (input, init) => {
+  const path = pathOf(input);
+  const scope = path === null ? null : scopeOf(path);
+  return send(input, init, scope?.bookId ? [scope.bookId] : [], scope?.isStateRead ?? false);
 };
+
+/** `fetch` for a write that names its book(s) in the body or query, not the path
+ *  (`library-cast/override`, `voice-library/:uuid/assign`): the same token exchange,
+ *  scoped to the books the caller names. */
+export const bookFetchFor =
+  (bookIds: readonly string[]): typeof fetch =>
+  (input, init) =>
+    send(input, init, bookIds, false);

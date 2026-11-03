@@ -138,7 +138,7 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
-import { bookFetch as fetch, rememberManuscriptBook } from './book-read-token';
+import { bookFetch as fetch, bookFetchFor, rememberManuscriptBook } from './book-read-token';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -4763,7 +4763,8 @@ async function mockGenerateAllVoiceStyles(
 async function realOverrideLibraryCast(
   args: OverrideLibraryCastArgs,
 ): Promise<OverrideLibraryCastResponse> {
-  const res = await fetch('/api/library-cast/override', {
+  /* #3713 pass 3: the books are named in the body, so the token exchange is scoped to them. */
+  const res = await bookFetchFor([args.sourceBookId, args.targetBookId])('/api/library-cast/override', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(args),
@@ -10242,7 +10243,7 @@ async function realAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
 ): Promise<AssignLibraryVoiceResult> {
-  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
+  const res = await bookFetchFor([body.bookId])(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -10271,7 +10272,7 @@ async function realUnassignLibraryVoice(
   args: { bookId: string; characterId: string },
 ): Promise<UnassignLibraryVoiceResult> {
   const qs = new URLSearchParams({ bookId: args.bookId, characterId: args.characterId });
-  const res = await fetch(
+  const res = await bookFetchFor([args.bookId])(
     `/api/voice-library/${encodeURIComponent(voiceUuid)}/assign?${qs.toString()}`,
     { method: 'DELETE' },
   );
