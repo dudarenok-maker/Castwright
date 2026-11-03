@@ -43,7 +43,9 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
     const state = getState();
     /* #3919 — the ids were captured when the preview started; a chapter
        excluded since renders nothing, so it is neither logged nor enqueued.
-       When the slices hold another book the exclude path already dropped it. */
+       When the slices hold another book nothing here can tell: only the
+       Generate toggle drops the id from the preview then, so the fan-out may
+       still name an excluded chapter (the server skips it). */
     const excludedIds = state.chapters.currentBookId === preview.bookId
       ? new Set(state.chapters.chapters.filter((c) => c.excluded).map((c) => c.id))
       : new Set<number>();
