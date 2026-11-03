@@ -86,7 +86,7 @@ import {
   withBookPathClaim,
   type BookJobKind,
 } from '../workspace/book-op-lock.js';
-import { BOOK_READ_TOKEN_HEADER, repairedReadToken } from '../workspace/repaired-book-gate.js';
+import { BOOK_READ_TOKEN_HEADER, markRepairedBookRead, repairedReadToken } from '../workspace/repaired-book-gate.js';
 import {
   manuscriptFingerprint,
   sameFingerprint,
@@ -437,6 +437,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     if (readToken) res.setHeader(BOOK_READ_TOKEN_HEADER, readToken);
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
+    if (readToken) markRepairedBookRead(String(req.params.bookId));
 
     let { bookDir, state } = located;
     /* #3400 — the title refresh and the uuid mint each rewrite the WHOLE

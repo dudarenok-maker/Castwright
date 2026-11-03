@@ -381,7 +381,7 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
               `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
                 `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${wrote.newBookId}"`,
             );
-            registerRepairedBook(group.bookId, wrote.newMs ? wrote.oldMs : null);
+            await registerRepairedBook(group.bookId, wrote.newMs ? wrote.oldMs : null);
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
             if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
             return {

@@ -895,8 +895,14 @@ After the sweep repairs a group, the server **refuses any write, rename or delet
 has not read that book since the repair. The repaired id is `previousBookId`: the twin that kept it and the loser's old
 id are the same string. The rule, exactly:
 
-- The sweep registers each repaired `previousBookId` in an in-memory map, id to a random token
-  (`workspace/repaired-book-gate.ts`). It lives for this process only, so a restart (no duplicate left to repair) ends it.
+- The sweep registers each repaired `previousBookId` in a map, id to a random token
+  (`workspace/repaired-book-gate.ts`), and **persists it** (id, token, repair time) to
+  `<workspace>/.repaired-book-gate.json` with an atomic write (owner decision, PR #4004 pass 3). Boot re-reads that file
+  **before** the sweep, so the gate lasts **7 days from the repair, across restarts**. An entry older than 7 days is
+  dropped at load and ignored at check. A read of the book by a client (`GET /:bookId/state`) clears that book's
+  persisted entry early; the running process keeps refusing a tab that sends no token, and the next restart does not
+  gate that book. A damaged file fails closed: every entry still readable is kept (one with a broken token or time is
+  kept with a fresh token and a clock starting now), the file is rewritten whole, and nothing is ungated silently.
 - `GET /api/books/:bookId/state` for a registered id returns the token in the `X-Book-Read-Token` response header.
 - Any non-GET/HEAD/OPTIONS request on `/api/books/:bookId/...` whose `:bookId` is registered must send the same token in
   `X-Book-Read-Token`. Without it, or with a different one, the answer is **409**
@@ -914,10 +920,11 @@ id are the same string. The rule, exactly:
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
 
-An **old bundle** knows nothing of the token, so it sends none and is refused too: absence of a token is the refusal,
-which is what closes the tab that survives an upgrade other than the in-app card. The gate does not cover the enumerated
-workspace-level writers that are not under `/:bookId` (voice and voice-library assignments, `library-cast/override`):
-they are keyed by voice, not by a book id.
+An **old bundle** knows nothing of the token, so it sends none and is refused too: absence of a token is the refusal.
+The refusal is **silent** in an old bundle (v1.14.0 logs a failed `PUT /state` to the console and shows nothing, so the
+edits stay on screen unsaved), which is why the release notes tell users to **reload any tab left open across the
+upgrade**. With the 7-day persistence, such a tab stays refused until it reloads, even across further restarts within the
+week. `PUT /voices/:voiceId/override` and revoke are keyed by voice, not by a book id, and are not gated.
 
 **Client** (`lib/book-read-token.ts`, `bookFetch`, used by every `fetch` in `lib/api.ts` and by the mini-player's
 keepalive flush): a book-state read only **issues** the token; the caller that applied the read as the book's full
@@ -931,8 +938,9 @@ without a retry and a details commit is rolled back, its typed draft kept.
 
 What this closes: the stage-versus-slices hole (a book left and reopened keeps its slices), the stale Library row's
 Delete and Edit, the up-to-30 s poll gap, old bundles, and the direct `putBookState` callers (language guard, prosody
-flags, Cast and Analysing) that bypass the middleware. Residuals: a tab that held the id across two restarts (the gate
-is in memory), and a manuscriptId-keyed write from a tab that never read the book (no token to find the book by, so the
+flags, Cast and Analysing) that bypass the middleware. Residuals: a tab that held the id for more than 7 days after the
+repair, a book read by another client clearing the persisted entry (an old-bundle tab is then ungated at the next
+restart), and a manuscriptId-keyed write from a tab that never read the book (no token to find the book by, so the
 409 is shown as an ordinary failure).
 
 ### Reference classes

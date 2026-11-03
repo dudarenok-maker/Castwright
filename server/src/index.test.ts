@@ -278,6 +278,10 @@ describe('main() boot order (#3713, PR #4004)', () => {
     expect(sweep).toBeLessThan(listen);
   });
 
+  it('re-reads the persisted repaired-id gate before the sweep runs (pass 3: the gate lasts 7 days)', () => {
+    expect(at('await loadRepairedBookGate();')).toBeLessThan(at('const repaired = await repair();'));
+  });
+
   it('starts the fsck only after the sweep, so the two never touch a state.json together', () => {
     expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void fsckAllBooks()'));
   });

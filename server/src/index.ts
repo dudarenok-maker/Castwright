@@ -46,6 +46,7 @@ import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { sweepStaleStaging } from './workspace/portable-staging.js';
 import { repairDuplicateBookIds } from './workspace/duplicate-bookid-sweep.js';
+import { loadRepairedBookGate } from './workspace/repaired-book-gate.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
 import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js';
 import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
@@ -175,6 +176,8 @@ export async function bootRepairDuplicateBookIds(
   repair: () => Promise<readonly unknown[]> = repairDuplicateBookIds,
 ): Promise<void> {
   try {
+    /* Pass 3: the gate on ids repaired by an EARLIER boot (< 7 days ago) is re-read first. */
+    await loadRepairedBookGate();
     const repaired = await repair();
     if (repaired.length > 0) {
       console.log(
