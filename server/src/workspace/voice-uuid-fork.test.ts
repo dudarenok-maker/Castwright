@@ -131,14 +131,22 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(false);
   });
 
-  it('an unreadable cast.json in another book is skipped, not thrown (and holds nothing)', async () => {
+  it('an unreadable cast.json in another book is a possible holder: it forks, and does not throw (pass-2 U)', async () => {
     reset();
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     const bad = book('Bad', 'bad-id', []);
     writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
-    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(false);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
     book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
     expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
+  });
+
+  it('an unreadable book never makes a row nobody declined fork', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U })).toBe(false);
   });
 });
 
@@ -178,6 +186,15 @@ describe('shouldMintApartFromLegacyKey (#3992)', () => {
     ]);
     const two = book('Two', TWO_ID, [x]);
     expect(await shouldMintApart(two, x)).toBe(false);
+  });
+
+  it('true: an unreadable other book is a possible holder, the same reading as the uuid fork (pass-2 U)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [x]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    expect(await shouldMintApart(two, x)).toBe(true);
+    expect(await shouldMintApart(two, { ...x, declinedVoiceFrom: undefined })).toBe(false);
   });
 
   it('false: the other book links back to this one (source side of a live pair)', async () => {

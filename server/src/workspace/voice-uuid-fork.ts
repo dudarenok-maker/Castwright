@@ -88,17 +88,30 @@ interface OtherBook {
   rows: CastRow[];
 }
 
+interface OtherBooks {
+  books: OtherBook[];
+  /** Some other book's cast.json could not be read, so what it holds is unknown. */
+  unreadable: boolean;
+}
+
 /* Every OTHER book's readable cast, with its bookId. An unreadable cast.json is
-   skipped (see readOtherBookCast), so it holds nothing and follows nothing. */
-async function loadOtherBooks(selfDir: string): Promise<OtherBook[]> {
+   not in `books` (it can be neither a follower nor named by a link we can see),
+   and is reported in `unreadable` so each caller decides what not knowing means:
+   the fork decisions read it as a possible HOLDER (see shouldForkSharedVoiceUuid). */
+async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
   const out: OtherBook[] = [];
+  let unreadable = false;
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (resolve(dir) === selfDir) continue;
         const cast = await readOtherBookCast<CastFile>(dir);
-        if (cast === UNREADABLE || !cast?.characters?.length) continue;
+        if (cast === UNREADABLE) {
+          unreadable = true;
+          continue;
+        }
+        if (!cast?.characters?.length) continue;
         let bookId: string | undefined;
         try {
           bookId = await readBookId(dir);
@@ -109,7 +122,7 @@ async function loadOtherBooks(selfDir: string): Promise<OtherBook[]> {
       }
     }
   }
-  return out;
+  return { books: out, unreadable };
 }
 
 export interface LinkFollower {
@@ -181,14 +194,19 @@ export async function findLinkFollowers(
   uuid: string,
 ): Promise<LinkFollower[]> {
   const selfDir = resolve(bookDir);
-  return walkFollowers(selfDir, character, uuid, await loadOtherBooks(selfDir));
+  return walkFollowers(selfDir, character, uuid, (await loadOtherBooks(selfDir)).books);
 }
 
-/* Residual risk of the skip, shared by the fork decisions below: an unreadable
-   book is treated as holding nothing. If it does in fact hold the uuid (or the
-   legacy key), a redesign of the book being designed overwrites that book's
-   `.pt` as it did before #3992. The alternative, treating it as a holder, would
-   re-fork the row on every design for as long as the file stays unreadable. */
+/* An unreadable other book is treated as a possible HOLDER of the uuid (and, in
+   shouldMintApartFromLegacyKey, of the legacy key), by BOTH fork decisions. The
+   two outcomes are not symmetric: assuming it holds it costs one extra fork (a
+   copy of the base family and a fresh uuid, nothing audible, repeated on each
+   design for as long as the file stays unreadable, which is transient), while
+   assuming it holds nothing lets the redesign overwrite that book's `.pt` with no
+   way to get it back. The earlier book's voice wins over a spare copy. The other
+   direction, a book that could be a FOLLOWER we cannot see, is covered at write
+   time: a follower found by the scan that has become unreadable fails the fork
+   (qwen-voice.ts), it is never skipped. */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: {
@@ -208,11 +226,12 @@ export async function shouldForkSharedVoiceUuid(
   if (!character.declinedVoiceFrom?.length) return false;
 
   const selfDir = resolve(bookDir);
-  const others = await loadOtherBooks(selfDir);
+  const { books, unreadable } = await loadOtherBooks(selfDir);
+  if (unreadable) return true;
   const followed = new Set(
-    (await walkFollowers(selfDir, character, uuid, others)).map((f) => rowKey(f.dir, f.characterId)),
+    (await walkFollowers(selfDir, character, uuid, books)).map((f) => rowKey(f.dir, f.characterId)),
   );
-  return others.some((b) =>
+  return books.some((b) =>
     b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))),
   );
 }
@@ -245,7 +264,10 @@ export async function shouldMintApartFromLegacyKey(
         const otherDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         if (resolve(otherDir) === selfDir) continue;
         const cast = await readOtherBookCast<{ characters?: LegacyRow[] }>(otherDir);
-        if (cast === UNREADABLE) continue;
+        if (cast === UNREADABLE) {
+          hasHolder = true; // unknown, so a possible holder (see shouldForkSharedVoiceUuid)
+          continue;
+        }
         for (const y of cast?.characters ?? []) {
           if (y.voiceUuid || (y.voiceId ?? y.id) !== linkId) continue;
           if (!y.overrideTtsVoices?.qwen?.name) continue;
