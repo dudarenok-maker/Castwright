@@ -147,12 +147,9 @@ export default tseslint.config(
          captioned media surface — there is no caption track to ship.
          Re-enable if/when generated audio surfaces SRT-like sidecars. */
       'jsx-a11y/media-has-caption': 'off',
-      /* react-hooks/rules-of-hooks fires on pre-existing
-         early-return-then-hook patterns in layout.tsx, character-regenerate.tsx,
-         and confirm-metadata.tsx. Each is a real but inherited rules-violation
-         that needs its own surgical fix (move hooks above the early
-         return). Out of scope for the baseline; tracked as a follow-up. */
-      'react-hooks/rules-of-hooks': 'off',
+      /* rules-of-hooks is enforced (#4014): the inherited early-return-then-hook
+         and hook-named-callback hits were fixed rather than waived. */
+      'react-hooks/rules-of-hooks': 'error',
       /* exhaustive-deps was warn in the old v4 `plugin:react-hooks/recommended`
          set; carried verbatim. (Set explicitly because v7's bundled config
          layers on the Compiler rules we deliberately do not adopt here.) */

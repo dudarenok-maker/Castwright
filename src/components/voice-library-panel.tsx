@@ -259,7 +259,7 @@ export function VoiceLibraryPanel({
                      engine picker of its own, so derive the intended engine
                      CHOICE from the target character's already-PERSISTED
                      `ttsEngine` (falling back to 'default' = "use the session
-                     model key"), mirroring the drawer's `useMyVoice` derivation
+                     model key"), mirroring the drawer's `assignMyVoice` derivation
                      one-for-one. `qwenTier` carries the character's own
                      persisted 1.7B pin, if any. */
                   const targetChar = characters.find((c) => c.id === characterId);
@@ -276,7 +276,7 @@ export function VoiceLibraryPanel({
                   )
                     .unwrap()
                     .then(({ written, warning }) => {
-                      /* Gate 2 C-2 — mirror the profile drawer's `useMyVoice`
+                      /* Gate 2 C-2 — mirror the profile drawer's `assignMyVoice`
                          reconcile-from-the-response discipline: a 200 only
                          means the slots in `written` actually landed (`qwen`
                          is unconditional; `coqui` only when the entry is
