@@ -908,6 +908,21 @@ recite:
     the guard's false branch (leave the book before the read settles, once
     with a hang and once with a prompt answer) and assert the mark.
 
+68. **A repair scheduled rather than applied, while the lock protecting the stale
+    state is released** — PR #4008 pass 4 (#3967): when a Restructure's
+    re-read expired or its remap was skipped, the fix was a mark that queues
+    Layout's full read. But `applyResponse` returned, and each handler's
+    `finally` lowered the edit lock, while the sentences still held the old
+    chapter ids; an edit in the window saved the whole stale list over the
+    route's rewrite, and the scheduled read is slowest in exactly the
+    condition that called for it (a stall). Checkable: for every "mark it and
+    let a later read repair it", ask what guards the state between the mark and
+    the repair, and whether that guard is released before the repair lands. A
+    repair that is only scheduled keeps the lock up until it lands (and comes
+    down on its landing, on its failure, and on leaving the book), or applies
+    the repair itself. Then drive the window: make an edit after the lock would
+    have come down and assert what reaches disk.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
