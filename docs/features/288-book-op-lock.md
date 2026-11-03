@@ -831,18 +831,18 @@ owner's two rulings of 2026-10-31 and the disposition of every reference class. 
 
 1. **The winner is ranked** (owner decision 1, **revised 2026-10-31**; this replaces "current first match").
    Compare the twins in this order. The first criterion that differs decides:
-   1. most chapters whose `state.chapters[].audioRenderedAt` is a non-empty string (`scan.ts:111`);
-   2. most cast rows, i.e. the length of `characters` in the folder's `cast.json` (`castJsonPath`, `paths.ts:194`;
-      read precedent `scan.ts:565-568`), an absent `cast.json` counting as 0;
-   3. the older `createdAt` (`scan.ts:198`, ISO); a missing or unparseable value ranks after any valid one;
+   1. most chapters whose `state.chapters[].audioRenderedAt` is a non-empty string (`scan.ts`);
+   2. most cast rows, i.e. the length of `characters` in the folder's `cast.json` (`castJsonPath`, `paths.ts`;
+      read precedent `scan.ts`), an absent `cast.json` counting as 0;
+   3. the older `createdAt` (`scan.ts`, ISO); a missing or unparseable value ranks after any valid one;
    4. walk order, i.e. the sorted path (see "Walk order" below).
 
    The twin that wins keeps the id; every other twin is re-minted. Why not the first match: in the usual case
    (rename `A/S/T` to `A/S/T2`, then re-import `A/S/T`) the first match is the fresh import, yet every id-keyed
    reference from before the duplicate was written by the original, so the original must keep the id.
 2. **A one-time startup sweep, with no reference remap.** The sweep detects duplicates and re-mints the loser's id
-   via `mintBookId` (`book-op-lock.ts:709`). It rewrites the loser's `state.json` under `withBookOp` +
-   `withBookPathClaim` (`book-op-lock.ts:410`, `:492`), logs both paths, and raises a user-visible notification
+   via `mintBookId` (`book-op-lock.ts`). It rewrites the loser's `state.json` under `withBookOp` +
+   `withBookPathClaim` (`book-op-lock.ts`), logs both paths, and raises a user-visible notification
    naming both folders. Id-keyed references stay with the winner.
    **Owner's caveat:** id-keyed state written *after* the duplicate appeared was resolved to the first match, so
    it may belong to the twin that loses, and it still stays with whichever twin keeps the id.
@@ -854,9 +854,9 @@ cast, so **the renamed original `A/S/T2` keeps `a__s__t` and the fresh import `A
 
 ### Walk order
 
-`resolveBook` (`book-op-lock.ts:296`) and `findBookBy` (`scan.ts:1075`) pick the first match in tree-walk order,
+`resolveBook` (`book-op-lock.ts`) and `findBookBy` (`scan.ts`) pick the first match in tree-walk order,
 which matters until the sweep runs and for any group it has to skip. Before child 2 neither walk sorted:
-`walkBookDirs` (`book-op-lock.ts:194`) and `listDirs` (`scan.ts:517`) returned raw `readdirSync` order, which NTFS
+`walkBookDirs` (`book-op-lock.ts`) and `listDirs` (`scan.ts`) returned raw `readdirSync` order, which NTFS
 returns case-insensitively sorted and ext4 returns in hash order. Both walks now share one comparator
 (`sortDirNames`, `dir-order.ts`): upper-case both
 names and compare them by UTF-16 code unit, then break ties by the raw names. That approximates NTFS's own
@@ -935,16 +935,16 @@ None is remapped (decision 2). Each is classified by where it is actually keyed.
 
 | Class | Keyed at | Classification |
 |---|---|---|
-| `queue.json` entries | Workspace-root `.queue.json` (`queueJsonPath`, `paths.ts:409-411`); each `QueueEntry` carries `bookId` (`queue-io.ts:41`) | id-keyed: stays with the twin that keeps the id |
-| Per-book backups | `<WORKSPACE_ROOT>/.backups/<bookId>/` (`bookBackupsDir`, `paths.ts:429`), outside the book folder | id-keyed: stays with the twin that keeps the id |
-| Series / library references | Series are the `<author>/<series>` directories (`scan.ts:407`); series memory is computed on each scan from the scanned books' own `cast.json` (`scan.ts:561-568`, `:951`), but `cast.json` itself does persist bookIds: `matchedFrom.bookId` and `notLinkedTo[].bookId` on its characters (`series-memory.ts:15`, `cast-reject-orphan.ts:795-800`, `handoff/schemas.ts:51`), and voice-clone sample scopes are named `char-<bookId>__<id>` (`purge-clone-artifacts.ts:385`) | the files are folder-local, each twin keeps its own. The ids inside them are **not** rewritten (decision 2): a cross-book reference to the shared id resolves to the winner, and a same-book reject edge (`notLinkedTo` with the old id) in the loser's `cast.json` keeps the old id, so the reject-orphan Undo route (`removeNotLinked(character, bookId, ...)`) will not match it after the re-mint; that edge needs an owner call (rewrite vs. leave), because a loser edge carrying the old id can equally be a legitimate cross-book edge to the winner |
-| Share links | `<workspace>/.audiobook/share-links.json`, slug to `bookId` (`routes/share.ts:45-50`), resolved with `findBookByBookId` (`share.ts:171`) | id-keyed: stays with the twin that keeps the id |
-| `ManuscriptRecord.bookId` heal | Live record keyed by `manuscriptId`, healed in `healIndexAndRecord` only when `rec.bookId === bookId` (`book-op-lock.ts:261`) | id-keyed: stays with the twin that keeps the id |
-| Listen progress | `.audiobook/listen-progress.json` inside the book folder (`listenProgressJsonPath(bookDir)`, `paths.ts:247`; read and written by bookDir at `routes/book-state.ts:2645`, `:2742`); the frontend copy `byBook[bookId]` in `src/store/listen-progress-slice.ts:121` is a client cache keyed by id | server file: folder-local, unaffected, each twin keeps its own; frontend cache: id-keyed, stays with the twin that keeps the id |
-| cast-id-history | `<bookDir>/.audiobook/cast-id-history.json` (`castIdHistoryPath`, `store/cast-id-history.ts:197-198`); its write lock is keyed by `bookDir`, not `bookId` (`:546`) | folder-local: unaffected, each twin keeps its own |
+| `queue.json` entries | Workspace-root `.queue.json` (`queueJsonPath`, `paths.ts`); each `QueueEntry` carries `bookId` (`queue-io.ts`) | id-keyed: stays with the twin that keeps the id |
+| Per-book backups | `<WORKSPACE_ROOT>/.backups/<bookId>/` (`bookBackupsDir`, `paths.ts`), outside the book folder | id-keyed: stays with the twin that keeps the id |
+| Series / library references | Series are the `<author>/<series>` directories (`scan.ts`); series memory is computed on each scan from the scanned books' own `cast.json` (`scan.ts`), but `cast.json` itself does persist bookIds: `matchedFrom.bookId` and `notLinkedTo[].bookId` on its characters (`series-memory.ts`, `cast-reject-orphan.ts`, `handoff/schemas.ts`), and voice-clone sample scopes are named `char-<bookId>__<id>` (`purge-clone-artifacts.ts`) | the files are folder-local, each twin keeps its own. The ids inside them are **not** rewritten (decision 2): a cross-book reference to the shared id resolves to the winner, and a same-book reject edge (`notLinkedTo` with the old id) in the loser's `cast.json` keeps the old id, so the reject-orphan Undo route (`removeNotLinked(character, bookId, ...)`) will not match it after the re-mint; that edge needs an owner call (rewrite vs. leave), because a loser edge carrying the old id can equally be a legitimate cross-book edge to the winner |
+| Share links | `<workspace>/.audiobook/share-links.json`, slug to `bookId` (`routes/share.ts`), resolved with `findBookByBookId` (`share.ts`) | id-keyed: stays with the twin that keeps the id |
+| `ManuscriptRecord.bookId` heal | Live record keyed by `manuscriptId`, healed in `healIndexAndRecord` only when `rec.bookId === bookId` (`book-op-lock.ts`) | id-keyed: stays with the twin that keeps the id |
+| Listen progress | `.audiobook/listen-progress.json` inside the book folder (`listenProgressJsonPath(bookDir)`, `paths.ts`; read and written by bookDir at `routes/book-state.ts`); the frontend copy `byBook[bookId]` in `src/store/listen-progress-slice.ts` is a client cache keyed by id | server file: folder-local, unaffected, each twin keeps its own; frontend cache: id-keyed, stays with the twin that keeps the id |
+| cast-id-history | `<bookDir>/.audiobook/cast-id-history.json` (`castIdHistoryPath`, `store/cast-id-history.ts`); its write lock is keyed by `bookDir`, not `bookId` | folder-local: unaffected, each twin keeps its own |
 | Export manifests | `<bookDir>/.audiobook/export-manifests/<exportId>.json` (`bookExportManifestsDir`); each manifest embeds `bookId` and a `downloadUrl` built from it, and `routes/export.ts` filters on `job.bookId` (`rehydrateBook`, `revokeStaleSameFormat`) | folder-local data holding an id: **rewritten** for the re-minted loser (old id to new id, `downloadUrl` re-pointed) inside the same `withBookOp` span as its `state.json` write, after it. Per manifest best-effort: a manifest that cannot be rewritten is logged and left untouched with its artifact, and the book stays reachable under the new id (the `state.json` write is authoritative); that one export is then not listed |
-| Frontend hash route | `#/books/<bookId>/...` (`src/lib/router.ts:18-22`, `:75-86`) | id-keyed: stays with the twin that keeps the id |
-| Open tab (in-memory slices) | A tab alive across the restart holds one twin's cast, manuscript and chapters under `previousBookId`; a first cast save carries no `baseRevision`, so the server would write that snapshot into whichever twin now owns the id (PR #4004 pass 1) | **refused by the server, then re-read** (see "Repaired-id write gate" below). `duplicate-book-repair-reread.tsx`, mounted beside the banner, makes the re-read happen as soon as the poll shows the repair, instead of at the first refused save: when a repair first appears in `/api/info` after the tab had an answer without it and the tab's slices hold `previousBookId` (open, or left behind on another view, which keeps them), the book is marked for a full read. The repair record carries `reassignedManuscriptId` (the loser's manuscriptId before the repair, `null` when it was shared and re-minted): an open tab whose `manuscript.manuscriptId` equals it provably holds the loser, so it rebinds to `newBookId` (`ui.rebindBook`, which keeps an uncommitted details draft), resets its slices and reads that. Otherwise it re-reads the id, ending on whichever folder owns it now. A repair already in the tab's first `/api/info` answer needs nothing. There is no client-side save hold any more (the pass 1 `holdBookSaves` was removed): it could only see the open stage, the poll and the persistence middleware, and the gate covers what it missed |
+| Frontend hash route | `#/books/<bookId>/...` (`src/lib/router.ts`) | id-keyed: stays with the twin that keeps the id |
+| Open tab (in-memory slices) | A tab alive across the restart holds one twin's cast, manuscript and chapters under `previousBookId`; a first cast save carries no `baseRevision`, so the server would write that snapshot into whichever twin now owns the id (PR #4004 pass 1) | **refused by the server, then re-read** (see "Repaired-id write gate" below). `duplicate-book-repair-reread.tsx`, mounted beside the banner, makes the re-read happen as soon as the poll shows the repair, instead of at the first refused save: when a repair first appears in `/api/info` after the tab had an answer without it and the tab's slices hold `previousBookId` (open, or left behind on another view, which keeps them), the book is marked for a full read. The repair record carries `reassignedManuscriptId` (the loser's manuscriptId before the repair, set only when no other member of its group carried it, read before any member was rewritten; `null` when it was shared with any twin, even only with another loser): an open tab whose `manuscript.manuscriptId` equals it provably holds the loser, so it rebinds to `newBookId` (`ui.rebindBook`, which keeps an uncommitted details draft), resets its slices and reads that. Otherwise it re-reads the id, ending on whichever folder owns it now. A repair already in the tab's first `/api/info` answer needs nothing. There is no client-side save hold any more (the pass 1 `holdBookSaves` was removed): it could only see the open stage, the poll and the persistence middleware, and the gate covers what it missed |
 
 A bookmarked or open route, queue entry, share link or backup history for the id therefore follows the winner. A
 re-minted loser starts with a new id, an empty server-side queue and share table, and no backup history under the
@@ -976,7 +976,8 @@ best-effort: an absent file is skipped, an unreadable or unwritable one is logge
 | Auto-backup snapshots of the loser | contain the old manuscriptId (and old bookId) | not rewritten: restoring one re-creates the share, and the next start's sweep re-mints it again |
 
 A crash between the state write and the rekey leaves the files on the old id; no later start repairs them, because the
-group is no longer a duplicate. That degrades as the "cannot be rekeyed" column says rather than aliasing the other twin.
+group is no longer a duplicate. The sweep therefore logs the repair (and gates the id) immediately after the state write,
+before the manifests, the cache copy and the rekeys, so the log line survives such a crash as the only durable record. That degrades as the "cannot be rekeyed" column says rather than aliasing the other twin.
 The sweep stays idempotent: a second start finds no duplicate group and changes nothing. Books that share a
 `manuscriptId` but have different `bookId`s are not touched (not a duplicate-bookId group).
 

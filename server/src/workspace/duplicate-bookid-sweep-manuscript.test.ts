@@ -232,11 +232,14 @@ describe('twins that share a manuscriptId', () => {
     seed('Book', 'auth__ser__book', 'm_win', true, true);
     const b = seed('Book b', 'auth__ser__book', 'm_pair', false, false);
     const c = seed('Book c', 'auth__ser__book', 'm_pair', false, false);
-    await sweep.repairDuplicateBookIds();
+    const repairs = await sweep.repairDuplicateBookIds();
     const idB = readState(b).manuscriptId;
     const idC = readState(c).manuscriptId;
     expect(idB).not.toBe(idC);
     expect([idB, idC]).toContain('m_pair');
+    /* The one that kept 'm_pair' looks unique now, but it was shared with the other loser at
+       the start: a tab holding 'm_pair' cannot tell which of the two it holds. */
+    expect(repairs.map((r) => r.reassignedManuscriptId)).toEqual([null, null]);
   });
 
   it("rekeys the loser's own hints, ledger, dropped-quotes and analysis-state files", async () => {

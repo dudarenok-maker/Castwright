@@ -161,9 +161,10 @@ export interface DuplicateBookIdRepair {
   /** RELATIVE to BOOKS_ROOT, '/'-separated. Never an absolute path: this reaches the client. */
   keptFolder: string;
   reassignedFolder: string;
-  /** The loser's manuscriptId before the repair, when it differed from every twin's
-   *  (so a tab holding it can tell it holds the loser); null when it was shared and
-   *  re-minted, which identifies nothing. */
+  /** The loser's manuscriptId before the repair, when no other member of its group carried
+   *  it (read before any member was rewritten), so a tab holding it can tell it holds the
+   *  loser; null when it was shared with any twin, even only with another loser, which
+   *  identifies nothing. */
   reassignedManuscriptId: string | null;
 }
 
@@ -306,6 +307,27 @@ async function twinSharesManuscriptId(
   return false;
 }
 
+/** The manuscriptIds carried by more than one member of the group, read BEFORE any member is
+ *  rewritten. `reassignedManuscriptId` is only meaningful for an id that was unique in the
+ *  group at the start: two losers sharing an id only with each other have it re-minted for
+ *  one and left on the other, and the one left would otherwise look unique afterwards.
+ *  Null when any member cannot be read (then no id can be called unique). */
+async function sharedManuscriptIds(group: DuplicateBookIdGroup): Promise<Set<string> | null> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const dir of [group.winnerDir, ...group.loserDirs]) {
+    try {
+      const ms = (await readBookStateOrThrow(dir))?.manuscriptId;
+      if (typeof ms !== 'string' || ms === '') continue;
+      if (seen.has(ms)) shared.add(ms);
+      seen.add(ms);
+    } catch {
+      return null;
+    }
+  }
+  return shared;
+}
+
 /** Never throws: one failing loser is logged (raw error, server log only) and the rest continue. */
 export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]> {
   const done: DuplicateBookIdRepair[] = [];
@@ -316,6 +338,7 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
     console.warn('[duplicate-bookid] detection failed; skipping the repair until next startup', err);
   }
   for (const group of groups) {
+    const sharedAtStart = await sharedManuscriptIds(group);
     for (const loserDir of group.loserDirs) {
       try {
         /* One withBookOp per loser, never nested. The hint is the only thing that
@@ -351,12 +374,21 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
               return written ? { newBookId, oldMs, newMs: remintedMs as string | null } : null;
             });
             if (wrote === null) return null;
+            /* The state write is the repair: log it NOW, before the best-effort rewrites. A crash
+               after this point leaves no duplicate group for a later start to find, so this line is
+               the only durable record. The id is gated at the same moment. */
+            console.warn(
+              `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
+                `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${wrote.newBookId}"`,
+            );
+            registerRepairedBook(group.bookId, wrote.newMs ? wrote.oldMs : null);
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
             if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
             return {
               newBookId: wrote.newBookId,
-              reassignedManuscriptId: wrote.oldMs && !wrote.newMs ? wrote.oldMs : null,
-              remintedFrom: wrote.newMs ? wrote.oldMs : null,
+              /* Only an id that was unique in the group at the start identifies the loser. */
+              reassignedManuscriptId:
+                wrote.oldMs && !wrote.newMs && sharedAtStart && !sharedAtStart.has(wrote.oldMs) ? wrote.oldMs : null,
             };
           },
           { hintDir: loserDir },
@@ -369,13 +401,6 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
           console.warn(`[duplicate-bookid] ${loserDir} was not rewritten for "${group.bookId}"`);
           continue;
         }
-        console.warn(
-          `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
-            `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${result.newBookId}"`,
-        );
-        /* The repaired id now names a different folder than a client that held it
-           across the restart saw: its writes are refused until it has read the book. */
-        registerRepairedBook(group.bookId, result.remintedFrom);
         done.push({
           previousBookId: group.bookId,
           newBookId: result.newBookId,

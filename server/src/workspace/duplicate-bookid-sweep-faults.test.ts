@@ -15,6 +15,8 @@ const hooks = vi.hoisted(() => ({
   dropHint: false,
   onMint: null as null | (() => void),
   afterMint: null as null | (() => void),
+  /* Runs after the locked repair of one loser returned, as a crash there would. */
+  afterWithBookOp: null as null | (() => void),
   /* Dirs whose state.json read fails (EPERM) while armed. */
   unreadable: new Set<string>(),
 }));
@@ -39,7 +41,13 @@ vi.mock('./book-op-lock.js', async (importOriginal) => {
     withBookOp: ((bookId: string, fn: unknown, opts?: { hintDir?: string }) => {
       hooks.beforeWithBookOp?.(opts?.hintDir);
       const o = hooks.dropHint ? { ...opts, hintDir: undefined } : opts;
-      return (actual.withBookOp as (...a: unknown[]) => unknown)(bookId, fn, o);
+      const done = (actual.withBookOp as (...a: unknown[]) => Promise<unknown>)(bookId, fn, o);
+      return hooks.afterWithBookOp
+        ? done.then((r) => {
+            hooks.afterWithBookOp?.();
+            return r;
+          })
+        : done;
     }) as typeof actual.withBookOp,
     readBookStateOrThrow: async (dir: string) => {
       if (hooks.unreadable.has(dir)) {
@@ -99,6 +107,7 @@ afterEach(() => {
   hooks.dropHint = false;
   hooks.onMint = null;
   hooks.afterMint = null;
+  hooks.afterWithBookOp = null;
   hooks.unreadable.clear();
   warn.mockClear();
   rmSync(join(root, 'books'), { recursive: true, force: true });
@@ -298,5 +307,24 @@ describe('failure paths of the locked repair', () => {
     expect(idOf(loser)).toBe(repair.newBookId);
     expect(msOf(loser)).toBe('m_moved');
     expect(JSON.parse(readFileSync(analysisState, 'utf8')).manuscriptId).toBe('m_shared');
+  });
+
+  it('a crash right after the state write still leaves the log line (no later start would find the group)', async () => {
+    seed('A', 'W', 'dup', 3);
+    const loser = seed('A', 'L', 'dup');
+    hooks.afterWithBookOp = () => {
+      throw new Error('simulated crash after the state write');
+    };
+
+    const repairs = await sweep.repairDuplicateBookIds();
+
+    /* The write landed, the in-memory record did not (the process would be gone)... */
+    expect(idOf(loser)).not.toBe('dup');
+    expect(repairs).toEqual([]);
+    /* ...and the durable record is the log line, written before anything after the write. */
+    expect(warned().some((l) => l.includes('"dup" was carried by both') && l.includes('keeps it (ranked first)'))).toBe(true);
+    /* No later start finds a duplicate group: that is why the line has to exist. */
+    hooks.afterWithBookOp = null;
+    expect(await sweep.repairDuplicateBookIds()).toEqual([]);
   });
 });
