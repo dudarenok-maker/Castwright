@@ -150,14 +150,18 @@ export function voicedSurvivorsDropped(
     for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
     the whole book and a dropped prior row really is gone. `currentBookId`
     (optional) is the id of the book being analysed; it scopes the
-    `notLinkedTo` gate (see `notLinkedToId`). See
+    `notLinkedTo` gate (see `notLinkedToId`). `idHistory` (optional) is the
+    book's `supersededBy` map: a name-fallback pair whose fresh id is recorded
+    there as retired to a DIFFERENT existing row is refused (#3954, the same
+    recorded-merge refusal `remapFreshToPriorIds` applies). See
     `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
   currentBookId?: string,
+  idHistory?: Readonly<Record<string, string>>,
 ): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true, currentBookId);
+  return mergeCore(existing, fresh, true, currentBookId, idHistory);
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
@@ -216,6 +220,7 @@ function mergeCore<T extends { id: string }>(
   fresh: T[],
   nameFallback: boolean,
   currentBookId?: string,
+  idHistory: Readonly<Record<string, string>> = {},
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -360,10 +365,20 @@ function mergeCore<T extends { id: string }>(
     const k = nameOf(f as T & Record<string, unknown>);
     if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
   }
+  /* #3954 — the fresh id is already retired in the id history to a DIFFERENT
+     existing row: the user merged that character into it. Retiring `cand`
+     onto the fresh id would drop that entry as "reclaimed by a live id" and
+     send the merged lines to `cand`, so the pair is refused like a
+     notLinkedTo edge. */
+  const recordedElsewhere = (cand: CastRecord, f: { id: string }): boolean => {
+    const to = idHistory[f.id];
+    return to !== undefined && to !== cand.id && byId.has(to);
+  };
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
     notLinkedToId(cand, f.id, currentBookId) ||
     notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
-    declinesLinkOf(f as unknown as CastRecord, cand);
+    declinesLinkOf(f as unknown as CastRecord, cand) ||
+    recordedElsewhere(cand, f);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
@@ -430,7 +445,8 @@ function mergeCore<T extends { id: string }>(
           cand &&
           !notLinkedToId(cand, f.id, currentBookId) &&
           !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
-          !declinesLinkOf(f as unknown as CastRecord, cand)
+          !declinesLinkOf(f as unknown as CastRecord, cand) &&
+          !recordedElsewhere(cand, f)
         ) {
           old = cand;
           claimedByName.add(cand.id);

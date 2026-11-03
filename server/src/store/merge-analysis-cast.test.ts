@@ -524,6 +524,21 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('a fresh id the id history already retired to another existing row does not name-join (#3954)', () => {
+    const existing: C[] = [
+      { id: 'brann', name: 'Brann', voiceId: 'v_brann', voiceState: 'locked' },
+      { id: 'old-weir', name: 'Old Weir' },
+    ];
+    const fresh: C[] = [{ id: 'brann-weir', name: 'Brann Weir' } as C];
+    const history = { 'brann-weir': 'old-weir' };
+    const refused = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2', history);
+    expect(refused.retirements).toEqual([]);
+    expect(refused.characters.find((c) => c.id === 'brann')?.voiceId).toBe('v_brann');
+    // Control: with no history the tolerant name-fallback retires brann.
+    const control = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2');
+    expect(control.retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+  });
+
   it('a fresh row that declines the link a prior row carries in matchedFrom does not name-join it (#3965)', () => {
     const existing: C[] = [
       {

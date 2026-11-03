@@ -471,6 +471,55 @@ describe('remapFreshToPriorIds', () => {
     expect(r.rewrites).toEqual({ 'anna-new': 'anna-x' });
   });
 
+  describe('a fresh id the user merged elsewhere (id history, #3954)', () => {
+    const prior = [
+      { id: 'brann', name: 'Brann', voiceState: 'locked' },
+      { id: 'old-weir', name: 'Old Weir' },
+    ];
+    const fresh = [{ id: 'brann-weir', name: 'Brann Weir' }];
+
+    it('R13: follows the recorded merge instead of joining the tolerant twin', () => {
+      const r = remapFreshToPriorIds(fresh, [], prior, {}, 'book-2', {
+        'brann-weir': 'old-weir',
+      });
+      expect(r.rewrites).toEqual({ 'brann-weir': 'old-weir' });
+    });
+
+    it('R14: control - without the history the name join proceeds', () => {
+      const r = remapFreshToPriorIds(fresh, [], prior, {}, 'book-2');
+      expect(r.rewrites).toEqual({ 'brann-weir': 'brann' });
+    });
+
+    it('R15: a history entry pointing at the join target itself does not block it', () => {
+      const r = remapFreshToPriorIds(fresh, [], prior, {}, 'book-2', { 'brann-weir': 'brann' });
+      expect(r.rewrites).toEqual({ 'brann-weir': 'brann' });
+    });
+
+    it('R16: a history entry whose target is no longer live is stale and does not block', () => {
+      const r = remapFreshToPriorIds(fresh, [], prior, {}, 'book-2', { 'brann-weir': 'gone' });
+      expect(r.rewrites).toEqual({ 'brann-weir': 'brann' });
+    });
+
+    it('R17: the recorded merge target is not adopted across a same-book notLinkedTo edge', () => {
+      const r = remapFreshToPriorIds(
+        fresh,
+        [],
+        [
+          prior[0],
+          {
+            id: 'old-weir',
+            name: 'Old Weir',
+            notLinkedTo: [{ bookId: 'book-2', characterId: 'brann-weir' }],
+          },
+        ],
+        {},
+        'book-2',
+        { 'brann-weir': 'old-weir' },
+      );
+      expect(r.rewrites).toEqual({});
+    });
+  });
+
   it('R12: the same, in the surname-tolerant tier (#3954)', () => {
     const r = remapFreshToPriorIds(
       [{ id: 'anna-lee', name: 'Anna Lee' }],

@@ -103,7 +103,11 @@ const sel = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
 
 type Row = Record<string, unknown>;
 
-function mkBook(characters: Row[]): { manuscriptId: string; bookDir: string } {
+function mkBook(
+  characters: Row[],
+  supersededBy?: Record<string, string>,
+  body: string = BODY,
+): { manuscriptId: string; bookDir: string } {
   const manuscriptId = `t3954-${Date.now()}-${Math.random()}`;
   const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-3954-'));
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -131,10 +135,16 @@ function mkBook(characters: Row[]): { manuscriptId: string; bookDir: string } {
     }),
   );
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+  if (supersededBy) {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy }),
+    );
+  }
   const chapterHints = [
-    { id: 1, title: 'Chapter One', body: BODY },
-    { id: 2, title: 'Chapter Two', body: BODY },
-    { id: 3, title: 'Chapter Three', body: BODY },
+    { id: 1, title: 'Chapter One', body },
+    { id: 2, title: 'Chapter Two', body },
+    { id: 3, title: 'Chapter Three', body },
   ];
   putManuscript({
     manuscriptId,
@@ -199,25 +209,30 @@ const WREN_FRESH = {
 const roster = [NARR, WREN_FRESH];
 const PRIOR_WREN: Row = { id: PRIOR_ID, name: 'Wren', voiceState: 'locked' };
 
-async function run(manuscriptId: string, bookDir: string, kind: 'main' | 'subset'): Promise<Sent[]> {
+async function run(
+  manuscriptId: string,
+  bookDir: string,
+  kind: 'main' | 'subset',
+  fresh: { roster: CharacterOutput[]; speakerId: string } = { roster, speakerId: FRESH_ID },
+): Promise<Sent[]> {
   const { job, events } = mkJob(manuscriptId, bookDir, kind);
   const rec = getManuscript(manuscriptId);
   if (!rec) throw new Error('manuscript missing');
-  const phase1Sel = sel(phase1(FRESH_ID), 'phase1-model');
+  const phase1Sel = sel(phase1(fresh.speakerId), 'phase1-model');
   if (kind === 'subset') {
     /* Pre-seed cache.stage1 so the subset route takes the book-already-analysed
        branch (stage1Existed), the only one that reaches the subset persist. */
     await saveAnalysisCache(manuscriptId, {
       chapters: {},
       stage1: {
-        characters: roster,
+        characters: fresh.roster,
         chapters: rec.chapterHints.map((c) => ({ id: c.id, title: c.title })),
       },
     } as never);
     await runSubsetAnalyzerJob(
       job,
       rec as never,
-      sel(phase0(roster), 'phase0-model'),
+      sel(phase0(fresh.roster), 'phase0-model'),
       phase1Sel,
       rec.chapterHints,
       true,
@@ -225,7 +240,7 @@ async function run(manuscriptId: string, bookDir: string, kind: 'main' | 'subset
     return events;
   }
   (globalThis as Record<string, unknown>).__keep_prior_id_phase1 = phase1Sel;
-  await runMainAnalyzerJob(job, rec as never, sel(phase0(roster), 'phase0-model'), {
+  await runMainAnalyzerJob(job, rec as never, sel(phase0(fresh.roster), 'phase0-model'), {
     requestedFresh: false,
     allowStage1Shrink: true,
     requestedModel: undefined,
@@ -306,6 +321,55 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
       await cleanup(manuscriptId, bookDir);
     }
   });
+
+  /* Finding 4 (owner: follow the history). The user merged "Brann Weir" into Old
+     Weir, so the history holds brann-weir -> old-weir. The analyzer re-mints
+     brann-weir "Brann Weir"; Brann (locked, name "Brann") is a surname-tolerant
+     match. Joining would overwrite the user's merge, so the join is refused
+     and the fresh lines keep resolving to Old Weir. */
+  it.each(['main', 'subset'] as const)(
+    'A5 %s job: a fresh id the user merged elsewhere is not name-joined to a tolerant twin',
+    async (kind) => {
+      const brannFresh = {
+        ...WREN_FRESH,
+        id: 'brann-weir',
+        name: 'Brann Weir',
+        evidence: [{ quote: 'Brann asked' }],
+      } as CharacterOutput;
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { id: 'brann', name: 'Brann', voiceState: 'locked' },
+          { id: 'old-weir', name: 'Old Weir', aliases: ['Brann Weir'] },
+        ],
+        { 'brann-weir': 'old-weir' },
+        BODY.replace('Wren asked', 'Brann asked'),
+      );
+      try {
+        await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, brannFresh],
+          speakerId: 'brann-weir',
+        });
+        const cast = readCast(bookDir);
+        const brann = cast.find((c) => c.id === 'brann');
+        expect(brann?.voiceState).toBe('locked');
+        expect(brann?.name).toBe('Brann');
+        const history = readHistory(bookDir);
+        expect(history.supersededBy).toEqual({ 'brann-weir': 'old-weir' });
+        expect(history).not.toHaveProperty('displaced');
+        const resolver = buildCastResolver(cast as Array<{ id: string }>, history);
+        expect(resolver.resolve('brann-weir')?.character.id).toBe('old-weir');
+        const attributed = readEdits(bookDir).filter(
+          (s) => s.characterId === 'brann-weir' || s.characterId === 'old-weir',
+        );
+        expect(attributed.length).toBeGreaterThan(0);
+        expect(readEdits(bookDir).some((s) => s.characterId === 'brann')).toBe(false);
+        expect(cast.some((c) => c.id === 'brann-weir')).toBe(false);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
 
   it('A3 a second main run is stable', async () => {
     const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...PRIOR_WREN }]);

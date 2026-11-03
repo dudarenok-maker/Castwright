@@ -155,6 +155,7 @@ import {
   dropSupersededIdsReclaimedByLiveCast,
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
+  loadCastIdHistory,
   loadCastIdHistoryWithStatus,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
@@ -7223,12 +7224,19 @@ export async function runMainAnalyzerJob(
       priorCastForMerge,
       characters0,
     );
+    /* #3954 — the id history the remap consults before retiring a fresh id
+       onto a prior row (a recorded merge is not overwritten). `loadCastIdHistory`
+       never throws; an absent or degraded file is the empty map. */
+    const idHistoryForRemap = record.bookDir
+      ? (await loadCastIdHistory(record.bookDir)).supersededBy
+      : {};
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
       record.bookId ?? undefined,
+      idHistoryForRemap,
     );
     const characters = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -7441,7 +7449,7 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined, idHistoryForRemap);
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -9455,12 +9463,17 @@ export async function runSubsetAnalyzerJob(
       priorCastForMerge,
       enriched0,
     );
+    // #3954 — see the main route's `idHistoryForRemap`.
+    const idHistoryForRemap = record.bookDir
+      ? (await loadCastIdHistory(record.bookDir)).supersededBy
+      : {};
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
       record.bookId ?? undefined,
+      idHistoryForRemap,
     );
     const enriched = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -9630,7 +9643,7 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined, idHistoryForRemap);
           /* #2295 — the authoritative cast.json write; mirrors the main job's
              same-named wrap, including WHY it is wrapped at the write rather
              than at `catch (persistErr)` (which also covers the journals) and

@@ -31,8 +31,9 @@
       `reconcileRejectEdgesOnDisk`, which reads the *just-captured*
       pre-persist verdict and the edge is genuinely cleared and reported —
       the one path where that captured verdict is actually consumed.
-   3. A TRANSIENT one-shot read failure on cast-id-history.json's very
-      first physical read this run, with a genuinely well-formed file
+   3. A TRANSIENT one-shot read failure on cast-id-history.json's read at
+      the persist block's capture (the run's second physical read; the first
+      is the remap's own, #3954), with a genuinely well-formed file
       underneath it (the real-world case the module doc comment names: "a
       transient EPERM/EBUSY from an AV scanner or a cloud-sync client").
       Under the real capture position, the capture eats the blip
@@ -614,7 +615,9 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (path === historyPath) {
           historyReadCount += 1;
-          if (historyReadCount === 1) {
+          // Read 1 is the remap's own history read (#3954, which fails open on
+          // a degraded file); read 2 is the persist block's capture.
+          if (historyReadCount === 2) {
             // The one-shot blip — a transient EBUSY/EPERM, not a damaged
             // file. loadCastIdHistoryWithStatus's own try/catch turns this
             // into a 'degraded' verdict exactly as it would a real one.

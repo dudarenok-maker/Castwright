@@ -91,6 +91,10 @@ function nameKeyOf(c: Record<string, unknown>): string {
     the `notLinkedTo` gate by book (see `notLinkedToId`). Omit it to keep the
     bookId-blind behaviour.
 
+    `idHistory` (optional) is the book's `cast-id-history.json` `supersededBy`
+    map. A pair whose fresh id is already recorded there as retired to a
+    different live prior id is refused (see the guard below).
+
     Returns new arrays; `fresh`, `sentences` and `priorCast` are not
     mutated. */
 export function remapFreshToPriorIds<
@@ -102,12 +106,14 @@ export function remapFreshToPriorIds<
   priorCast: ReadonlyArray<PriorCastRow>,
   priorRewrites: Readonly<Record<string, string>> = {},
   currentBookId?: string,
+  idHistory: Readonly<Record<string, string>> = {},
 ): { characters: C[]; sentences: S[]; rewrites: Record<string, string> } {
   if (fresh.length === 0 || priorCast.length === 0) {
     return { characters: [...fresh], sentences: [...sentences], rewrites: {} };
   }
 
   const priorIdAfter = (id: string): string => priorRewrites[id] ?? id;
+  const priorLiveIds = new Set(priorCast.map((p) => priorIdAfter(p.id)));
 
   const freshByName = new Map<string, C[]>();
   for (const f of fresh) {
@@ -211,6 +217,37 @@ export function remapFreshToPriorIds<
     // Wave 2 final-review finding 2 — see `isReservedId`. Both directions,
     // and the prior row's raw id as well as its destination.
     if (isReservedId(freshRow.id) || isReservedId(priorRow.id) || isReservedId(target)) continue;
+    /* #3954 review finding 4 — the fresh id is already retired in the id
+       history to a DIFFERENT live prior id: the user merged that character
+       into it, a recorded decision like a `notLinkedTo` edge. Retiring the
+       id onto this pair would overwrite that entry (`retireCharacterId` writes
+       `supersededBy[from]` unconditionally) and send every line the user
+       assigned to the merge target to this row instead. Follow the history:
+       refuse the name join. A recorded target that is no longer live is a
+       stale entry the persist prunes, and does not block.
+
+       "Refuse" has to mean more than leaving the fresh row alone: a fresh row
+       that keeps its own id is a LIVE row, and the resolver is exact-id-first
+       (and the persist drops a history key a live row reclaims), so the lines
+       would stop resolving to the merge target. The refusal therefore adopts
+       the recorded target instead of the name-join one, subject to the same
+       reserved / notLinkedTo / held-by-a-fresh-row guards, and the retirement
+       it records is the entry already on file. */
+    const recordedTo = idHistory[freshRow.id];
+    if (recordedTo !== undefined && recordedTo !== target && priorLiveIds.has(recordedTo)) {
+      const recordedRow = priorCast.find((p) => priorIdAfter(p.id) === recordedTo);
+      if (
+        recordedRow &&
+        !freshIds.has(recordedTo) &&
+        !isReservedId(recordedTo) &&
+        !isReservedId(recordedRow.id) &&
+        !notLinkedToId(recordedRow, freshRow.id, currentBookId) &&
+        !notLinkedToId(freshRow as unknown as Record<string, unknown>, recordedRow.id, currentBookId)
+      ) {
+        pairs.push({ freshRow, priorRow: recordedRow, target: recordedTo, exact: true });
+      }
+      continue;
+    }
     if (
       notLinkedToId(priorRow, freshRow.id, currentBookId) ||
       notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id, currentBookId)
