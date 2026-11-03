@@ -980,6 +980,20 @@ recite:
     the guard's false branch (leave the book before the read settles, once
     with a hang and once with a prompt answer) and assert the mark.
 
+77. **A repair keyed on the immediate neighbour's marker, which moves a node
+    without its dependents** — PR #4007 pass 4 (#3992): a row stranded on a
+    declined voice was moved onto its source's new uuid by checking only the
+    source's "declined" marker, and the move took that row and its same-book
+    siblings but not the rows that follow it. The row below it, one hop
+    further, had a source that held the new uuid but carried no marker (it was
+    a follower, not a decliner), so the next hop's check no longer saw why it
+    had to move and its design overwrote the earlier book. Checkable: for every
+    repair that moves a node on the strength of a marker on its direct
+    neighbour, ask what depends on the node and whether the dependents move
+    with it, and what the dependents' own check sees afterwards (the marker is
+    on the neighbour, not on them). Then build a chain one longer than the
+    case the fix was written for and drive the repair from its middle.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
