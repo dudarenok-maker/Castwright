@@ -18,6 +18,15 @@
    `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId) is
    gated by the SAME token.
 
+   Gate book CONTENT only (PR #4004 pass 3, owner decision): a write that can overwrite the
+   twin's content or identity (cast, manuscript, state slices, rename, delete, analysis, the
+   body-keyed cast writers) is gated. Per-listener writes are EXEMPT, because none carries a
+   snapshot of the slices the gate protects and several clients (the Android companion, a
+   fresh tab's mini-player keepalive flush) can never present a token:
+     PUT  /api/books/:bookId/listen-progress
+     POST /api/books/:bookId/shelf-status
+     PUT  /api/books/:bookId/listen-stats
+
    Mounted once, in app.ts, ahead of every `/api/books/:bookId` router. */
 
 import { randomUUID } from 'node:crypto';
@@ -59,11 +68,14 @@ function refuseUnlessRead(scopeBookId: string | undefined, req: Request, res: Re
   res.status(409).json({ error: BOOK_REPAIRED_MESSAGE, code: BOOK_REPAIRED_RELOAD });
 }
 
+/** Paths under `/api/books/:bookId` whose writes are per-listener records, not book content. */
+const LISTENER_WRITE_PATHS: ReadonlySet<string> = new Set(['/listen-progress', '/shelf-status', '/listen-stats']);
+
 const isRead = (req: Request): boolean => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
 
 /** `app.use('/api/books/:bookId', …)`: every write, rename and delete on a repaired id. */
 export function repairedBookGate(req: Request, res: Response, next: NextFunction): void {
-  if (isRead(req)) return next();
+  if (isRead(req) || LISTENER_WRITE_PATHS.has(req.path)) return next();
   refuseUnlessRead(String(req.params.bookId), req, res, next);
 }
 

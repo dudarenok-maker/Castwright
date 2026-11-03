@@ -94,18 +94,37 @@ describe('the repaired-id write gate (#3713)', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/[\\/]Auth[\\/]/);
   });
 
-  it('a PUT, POST and the listen writes are refused the same way', async () => {
+  it('a content write (cast slice, state, reparse) is refused the same way', async () => {
     await repairedPair(false);
     for (const [method, url] of [
       ['put', '/api/books/auth__ser__book/state'],
-      ['put', '/api/books/auth__ser__book/listen-progress'],
-      ['post', '/api/books/auth__ser__book/shelf-status'],
       ['post', '/api/books/auth__ser__book/reparse'],
     ] as const) {
       const res = await request(app)[method](url).send({ slice: 'cast', patch: {} });
       expect(res.status, `${method} ${url}`).toBe(409);
       expect(res.body.code).toBe('book_repaired_reload');
     }
+  });
+
+  /* Owner decision (PR #4004 pass 3): gate book CONTENT only. The companion app's three writes
+     and a fresh tab's keepalive flush carry nothing that can overwrite the twin's content or
+     identity, and none of them can present a token. */
+  it('the per-listener writes (listen-progress, shelf-status, listen-stats) pass on a repaired id with no token', async () => {
+    await repairedPair(false);
+    for (const [method, url, body] of [
+      ['put', '/api/books/auth__ser__book/listen-progress', { chapterId: 1, currentSec: 3 }],
+      ['post', '/api/books/auth__ser__book/shelf-status', { finished: true }],
+      ['put', '/api/books/auth__ser__book/listen-stats', { days: {} }],
+    ] as const) {
+      const res = await request(app)[method](url).send(body);
+      expect(res.status, `${method} ${url}`).not.toBe(409);
+    }
+  });
+
+  it('a prefix-lookalike of an exempt path is still gated', async () => {
+    await repairedPair(false);
+    const res = await request(app).put('/api/books/auth__ser__book/listen-progress/extra').send({});
+    expect(res.status).toBe(409);
   });
 
   it('a wrong token is refused like no token', async () => {

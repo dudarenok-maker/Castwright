@@ -901,6 +901,12 @@ id are the same string. The rule, exactly:
 - Any non-GET/HEAD/OPTIONS request on `/api/books/:bookId/...` whose `:bookId` is registered must send the same token in
   `X-Book-Read-Token`. Without it, or with a different one, the answer is **409**
   `{ error, code: 'book_repaired_reload' }`. The message is a fixed, path-free sentence.
+- **The gate covers book content only (owner decision, PR #4004 pass 3).** Per-listener records are exempt, since none
+  carries a snapshot of the slices the gate protects and several clients (the Android companion, a fresh tab's
+  mini-player keepalive flush) cannot present a token. The exempt routes, exactly:
+  `PUT /api/books/:bookId/listen-progress`, `POST /api/books/:bookId/shelf-status`,
+  `PUT /api/books/:bookId/listen-stats` (the mini-player's keepalive flush is the last one). A stale tab's listen
+  record landing on the twin that kept the id is accepted. Everything else non-GET is gated.
 - When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it, the kept twin's manuscriptId is
   registered too, scoped to the same token, so `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId)
   is gated the same way.
