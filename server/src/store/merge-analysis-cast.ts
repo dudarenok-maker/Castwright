@@ -701,7 +701,7 @@ function groupHasNotLinkedEdge(
 function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
   const keyOf = (e: unknown): string =>
     e && typeof e === 'object'
-      ? `${String((e as { bookId?: unknown }).bookId)} ${String((e as { characterId?: unknown }).characterId)}`
+      ? JSON.stringify([(e as { bookId?: unknown }).bookId, (e as { characterId?: unknown }).characterId])
       : `s:${String(e)}`;
   const out = [...(a ?? [])];
   const seen = new Set(out.map(keyOf));
