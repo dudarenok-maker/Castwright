@@ -971,7 +971,7 @@ best-effort: an absent file is skipped, an unreadable or unwritable one is logge
 | `dropped-quotes.json` | envelope `manuscriptId` (informational) | rekeyed |
 | `analysis-state.json`, `analysis-last-outcome.json` | top-level `manuscriptId` (the library scan reports it) | rekeyed |
 | `state.json` | `manuscriptId`, also the revision salt (`book-state.ts`) | rewritten; an open tab's `baseRevision` no longer matches, which is wanted |
-| **Analysis cache** `server/handoff/cache/{manuscriptId}.json` | global, outside the book folder, one file per id shared by both twins | **not carried**: it stays with the winner under the old id. The loser loses its saved partial-analysis cache; its next Analyse starts from the first chapter, with no resume |
+| **Analysis cache** `server/handoff/cache/{manuscriptId}.json` | global, outside the book folder, one file per id shared by both twins | **copied** to the loser's new id (`copyFile` with `COPYFILE_EXCL`, best-effort, after the state write); the winner keeps the old file. Both twins read the one file before the sweep, so the copy reproduces the loser's pre-sweep view exactly: an analysed, unconfirmed copy stays at Confirm instead of dropping back to Analysing (`scan.ts` reads the cache for the status). If it cannot be copied the failure is logged and the loser re-analyses from the first chapter |
 | `manuscript-edits.json`, `cast.json`, audio | folder-local, hold no manuscriptId | unaffected |
 | Auto-backup snapshots of the loser | contain the old manuscriptId (and old bookId) | not rewritten: restoring one re-creates the share, and the next start's sweep re-mints it again |
 

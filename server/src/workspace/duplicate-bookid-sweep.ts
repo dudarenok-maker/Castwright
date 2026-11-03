@@ -20,7 +20,8 @@
    folder could hold a twin or the next id). One twin's cast.json failing for any reason but absence skips
    just that group. */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { nanoid } from 'nanoid';
 import {
@@ -32,6 +33,7 @@ import {
   withBookOp,
   withBookPathClaim,
 } from './book-op-lock.js';
+import { cachePath } from '../store/analysis-cache.js';
 import { updateStateAtDir } from './book-state-update.js';
 import {
   BOOKS_ROOT,
@@ -247,11 +249,25 @@ function swapId(node: unknown, oldId: string, newId: string): boolean {
   return true;
 }
 
-/** Everything in the loser's OWN folder keyed on its manuscriptId. NOT carried: the
- *  analysis cache (`handoff/cache/{manuscriptId}.json`) is global and shared by
- *  both twins under the old id, so it stays with the winner. Called AFTER the state
- *  write, inside the same withBookOp span. */
+/** The analysis cache (`handoff/cache/{manuscriptId}.json`) is global, outside the book
+ *  folder, and both twins read it under the shared id. The winner keeps the old file;
+ *  the loser gets a COPY under its new id, which reproduces its pre-sweep view exactly
+ *  (without it the status scan sends an analysed, unconfirmed copy back to Analysing).
+ *  Best-effort: absent is the common case; any other failure is logged and the loser
+ *  re-analyses from the first chapter. */
+async function copyAnalysisCache(oldId: string, newId: string): Promise<void> {
+  try {
+    await copyFile(cachePath(oldId), cachePath(newId), constants.COPYFILE_EXCL);
+  } catch (err) {
+    if (isEnoent(err)) return;
+    console.warn(`[duplicate-bookid] could not copy the analysis cache of "${oldId}" to "${newId}"; the copy re-analyses from the start`, err);
+  }
+}
+
+/** Everything in the loser's OWN folder keyed on its manuscriptId, and its analysis
+ *  cache. Called AFTER the state write, inside the same withBookOp span. */
 async function rekeyManuscriptId(loserDir: string, oldId: string, newId: string): Promise<void> {
+  await copyAnalysisCache(oldId, newId);
   await rekeyJsonFile(manuscriptHintsJsonPath(loserDir), (j) => {
     const entries = isRecord(j) ? j.entries : null;
     if (!Array.isArray(entries)) return false;
@@ -323,16 +339,16 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
                 do newMs = `mns_${nanoid(10)}`;
                 while (ids.takenManuscriptIds.has(newMs));
               }
-              const written = await updateStateAtDir(loserDir, (fresh) =>
-                fresh.bookId === group.bookId
-                  ? {
-                      ...fresh,
-                      bookId: newBookId,
-                      ...(newMs && fresh.manuscriptId === oldMs ? { manuscriptId: newMs } : {}),
-                    }
-                  : null,
-              );
-              return written ? { newBookId, oldMs, newMs } : null;
+              /* Set by the callback: the manuscriptId actually replaced. A state.json whose
+                 manuscriptId moved since the read above is left on the id it carries, and
+                 nothing is rekeyed from `oldMs`. */
+              let remintedMs: string | null = null;
+              const written = await updateStateAtDir(loserDir, (fresh) => {
+                if (fresh.bookId !== group.bookId) return null;
+                remintedMs = newMs && fresh.manuscriptId === oldMs ? newMs : null;
+                return { ...fresh, bookId: newBookId, ...(remintedMs ? { manuscriptId: remintedMs } : {}) };
+              });
+              return written ? { newBookId, oldMs, newMs: remintedMs as string | null } : null;
             });
             if (wrote === null) return null;
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
