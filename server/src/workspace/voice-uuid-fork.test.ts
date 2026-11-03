@@ -140,9 +140,22 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     const bad = book('Bad', 'bad-id', []);
     writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
-    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
+    const still = { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
+    expect(await shouldFork(two, still)).toBe(true);
     book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
-    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
+    expect(await shouldFork(two, still)).toBe(true);
+  });
+
+  it('a row that already left the declined voice is not re-forked by an unreadable book (pass 3)', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: 'u_own' }]);
+    const bad = book('Bad', 'bad-id', []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    const forked = { id: 'c2', voiceUuid: 'u_own', declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
+    expect(await shouldFork(two, forked)).toBe(false);
+    // a readable earlier book holding the SAME uuid still forks it
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: 'u_own' }]);
+    expect(await shouldFork(two, forked)).toBe(true);
   });
 
   it('an unreadable book never makes a row nobody declined fork', async () => {
@@ -327,14 +340,33 @@ describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
   it('returns the declined row a linked row follows', async () => {
     const three = chain();
     const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) });
-    expect(found && [basename(found.dir), found.characterId]).toEqual(['Two', 'c']);
+    expect(found && 'dir' in found && [basename(found.dir), found.characterId]).toEqual(['Two', 'c']);
   });
 
   it('walks several links up', async () => {
     chain();
     const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
     const found = await findAncestor(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) });
-    expect(found && basename(found.dir)).toBe('Two');
+    expect(found && 'dir' in found && basename(found.dir)).toBe('Two');
+  });
+
+  it('returns the source’s uuid for a follower stranded on a voice the source forked away from (pass 3)', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    book('Two', TWO_ID, [
+      { id: 'c', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] },
+    ]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toEqual({
+      voiceUuid: 'u_two',
+    });
+  });
+
+  it('a source on another uuid that never declined this one is not a stranding', async () => {
+    reset();
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: 'u_two' }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
   });
 
   it('null when nothing up the chain declined: a plain link shares by design', async () => {

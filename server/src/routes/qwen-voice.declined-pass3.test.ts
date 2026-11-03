@@ -11,6 +11,7 @@ import {
   writeFileSync,
   readFileSync,
   readdirSync,
+  existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -291,5 +292,75 @@ describe('pass-3 2 — a follower the fork could not see is not left on the earl
     seedChain();
     rmSync(bookDir('Book Two'), { recursive: true, force: true });
     expect((await design('Book Three')).status).toBe(200);
+  });
+});
+
+describe('pass-3 3 — an unreadable book anywhere does not re-fork a row that already left the declined voice', () => {
+  const ownBase = {
+    ...baseRow,
+    voiceUuid: 'u_two',
+    overrideTtsVoices: {
+      qwen: {
+        name: 'qwen-u_two',
+        variants: { angry: { name: 'qwen-u_two__angry' } },
+      },
+    },
+  };
+  function seedForked() {
+    seedChain();
+    writeBook('Book Two', [{ ...ownBase, ...declined() }]);
+    writeFileSync(join(qwenDir(), 'qwen-u_two.pt'), Buffer.from('TWO-OWN-PT'));
+    writeFileSync(join(qwenDir(), 'qwen-u_two__angry.pt'), Buffer.from('TWO-ANGRY'));
+    rmSync(bookDir('Book Three'), { recursive: true, force: true });
+  }
+  const tearUnrelated = () => {
+    const dir = join(workspaceRoot, 'books', 'Someone Else', 'Standalones', 'Unrelated', '.audiobook');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cast.json'), TORN);
+  };
+  const mend = () =>
+    rmSync(join(workspaceRoot, 'books', 'Someone Else'), { recursive: true, force: true });
+
+  it('control: no torn file, a variant design keeps the uuid and both variants', async () => {
+    seedForked();
+    expect((await design('Book Two', { emotion: 'sad' })).status).toBe(200);
+    const row = readRow('Book Two');
+    expect(row.voiceUuid).toBe('u_two');
+    expect(Object.keys(row.overrideTtsVoices.qwen.variants).sort()).toEqual(['angry', 'sad']);
+  });
+
+  it('a torn unrelated cast.json leaves the sole holder on its uuid with {angry, sad}', async () => {
+    seedForked();
+    tearUnrelated();
+    const res = await design('Book Two', { emotion: 'sad' });
+    mend();
+    expect(res.status).toBe(200);
+    const row = readRow('Book Two');
+    expect(row.voiceUuid).toBe('u_two');
+    expect(Object.keys(row.overrideTtsVoices.qwen.variants).sort()).toEqual(['angry', 'sad']);
+    expect(strays().filter((f) => !f.startsWith('qwen-u_two'))).toEqual([]);
+  });
+
+  it('three base designs while the file stays torn make no new families and orphan nothing', async () => {
+    seedForked();
+    tearUnrelated();
+    for (let i = 0; i < 3; i++) expect((await design('Book Two')).status).toBe(200);
+    mend();
+    expect(readRow('Book Two').voiceUuid).toBe('u_two');
+    expect(strays().filter((f) => !f.startsWith('qwen-u_two'))).toEqual([]);
+    expect(existsSync(join(qwenDir(), 'qwen-u_two__angry.pt'))).toBe(true);
+  });
+
+  it('failure path: a row still on the declined voice DOES fork when an unrelated book is torn (the earlier book wins)', async () => {
+    seedChain();
+    rmSync(bookDir('Book Three'), { recursive: true, force: true });
+    writeRows('Book One', []); // Book One no longer visible as a holder...
+    tearUnrelated(); // ...and an unreadable book might be it
+    const res = await design('Book Two');
+    mend();
+    expect(res.status).toBe(200);
+    expect(book1Intact()).toBe(true);
+    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
   });
 });

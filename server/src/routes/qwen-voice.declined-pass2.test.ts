@@ -133,7 +133,9 @@ function seedChain() {
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
   writeBook('Book One', [{ ...baseRow }]);
-  writeBook('Book Two', [{ ...baseRow, declinedVoiceFrom: [ids['Book One']] }]);
+  writeBook('Book Two', [
+    { ...baseRow, declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'] },
+  ]);
   writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two') }]);
   mkdirSync(qwenDir(), { recursive: true });
   writeFileSync(join(qwenDir(), 'qwen-u_shared.pt'), ORIG_PT);
@@ -223,7 +225,7 @@ describe('pass-2 U — an unreadable earlier book is a holder, not an absence', 
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
   });
 
-  it('the cost: while Book One stays unreadable a second design forks again, and still never touches it', async () => {
+  it('once forked, a second design while Book One stays unreadable does not fork again (pass 3), and never touches it', async () => {
     seedChain();
     writeRows('Book Three', []);
     const good = readFileSync(castPath('Book One'), 'utf8');
@@ -232,7 +234,7 @@ describe('pass-2 U — an unreadable earlier book is a holder, not an absence', 
     const first = readRow('Book Two').voiceUuid;
     expect((await design('Book Two')).status).toBe(200);
     writeFileSync(castPath('Book One'), good);
-    expect(readRow('Book Two').voiceUuid).not.toBe(first);
+    expect(readRow('Book Two').voiceUuid).toBe(first);
     expect(book1Intact()).toBe(true);
   });
 

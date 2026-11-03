@@ -275,14 +275,19 @@ export async function findDeclinedAncestor(
 }
 
 /* An unreadable other book is treated as a possible HOLDER of the uuid (and, in
-   shouldMintApartFromLegacyKey, of the legacy key), by BOTH fork decisions. The
-   two outcomes are not symmetric: assuming it holds it costs one extra fork (a
-   copy of the base family and a fresh uuid, nothing audible, repeated on each
-   design for as long as the file stays unreadable, which is transient), while
-   assuming it holds nothing lets the redesign overwrite that book's `.pt` with no
-   way to get it back. The earlier book's voice wins over a spare copy. The other
-   direction, a book that could be a FOLLOWER we cannot see, is NOT covered at write
-   time: a follower the first scan found that became unreadable, or a link that
+   shouldMintApartFromLegacyKey, of the legacy key), but only by a row that could
+   still be sharing it. The two outcomes are not symmetric: assuming it holds the
+   voice for a row that DOES still share a declined voice costs one extra fork (a
+   copy of the base family and a fresh uuid), while assuming it holds nothing lets
+   the redesign overwrite that book's `.pt` with no way to get it back. So a row
+   whose uuid is on its own `declinedVoiceUuids` (it still holds the voice it
+   declined) forks. A row whose uuid is NOT on that list has already left the
+   declined voice (a fork gives it a uuid no decline names): no unreadable book,
+   anywhere in the library, can be the earlier book for it, and re-forking it on
+   every design would drop its own variants and orphan its own files for as long as
+   some unrelated cast.json stays unreadable. It is decided from the readable
+   books alone. The other direction, a book that could be a FOLLOWER we cannot
+   see, is NOT covered at write time: a follower the first scan found that became unreadable, or a link that
    landed after it, fails the fork (qwen-voice.ts), but one that was already
    unreadable at the first scan is simply not in the set, so the fork leaves it on
    U. It is caught later, when ITS design comes: findDeclinedAncestor sees the
@@ -295,6 +300,7 @@ export async function shouldForkSharedVoiceUuid(
     voiceUuid?: string | null;
     matchedFrom?: unknown;
     declinedVoiceFrom?: string[] | null;
+    declinedVoiceUuids?: string[] | null;
   },
 ): Promise<boolean> {
   const uuid = character.voiceUuid;
@@ -308,7 +314,7 @@ export async function shouldForkSharedVoiceUuid(
 
   const selfDir = resolve(bookDir);
   const { books, unreadable } = await loadOtherBooks(selfDir);
-  if (unreadable) return true;
+  if (unreadable && character.declinedVoiceUuids?.includes(uuid)) return true;
   const followed = new Set(
     (await walkFollowers(selfDir, character, uuid, books)).map((f) => rowKey(f.dir, f.characterId)),
   );
