@@ -3523,7 +3523,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       uiActions.setPreviewRegen({
         characterId: 'marlow',
         previewChapterId: 2,
-        remainingChapterIds: [3],
+        remainingChapterIds: [2, 3],
         reason: 'voice',
         note: '',
         bookId: 'other-book',
@@ -3533,7 +3533,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(screen.getByText('Chapter 2'));
     fireEvent.click(screen.getAllByRole('button', { name: /^Exclude$/i }).at(-1)!);
     await waitFor(() => expect(store.getState().chapters.chapters.find((c) => c.id === 2)?.excluded).toBe(true));
-    expect(store.getState().ui.previewRegen).toMatchObject({ bookId: 'other-book', remainingChapterIds: [3] });
+    expect(store.getState().ui.previewRegen).toMatchObject({ bookId: 'other-book', remainingChapterIds: [2, 3] });
     expect(store.getState().notifications.toasts).toEqual([]);
   });
 
