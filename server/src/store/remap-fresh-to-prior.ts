@@ -148,7 +148,15 @@ export function remapFreshToPriorIds<
      declined link to the voiced twin's id). Every guard below then runs on
      the chosen pair, unchanged and in the same order as before this widening. */
   const choosePrior = (rows: ReadonlyArray<PriorCastRow>): PriorCastRow | undefined => {
-    const eligible = rows.filter((p) => !freshIds.has(priorIdAfter(p.id)));
+    /* The narrator is never a candidate, and so never a voiced twin either:
+       `mergeCore` drops `NARRATOR_CHARACTER_IDS` rows before its own selection
+       (`merge-analysis-cast.ts`), so a voiced narrator renamed to a
+       character's name must not make that name ambiguous here. The two
+       buckets stay in, as in `mergeCore`; `isReservedId` still refuses them
+       after selection. */
+    const eligible = rows.filter(
+      (p) => !freshIds.has(priorIdAfter(p.id)) && !NARRATOR_CHARACTER_IDS.includes(p.id),
+    );
     // Over `eligible`, not `rows`: a row the fresh roster already took over by
     // id is not a candidate, so it is not a twin whose decision matters here.
     if (eligible.some((c) => eligible.some((o) => o !== c && declinesLinkOf(c, o)))) {

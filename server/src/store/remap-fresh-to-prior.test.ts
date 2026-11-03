@@ -456,4 +456,32 @@ describe('remapFreshToPriorIds', () => {
     );
     expect(r.rewrites).toEqual({});
   });
+
+  it('R11: a voiced narrator sharing the name is not a voiced twin (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'anna-new', name: 'Anna' }],
+      [],
+      [
+        { id: 'narrator', name: 'Anna', voiceId: 'v_narr' },
+        { id: 'anna-x', name: 'Anna', voiceState: 'locked' },
+      ],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({ 'anna-new': 'anna-x' });
+  });
+
+  it('R12: the same, in the surname-tolerant tier (#3954)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'anna-lee', name: 'Anna Lee' }],
+      [],
+      [
+        { id: 'narrator', name: 'Anna', voiceId: 'v_narr' },
+        { id: 'anna-x', name: 'Anna', voiceState: 'locked' },
+      ],
+      {},
+      'book-2',
+    );
+    expect(r.rewrites).toEqual({ 'anna-lee': 'anna-x' });
+  });
 });
