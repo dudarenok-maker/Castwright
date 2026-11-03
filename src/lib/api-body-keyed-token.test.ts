@@ -53,6 +53,29 @@ describe('body-keyed cast writers carry the repaired-id token', () => {
     expect(tokenOf(2)!.split(',').sort()).toEqual(['tokS', 'tokT']);
   });
 
+  it('linkPriorCharacter echoes the path book\'s and the target book\'s tokens (pass 4)', async () => {
+    await readAndCommit('src', 'tokS');
+    await readAndCommit('tgt', 'tokT');
+    fetchMock.mockResolvedValue(ok());
+    await api.linkPriorCharacter({ bookId: 'src', sourceCharacterId: 'c0', targetBookId: 'tgt', targetCharacterId: 'c1' });
+    expect(tokenOf(2)!.split(',').sort()).toEqual(['tokS', 'tokT']);
+  });
+
+  it('addFromSeriesRoster echoes the path book\'s and the target book\'s tokens (pass 4)', async () => {
+    await readAndCommit('src', 'tokS');
+    await readAndCommit('tgt', 'tokT');
+    fetchMock.mockResolvedValue(ok());
+    await api.addFromSeriesRoster({ bookId: 'src', targetBookId: 'tgt', targetCharacterId: 'c1' });
+    expect(tokenOf(2)!.split(',').sort()).toEqual(['tokS', 'tokT']);
+  });
+
+  it('a series-scope setVoiceOverride echoes the token of the book it names (pass 4)', async () => {
+    await readAndCommit('b1', 'tok1');
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await api.setVoiceOverride('v1', { engine: 'kokoro', name: 'af_heart' }, { scope: 'series', bookId: 'b1' });
+    expect(tokenOf(1)).toBe('tok1');
+  });
+
   it('sends no header for a book with no committed token (nothing repaired)', async () => {
     fetchMock.mockResolvedValue(ok());
     await api.assignLibraryVoice('lib-1', { bookId: 'b9', characterId: 'c1' });

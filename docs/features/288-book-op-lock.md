@@ -924,6 +924,24 @@ id are the same string. The rule, exactly:
   `refuseUnreadRepairedBooks` first, which requires the token of every named book that is gated (the header may carry
   several, comma-joined). Their client calls (`bookFetchFor` in `lib/book-read-token.ts`, used by
   `overrideLibraryCast`, `assignLibraryVoice`, `unassignLibraryVoice`) echo the committed tokens of the books they name.
+- **Every other write that names a book outside the path is gated too (owner decision, PR #4004 pass 4).** The sweep
+  read each write helper's callers (`withCastLock`, `writeJsonAtomic(castJsonPath…)`, `writeStateJsonAtomic`,
+  `updateStateAtDir`, `manuscript-edits.json`) and every route that takes a book id from a body or query. Gated, each
+  by `refuseUnreadRepairedBooks` (409 with no token, nothing written; success with the named book's token):
+  `POST /api/books/:bookId/cast/add-from-roster` and `POST /api/books/:bookId/cast/link-prior` (body `targetBookId`;
+  the path book is gated by the mount), and `PUT /api/voices/:voiceId/override` with `scope: 'series'` (body or query
+  `bookId`, which the series, hence every `cast.json` written, is resolved from). Confirmed safe, with why:
+  `POST /api/voice-library/promote` (reads the book's character, writes only the voice library; the origin cast.json is
+  never modified), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by voice uuid,
+  name no book), `PUT /api/voices/:voiceId/override` with `scope: 'workspace'` (names no book), the series fan-out of
+  `series-patch`, `voice-override-linked`, `cast/tier` and the voice-style writers (the path book is gated; the
+  series-mates they also write are matched by voice id or name, which the client does not name and cannot hold a token
+  for), `POST /api/queue/*` (writes the queue, not a book file), `POST /api/books` and `POST /api/import` (mint a
+  new book), `library-sync-manifest` (its `bookId` query only selects a manifest; the uuid migration it writes is
+  derived from the same file). The 409 body names the book the refusal was scoped to, so the client re-reads the right
+  one; the `link-prior`, `add-from-roster` and override client calls use `bookFetchFor` to echo the tokens.
+  **Open design question for the owner:** a series-scope fan-out onto a repaired series-mate the client did not name is
+  not refused (gating it would demand tokens for books the client never read, so the write could never succeed).
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
@@ -932,9 +950,10 @@ An **old bundle** knows nothing of the token, so it sends none and is refused to
 The refusal is **silent** in an old bundle (v1.14.0 logs a failed `PUT /state` to the console and shows nothing, so the
 edits stay on screen unsaved), which is why the release notes tell users to **reload any tab left open across the
 upgrade**. With the 7-day persistence, such a tab stays refused until it reloads, even across further restarts within the
-week. `PUT /voices/:voiceId/override` and revoke are keyed by voice, not by a book id, and are not gated. (An earlier
-revision of this section said the override and assign writers were all "keyed by voice"; that is true of those two
-only, and `library-cast/override` and `assign` name a book in the request and are gated as above.)
+week. Revoke and the workspace-scope `PUT /voices/:voiceId/override` are keyed by voice, not by a book id, and are not gated;
+the series-scope override names a book and is (pass 4, above). (An earlier revision of this section said the override
+and assign writers were all "keyed by voice"; that is true only of those two, and `library-cast/override` and `assign`
+name a book in the request and are gated as above.)
 
 **Client** (`lib/book-read-token.ts`, `bookFetch`, used by every `fetch` in `lib/api.ts` and by the mini-player's
 keepalive flush): a book-state read only **issues** the token; the caller that applied the read as the book's full

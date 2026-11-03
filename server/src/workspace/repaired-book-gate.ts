@@ -27,6 +27,22 @@
      POST /api/books/:bookId/shelf-status
      PUT  /api/books/:bookId/listen-stats
 
+   Writes that name a book OUTSIDE the path are gated by the book they name, through
+   `refuseUnreadRepairedBooks` in the handler (pass 4, owner decision: every write that can overwrite a
+   repaired book's content or identity). Gated:
+     POST   /api/library-cast/override                (sourceBookId, targetBookId)
+     POST   /api/voice-library/:uuid/assign           (body bookId)
+     DELETE /api/voice-library/:uuid/assign           (query bookId)
+     POST   /api/books/:bookId/cast/add-from-roster   (body targetBookId; the path book by the mount)
+     POST   /api/books/:bookId/cast/link-prior        (body targetBookId; the path book by the mount)
+     PUT    /api/voices/:voiceId/override             (scope 'series': body or query bookId)
+   Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
+   library); voice-library revoke and DELETE /:uuid, and PUT /api/voices/:id/override with scope 'workspace'
+   (keyed by voice, name no book); the series fan-out of series-patch / voice-override-linked / cast/tier /
+   voice-style (path book gated; the series-mates are matched by voice id or name, not named by the client);
+   /api/queue/* (writes the queue); POST /api/books and /api/import (mint a new book); library-sync-manifest
+   (a query bookId only selects a manifest). See plan 288, "Every other write".
+
    Scope keys are bookIds. The kept twin's manuscriptId, when the sweep had to
    re-mint the loser's because they shared it, is registered too, so
    `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId) is
@@ -246,8 +262,8 @@ export function repairedManuscriptGate(req: Request, res: Response, next: NextFu
   refuseUnlessRead(scope && !isExpired(scope.repairedAt, Date.now()) ? scope.bookId : undefined, req, res, next);
 }
 
-/** Gate a write that names its book(s) in the request BODY or query, not the path (library-cast/override,
- *  voice-library assign): every named book that is gated must have its token echoed. Answers the 409
+/** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the
+ *  header comment): every named book that is gated must have its token echoed. Answers the 409
  *  itself; returns true when it did, so the handler returns. */
 export function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): boolean {
   for (const id of bookIds) {

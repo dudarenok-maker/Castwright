@@ -2253,7 +2253,7 @@ async function realSetVoiceOverride(
   const body: { override: BaseVoice | null; scope?: string; bookId?: string } = { override };
   if (opts?.scope) body.scope = opts.scope;
   if (opts?.bookId) body.bookId = opts.bookId;
-  const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
+  const res = await bookFetchFor(opts?.bookId ? [opts.bookId] : [])(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -4864,7 +4864,7 @@ async function realLinkPriorCharacter(
   args: LinkPriorCharacterArgs,
 ): Promise<LinkPriorCharacterResponse> {
   const { bookId, ...body } = args;
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
+  const res = await bookFetchFor([bookId, args.targetBookId])(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -5254,7 +5254,7 @@ async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
   const { bookId, ...body } = args;
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/add-from-roster`, {
+  const res = await bookFetchFor([bookId, args.targetBookId])(`/api/books/${encodeURIComponent(bookId)}/cast/add-from-roster`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
