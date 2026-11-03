@@ -202,6 +202,54 @@ describe('the repaired manuscriptId gate (#3713)', () => {
   });
 });
 
+/* PR #4004 pass 3, finding 6: two losers that share a manuscriptId only with each other. The first
+   is re-minted and the second KEEPS the id under its own new bookId, so the manuscriptId scope has
+   to follow the id to the book that carries it, or that book's Analyse is refused for good. */
+describe('three twins: the manuscriptId scope follows the id to the book that carries it (#3713)', () => {
+  async function threeTwins() {
+    seed('Book w', { ms: 'm_w', rendered: true, rows: 5 });
+    seed('Book b', { ms: 'm_pair', rendered: false, rows: 1 });
+    seed('Book c', { ms: 'm_pair', rendered: false, rows: 1 });
+    return sweep.repairDuplicateBookIds();
+  }
+  const stateOf = (dir: string) => JSON.parse(readFileSync(paths.stateJsonPath(dir), 'utf8')) as { bookId: string; manuscriptId: string };
+  const dirOf = (f: string) => join(paths.BOOKS_ROOT, 'Auth', 'Ser', f);
+
+  it('the loser that keeps the shared id can Analyse after reading its own book', async () => {
+    const repairs = await threeTwins();
+    expect(repairs).toHaveLength(2);
+    const c = stateOf(dirOf('Book c'));
+    expect(c.manuscriptId).toBe('m_pair'); // C kept the id
+    expect(c.bookId).not.toBe('auth__ser__book');
+    const read = await request(app).get(`/api/books/${c.bookId}/state`);
+    const token = read.headers['x-book-read-token'] as string;
+    expect(token, 'a read of C must issue a token').toBeTruthy();
+    expect((await request(app).post('/api/manuscripts/m_pair/analysis').send({})).status).toBe(409);
+    const ok = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Book-Read-Token', token).send({});
+    expect(ok.status).toBe(202);
+  });
+
+  it('the winner token alone does NOT open the manuscript id of C (stale B-snapshot tabs stay refused)', async () => {
+    await threeTwins();
+    const wToken = gate.repairedReadToken('auth__ser__book')!;
+    const res = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Book-Read-Token', wToken).send({});
+    expect(res.status).toBe(409);
+  });
+
+  it('a re-minted id nobody carries any more gates nothing, and the winner own id is not gated', async () => {
+    await threeTwins();
+    const b = stateOf(dirOf('Book b'));
+    expect(b.manuscriptId).toMatch(/^mns_/);
+    expect((await request(app).post(`/api/manuscripts/${b.manuscriptId}/analysis`).send({})).status).toBe(202);
+    expect((await request(app).post('/api/manuscripts/m_w/analysis').send({})).status).toBe(202);
+  });
+
+  it('a pair whose kept twin carries the id (two twins) still scopes it to the kept twin', async () => {
+    await repairedPair(true);
+    expect((await request(app).post('/api/manuscripts/m_copy/analysis').send({})).status).toBe(409);
+  });
+});
+
 describe('where the gate is mounted (#3713)', () => {
   it('app.ts mounts both gates before the first router under their paths', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'app.ts'), 'utf8');

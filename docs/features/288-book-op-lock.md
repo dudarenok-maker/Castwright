@@ -913,9 +913,11 @@ id are the same string. The rule, exactly:
   `PUT /api/books/:bookId/listen-progress`, `POST /api/books/:bookId/shelf-status`,
   `PUT /api/books/:bookId/listen-stats` (the mini-player's keepalive flush is the last one). A stale tab's listen
   record landing on the twin that kept the id is accepted. Everything else non-GET is gated.
-- When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it, the kept twin's manuscriptId is
-  registered too, scoped to the same token, so `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId)
-  is gated the same way.
+- When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it, that manuscriptId is
+  registered too, scoped to the book that carries it **after the sweep** (pass 3): the kept twin normally, but with three
+  twins where two losers share it only with each other the first is re-minted and the second keeps it under its own new
+  bookId, so the id is scoped to that book and that book's id is gated too (its read issues the token). So
+  `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId) is gated by the token of the book it resolves to.
 - **Body-keyed writers are gated by the book they name (pass 3).** `POST /api/library-cast/override` writes both
   `sourceBookId`'s and `targetBookId`'s `cast.json`, and `POST` / `DELETE /api/voice-library/:uuid/assign` write
   `bookId`'s (body, and query for the DELETE), so the path mount cannot see them. Each calls

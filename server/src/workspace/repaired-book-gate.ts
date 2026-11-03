@@ -177,6 +177,15 @@ export function registerRepairedBook(bookId: string, sharedManuscriptId: string 
   return persistRepairedBookGate();
 }
 
+/** Re-scope a gated manuscriptId to the book that carries it after the sweep (a book that is not the one the id
+ *  was registered under): that book is gated too, so a read of it issues the token the id's writes ask for. */
+export function scopeManuscriptToBook(manuscriptId: string, bookId: string): Promise<void> {
+  const now = Date.now();
+  manuscriptScopes.set(manuscriptId, { bookId, repairedAt: now, persist: true });
+  if (!activeBook(bookId, now)) books.set(bookId, { token: randomUUID(), repairedAt: now, persist: true });
+  return persistRepairedBookGate();
+}
+
 /** The token a read of `bookId` returns, or undefined when the id is not gated. */
 export function repairedReadToken(bookId: string): string | undefined {
   return activeBook(bookId)?.token;

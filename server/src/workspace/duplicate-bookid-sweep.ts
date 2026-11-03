@@ -45,7 +45,7 @@ import {
   manuscriptHintsJsonPath,
   scriptReviewLedgerJsonPath,
 } from './paths.js';
-import { __resetRepairedBookGateForTest, registerRepairedBook } from './repaired-book-gate.js';
+import { __resetRepairedBookGateForTest, registerRepairedBook, scopeManuscriptToBook } from './repaired-book-gate.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 
 export interface DuplicateBookIdGroup {
@@ -328,6 +328,20 @@ async function sharedManuscriptIds(group: DuplicateBookIdGroup): Promise<Set<str
   return shared;
 }
 
+/** The bookId the group's member carrying `manuscriptId` has NOW (the winner keeps the group's id, a loser has
+ *  its new one), null when no member carries it, undefined when a member cannot be read (no answer). */
+async function carrierBookId(group: DuplicateBookIdGroup, manuscriptId: string): Promise<string | null | undefined> {
+  for (const dir of [group.winnerDir, ...group.loserDirs]) {
+    try {
+      const state = await readBookStateOrThrow(dir);
+      if (state?.manuscriptId === manuscriptId) return state.bookId;
+    } catch {
+      return undefined;
+    }
+  }
+  return null;
+}
+
 /** Never throws: one failing loser is logged (raw error, server log only) and the rest continue. */
 export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]> {
   const done: DuplicateBookIdRepair[] = [];
@@ -339,6 +353,8 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
   }
   for (const group of groups) {
     const sharedAtStart = await sharedManuscriptIds(group);
+    /* The manuscriptIds re-minted for a loser in this group, to be re-scoped once every loser is done. */
+    const remintedFrom = new Set<string>();
     for (const loserDir of group.loserDirs) {
       try {
         /* One withBookOp per loser, never nested. The hint is the only thing that
@@ -381,6 +397,7 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
               `[duplicate-bookid] "${group.bookId}" was carried by both ${group.winnerDir} and ${loserDir}; ` +
                 `${group.winnerDir} keeps it (ranked first), ${loserDir} is now "${wrote.newBookId}"`,
             );
+            if (wrote.newMs && wrote.oldMs) remintedFrom.add(wrote.oldMs);
             await registerRepairedBook(group.bookId, wrote.newMs ? wrote.oldMs : null);
             await rewriteExportManifests(loserDir, group.bookId, wrote.newBookId);
             if (wrote.oldMs && wrote.newMs) await rekeyManuscriptId(loserDir, wrote.oldMs, wrote.newMs);
@@ -410,6 +427,17 @@ export async function repairDuplicateBookIds(): Promise<DuplicateBookIdRepair[]>
         });
       } catch (err) {
         console.warn(`[duplicate-bookid] repair of "${group.bookId}" failed for one twin; continuing`, err);
+      }
+    }
+    /* PR #4004 pass 3: an id re-minted for one loser can stay on another (two losers sharing it only with
+       each other), so the manuscriptId gate follows the id to the book that carries it NOW. Left on the
+       group's id (the fallback each loser's own registration made) when no member can be read. */
+    for (const ms of remintedFrom) {
+      try {
+        const carrier = await carrierBookId(group, ms);
+        if (carrier && carrier !== group.bookId) await scopeManuscriptToBook(ms, carrier);
+      } catch (err) {
+        console.warn(`[duplicate-bookid] could not re-scope the gate on a shared manuscript id of "${group.bookId}"`, err);
       }
     }
   }
