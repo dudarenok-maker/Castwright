@@ -691,9 +691,26 @@ function groupHasNotLinkedEdge(
       // the re-minted orphan), and fusing the pair would delete that rejection.
       // The book scope still drops a cross-book self-id.
       if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
+      if (other !== c && declinesLinkOf(c, other)) return true;
     }
   }
   return false;
+}
+
+/** True when `c` declined, in its notLinkedTo, the series link `other` carries
+    in matchedFrom. That decline is cross-book, so the id-keyed check above
+    cannot see it; but a collapse keeps one row and would hand the declined link
+    to the survivor, for the next run's linker to land (#3965). Matched on the
+    link's own (bookId, characterId); a bare string matches by characterId. */
+function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
+  const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
+  if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
+  return (c.notLinkedTo as unknown[]).some((entry) => {
+    if (typeof entry === 'string') return entry === mf.characterId;
+    if (!entry || typeof entry !== 'object') return false;
+    const e = entry as { bookId?: unknown; characterId?: unknown };
+    return e.characterId === mf.characterId && (e.bookId === undefined || e.bookId === mf.bookId);
+  });
 }
 
 /** `a` plus the entries of `b` it lacks, deduped by (bookId, characterId); a

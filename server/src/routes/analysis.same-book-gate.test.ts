@@ -477,6 +477,49 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
   );
 
   it.each(['main', 'subset'] as const)(
+    "a row that declines another row's link keeps the rows apart, so the decline survives (%s job)",
+    async (kind) => {
+      /* `thomas` already holds the series link to book-1/old-tom; `old-tom`
+         declined exactly that. Fusing them put the declined link on the
+         survivor, and the linker then landed it. */
+      const thomas: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const oldTom: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, thomas, oldTom], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom', 'Old Tom')], {
+          speaker: 'old-tom',
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Old Tom');
+        expect(rows.map((r) => r.id).sort()).toEqual(['old-tom', 'thomas']);
+        const declined = rows.find((r) => r.id === 'old-tom');
+        expect(declined?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(declined?.matchedFrom).toBeUndefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
     "a row's own same-book reject edge still blocks the collapse, keeping the rejected pair (%s job)",
     async (kind) => {
       /* The user merged the reject target `tom` into a same-name `x`, which

@@ -1308,6 +1308,68 @@ describe('dedupePriorCastByName', () => {
     expect(dedupePriorCastByName(prior, 'b2').cast).toHaveLength(1);
   });
 
+  it("refuses a collapse when one row declines the link another row carries in matchedFrom (#3965)", () => {
+    // The decline is cross-book ({book-1, old-tom} in book-2), so the id-edge
+    // gate ignores it; but fusing the rows would hand the declined link to the
+    // survivor, which the next run's linker then lands.
+    const linked: C = {
+      id: 'thomas',
+      name: 'Old Tom',
+      voiceState: 'reused',
+      voiceId: 'v_b1',
+      lines: 0,
+      matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+    };
+    const declining: C = {
+      id: 'old-tom',
+      name: 'Old Tom',
+      lines: 3,
+      notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+    };
+    expect(dedupePriorCastByName([linked, declining], 'book-2').cast).toHaveLength(2);
+    expect(dedupePriorCastByName([declining, linked], 'book-2').cast).toHaveLength(2);
+    // A bare-string decline of the same target blocks too.
+    expect(
+      dedupePriorCastByName([linked, { ...declining, notLinkedTo: ['old-tom'] }], 'book-2').cast,
+    ).toHaveLength(2);
+  });
+
+  it('collapses when the decline names a different book or a different target than the other row’s link (#3965)', () => {
+    const linked: C = {
+      id: 'thomas',
+      name: 'Old Tom',
+      voiceState: 'reused',
+      voiceId: 'v_b1',
+      lines: 0,
+      matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+    };
+    const otherBook: C = {
+      id: 'old-tom',
+      name: 'Old Tom',
+      lines: 3,
+      notLinkedTo: [{ bookId: 'book-3', characterId: 'old-tom' }],
+    };
+    const otherTarget: C = {
+      id: 'old-tom',
+      name: 'Old Tom',
+      lines: 3,
+      notLinkedTo: [{ bookId: 'book-1', characterId: 'someone-else' }],
+    };
+    expect(dedupePriorCastByName([linked, otherBook], 'book-2').cast).toHaveLength(1);
+    expect(dedupePriorCastByName([linked, otherTarget], 'book-2').cast).toHaveLength(1);
+  });
+
+  it('two locked same-name rows with different voices DO collapse, keeping the row with the lines (#3965, owner-confirmed)', () => {
+    const prior: C[] = [
+      { id: 'mira', name: 'Mira', voiceState: 'locked', voiceId: 'v_a', lines: 0 },
+      { id: 'mira-2', name: 'Mira', voiceState: 'locked', voiceId: 'v_b', lines: 3 },
+    ];
+    const { cast, retirements } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast.map((r) => r.id)).toEqual(['mira-2']);
+    expect(cast[0].voiceId).toBe('v_b');
+    expect(retirements).toEqual([{ from: 'mira', to: 'mira-2' }]);
+  });
+
   it('never collapses narrator rows sharing a name', () => {
     const prior: C[] = [
       { id: 'narrator', name: 'Narrator', voiceState: 'tuned' },
