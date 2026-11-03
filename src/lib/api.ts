@@ -3347,7 +3347,7 @@ async function realAnalyseManuscript(
           payload.remediation,
           payload.fixes,
         ),
-        payload.draining,
+        (payload as { draining?: unknown }).draining,
       );
     }
   };
@@ -6095,7 +6095,7 @@ async function realRunAnalysisForChapters(
           payload.remediation,
           payload.fixes,
         ),
-        payload.draining,
+        (payload as { draining?: unknown }).draining,
       );
     }
   };

@@ -23,7 +23,7 @@
       first tick. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Middleware } from '@reduxjs/toolkit';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsSlice, notificationsActions } from './notifications-slice';
 
@@ -1584,10 +1584,10 @@ describe('analysisStreamMiddleware - #3967 the refusal re-read failing keeps a l
       const store = configureStore({
         reducer: { analysis: analysisSlice.reducer, notifications: notificationsSlice.reducer },
         middleware: (getDefault) =>
-          getDefault().concat(analysisStreamMiddleware, () => (next) => (action) => {
+          getDefault().concat(analysisStreamMiddleware, (() => (next: (a: unknown) => unknown) => (action: unknown) => {
             types.push((action as { type: string }).type);
             return next(action);
-          }),
+          }) as Middleware),
       });
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
