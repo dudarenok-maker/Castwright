@@ -24,12 +24,15 @@ import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const castDeclineVoiceLinkRouter = Router();
 
 interface CastRow {
   id: string;
   voiceUuid?: string | null;
+  voiceState?: string;
+  matchedFrom?: { bookId?: string } | null;
   declinedVoiceFrom?: string[];
   declinedVoiceUuids?: string[];
 }
@@ -50,39 +53,64 @@ castDeclineVoiceLinkRouter.post(
       return res.status(400).json({ error: 'fromBookId must name a different book.' });
     }
 
-    const outcome = await withBookOp(bookId, ({ bookDir }) =>
-      withCastLock(bookDir, async () => {
-        const cast = await readJson<CastFile>(castJsonPath(bookDir));
-        if (!cast?.characters?.length) {
-          return res.status(409).json({ error: 'Book has no cast on disk yet.' });
-        }
-        const idx = cast.characters.findIndex((c) => c.id === characterId);
-        if (idx === -1) {
-          return res.status(404).json({ error: `Character "${characterId}" not found.` });
-        }
-        const row = cast.characters[idx];
-        const existing = row.declinedVoiceFrom ?? [];
-        /* The voice being declined is the uuid the row holds right now (a linked
+    let outcome: Awaited<ReturnType<typeof withBookOp>>;
+    try {
+      outcome = await withBookOp(bookId, ({ bookDir }) =>
+        withCastLock(bookDir, async () => {
+          const cast = await readJson<CastFile>(castJsonPath(bookDir));
+          if (!cast?.characters?.length) {
+            return res.status(409).json({ error: 'Book has no cast on disk yet.' });
+          }
+          const idx = cast.characters.findIndex((c) => c.id === characterId);
+          if (idx === -1) {
+            return res.status(404).json({ error: `Character "${characterId}" not found.` });
+          }
+          const row = cast.characters[idx];
+          /* The decline is ONE write: the marker and the cleared link land together,
+           so a client whose autosave never lands (refused, tab closed) cannot leave
+           a row that is both declined and still linked, which the fork would then
+           treat as an active link. Mirrors the reducer's declineMatch: clear
+           `matchedFrom` only when it is the link being declined, and never drop a
+           lock/tune. */
+          const unlink = row.matchedFrom?.bookId === fromBookId;
+          const existing = row.declinedVoiceFrom ?? [];
+          /* The voice being declined is the uuid the row holds right now (a linked
            row shares its source's). Recording it makes the decline cover every
            book holding that voice, not only `fromBookId`. */
-        const uuids = row.declinedVoiceUuids ?? [];
-        const addUuid = !!row.voiceUuid && !uuids.includes(row.voiceUuid);
-        if (!existing.includes(fromBookId) || addUuid) {
-          cast.characters[idx] = {
-            ...row,
-            declinedVoiceFrom: existing.includes(fromBookId) ? existing : [...existing, fromBookId],
-            ...(addUuid ? { declinedVoiceUuids: [...uuids, row.voiceUuid as string] } : {}),
-          };
-          await writeJsonAtomic(castJsonPath(bookDir), cast);
-          console.log(`[cast-decline-voice-link] ${bookId}/${characterId} declined the voice of ${fromBookId}`);
-        }
-        const done = cast.characters[idx];
-        return res.json({
-          declinedVoiceFrom: done.declinedVoiceFrom ?? [fromBookId],
-          declinedVoiceUuids: done.declinedVoiceUuids ?? [],
-        });
-      }),
-    );
+          const uuids = row.declinedVoiceUuids ?? [];
+          const addUuid = !!row.voiceUuid && !uuids.includes(row.voiceUuid);
+          if (!existing.includes(fromBookId) || addUuid || unlink) {
+            const next: CastRow = {
+              ...row,
+              declinedVoiceFrom: existing.includes(fromBookId)
+                ? existing
+                : [...existing, fromBookId],
+              ...(addUuid ? { declinedVoiceUuids: [...uuids, row.voiceUuid as string] } : {}),
+            };
+            if (unlink) {
+              delete next.matchedFrom;
+              if (row.voiceState !== 'locked' && row.voiceState !== 'tuned')
+                next.voiceState = 'generated';
+            }
+            cast.characters[idx] = next;
+            await writeJsonAtomic(castJsonPath(bookDir), cast);
+            console.log(
+              `[cast-decline-voice-link] ${bookId}/${characterId} declined the voice of ${fromBookId}`,
+            );
+          }
+          const done = cast.characters[idx];
+          return res.json({
+            declinedVoiceFrom: done.declinedVoiceFrom ?? [fromBookId],
+            declinedVoiceUuids: done.declinedVoiceUuids ?? [],
+          });
+        }),
+      );
+    } catch (e) {
+      console.error('[cast-decline-voice-link] failed', e);
+      return res
+        .status(500)
+        .json({ error: requestFailureMessageFs(e, 'Could not record the decline.') });
+    }
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     return outcome;
   },

@@ -4583,8 +4583,13 @@ paths:
         decline survives re-analysis and a later redesign forks the shared voice
         instead of overwriting the earlier book's. Single-book write; `fromBookId`
         need not be resolvable (a deleted book's id is still a valid decline).
-        Idempotent — an already-recorded book is a no-op. The client calls it from
-        the match drawer's Don't reuse, alongside clearing `matchedFrom`.
+        In the same locked write it clears the row's `matchedFrom` when that link
+        names `fromBookId` (and sets `voiceState` back to `generated` unless the
+        voice is locked or tuned), so the decline is one request and a row is never
+        left both declined and linked. Idempotent — an already-recorded book with
+        no link left to clear is a no-op. The client calls it from the match
+        drawer's Don't reuse, which opens on the Cast view and on Confirm, and
+        applies its own reducer only after this succeeds.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: characterId, required: true, schema: { type: string } }

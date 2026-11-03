@@ -4949,7 +4949,8 @@ async function mockRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedTo
    the row keeps the earlier book's voiceUuid and nothing on disk says it was
    declined, so a re-analysis re-links it and a redesign overwrites the earlier
    book's voice. This records `declinedVoiceFrom` server-side (the cast PUT cannot:
-   it takes the field from disk). Idempotent. */
+   it takes the field from disk) and clears `matchedFrom` on disk in the same
+   write; the caller applies the reducer only after it succeeds. Idempotent. */
 export interface DeclineVoiceLinkArgs {
   bookId: string;
   characterId: string;

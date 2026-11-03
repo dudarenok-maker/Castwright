@@ -3,6 +3,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { declineMatchFlow } from './decline-match-flow';
 import { castSlice } from './cast-slice';
 import { uiSlice } from './ui-slice';
+import { notificationsSlice } from './notifications-slice';
 import type { Character } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
@@ -20,7 +21,7 @@ const matched = {
 function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books' = 'ready') {
   const initialUi = uiSlice.getInitialState();
   const store = configureStore({
-    reducer: { cast: castSlice.reducer, ui: uiSlice.reducer },
+    reducer: { cast: castSlice.reducer, ui: uiSlice.reducer, notifications: notificationsSlice.reducer },
     preloadedState: {
       ui: {
         ...initialUi,
@@ -79,14 +80,34 @@ describe('declineMatchFlow (#3992)', () => {
     expect(api.declineVoiceLink).not.toHaveBeenCalled();
   });
 
-  it('a failed record is swallowed (warned): the redux decline stands and the thunk resolves', async () => {
+  it('a failed record reverts nothing because nothing was applied: the link stays, a toast says why (pass-2 D)', async () => {
     vi.mocked(api.declineVoiceLink).mockRejectedValue(new Error('network down'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = makeStore([matched]);
     await expect((store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'))).resolves.toBeUndefined();
-    expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('recording the decline failed'), 'network down');
+    const row = store.getState().cast.characters[0];
+    expect(row.matchedFrom?.bookId).toBe('book-one');
+    expect(row.voiceState).toBe('reused');
+    const toasts = (store.getState() as unknown as { notifications: { toasts: Array<{ kind: string; message: string }> } })
+      .notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('error');
+    expect(toasts[0].message).toContain('network down');
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('a success applies the reducer after the request, with no toast', async () => {
+    const store = makeStore([matched]);
+    const order: string[] = [];
+    vi.mocked(api.declineVoiceLink).mockImplementation(async () => {
+      order.push(`request saw matchedFrom=${store.getState().cast.characters[0].matchedFrom?.bookId}`);
+      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] };
+    });
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    expect(order).toEqual(['request saw matchedFrom=book-one']);
+    expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
+    expect((store.getState() as unknown as { notifications: { toasts: unknown[] } }).notifications.toasts).toHaveLength(0);
   });
 
   it('records nothing when no book is open', async () => {

@@ -109,6 +109,52 @@ describe('POST decline-voice-link', () => {
     expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared', 'u_new']);
   });
 
+  it('clears matchedFrom on disk in the same write, mirroring the reducer (pass-2 D)', async () => {
+    const mf = { bookId: oneId, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 };
+    writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_shared', voiceState: 'reused', matchedFrom: mf })]);
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(200);
+    const row = readRows('Book Two')[0];
+    expect('matchedFrom' in row).toBe(false);
+    expect(row.voiceState).toBe('generated');
+    expect(row.declinedVoiceFrom).toEqual([oneId]);
+    expect(row.voiceUuid).toBe('u_shared');
+  });
+
+  it('keeps a locked or tuned voiceState when it clears the link', async () => {
+    const mf = { bookId: oneId, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 };
+    writeBook('Book Two', twoId, [wren({ voiceState: 'tuned', matchedFrom: mf })]);
+    await decline(twoId, 'wren', { fromBookId: oneId });
+    const row = readRows('Book Two')[0];
+    expect('matchedFrom' in row).toBe(false);
+    expect(row.voiceState).toBe('tuned');
+  });
+
+  it('leaves a link to a DIFFERENT book alone (the disk moved on since the client read it)', async () => {
+    const mf = { bookId: 'another-book', characterId: 'wren', bookTitle: 'Other', confidence: 0.9 };
+    writeBook('Book Two', twoId, [wren({ voiceState: 'reused', matchedFrom: mf })]);
+    await decline(twoId, 'wren', { fromBookId: oneId });
+    const row = readRows('Book Two')[0];
+    expect(row.matchedFrom).toEqual(mf);
+    expect(row.declinedVoiceFrom).toEqual([oneId]);
+  });
+
+  it('a cast.json that cannot be read answers a path-free 500 (an fs error embeds the absolute path)', async () => {
+    rmSync(castFile('Book Two'));
+    mkdirSync(castFile('Book Two')); // reading a directory throws EISDIR with the path in its message
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(typeof res.body.error).toBe('string');
+    expect(JSON.stringify(res.body)).not.toContain(root);
+  });
+
+  it('a torn cast.json answers 500 and is left exactly as it was', async () => {
+    writeFileSync(castFile('Book Two'), '{"characters":[{"id":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe('{"characters":[{"id":');
+  });
+
   it('records no uuid for a row that has none', async () => {
     await decline(twoId, 'wren', { fromBookId: oneId });
     expect('declinedVoiceUuids' in readRows('Book Two')[0]).toBe(false);
