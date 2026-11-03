@@ -10670,7 +10670,7 @@ function _mockRoutedEngine(modelKey: TtsModelKey | undefined) {
    characters live in the redux `cast` slice, never round-tripped through
    `api.*`), so it only looks at the caller's own explicit `modelKey` —
    every real caller already sends its pending engine choice (see
-   profile-drawer.tsx's `useMyVoice`) — falling back to 'qwen' (the common
+   profile-drawer.tsx's `assignMyVoice`) — falling back to 'qwen' (the common
    case) when omitted. It also has no character name to interpolate into
    the message the way the server's `blockMessage`/`advisoryMessage` do —
    these mock strings name the voice and the reason, not the character.

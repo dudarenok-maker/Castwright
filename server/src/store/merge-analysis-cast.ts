@@ -362,7 +362,8 @@ function mergeCore<T extends { id: string }>(
   }
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
     notLinkedToId(cand, f.id, currentBookId) ||
-    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId);
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
+    declinesLinkOf(f as unknown as CastRecord, cand);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
@@ -428,7 +429,8 @@ function mergeCore<T extends { id: string }>(
         if (
           cand &&
           !notLinkedToId(cand, f.id, currentBookId) &&
-          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId)
+          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
+          !declinesLinkOf(f as unknown as CastRecord, cand)
         ) {
           old = cand;
           claimedByName.add(cand.id);
@@ -658,6 +660,22 @@ export function seedReuseGuardsFromPriorCast<
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
+    // a fresh row with no by-id prior (an id-drifted speaker) would get no
+    // decline at all, and the merge's name fallback could then hand it a link a
+    // twin declined. Union every same-name prior row's declines onto it: a
+    // spurious copy only prevents a link, which fails safe.
+    if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
+      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+        let union: unknown[] | undefined;
+        for (const old of existing) {
+          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
+          if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
+        }
+        if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];
+      }
+    }
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
       f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }
@@ -681,23 +699,46 @@ function priorVoiceRank(c: CastRecord): number {
   return 0;
 }
 
-/** True when any two rows in the group are explicitly marked not-the-same-person
-    via notLinkedTo (by the other member's id). Conservative: any such edge blocks
-    collapsing the whole group, mirroring Tier-1's gender-conflict skip. Goes
-    through the shared book-scoped `notLinkedToId` (#3965): a cross-book edge
-    copied onto an id-drifted twin is not a decision between these two rows, but
-    a same-book edge (reject-orphan's) still blocks. */
+/** True when the group holds a recorded not-the-same-person decision: a row's
+    notLinkedTo naming another member's id, a row's own same-book self-edge (the
+    seed's copy of a rejected pair), or one row declining the series link
+    another carries in matchedFrom (`declinesLinkOf`). Conservative: any such
+    decision blocks collapsing the whole group, mirroring Tier-1's gender-conflict
+    skip. The id checks go through the shared book-scoped `notLinkedToId` (#3965):
+    a cross-book edge copied onto an id-drifted twin is not a decision between
+    these rows, but a same-book edge (reject-orphan's) still blocks. */
 function groupHasNotLinkedEdge(
   group: ReadonlyArray<CastRecord>,
   currentBookId: string | undefined,
 ): boolean {
   for (const c of group) {
     for (const other of group) {
-      if (other === c) continue;
+      // `other === c` is deliberate: a row's own same-book self-edge is the
+      // seed's surviving record of a rejected pair (reject-orphan writes its edge
+      // onto the live character, and the seed's name bridge copies it onto the
+      // re-minted orphan), and fusing the pair would delete that rejection.
+      // The book scope still drops a cross-book self-id.
       if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
+      if (other !== c && declinesLinkOf(c, other)) return true;
     }
   }
   return false;
+}
+
+/** True when `c` declined, in its notLinkedTo, the series link `other` carries
+    in matchedFrom. That decline is cross-book, so the id-keyed check above
+    cannot see it; but a collapse keeps one row and would hand the declined link
+    to the survivor, for the next run's linker to land (#3965). Matched on the
+    link's own (bookId, characterId); a bare string matches by characterId. */
+function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
+  const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
+  if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
+  return (c.notLinkedTo as unknown[]).some((entry) => {
+    if (typeof entry === 'string') return entry === mf.characterId;
+    if (!entry || typeof entry !== 'object') return false;
+    const e = entry as { bookId?: unknown; characterId?: unknown };
+    return e.characterId === mf.characterId && (e.bookId === undefined || e.bookId === mf.bookId);
+  });
 }
 
 /** `a` plus the entries of `b` it lacks, deduped by (bookId, characterId); a
@@ -705,7 +746,7 @@ function groupHasNotLinkedEdge(
 function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
   const keyOf = (e: unknown): string =>
     e && typeof e === 'object'
-      ? `${String((e as { bookId?: unknown }).bookId)} ${String((e as { characterId?: unknown }).characterId)}`
+      ? JSON.stringify([(e as { bookId?: unknown }).bookId, (e as { characterId?: unknown }).characterId])
       : `s:${String(e)}`;
   const out = [...(a ?? [])];
   const seen = new Set(out.map(keyOf));

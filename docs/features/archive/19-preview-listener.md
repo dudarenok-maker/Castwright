@@ -6,6 +6,15 @@ owner: null
 
 # Listener preview (POV)
 
+> Status: removed (2026-11-03) — #4014
+> Key files (deleted): `src/views/preview-listener.tsx`
+
+**Removed.** The Preview-as-listener page crashed and was deleted along with its
+Listen-header button; there is no listener-preview overlay any more. The
+historical spec below is retained for context only.
+
+---
+
 > Status: stable
 > Key files: `src/views/preview-listener.tsx`, `src/store/ui-slice.ts` (`setPreviewMode`)
 > URL surface: none (overlay flag; preserves underlying stage URL)

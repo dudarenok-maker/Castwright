@@ -108,7 +108,11 @@ const sel = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
 
 type CastRow = Record<string, unknown>;
 
-function mkBook(characters: CastRow[], name: string): { manuscriptId: string; bookDir: string } {
+function mkBook(
+  characters: CastRow[],
+  name: string,
+  history?: unknown,
+): { manuscriptId: string; bookDir: string } {
   const manuscriptId = `t3965-${Date.now()}-${Math.random()}`;
   const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-3965-'));
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -136,6 +140,9 @@ function mkBook(characters: CastRow[], name: string): { manuscriptId: string; bo
     }),
   );
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+  if (history) {
+    writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify(history));
+  }
   const chapterHints = [
     { id: 1, title: 'Chapter One', body: BODY(name) },
     { id: 2, title: 'Chapter Two', body: BODY(name) },
@@ -226,6 +233,9 @@ const readCast = (bookDir: string): CastRow[] =>
   JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8')).characters;
 const named = (bookDir: string, name: string): CastRow[] =>
   readCast(bookDir).filter((c) => c.name === name);
+const readRejectedPairs = (bookDir: string): Array<{ from: string; to: string }> =>
+  JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), 'utf8'))
+    .rejectedPairs;
 
 const NARR: CharacterOutput = {
   id: 'narrator',
@@ -467,6 +477,87 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
   );
 
   it.each(['main', 'subset'] as const)(
+    "a row that declines another row's link keeps the rows apart, so the decline survives (%s job)",
+    async (kind) => {
+      /* `thomas` already holds the series link to book-1/old-tom; `old-tom`
+         declined exactly that. Fusing them put the declined link on the
+         survivor, and the linker then landed it. */
+      const thomas: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const oldTom: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, thomas, oldTom], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('old-tom', 'Old Tom')], {
+          speaker: 'old-tom',
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Old Tom');
+        expect(rows.map((r) => r.id).sort()).toEqual(['old-tom', 'thomas']);
+        const declined = rows.find((r) => r.id === 'old-tom');
+        expect(declined?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(declined?.matchedFrom).toBeUndefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    "a row's own same-book reject edge still blocks the collapse, keeping the rejected pair (%s job)",
+    async (kind) => {
+      /* The user merged the reject target `tom` into a same-name `x`, which
+         repointed the rejected pair to (thomas, x). `thomas` keeps the seeded
+         same-book self-edge. Fusing the two would delete that rejection. */
+      const x: CastRow = { id: 'x', name: 'Old Tom', voiceId: 'v_x', lines: 0 };
+      const thomas: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_th',
+        voiceState: 'locked',
+        lines: 3,
+        notLinkedTo: [{ bookId: BOOK, characterId: 'thomas' }],
+      };
+      const history = {
+        schema: 1,
+        supersededBy: { tom: 'x' },
+        rejectedPairs: [{ from: 'thomas', to: 'x' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, x, thomas], 'Old Tom', history);
+      try {
+        await run(manuscriptId, bookDir, [NARR, rosterRow('thomas', 'Old Tom')], {
+          speaker: 'thomas',
+          subset: kind === 'subset',
+        });
+        expect(
+          named(bookDir, 'Old Tom')
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(['thomas', 'x']);
+        expect(readRejectedPairs(bookDir)).toEqual([{ from: 'thomas', to: 'x' }]);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
     'the remap keeps the PRIOR id of an id-drifted locked row (%s job)',
     async (kind) => {
       /* Without the remap's own book scope the merge name-fallback still
@@ -504,6 +595,51 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         const rows = readCast(bookDir).filter((c) => String(c.name).startsWith('Old Tom'));
         expect(rows).toHaveLength(1);
         expect(rows[0].voiceId).toBe('v_tom');
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    'an id-drifted speaker neither takes the link its same-name twin declined nor loses the decline (%s job)',
+    async (kind) => {
+      /* The two same-name prior rows stay apart (one declines the link the other
+         carries), so the drifted speaker `old-tom-2` has no by-id prior and
+         reaches the name fallback with an ambiguous name: the seed must still
+         hand it the decline, and the merge must refuse the linked twin. */
+      const linked: CastRow = {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1_tom',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'old-tom',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const declining: CastRow = {
+        id: 'old-tom',
+        name: 'Old Tom',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, linked, declining], 'Old Tom');
+      try {
+        await run(manuscriptId, bookDir, tomRoster, {
+          speaker: 'old-tom-2',
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Old Tom');
+        const speaker = rows.find((r) => r.lines === 3);
+        expect(speaker?.matchedFrom).toBeUndefined();
+        expect(speaker?.voiceUuid).toBeUndefined();
+        expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+        expect(rows.find((r) => r.id === 'thomas')?.matchedFrom).toBeDefined();
       } finally {
         await cleanup(manuscriptId, bookDir);
       }

@@ -14,9 +14,10 @@
     Same-book object entries (the one-sided edge `cast-reject-orphan.ts`
     writes) and bare strings still block. `currentBookId` omitted (a record
     with no `bookId`) keeps the old bookId-blind behaviour as the fail-safe.
-    (The same-name dedupe's `groupHasNotLinkedEdge` additionally ignores a
-    row's edge naming ITS OWN id, which `main` counted: a self-edge is not a
-    decision between two rows. Declared in the PR body.)
+    (The same-name dedupe's `groupHasNotLinkedEdge` also counts a row's edge
+    naming ITS OWN id, through this same predicate: the seed leaves a
+    same-book self-edge as the record of a rejected pair, while a cross-book
+    self-id is dropped by the book scope like any other.)
 
     The ONE book-scope predicate shared by every notLinkedTo join gate
     (`merge-analysis-cast.ts` fresh-to-prior match and same-name dedupe,
