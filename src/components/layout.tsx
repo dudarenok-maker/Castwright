@@ -86,7 +86,7 @@ import { UpdateNotifierBanner } from './update-notifier-banner';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { DuplicateBookRepairBanner } from './duplicate-book-repair-banner';
 import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
-import { commitBookReadToken, hasIssuedBookReadToken } from '../lib/book-read-token';
+import { commitBookReadToken, hasIssuedBookReadToken, revokeBookReadToken } from '../lib/book-read-token';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -957,7 +957,13 @@ export function Layout() {
       const requestSeq = store.getState().revisions.adoptSeq;
       const marks = marksFor(bookId);
       revisionsOnly = manuscriptReady && marks === 0;
-      if (!revisionsOnly) fullReadInFlight.current = bookId;
+      if (!revisionsOnly) {
+        fullReadInFlight.current = bookId;
+        /* #3713 (PR #4004 pass 4): until this read is applied the slices are not the book's snapshot,
+           so a save made now must not carry a token committed before it (the handler's off-stage
+           commit, or an earlier read): it is refused and the book re-read instead. */
+        revokeBookReadToken(bookId);
+      }
       /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
          so a save that lands while it is in flight wins over what it read. */
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);

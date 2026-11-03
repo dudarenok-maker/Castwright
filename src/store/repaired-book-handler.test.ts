@@ -14,6 +14,7 @@ import { librarySlice } from './library-slice';
 import { notificationsSlice } from './notifications-slice';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice, uiActions } from './ui-slice';
+import { castSlice, castActions } from './cast-slice';
 
 const fetchMock = vi.fn();
 const refusal = () => new Response(JSON.stringify({ code: 'book_repaired_reload', error: 'x' }), { status: 409 });
@@ -26,6 +27,7 @@ function makeStore(heldBookId: string | null, stageBookId: string | null = null)
       library: librarySlice.reducer,
       notifications: notificationsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      cast: castSlice.reducer,
       ui: uiSlice.reducer,
     } as never,
   });
@@ -129,6 +131,61 @@ describe('the repaired-book handler (#3713)', () => {
     await flush();
     await flush();
     expect(seen).toContainEqual({ type: 'persistence/dropRetained', payload: 'b1', onFullRead: true, dropBased: true });
+  });
+
+  /* PR #4004 pass 4, finding 1: the token vouches for what the slices hold, so slices still holding
+     the OTHER twin under this id are reset before it is committed. */
+  const names = (s: S) =>
+    (s.getState() as unknown as { cast: { characters: { name: string }[] } }).cast.characters.map((c) => c.name);
+  const seedCast = (s: S) =>
+    s.dispatch(castActions.hydrateCharacters([{ id: 'l', name: 'Loser Row', role: '', color: 'narrator' }] as never));
+
+  it('slices holding the refused book (stage elsewhere) are reset before the token is committed', async () => {
+    const store = makeStore('b1');
+    seedCast(store);
+    await bookFetch('/api/books/b1', { method: 'DELETE' });
+    await flush();
+    await flush();
+    expect(names(store)).toEqual([]);
+    expect((store.getState() as unknown as { manuscript: { bookId: string } }).manuscript.bookId).toBe('b1');
+    expect((await bookFetch('/api/books/b1', { method: 'DELETE' })).status).toBe(204);
+  });
+
+  it('slices holding ANOTHER book are left alone', async () => {
+    const store = makeStore('other');
+    seedCast(store);
+    await bookFetch('/api/books/b1', { method: 'DELETE' });
+    await flush();
+    await flush();
+    expect(names(store)).toEqual(['Loser Row']);
+  });
+
+  it('a book the stage shows by the time the read returns is not reset or committed here', async () => {
+    const store = makeStore('b1');
+    seedCast(store);
+    h.getBookState.mockImplementation(async (id: string) => {
+      await bookFetch(`/api/books/${id}/state`);
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
+      return {};
+    });
+    await bookFetch('/api/books/b1', { method: 'DELETE' });
+    await flush();
+    await flush();
+    expect(names(store)).toEqual(['Loser Row']);
+    expect((await bookFetch('/api/books/b1', { method: 'DELETE' })).status).toBe(409);
+  });
+
+  it('a failing book re-read leaves the slices alone and the refusal in place', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.getBookState.mockRejectedValue(new Error('down'));
+    const store = makeStore('b1');
+    seedCast(store);
+    await bookFetch('/api/books/b1', { method: 'DELETE' });
+    await flush();
+    await flush();
+    expect(names(store)).toEqual(['Loser Row']);
+    expect((await bookFetch('/api/books/b1', { method: 'DELETE' })).status).toBe(409);
+    warn.mockRestore();
   });
 
   it('a failing book re-read leaves the refusal in place and does not throw', async () => {

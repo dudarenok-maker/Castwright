@@ -12,6 +12,7 @@ import { commitBookReadToken, setRepairedBookHandler, setSkippedBooksHandler } f
 import { bookMetaActions } from './book-meta-slice';
 import { dropRetainedSaves } from './persistence-middleware';
 import { libraryActions } from './library-slice';
+import { resetBookSlices } from './reset-book-slices';
 import { notificationsActions } from './notifications-slice';
 
 export const BOOK_REPAIRED_MESSAGE =
@@ -53,6 +54,15 @@ export function installRepairedBookHandler(store: Pick<Store, 'dispatch' | 'getS
            be refused on every retry. */
         if (stageShows(store.getState(), bookId)) return;
         await api.getBookState(bookId);
+        /* The stage may have moved onto the book while that read was out: Layout's own full read
+           commits then, over slices it hydrates itself. */
+        if (stageShows(store.getState(), bookId)) return;
+        /* The slices may still hold the OTHER twin under this id (a Library tab whose slices were
+           kept): the token vouches for what the slices hold, so they start empty and a reopen
+           re-reads (the Library Delete's reset, #3841). Slices holding another book are not this
+           book's to reset. */
+        const held = (store.getState() as { manuscript?: { bookId: string | null } }).manuscript?.bookId;
+        if (held === bookId) resetBookSlices(store.dispatch, bookId);
         /* A save the middleware kept from before this commit was made without the token: the
            commit must not arm it (a based `state` save included). */
         store.dispatch(dropRetainedSaves(bookId, true, true));

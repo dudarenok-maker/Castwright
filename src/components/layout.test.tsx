@@ -5573,7 +5573,16 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
   const WINNER = [row('a', 'Winner A'), row('b', 'Winner B'), row('c', 'Winner C')];
 
   function fakeServer() {
-    const server = { gated: false, cast: LOSER as Character[], ms: 'm_loser', castPuts: 0, deletes: 0 };
+    const server = {
+      gated: false,
+      cast: LOSER as Character[],
+      ms: 'm_loser',
+      castPuts: 0,
+      deletes: 0,
+      /* wire-level record of every PUT: which slice, and the token it carried */
+      puts: [] as Array<{ slice: string; token: string | null; status: number }>,
+      readDelay: 0,
+    };
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       /* Only the book routes are modelled; anything else (queue, config) is a network failure. */
       if (!url.startsWith('/api/books/')) throw new Error('no network');
@@ -5582,7 +5591,12 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
       if (method === 'GET') {
         return new Response('{}', { headers: server.gated ? { 'x-book-read-token': 'tok' } : {} });
       }
-      if (server.gated && headers.get('x-book-read-token') !== 'tok') {
+      const token = headers.get('x-book-read-token');
+      if (server.gated && token !== 'tok') {
+        if (method === 'PUT') {
+          const { slice } = JSON.parse(String(init?.body ?? '{}')) as { slice: string };
+          server.puts.push({ slice, token, status: 409 });
+        }
         return new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
       }
       if (method === 'DELETE') {
@@ -5590,6 +5604,7 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
         return new Response(null, { status: 204 });
       }
       const req = JSON.parse(String(init?.body ?? '{}')) as { slice: string; patch: { characters?: Character[] } };
+      server.puts.push({ slice: req.slice, token, status: 200 });
       if (req.slice === 'cast') {
         server.castPuts += 1;
         server.cast = req.patch.characters ?? server.cast;
@@ -5599,7 +5614,10 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     getBookStateMock.mockImplementation(async (id: string) => {
       await bookFetch(`/api/books/${id}/state`);
       const base = bookStateFor(id, revState(id, null, 0, []));
-      return { ...base, state: { ...base.state, manuscriptId: server.ms, title: 'T' }, cast: { characters: server.cast } };
+      const snapshot = { ...base, state: { ...base.state, manuscriptId: server.ms, title: 'T' }, cast: { characters: server.cast } };
+      /* the disk is read when the request is served; the response lands readDelay later */
+      if (server.readDelay > 0) await new Promise((r) => setTimeout(r, server.readDelay));
+      return snapshot;
     });
     putBookStateMock.mockImplementation(async (id: string, req: unknown) => {
       const res = await bookFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
@@ -5672,6 +5690,33 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     await settle(900);
     expect(server.castPuts).toBe(1);
     expect(server.cast.map((c) => c.name)).toContain('Edited after the re-read');
+  });
+
+  /* PR #4004 pass 4, finding 1: a Library write is refused while the slices still hold the copy; the
+     handler's off-stage read commits the token. Committing it over the copy's slices armed every save
+     the reopen (and its 1.5 s full read) made. */
+  it('a Library write refused off-stage, then the book reopened and edited mid-read: the kept twin is untouched', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    sweep(server);
+    /* The Library Edit's PUT: refused, so the handler reads the book off-stage. */
+    await act(async () => {
+      await bookFetch(`/api/books/${PREV}/state`, { method: 'PUT', body: JSON.stringify({ slice: 'state', patch: {} }) });
+    });
+    await settle(200);
+    expect(server.cast).toEqual(WINNER);
+
+    server.readDelay = 1500;
+    server.puts.length = 0;
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await settle(300);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
+    await settle(2200);
+
+    expect(server.puts.filter((p) => p.status === 200)).toEqual([]);
+    expect(server.cast).toEqual(WINNER);
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']), { timeout: 6000 });
   });
 
   it('open the whole time, edited before the poll lands: refused, told, re-read, and the next edit lands', async () => {

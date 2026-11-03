@@ -70,6 +70,12 @@ export function commitBookReadToken(bookId: string): void {
   if (token) tokens.set(bookId, token);
 }
 
+/** A full read of `bookId` is going out (PR #4004 pass 4): until it lands and is applied, the slices are not
+ *  its snapshot, so no save may carry the token it was committed under. The next commit re-arms it. */
+export function revokeBookReadToken(bookId: string): void {
+  tokens.delete(bookId);
+}
+
 /** A book-state read issued a token for `bookId` (the book is a repaired id) that nothing has committed yet. */
 export function hasIssuedBookReadToken(bookId: string): boolean {
   return issued.has(bookId);
