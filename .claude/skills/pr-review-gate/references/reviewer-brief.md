@@ -884,6 +884,23 @@ recite:
     sibling-family call) and confirm a direct test goes red; add the case
     for any that survives.
 
+67. **A merge that unions some fields and drops the field recording a user's
+    decision, reached through a guard a change then narrows** — PR #4006 pass
+    2 (#3965, `dedupePriorCastByName`): the same-name collapse kept the best
+    row and unioned `aliases`, but dropped every other field of the losing
+    row, `notLinkedTo` included. On `main` any cross-book decline blocked the
+    collapse outright, so a decline never reached the merge; scoping the gate
+    to the current book sent those groups into the merge, which erased a
+    decline held only by the row that lost rank, and the link the user
+    refused landed on the next run. Checkable: for every merge or collapse
+    that keeps one of N rows, list each field of the dropped rows and mark the
+    ones that record a user decision (not-the-same-person edges, locks,
+    overrides, dismissals); each must be unioned or carried, not silently
+    discarded. Then, for any change that narrows a guard in front of such a
+    path, ask which inputs the old guard kept out of it, and run those inputs
+    through the real jobs and the real downstream consumer (here the linker),
+    not the merge function alone.
+
 68. **Ids captured when a job starts, acted on later without re-checking each
     still qualifies** — PR #4001 pass 3 (#3919): a profile-change preview
     stored `remainingChapterIds` when it started; Approve enqueued and logged
@@ -911,6 +928,18 @@ recite:
     Entry 55 (an id reissued after a delete) is the nearest. (Numbered 69:
     66-68 are taken or reserved by open PRs; renumber on merge if the order
     changes.)
+
+70. **A degenerate input dismissed as "not a decision" without tracing who
+    writes it** — PR #4006 pass 2 (#3965, `groupHasNotLinkedEdge`): a row's
+    own self-naming `notLinkedTo` edge was ignored as "not a decision between
+    two rows". One writer does put a decision there: the seed's name bridge
+    copies reject-orphan's same-book edge onto the re-minted orphan, so the
+    self-edge is the surviving record of a rejected pair, and ignoring it
+    fused the pair and deleted the rejection from both records. Checkable:
+    before calling a self-reference, empty value or no-op shape harmless,
+    list every writer of that field and read what each puts there; if one
+    writes a real decision in that shape, the shape needs a test through the
+    real jobs, not a comment saying it cannot matter.
 
 ### Keeping the catalogue current
 

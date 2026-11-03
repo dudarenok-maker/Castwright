@@ -30,6 +30,7 @@ import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { notLinkedToId } from './not-linked-to-scope.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -123,28 +124,6 @@ function unionAliases(a: unknown, b: unknown): string[] | undefined {
   return out.length ? out : undefined;
 }
 
-/** True when `row.notLinkedTo` names `targetId`, in either shape the field is
-    written in: a bare string (defensive; nothing mints this shape today) or
-    the real on-disk `{ bookId, characterId }` shape `POST /not-linked-to`
-    writes (`server/src/routes/cast-not-linked-to.ts:238`; typed in
-    `voices.ts:104`/`voice-override-linked.ts:65`). Matches on `characterId`
-    alone, ignoring `bookId` — the identical trade `remap-fresh-to-prior.ts`'s
-    own `notLinkedToId` helper makes (§2040 Task 10/11), for the same reason:
-    a false "linked" is silent data corruption (two people collapsed into
-    one), a false "not linked" only costs a match a user can still do by
-    hand. */
-function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
-  const nl = row.notLinkedTo;
-  if (!Array.isArray(nl)) return false;
-  return nl.some((entry) => {
-    if (typeof entry === 'string') return entry === targetId;
-    if (entry && typeof entry === 'object') {
-      return (entry as { characterId?: unknown }).characterId === targetId;
-    }
-    return false;
-  });
-}
-
 /** Voiced/reused characters present in `existing` but dropped by the fresh
     roster — i.e. the rows that carry-forward re-adds. Exposed so a caller can
     name them in a change-log entry. */
@@ -168,13 +147,16 @@ export function voicedSurvivorsDropped(
 
     Delegates to `mergeCore` with the name-fallback ON — this entry point is
     for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
-    the whole book and a dropped prior row really is gone. See
+    the whole book and a dropped prior row really is gone. `currentBookId`
+    (optional) is the id of the book being analysed; it scopes the
+    `notLinkedTo` gate (see `notLinkedToId`). See
     `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
+  currentBookId?: string,
 ): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true);
+  return mergeCore(existing, fresh, true, currentBookId);
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
@@ -226,11 +208,13 @@ function surnameTolerantMatch(a: string, b: string): boolean {
     same-name match (`:401-437`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
     carry-forward loop at the end unconditionally rescues every voiced prior
-    row instead of treating any of them as already claimed. */
+    row instead of treating any of them as already claimed. `currentBookId`
+    (optional) scopes both `notLinkedTo` gates by book; see `notLinkedToId`. */
 function mergeCore<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
   nameFallback: boolean,
+  currentBookId?: string,
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -371,8 +355,9 @@ function mergeCore<T extends { id: string }>(
     if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
   }
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
-    notLinkedToId(cand, f.id) ||
-    notLinkedToId(f as unknown as Record<string, unknown>, cand.id);
+    notLinkedToId(cand, f.id, currentBookId) ||
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
+    declinesLinkOf(f as unknown as CastRecord, cand);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
@@ -437,8 +422,9 @@ function mergeCore<T extends { id: string }>(
         // durably, via retireCharacterId).
         if (
           cand &&
-          !notLinkedToId(cand, f.id) &&
-          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id)
+          !notLinkedToId(cand, f.id, currentBookId) &&
+          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
+          !declinesLinkOf(f as unknown as CastRecord, cand)
         ) {
           old = cand;
           claimedByName.add(cand.id);
@@ -667,6 +653,22 @@ export function seedReuseGuardsFromPriorCast<
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
+    // a fresh row with no by-id prior (an id-drifted speaker) would get no
+    // decline at all, and the merge's name fallback could then hand it a link a
+    // twin declined. Union every same-name prior row's declines onto it: a
+    // spurious copy only prevents a link, which fails safe.
+    if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
+      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+        let union: unknown[] | undefined;
+        for (const old of existing) {
+          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
+          if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
+        }
+        if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];
+      }
+    }
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
       f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
   }
@@ -690,20 +692,64 @@ function priorVoiceRank(c: CastRecord): number {
   return 0;
 }
 
-/** True when any two rows in the group are explicitly marked not-the-same-person
-    via notLinkedTo (by the other member's id). Conservative: any such edge blocks
-    collapsing the whole group, mirroring Tier-1's gender-conflict skip. */
-function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
-  const ids = new Set(group.map((g) => g.id));
+/** True when the group holds a recorded not-the-same-person decision: a row's
+    notLinkedTo naming another member's id, a row's own same-book self-edge (the
+    seed's copy of a rejected pair), or one row declining the series link
+    another carries in matchedFrom (`declinesLinkOf`). Conservative: any such
+    decision blocks collapsing the whole group, mirroring Tier-1's gender-conflict
+    skip. The id checks go through the shared book-scoped `notLinkedToId` (#3965):
+    a cross-book edge copied onto an id-drifted twin is not a decision between
+    these rows, but a same-book edge (reject-orphan's) still blocks. */
+function groupHasNotLinkedEdge(
+  group: ReadonlyArray<CastRecord>,
+  currentBookId: string | undefined,
+): boolean {
   for (const c of group) {
-    const nl = c.notLinkedTo;
-    if (!Array.isArray(nl)) continue;
-    for (const entry of nl) {
-      const cid = (entry as { characterId?: unknown })?.characterId;
-      if (typeof cid === 'string' && ids.has(cid)) return true;
+    for (const other of group) {
+      // `other === c` is deliberate: a row's own same-book self-edge is the
+      // seed's surviving record of a rejected pair (reject-orphan writes its edge
+      // onto the live character, and the seed's name bridge copies it onto the
+      // re-minted orphan), and fusing the pair would delete that rejection.
+      // The book scope still drops a cross-book self-id.
+      if (notLinkedToId(c as Record<string, unknown>, other.id, currentBookId)) return true;
+      if (other !== c && declinesLinkOf(c, other)) return true;
     }
   }
   return false;
+}
+
+/** True when `c` declined, in its notLinkedTo, the series link `other` carries
+    in matchedFrom. That decline is cross-book, so the id-keyed check above
+    cannot see it; but a collapse keeps one row and would hand the declined link
+    to the survivor, for the next run's linker to land (#3965). Matched on the
+    link's own (bookId, characterId); a bare string matches by characterId. */
+function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
+  const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
+  if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
+  return (c.notLinkedTo as unknown[]).some((entry) => {
+    if (typeof entry === 'string') return entry === mf.characterId;
+    if (!entry || typeof entry !== 'object') return false;
+    const e = entry as { bookId?: unknown; characterId?: unknown };
+    return e.characterId === mf.characterId && (e.bookId === undefined || e.bookId === mf.bookId);
+  });
+}
+
+/** `a` plus the entries of `b` it lacks, deduped by (bookId, characterId); a
+    bare-string entry dedupes by its value. Never mutates either input. */
+function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
+  const keyOf = (e: unknown): string =>
+    e && typeof e === 'object'
+      ? JSON.stringify([(e as { bookId?: unknown }).bookId, (e as { characterId?: unknown }).characterId])
+      : `s:${String(e)}`;
+  const out = [...(a ?? [])];
+  const seen = new Set(out.map(keyOf));
+  for (const e of b) {
+    const k = keyOf(e);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+  }
+  return out;
 }
 
 /** Collapse same-normalised-name rows in a prior cast to one survivor each so
@@ -716,6 +762,7 @@ function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
     the survivor's id). Input is not mutated. */
 export function dedupePriorCastByName<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
+  currentBookId: string | undefined,
 ): {
   cast: T[];
   dropped: Array<{ id: string; name?: string; voiceState?: string }>;
@@ -742,7 +789,7 @@ export function dedupePriorCastByName<T extends CastRecord>(
   const collapsedKeys = new Set<string>();
 
   for (const [key, group] of groups) {
-    if (group.length < 2 || groupHasNotLinkedEdge(group)) continue;
+    if (group.length < 2 || groupHasNotLinkedEdge(group, currentBookId)) continue;
     collapsedKeys.add(key);
 
     let best = group[0];
@@ -759,6 +806,11 @@ export function dedupePriorCastByName<T extends CastRecord>(
     let aliases: string[] | undefined = Array.isArray(best.aliases)
       ? (best.aliases as string[])
       : undefined;
+    // A dropped row's "not the same person" decisions ride onto the survivor:
+    // the collapse is the owner's call, losing a user's decline is not (#3965).
+    let notLinkedTo: unknown[] | undefined = Array.isArray(best.notLinkedTo)
+      ? (best.notLinkedTo as unknown[])
+      : undefined;
     for (const row of group) {
       if (row === best) continue;
       // Fold the dropped row's alternate names in, but never the survivor's own
@@ -770,6 +822,9 @@ export function dedupePriorCastByName<T extends CastRecord>(
         ...(Array.isArray(row.aliases) ? (row.aliases as string[]) : []),
       ];
       aliases = unionAliases(aliases, add);
+      if (Array.isArray(row.notLinkedTo)) {
+        notLinkedTo = unionNotLinkedTo(notLinkedTo, row.notLinkedTo as unknown[]);
+      }
       dropped.push({
         id: row.id,
         ...(typeof row.name === 'string' ? { name: row.name } : {}),
@@ -777,7 +832,16 @@ export function dedupePriorCastByName<T extends CastRecord>(
       });
       if (row.id !== best.id) retirements.push({ from: row.id, to: best.id });
     }
-    survivorByKey.set(key, aliases ? ({ ...best, aliases } as T) : best);
+    survivorByKey.set(
+      key,
+      aliases || notLinkedTo
+        ? ({
+            ...best,
+            ...(aliases ? { aliases } : {}),
+            ...(notLinkedTo ? { notLinkedTo } : {}),
+          } as T)
+        : best,
+    );
   }
 
   if (!collapsedKeys.size) return { cast: [...priorCast], dropped: [], retirements: [] };
