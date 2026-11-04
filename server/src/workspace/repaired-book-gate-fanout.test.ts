@@ -1,12 +1,11 @@
-/* #3713 / PR #4004 pass 5 (owner decision) -- a series-scope fan-out SKIPS a repaired series-mate it holds no
-   token for, and writes it when the request echoes the token. The mates of a fan-out are matched by voice id or
-   name, so the client never names them: refusing would make the write impossible, writing would land on the wrong
-   twin. The real sweep repairs a pair in a temp workspace and the real routers serve it.
+/* #3713 / PR #4004 (owner decision) -- a series-scope fan-out SKIPS a repaired series-mate on a request that does
+   not carry the current repair epoch, and writes it when the request does. The mates of a fan-out are matched by
+   voice id or name, so the client never names them: refusing would make the write impossible, writing would land
+   on the wrong twin. The real sweep repairs a pair in a temp workspace and the real routers serve it.
 
-   SERVER-UNIT: the `X-Book-Read-Token` headers below are set by hand, standing for what the client sends. What the
-   REAL client sends (every token the tab has committed, comma-joined, on every write) is pinned on the other side of
-   the wire by `src/lib/api-body-keyed-token.test.ts` ("a series fan-out echoes every committed token"); the
-   "client wire shape" block here feeds the server exactly that shape. */
+   SERVER-UNIT: the `X-Repair-Epoch` headers below are set by hand, standing for what the client sends. What the
+   REAL client sends (the epoch it read from /api/info at page load, on every write) is pinned on the other side of
+   the wire by `src/lib/repair-epoch.test.ts`. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -104,7 +103,7 @@ function headerList(res: { headers: Record<string, string> }): Array<{ bookId: s
 describe('POST /books/:id/cast/:characterId/series-patch with a repaired series-mate (#3713)', () => {
   const patch = { gender: 'male' };
 
-  it('no token: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
+  it('no epoch: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
     await repaired();
     const before = mates();
     const res = await request(app).post(`/api/books/${SRC}/cast/c0/series-patch`).send(patch);
@@ -112,13 +111,13 @@ describe('POST /books/:id/cast/:characterId/series-patch with a repaired series-
     expect(mates()).toEqual(before);
     expect(JSON.parse(read(src)).characters[0].gender).toBe('male');
     expect(skippedIds(res.body)).toContain(DUP);
-    expect(res.body.skippedBooks[0].reason).toMatch(/^Reopen ".+" to apply/);
+    expect(res.body.skippedBooks[0].reason).toMatch(/^".+" was repaired after this page loaded. Reload Castwright/);
     expect(headerList(res).map((s) => s.bookId)).toContain(DUP);
   });
 
-  it('with the mate\'s token it is written and nothing is skipped', async () => {
+  it('with the current epoch it is written and nothing is skipped', async () => {
     await repaired();
-    const res = await request(app).post(`/api/books/${SRC}/cast/c0/series-patch`).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(patch);
+    const res = await request(app).post(`/api/books/${SRC}/cast/c0/series-patch`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(patch);
     expect(res.status).toBe(200);
     expect(skippedIds(res.body)).toEqual([]);
     expect(res.headers[gate.SKIPPED_BOOKS_HEADER]).toBeUndefined();
@@ -129,7 +128,7 @@ describe('POST /books/:id/cast/:characterId/series-patch with a repaired series-
 describe('POST /books/:id/cast/:characterId/voice-override-linked with a repaired series-mate (#3713)', () => {
   const body = { override: { engine: 'kokoro', name: 'af_heart' } };
 
-  it('no token: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
+  it('no epoch: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
     await repaired();
     const before = mates();
     const res = await request(app).post(`/api/books/${SRC}/cast/c0/voice-override-linked`).send(body);
@@ -140,9 +139,9 @@ describe('POST /books/:id/cast/:characterId/voice-override-linked with a repaire
     expect(headerList(res).map((s) => s.bookId)).toContain(DUP);
   });
 
-  it('with the mate\'s token it is written', async () => {
+  it('with the current epoch it is written', async () => {
     await repaired();
-    const res = await request(app).post(`/api/books/${SRC}/cast/c0/voice-override-linked`).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).post(`/api/books/${SRC}/cast/c0/voice-override-linked`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(200);
     expect(skippedIds(res.body)).toEqual([]);
     expect(read(kept)).toContain('af_heart');
@@ -152,7 +151,7 @@ describe('POST /books/:id/cast/:characterId/voice-override-linked with a repaire
 describe('POST /books/:id/cast/tier with a repaired series-mate (#3713)', () => {
   const body = { voiceId: 'c0', ttsModelKey: 'qwen3-tts-1.7b' };
 
-  it('no token: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
+  it('no epoch: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
     await repaired();
     const before = mates();
     const res = await request(app).post(`/api/books/${SRC}/cast/tier`).send(body);
@@ -164,9 +163,9 @@ describe('POST /books/:id/cast/tier with a repaired series-mate (#3713)', () => 
     expect(headerList(res).map((s) => s.bookId)).toContain(DUP);
   });
 
-  it('with the mate\'s token it is written', async () => {
+  it('with the current epoch it is written', async () => {
     await repaired();
-    const res = await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(200);
     expect(skippedIds(res.body)).toEqual([]);
     expect(read(kept)).toContain('qwen3-tts-1.7b');
@@ -176,7 +175,7 @@ describe('POST /books/:id/cast/tier with a repaired series-mate (#3713)', () => 
 describe('PUT /voices/:id/override (series scope) with a repaired series-mate (#3713)', () => {
   const body = { override: { engine: 'kokoro', name: 'af_heart' }, scope: 'series', bookId: SRC };
 
-  it('no token: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
+  it('no epoch: the repaired mate is byte-identical and reported skipped; the source updates', async () => {
     await repaired();
     const before = mates();
     const res = await request(app).put('/api/voices/c0/override').send(body);
@@ -187,9 +186,9 @@ describe('PUT /voices/:id/override (series scope) with a repaired series-mate (#
     expect(headerList(res).map((s) => s.bookId)).toContain(DUP);
   });
 
-  it('with the mate\'s token it is written (204, nothing skipped)', async () => {
+  it('with the current epoch it is written (204, nothing skipped)', async () => {
     await repaired();
-    const res = await request(app).put('/api/voices/c0/override').set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(204);
     expect(read(kept)).toContain('af_heart');
   });
@@ -204,43 +203,31 @@ describe('PUT /voices/:id/override (series scope) with a repaired series-mate (#
   });
 });
 
-/* PR #4004 pass 4, finding 4. The client echoes every token it has committed on every write, comma-joined: a
-   series-mate it read since the repair is written, one it never read is still skipped. */
-describe('client wire shape: every committed token, comma-joined (#3713, pass 4)', () => {
-  const sendPatch = (token: string | null) => {
-    const r = request(app).post(`/api/books/${SRC}/cast/c0/series-patch`);
-    return (token === null ? r : r.set('X-Book-Read-Token', token)).send({ gender: 'male' });
-  };
-
-  it('the mate\'s token among unrelated ones: the mate is written, nothing skipped', async () => {
-    await repaired();
-    const res = await sendPatch(`some-other-book-token,${gate.repairedReadToken(DUP)!}`);
-    expect(res.status).toBe(200);
-    expect(skippedIds(res.body)).toEqual([]);
-    expect(JSON.parse(read(kept)).characters[0].gender).toBe('male');
-  });
-
-  it('only unrelated tokens: the mate is still skipped, byte-identical', async () => {
+/* A page loaded before the repair carries no epoch, or the previous one: the mate is skipped. A page loaded after
+   carries the current one: every mate is written, whichever book the request names. */
+describe('a page loaded before vs after the repair (#3713)', () => {
+  it('a stale epoch: the mate is still skipped, byte-identical', async () => {
     await repaired();
     const before = mates();
-    const res = await sendPatch('some-other-book-token,another');
+    const res = await request(app).post(`/api/books/${SRC}/cast/c0/series-patch`).set('X-Repair-Epoch', 'pre-repair').send({ gender: 'male' });
     expect(skippedIds(res.body)).toContain(DUP);
+    expect(res.headers['x-skipped-repaired-books']).toBeTruthy();
     expect(mates()).toEqual(before);
   });
 
-  it('the tab read the kept twin and the series-patch comes from the other book: written, not skipped; a second patch too', async () => {
+  it('a page loaded after the repair, patching from the other book: written, not skipped; a second patch too', async () => {
     await repaired();
     for (const gender of ['male', 'female']) {
       const res = await request(app)
         .post(`/api/books/${SRC}/cast/c0/series-patch`)
-        .set('X-Book-Read-Token', gate.repairedReadToken(DUP)!)
+        .set('X-Repair-Epoch', gate.currentRepairEpoch()!)
         .send({ gender });
       expect(skippedIds(res.body)).toEqual([]);
       expect(JSON.parse(read(kept)).characters[0].gender).toBe(gender);
     }
   });
 
-  it('the workspace scope of a voice override reaches the kept twin with its token, and skips it without', async () => {
+  it('the workspace scope of a voice override reaches the kept twin with the current epoch, and skips it without', async () => {
     await repaired();
     const before = mates();
     const skipped = await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } });
@@ -248,13 +235,13 @@ describe('client wire shape: every committed token, comma-joined (#3713, pass 4)
     expect(mates()).toEqual(before);
     const res = await request(app)
       .put('/api/voices/c0/override')
-      .set('X-Book-Read-Token', gate.repairedReadToken(DUP)!)
+      .set('X-Repair-Epoch', gate.currentRepairEpoch()!)
       .send({ override: { engine: 'kokoro', name: 'af_heart' } });
     expect(res.status).toBe(204);
     expect(read(kept)).toContain('af_heart');
   });
 
-  it('the series voiceUuid stamp reaches the kept twin with its token, and leaves it unstamped without', async () => {
+  it('the series voiceUuid stamp reaches the kept twin with the current epoch, and leaves it unstamped without', async () => {
     await repaired();
     const without = await request(app).post('/api/__stamp').send({});
     expect(without.body.uuid).toBeTruthy();
@@ -262,7 +249,7 @@ describe('client wire shape: every committed token, comma-joined (#3713, pass 4)
     expect(JSON.parse(read(kept)).characters[0].voiceUuid).toBeUndefined();
     /* the source is clean again, as it would be before the design that mints the uuid */
     writeFileSync(paths.castJsonPath(src), JSON.stringify({ characters: [{ id: 'c0', name: 'Rhea' }] }));
-    const withToken = await request(app).post('/api/__stamp').set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send({});
-    expect(JSON.parse(read(kept)).characters[0].voiceUuid).toBe(withToken.body.uuid);
+    const withEpoch = await request(app).post('/api/__stamp').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({});
+    expect(JSON.parse(read(kept)).characters[0].voiceUuid).toBe(withEpoch.body.uuid);
   });
 });

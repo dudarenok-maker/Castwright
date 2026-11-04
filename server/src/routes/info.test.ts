@@ -19,6 +19,16 @@ import {
   refreshUpdateStatusInBackground,
   __resetUpdateCacheForTests,
 } from './updates.js';
+import { currentRepairEpoch } from '../workspace/repaired-book-gate.js';
+
+/* #3713 -- the epoch is the gate's to compute (and registering a repair writes the workspace, which this
+   file does not isolate), so the route is pinned against a stub of it. */
+vi.mock('../workspace/repaired-book-gate.js', () => ({
+  currentRepairEpoch: vi.fn(() => null),
+  __resetRepairedBookGateForTest: vi.fn(),
+  registerRepairedBook: vi.fn(async () => {}),
+  scopeManuscriptToBook: vi.fn(async () => {}),
+}));
 
 let app: Express;
 
@@ -76,6 +86,17 @@ describe('GET /api/info', () => {
     } finally {
       __resetDuplicateBookIdRepairsForTest();
     }
+  });
+
+  it('carries repairEpoch: null when no repaired id is gated (#3713)', async () => {
+    const res = await request(app).get('/api/info');
+    expect(res.body).toHaveProperty('repairEpoch', null);
+  });
+
+  it('carries the gate\'s current repairEpoch, read per request (#3713)', async () => {
+    vi.mocked(currentRepairEpoch).mockReturnValueOnce('epoch-1');
+    const res = await request(app).get('/api/info');
+    expect(res.body.repairEpoch).toBe('epoch-1');
   });
 
   it('reports host hardware for the device panel (fs-43)', async () => {

@@ -1,7 +1,7 @@
 /* #3713 / PR #4004 pass 2 (owner decision) -- the write gate on a repaired bookId.
    The real sweep repairs a duplicate pair in a temp workspace, the real
-   `bookStateRouter` serves it behind the gate, and a request is a "client":
-   one that has not read the book since the repair (no token) and one that has. */
+   `bookStateRouter` serves it behind the gate, and a request is a "page":
+   one loaded before the repair (no epoch, or a stale one) and one loaded after (the current epoch). */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -87,13 +87,12 @@ describe('the repaired-id write gate (#3713)', () => {
     expect(repair.newBookId).not.toBe('auth__ser__book');
   });
 
-  it('the 409 body names the book the refusal is scoped to, as an id and nothing else (PR #4004 pass 3)', async () => {
+  it('the 409 body is the code and a sentence, nothing else', async () => {
     await repairedPair(true);
     const byBook = await request(app).delete('/api/books/auth__ser__book');
-    expect(byBook.body.bookId).toBe('auth__ser__book');
     const byManuscript = await request(app).post('/api/manuscripts/m_copy/analysis').send({});
-    expect(byManuscript.body.bookId).toBe('auth__ser__book');
-    expect(Object.keys(byBook.body).sort()).toEqual(['bookId', 'code', 'error']);
+    expect(Object.keys(byBook.body).sort()).toEqual(['code', 'error']);
+    expect(Object.keys(byManuscript.body).sort()).toEqual(['code', 'error']);
   });
 
   it('the 409 body names no path', async () => {
@@ -116,9 +115,8 @@ describe('the repaired-id write gate (#3713)', () => {
   });
 
   /* Owner decision (PR #4004 pass 3): gate book CONTENT only. The companion app's three writes
-     and a fresh tab's keepalive flush carry nothing that can overwrite the twin's content or
-     identity, and none of them can present a token. */
-  it('the per-listener writes (listen-progress, shelf-status, listen-stats) pass on a repaired id with no token', async () => {
+     carry nothing that can overwrite the twin's content or identity, and it never sends the epoch. */
+  it('the per-listener writes (listen-progress, shelf-status, listen-stats) pass on a repaired id with no epoch', async () => {
     await repairedPair(false);
     for (const [method, url, body] of [
       ['put', '/api/books/auth__ser__book/listen-progress', { chapterId: 1, currentSec: 3 }],
@@ -136,28 +134,35 @@ describe('the repaired-id write gate (#3713)', () => {
     expect(res.status).toBe(409);
   });
 
-  it('a wrong token is refused like no token', async () => {
+  it('a stale epoch (a page loaded before the newest repair) is refused like none', async () => {
     await repairedPair(false);
-    const res = await request(app).delete('/api/books/auth__ser__book').set('X-Book-Read-Token', 'not-the-token');
+    const res = await request(app).delete('/api/books/auth__ser__book').set('X-Repair-Epoch', 'an-older-epoch');
     expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
   });
 
-  it('a client that has read the book can still write: GET /state returns the token, and echoing it passes', async () => {
+  it('a page loaded after the repair writes: it carries the current epoch', async () => {
     await repairedPair(false);
-    const read = await request(app).get('/api/books/auth__ser__book/state');
-    expect(read.status).toBe(200);
-    const token = read.headers['x-book-read-token'];
-    expect(typeof token).toBe('string');
+    const epoch = gate.currentRepairEpoch();
+    expect(typeof epoch).toBe('string');
     const write = await request(app)
-      .put('/api/books/auth__ser__book/listen-progress')
-      .set('X-Book-Read-Token', token)
-      .send({ chapterId: 1, currentSec: 3 });
-    expect(write.status).toBe(200);
+      .put('/api/books/auth__ser__book/state')
+      .set('X-Repair-Epoch', epoch!)
+      .send({ slice: 'cast', patch: { characters: [{ id: 'c0', name: 'Kept' }] } });
+    expect(write.body.code).not.toBe('book_repaired_reload');
+    expect(write.status, JSON.stringify(write.body)).toBeLessThan(300);
   });
 
-  it('the read itself is never gated, and carries no token for an id that was not repaired', async () => {
+  it('the read itself is never gated, and no repair means no epoch', async () => {
     const dir = seed('Solo', { ms: 'm_solo', rendered: false, rows: 1 });
     expect(existsSync(dir)).toBe(true);
+    const read = await request(app).get('/api/books/auth__ser__book/state');
+    expect(read.status).toBe(200);
+    expect(gate.currentRepairEpoch()).toBeNull();
+  });
+
+  it('a read of a repaired id is not gated and hands out nothing', async () => {
+    await repairedPair(false);
     const read = await request(app).get('/api/books/auth__ser__book/state');
     expect(read.status).toBe(200);
     expect(read.headers['x-book-read-token']).toBeUndefined();
@@ -171,14 +176,14 @@ describe('the repaired-id write gate (#3713)', () => {
     expect(res.status).toBe(200);
   });
 
-  it('the gate ends with the process: after a reset the old id is writable again', async () => {
+  it('a reset of the registry (and its file) leaves the old id writable again', async () => {
     await repairedPair(false);
     sweep.__resetDuplicateBookIdRepairsForTest();
     const res = await request(app).put('/api/books/auth__ser__book/listen-progress').send({ chapterId: 1, currentSec: 1 });
     expect(res.status).toBe(200);
   });
 
-  it('an id the sweep did not repair is writable without a token', async () => {
+  it('an id the sweep did not repair is writable without an epoch', async () => {
     seed('Solo', { ms: 'm_solo', rendered: false, rows: 1 });
     const res = await request(app).put('/api/books/auth__ser__book/listen-progress').send({ chapterId: 1, currentSec: 1 });
     expect(res.status).toBe(200);
@@ -186,14 +191,14 @@ describe('the repaired-id write gate (#3713)', () => {
 });
 
 describe('the repaired manuscriptId gate (#3713)', () => {
-  it('a shared manuscriptId the sweep re-minted gates the manuscript-keyed analysis write, with the book token', async () => {
+  it('a shared manuscriptId the sweep re-minted gates the manuscript-keyed analysis write by the same epoch', async () => {
     await repairedPair(true);
     const refused = await request(app).post('/api/manuscripts/m_copy/analysis').send({});
     expect(refused.status).toBe(409);
-    expect(refused.body.bookId).toBe('auth__ser__book');
     expect(refused.body.code).toBe('book_repaired_reload');
-    const token = gate.repairedReadToken('auth__ser__book')!;
-    const ok = await request(app).post('/api/manuscripts/m_copy/analysis').set('X-Book-Read-Token', token).send({});
+    const stale = await request(app).post('/api/manuscripts/m_copy/analysis').set('X-Repair-Epoch', 'old').send({});
+    expect(stale.status).toBe(409);
+    const ok = await request(app).post('/api/manuscripts/m_copy/analysis').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({});
     expect(ok.status).toBe(202);
   });
 
@@ -225,25 +230,26 @@ describe('three twins: the manuscriptId scope follows the id to the book that ca
   const stateOf = (dir: string) => JSON.parse(readFileSync(paths.stateJsonPath(dir), 'utf8')) as { bookId: string; manuscriptId: string };
   const dirOf = (f: string) => join(paths.BOOKS_ROOT, 'Auth', 'Ser', f);
 
-  it('the loser that keeps the shared id can Analyse after reading its own book', async () => {
+  it('the loser that keeps the shared id can Analyse from a page loaded after the repair', async () => {
     const repairs = await threeTwins();
     expect(repairs).toHaveLength(2);
     const c = stateOf(dirOf('Book c'));
     expect(c.manuscriptId).toBe('m_pair'); // C kept the id
     expect(c.bookId).not.toBe('auth__ser__book');
-    const read = await request(app).get(`/api/books/${c.bookId}/state`);
-    const token = read.headers['x-book-read-token'] as string;
-    expect(token, 'a read of C must issue a token').toBeTruthy();
     expect((await request(app).post('/api/manuscripts/m_pair/analysis').send({})).status).toBe(409);
-    const ok = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Book-Read-Token', token).send({});
+    const ok = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({});
     expect(ok.status).toBe(202);
   });
 
-  it('the winner token alone does NOT open the manuscript id of C (stale B-snapshot tabs stay refused)', async () => {
+  it('a page loaded before the repair (a stale B snapshot carrying m_pair) stays refused', async () => {
     await threeTwins();
-    const wToken = gate.repairedReadToken('auth__ser__book')!;
-    const res = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Book-Read-Token', wToken).send({});
+    const res = await request(app).post('/api/manuscripts/m_pair/analysis').set('X-Repair-Epoch', 'pre-repair').send({});
     expect(res.status).toBe(409);
+  });
+
+  it('the carrier, under its brand-new id, is not gated itself (no page can hold a stale copy of it)', async () => {
+    await threeTwins();
+    expect(gate.isRepairedBook(stateOf(dirOf('Book c')).bookId)).toBe(false);
   });
 
   it('a re-minted id nobody carries any more gates nothing, and the winner own id is not gated', async () => {
@@ -269,8 +275,8 @@ describe('where the gate is mounted (#3713)', () => {
       return i;
     };
     const booksGate = at("app.use('/api/books/:bookId', repairedBookGate)");
-    /* #3713 pass 5: the fan-out scope holds the request's tokens for every walker, so it precedes every router
-       a fan-out lives in (/api/books/*, /api/voices) and the body parser it reads nothing from but headers. */
+    /* #3713: the fan-out scope holds the request's epoch for every walker, so it precedes every router
+       a fan-out lives in (/api/books/*, /api/voices). */
     const fanOut = at("app.use('/api', repairedFanOutScope)");
     expect(fanOut).toBeLessThan(booksGate);
     expect(fanOut).toBeLessThan(at("app.use('/api/voices', voicesRouter)"));

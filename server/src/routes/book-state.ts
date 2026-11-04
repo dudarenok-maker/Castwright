@@ -86,7 +86,7 @@ import {
   withBookPathClaim,
   type BookJobKind,
 } from '../workspace/book-op-lock.js';
-import { BOOK_READ_TOKEN_HEADER, forgetRepairedBook, repairedReadToken } from '../workspace/repaired-book-gate.js';
+import { forgetRepairedBook } from '../workspace/repaired-book-gate.js';
 import {
   manuscriptFingerprint,
   sameFingerprint,
@@ -432,10 +432,6 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
 
 bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
   try {
-    /* #3713 — a read of a repaired id issues the token the write gate asks for. It does NOT end the
-       persisted gate: only the client that applied this read acks that (routes/repaired-book-ack.ts). */
-    const readToken = repairedReadToken(String(req.params.bookId));
-    if (readToken) res.setHeader(BOOK_READ_TOKEN_HEADER, readToken);
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 

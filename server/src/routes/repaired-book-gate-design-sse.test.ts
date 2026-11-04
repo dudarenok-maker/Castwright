@@ -1,7 +1,7 @@
 /* #3713 / PR #4004 pass 4, finding 6 -- the SSE design streams report a repaired series-mate their voice
    write skipped. A design persists across the series by voice id (the `voiceUuid` stamp and the override), so
-   the client never names the mates; a gated mate whose token the request did not echo is left alone (pass 5,
-   owner decision) and the stream says so on `designed` (single), `character_designed` and the terminal `idle`
+   the client never names the mates; a gated mate is left alone on a request without the current repair epoch (owner
+   decision) and the stream says so on `designed` (single), `character_designed` and the terminal `idle`
    (bulk), for the client to show the same toast as a plain series write. The real sweep repairs a pair in a
    temp workspace and the real routers serve it; only the sidecar design call is stubbed. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
@@ -116,17 +116,17 @@ function sse(text: string): Array<Record<string, any>> {
     .map((l) => JSON.parse(l.slice(6)));
 }
 
-const single = (token: string | null) => {
+const single = (epoch: string | null) => {
   const r = request(app).post(`/api/books/${SRC}/cast/c0/design-voice/stream`);
-  return (token === null ? r : r.set('X-Book-Read-Token', token)).send({ persona: 'a warm voice', sampleVoiceId: 'char-c0', modelKey: 'qwen3-tts-0.6b' });
+  return (epoch === null ? r : r.set('X-Repair-Epoch', epoch)).send({ persona: 'a warm voice', sampleVoiceId: 'char-c0', modelKey: 'qwen3-tts-0.6b' });
 };
-const bulk = (token: string | null) => {
+const bulk = (epoch: string | null) => {
   const r = request(app).post(`/api/books/${SRC}/cast/design`);
-  return (token === null ? r : r.set('X-Book-Read-Token', token)).send({ characterIds: ['c0'], modelKey: 'qwen3-tts-0.6b', scope: 'series' });
+  return (epoch === null ? r : r.set('X-Repair-Epoch', epoch)).send({ characterIds: ['c0'], modelKey: 'qwen3-tts-0.6b', scope: 'series' });
 };
 
 describe('single design (SSE) with a repaired series-mate (#3713, pass 4)', () => {
-  it('no token: the kept twin is not written, and the `designed` event names it', async () => {
+  it('no epoch: the kept twin is not written, and the `designed` event names it', async () => {
     await repaired();
     const before = read(kept);
     const res = await single(null);
@@ -138,9 +138,9 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 4)', () =
     expect(read(src)).toContain('qwen-c0');
   });
 
-  it('with the twin\'s token: written, and nothing is reported', async () => {
+  it('with the current epoch: written, and nothing is reported', async () => {
     await repaired();
-    const res = await single(gate.repairedReadToken(DUP)!);
+    const res = await single(gate.currentRepairEpoch()!);
     const designed = sse(res.text).find((e) => e.type === 'designed');
     expect(designed).toBeDefined();
     expect(skippedIds(designed)).toEqual([]);
@@ -158,7 +158,7 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 4)', () =
 });
 
 describe('bulk design (SSE) with a repaired series-mate (#3713, pass 4)', () => {
-  it('no token: `character_designed` and the terminal `idle` name the skipped twin; it is not written', async () => {
+  it('no epoch: `character_designed` and the terminal `idle` name the skipped twin; it is not written', async () => {
     await repaired();
     const before = read(kept);
     const res = await bulk(null);
@@ -169,9 +169,9 @@ describe('bulk design (SSE) with a repaired series-mate (#3713, pass 4)', () => 
     expect(read(kept)).toBe(before);
   });
 
-  it('with the twin\'s token: written, and no event reports a skip', async () => {
+  it('with the current epoch: written, and no event reports a skip', async () => {
     await repaired();
-    const events = sse((await bulk(gate.repairedReadToken(DUP)!)).text);
+    const events = sse((await bulk(gate.currentRepairEpoch()!)).text);
     expect(events.filter((e) => e.skippedBooks)).toEqual([]);
     expect(read(kept)).toContain('qwen-c0');
   });

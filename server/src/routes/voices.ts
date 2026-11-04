@@ -793,7 +793,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       });
     }
     const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
-    /* #3713 pass 5 -- repaired series-mates this request had no token for, left untouched. */
+    /* #3713 pass 5 -- repaired series-mates left untouched (no current repair epoch). */
     const skippedBooks = skippedRepairedBooks();
     if (updated === 0 && skipped.length === 0 && skippedBooks.length > 0) {
       return res.status(200).json({ updated, skippedBooks });
@@ -961,7 +961,7 @@ export async function forEachMatchingCastCharacter(
             }
             return bookUpdated;
           });
-        /* #3713 pass 5 -- a gated repaired mate this request holds no token for is left alone
+        /* #3713 pass 5 -- a gated repaired mate, on a request without the current epoch, is left alone
            and reported; the rest of the series updates. */
         if (state.bookId && skipUnreadRepairedBook(state.bookId, state.title || state.bookId)) continue;
         if (!state.bookId) {

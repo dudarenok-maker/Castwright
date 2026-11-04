@@ -8,7 +8,7 @@
 
    Body:  { voiceId: string, ttsModelKey: 'qwen3-tts-1.7b' | null }
    Response: { updated: number, skippedBooks?: [{ bookId, bookTitle, reason }] } -- skippedBooks names a
-   repaired series-mate this request echoed no token for (left untouched, #3713).
+   repaired series-mate left untouched on a request without the current repair epoch (#3713).
 
    Mounted at /api/books in app.ts, so the handler path is RELATIVE
    (/:bookId/cast/tier). */
@@ -63,7 +63,7 @@ castTierRouter.post('/:bookId/cast/tier', async (req: Request, res: Response) =>
     seriesInfo ?? undefined,
   );
 
-  /* #3713 pass 5 -- repaired series-mates this request had no token for, left untouched. */
+  /* #3713 pass 5 -- repaired series-mates left untouched (no current repair epoch). */
   const skippedBooks = skippedRepairedBooks();
   return res.json({ updated, ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
 });

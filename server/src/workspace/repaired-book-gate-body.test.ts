@@ -76,7 +76,7 @@ async function repaired() {
 const overrideBody = { sourceBookId: 'auth__other__other', sourceCharacterId: 'c0', targetBookId: DUP, targetCharacterId: 'c0' };
 
 describe('body-keyed cast writers are gated by the book they name (#3713)', () => {
-  it('POST /library-cast/override naming a repaired book with no token answers 409 and writes nothing', async () => {
+  it('POST /library-cast/override naming a repaired book with no epoch answers 409 and writes nothing', async () => {
     await repaired();
     const before = readFileSync(paths.castJsonPath(kept), 'utf8');
     const res = await request(app).post('/api/library-cast/override').send(overrideBody);
@@ -93,24 +93,23 @@ describe('body-keyed cast writers are gated by the book they name (#3713)', () =
     expect(res.status).toBe(409);
   });
 
-  it('with the book\'s read token it passes the gate and writes', async () => {
+  it('with the current epoch it passes the gate and writes', async () => {
     await repaired();
-    const token = gate.repairedReadToken(DUP)!;
-    const res = await request(app).post('/api/library-cast/override').set('X-Book-Read-Token', token).send(overrideBody);
+    const res = await request(app).post('/api/library-cast/override').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(overrideBody);
     expect(res.status).toBe(200);
     expect(castOf(kept).find((c) => c.id === 'c0')?.description).toBe('other book');
   });
 
-  it('a comma-joined list carrying the token passes (two books, one header)', async () => {
+  it('the epoch must match exactly: a list that contains it is refused', async () => {
     await repaired();
-    const token = gate.repairedReadToken(DUP)!;
-    const res = await request(app).post('/api/library-cast/override').set('X-Book-Read-Token', `other-tok,${token}`).send(overrideBody);
-    expect(res.status).toBe(200);
+    const epoch = gate.currentRepairEpoch()!;
+    const res = await request(app).post('/api/library-cast/override').set('X-Repair-Epoch', `other,${epoch}`).send(overrideBody);
+    expect(res.status).toBe(409);
   });
 
-  it('a wrong token is refused like no token', async () => {
+  it('a stale epoch is refused like none', async () => {
     await repaired();
-    const res = await request(app).post('/api/library-cast/override').set('X-Book-Read-Token', 'nope').send(overrideBody);
+    const res = await request(app).post('/api/library-cast/override').set('X-Repair-Epoch', 'nope').send(overrideBody);
     expect(res.status).toBe(409);
   });
 
@@ -123,17 +122,16 @@ describe('body-keyed cast writers are gated by the book they name (#3713)', () =
     expect(res.status).toBe(200);
   });
 
-  it('POST /voice-library/:uuid/assign for a repaired bookId with no token is refused before anything else', async () => {
+  it('POST /voice-library/:uuid/assign for a repaired bookId with no epoch is refused before anything else', async () => {
     await repaired();
     const res = await request(app).post('/api/voice-library/no-such-voice/assign').send({ bookId: DUP, characterId: 'c0' });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_repaired_reload');
   });
 
-  it('with the token the assign gets past the gate (and fails later on the unknown voice, not 409)', async () => {
+  it('with the current epoch the assign gets past the gate (and fails later on the unknown voice, not 409)', async () => {
     await repaired();
-    const token = gate.repairedReadToken(DUP)!;
-    const res = await request(app).post('/api/voice-library/no-such-voice/assign').set('X-Book-Read-Token', token).send({ bookId: DUP, characterId: 'c0' });
+    const res = await request(app).post('/api/voice-library/no-such-voice/assign').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({ bookId: DUP, characterId: 'c0' });
     expect(res.status).not.toBe(409);
   });
 
@@ -141,8 +139,7 @@ describe('body-keyed cast writers are gated by the book they name (#3713)', () =
     await repaired();
     const res = await request(app).delete(`/api/voice-library/no-such-voice/assign?bookId=${DUP}&characterId=c0`);
     expect(res.status).toBe(409);
-    const token = gate.repairedReadToken(DUP)!;
-    const ok = await request(app).delete(`/api/voice-library/no-such-voice/assign?bookId=${DUP}&characterId=c0`).set('X-Book-Read-Token', token);
+    const ok = await request(app).delete(`/api/voice-library/no-such-voice/assign?bookId=${DUP}&characterId=c0`).set('X-Repair-Epoch', gate.currentRepairEpoch()!);
     expect(ok.status).not.toBe(409);
   });
 

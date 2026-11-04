@@ -25,8 +25,6 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books/:bookId', gate.repairedBookGate);
   app.use('/api/manuscripts/:id', gate.repairedManuscriptGate);
-  const { repairedBookAckRouter } = await import('../routes/repaired-book-ack.js');
-  app.use('/api/repaired-books', repairedBookAckRouter);
   app.post('/api/manuscripts/:id/analysis', (_req, res) => res.status(202).end());
   app.use('/api/books', bookStateRouter);
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -88,22 +86,43 @@ describe('the repaired-id gate across a restart (#3713)', () => {
     expect(await delStatus()).toBe(409);
   });
 
-  it('keeps the same token across the restart (a tab that read before it keeps writing)', async () => {
+  it('keeps the same epoch across the restart (a page loaded before it keeps writing)', async () => {
     await repairedPair();
-    const token = gate.repairedReadToken('auth__ser__book');
+    const epoch = gate.currentRepairEpoch();
+    expect(epoch).toBeTruthy();
     gate.__clearRepairedBookGateMemoryForTest();
     await gate.loadRepairedBookGate();
-    expect(gate.repairedReadToken('auth__ser__book')).toBe(token);
-    const ok = await request(app).put('/api/books/auth__ser__book/state').set('X-Book-Read-Token', token!).send({});
+    expect(gate.currentRepairEpoch()).toBe(epoch);
+    const ok = await request(app).put('/api/books/auth__ser__book/state').set('X-Repair-Epoch', epoch!).send({});
     expect(ok.status).not.toBe(409);
   });
 
-  it('persists ids, tokens and times only: no path', async () => {
+  it('a later boot that repairs again rotates the epoch: a page loaded before that boot is refused', async () => {
+    await repairedPair();
+    const first = gate.currentRepairEpoch()!;
+    gate.__clearRepairedBookGateMemoryForTest();
+    await gate.loadRepairedBookGate();
+    await gate.registerRepairedBook('other__id__x', null);
+    const second = gate.currentRepairEpoch()!;
+    expect(second).not.toBe(first);
+    expect((await request(app).delete('/api/books/auth__ser__book').set('X-Repair-Epoch', first)).status).toBe(409);
+  });
+
+  it('two registrations in one boot share one epoch', async () => {
+    await gate.registerRepairedBook('a__a__a', null);
+    const e = gate.currentRepairEpoch();
+    await gate.registerRepairedBook('b__b__b', 'm_b');
+    expect(gate.currentRepairEpoch()).toBe(e);
+  });
+
+  it('persists ids, times and the epoch only: no path', async () => {
     await repairedPair(true);
     const raw = readFileSync(paths.repairedBookGateJsonPath(), 'utf8');
     expect(raw).not.toContain(root);
     const file = JSON.parse(raw);
+    expect(file.epoch).toBe(gate.currentRepairEpoch());
     expect(file.entries).toHaveLength(1);
+    expect(Object.keys(file.entries[0]).sort()).toEqual(['bookId', 'repairedAt']);
     expect(file.entries[0]).toMatchObject({ bookId: 'auth__ser__book' });
     expect(Date.parse(file.entries[0].repairedAt)).not.toBeNaN();
     expect(file.manuscripts[0]).toMatchObject({ manuscriptId: 'm_copy' });
@@ -129,122 +148,95 @@ describe('the 7-day lifetime (#3713)', () => {
     expect(await delStatus()).not.toBe(409);
   });
 
-  it('a process that runs past 7 days stops gating without a restart', async () => {
+  it('a process that runs past 7 days stops gating without a restart, and serves no epoch', async () => {
     await repairedPair();
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 7 * DAY + 5000);
     expect(await delStatus()).not.toBe(409);
+    expect(gate.currentRepairEpoch()).toBeNull();
   });
 });
 
-/* PR #4004 pass 4, finding 5: only a client that APPLIED a full read clears the persisted gate, by
-   acknowledging it (`POST /api/repaired-books/ack/:bookId`, sent when it commits the token). A bare
-   `GET /state` is most of the endpoint's traffic and applies nothing. */
-describe('cleared early only by a client that applied a full read (#3713)', () => {
+/* The owner's redesign after PR #4004 pass 5: nothing a client does ends an entry early. A read of the
+   book, any number of them, leaves an old-bundle page (no epoch) refused for the full 7 days. */
+describe('nothing a client does ends the gate early (#3713)', () => {
   const ID = 'auth__ser__book';
   const restart = async () => {
     gate.__clearRepairedBookGateMemoryForTest();
     await gate.loadRepairedBookGate();
   };
-  const ack = (token?: string) => {
-    const r = request(app).post(`/api/repaired-books/ack/${ID}`);
-    return (token === undefined ? r : r.set('X-Book-Read-Token', token)).send({});
-  };
-  const cast = (token?: string) => {
+  const cast = (epoch?: string) => {
     const r = request(app).put(`/api/books/${ID}/state`);
-    return (token === undefined ? r : r.set('X-Book-Read-Token', token)).send({ slice: 'cast', patch: { characters: [] } });
+    return (epoch === undefined ? r : r.set('X-Repair-Epoch', epoch)).send({ slice: 'cast', patch: { characters: [] } });
   };
 
-  it('ONE plain GET of the state, a restart, then an untokened cast PUT (the v1.14.0 shape): still 409', async () => {
+  it('reads of the state, a restart, then an untokened cast PUT (the v1.14.0 shape): still 409', async () => {
     await repairedPair();
-    expect((await request(app).get(`/api/books/${ID}/state`)).status).toBe(200);
+    for (let i = 0; i < 3; i++) expect((await request(app).get(`/api/books/${ID}/state`)).status).toBe(200);
     await restart();
     expect((await cast()).status).toBe(409);
     expect(await delStatus()).toBe(409);
   });
 
-  it('the client\'s ack stops the gate surviving the NEXT restart, but this process keeps refusing a tab with no token', async () => {
+  it('a page carrying the current epoch writes, and the gate still refuses a page without it afterwards', async () => {
     await repairedPair();
-    const token = (await request(app).get(`/api/books/${ID}/state`)).headers['x-book-read-token'];
-    expect((await ack(token)).status).toBe(204);
-    expect(await delStatus()).toBe(409);
+    expect((await cast(gate.currentRepairEpoch()!)).status).not.toBe(409);
     await restart();
-    expect(await delStatus()).not.toBe(409);
+    expect((await cast()).status).toBe(409);
   });
 
-  it('an ack without the token is refused and clears nothing', async () => {
+  it('the ack route is gone', async () => {
     await repairedPair();
-    const res = await ack();
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('book_repaired_reload');
-    await restart();
-    expect(await delStatus()).toBe(409);
-  });
-
-  it('an ack carrying another book\'s token clears nothing', async () => {
-    await repairedPair();
-    await gate.registerRepairedBook('other__id__x', null);
-    expect((await ack(gate.repairedReadToken('other__id__x')!)).status).toBe(409);
-    await restart();
-    expect(await delStatus()).toBe(409);
-  });
-
-  it('an ack for an id that is not gated is a quiet 204', async () => {
-    expect((await request(app).post('/api/repaired-books/ack/never__repaired__x').send({})).status).toBe(204);
-  });
-
-  it('an ack of one repaired book leaves another one\'s persisted gate alone', async () => {
-    await repairedPair();
-    await gate.registerRepairedBook('other__id__x', null);
-    await ack(gate.repairedReadToken(ID)!);
-    await restart();
-    expect(gate.repairedReadToken('other__id__x')).toBeTruthy();
-    expect(gate.repairedReadToken(ID)).toBeUndefined();
-  });
-
-  it('a shared-manuscriptId scope is forgotten with the book\'s ack', async () => {
-    await repairedPair(true);
-    await ack(gate.repairedReadToken(ID)!);
-    await restart();
-    expect((await request(app).post('/api/manuscripts/m_copy/analysis').send({})).status).toBe(202);
+    expect((await request(app).post(`/api/repaired-books/ack/${ID}`).send({})).status).toBe(404);
   });
 });
 
 describe('a damaged gate file fails closed (#3713)', () => {
-  const entry = (bookId: string) =>
-    JSON.stringify({ bookId, token: 'tok-' + bookId, repairedAt: new Date().toISOString() });
+  const entry = (bookId: string) => JSON.stringify({ bookId, repairedAt: new Date().toISOString() });
 
-  it('a file cut off mid-write keeps every entry it can still read', async () => {
+  it('a file cut off mid-write keeps every entry it can still read, and its epoch', async () => {
     mkdirSync(root, { recursive: true });
-    writeFileSync(paths.repairedBookGateJsonPath(), `{"version":1,"entries":[${entry('a__a__a')},${entry('b__b__b')},{"bookId":"c__c`);
-    await gate.loadRepairedBookGate();
-    expect(gate.repairedReadToken('a__a__a')).toBe('tok-a__a__a');
-    expect(gate.repairedReadToken('b__b__b')).toBe('tok-b__b__b');
-  });
-
-  it('an entry with a readable id but a broken token or time is kept gated with a fresh token and clock', async () => {
     writeFileSync(
       paths.repairedBookGateJsonPath(),
-      JSON.stringify({ version: 1, entries: [{ bookId: 'x__x__x', token: 7, repairedAt: 'not a date' }] }),
+      `{"version":2,"epoch":"ep-1","entries":[${entry('a__a__a')},${entry('b__b__b')},{"bookId":"c__c`,
     );
     await gate.loadRepairedBookGate();
-    const token = gate.repairedReadToken('x__x__x');
-    expect(typeof token).toBe('string');
-    expect(token!.length).toBeGreaterThan(8);
+    expect(gate.isRepairedBook('a__a__a')).toBe(true);
+    expect(gate.isRepairedBook('b__b__b')).toBe(true);
+    expect(gate.currentRepairEpoch()).toBe('ep-1');
+  });
+
+  it('an entry with a readable id but a broken time is kept gated from now', async () => {
+    writeFileSync(
+      paths.repairedBookGateJsonPath(),
+      JSON.stringify({ version: 2, epoch: 'ep-2', entries: [{ bookId: 'x__x__x', repairedAt: 'not a date' }] }),
+    );
+    await gate.loadRepairedBookGate();
+    expect(gate.isRepairedBook('x__x__x')).toBe(true);
+    expect((await request(app).delete('/api/books/x__x__x')).status).toBe(409);
+  });
+
+  it('entries whose epoch was lost get a fresh one: no page holds it, so every page reloads once more', async () => {
+    writeFileSync(paths.repairedBookGateJsonPath(), JSON.stringify({ version: 2, entries: [JSON.parse(entry('x__x__x'))] }));
+    await gate.loadRepairedBookGate();
+    const fresh = gate.currentRepairEpoch();
+    expect(fresh).toBeTruthy();
+    expect(JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).epoch).toBe(fresh);
   });
 
   it('an unparseable file does not throw and does not stop the next repair from being gated', async () => {
     writeFileSync(paths.repairedBookGateJsonPath(), '\u0000\u0000 not json at all');
     await expect(gate.loadRepairedBookGate()).resolves.toBeUndefined();
     await gate.registerRepairedBook('y__y__y', null);
-    expect(gate.repairedReadToken('y__y__y')).toBeTruthy();
+    expect(gate.isRepairedBook('y__y__y')).toBe(true);
   });
 
   it('after a damaged load the file is rewritten whole, so the next restart reads clean', async () => {
-    writeFileSync(paths.repairedBookGateJsonPath(), `{"version":1,"entries":[${entry('a__a__a')},{"bookId":"c`);
+    writeFileSync(paths.repairedBookGateJsonPath(), `{"version":2,"epoch":"ep-3","entries":[${entry('a__a__a')},{"bookId":"c`);
     await gate.loadRepairedBookGate();
     const healed = JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8'));
     expect(healed.entries.map((e: { bookId: string }) => e.bookId)).toEqual(['a__a__a']);
+    expect(healed.epoch).toBe('ep-3');
   });
 
   it('no file is the common case: loads nothing and writes nothing', async () => {
@@ -258,7 +250,7 @@ describe('a damaged gate file fails closed (#3713)', () => {
 describe('an unreadable gate file at boot fails closed (#3713)', () => {
   const ID = 'auth__ser__book';
   const file = () => paths.repairedBookGateJsonPath();
-  const entry = (bookId: string) => ({ bookId, token: 'tok-' + bookId, repairedAt: new Date().toISOString() });
+  const entry = (bookId: string) => ({ bookId, repairedAt: new Date().toISOString() });
   /* A directory where the file should be: readFile fails with EISDIR, not ENOENT -- the "exists but unreadable" shape. */
   const makeUnreadable = () => {
     rmSync(file(), { recursive: true, force: true });
@@ -266,7 +258,7 @@ describe('an unreadable gate file at boot fails closed (#3713)', () => {
   };
   const makeReadable = (...ids: string[]) => {
     rmSync(file(), { recursive: true, force: true });
-    writeFileSync(file(), JSON.stringify({ version: 1, entries: ids.map(entry), manuscripts: [] }));
+    writeFileSync(file(), JSON.stringify({ version: 2, epoch: 'ep-file', entries: ids.map(entry), manuscripts: [] }));
   };
   afterEach(() => {
     vi.useRealTimers();
@@ -287,20 +279,48 @@ describe('an unreadable gate file at boot fails closed (#3713)', () => {
     makeUnreadable();
     setTimeout(() => makeReadable('late__x__y'), 40);
     await gate.loadRepairedBookGate();
-    expect(gate.repairedReadToken('late__x__y')).toBe('tok-late__x__y');
+    expect(gate.isRepairedBook('late__x__y')).toBe(true);
   });
 
   it('keeps refusing: once the file becomes readable the next gated write loads it, and the ids it names are refused', async () => {
     gate.__clearRepairedBookGateMemoryForTest();
     makeUnreadable();
     await gate.loadRepairedBookGate();
-    expect(gate.repairedReadToken('old__x__y')).toBeUndefined();
+    expect(gate.isRepairedBook('old__x__y')).toBe(false);
     makeReadable('old__x__y');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 10_000);
     const res = await request(app).delete('/api/books/old__x__y');
     expect(res.status).toBe(409);
-    expect(gate.repairedReadToken('old__x__y')).toBe('tok-old__x__y');
+    expect(gate.isRepairedBook('old__x__y')).toBe(true);
+  });
+
+  it('a recovery made by a gated write writes the merge back: this boot\'s repair survives a restart', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    await repairedPair();
+    const bootEpoch = gate.currentRepairEpoch();
+    makeReadable('old__x__y');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+    expect((await request(app).delete('/api/books/old__x__y')).status).toBe(409);
+    vi.useRealTimers();
+    const onDisk = JSON.parse(readFileSync(file(), 'utf8'));
+    expect(onDisk.entries.map((e: { bookId: string }) => e.bookId).sort()).toEqual([ID, 'old__x__y'].sort());
+    expect(onDisk.epoch).toBe(bootEpoch); // the epoch pages loaded in this boot hold
+  });
+
+  it('a gated book deleted while the file was unreadable does not come back when it is read', async () => {
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    await gate.registerRepairedBook('gone__x__y', null);
+    await gate.forgetRepairedBook('gone__x__y');
+    makeReadable('gone__x__y', 'old__x__y');
+    await gate.persistRepairedBookGate();
+    expect(gate.isRepairedBook('gone__x__y')).toBe(false);
+    expect(gate.isRepairedBook('old__x__y')).toBe(true);
   });
 
   it('a repair made while it was unreadable is merged with the file once it can be read, and both persist', async () => {
@@ -319,25 +339,24 @@ describe('deleting a gated book drops its gate entry (#3713)', () => {
   const ID = 'auth__ser__book';
   it('the entry is gone in memory and from the file, so a new book minted with the same id is not refused', async () => {
     await repairedPair();
-    const token = gate.repairedReadToken(ID)!;
-    expect((await request(app).delete(`/api/books/${ID}`).set('X-Book-Read-Token', token)).status).toBe(204);
-    expect(gate.repairedReadToken(ID)).toBeUndefined();
+    expect((await request(app).delete(`/api/books/${ID}`).set('X-Repair-Epoch', gate.currentRepairEpoch()!)).status).toBe(204);
+    expect(gate.isRepairedBook(ID)).toBe(false);
     expect(JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).entries.map((e: { bookId: string }) => e.bookId)).not.toContain(ID);
     gate.__clearRepairedBookGateMemoryForTest();
     await gate.loadRepairedBookGate();
-    expect(gate.repairedReadToken(ID)).toBeUndefined();
+    expect(gate.isRepairedBook(ID)).toBe(false);
   });
 
-  it('a refused delete (no token) leaves the entry alone', async () => {
+  it('a refused delete (no epoch) leaves the entry alone', async () => {
     await repairedPair();
     expect((await request(app).delete(`/api/books/${ID}`)).status).toBe(409);
-    expect(gate.repairedReadToken(ID)).toBeTruthy();
+    expect(gate.isRepairedBook(ID)).toBe(true);
   });
 
   it('deleting one gated book leaves another one\'s entry alone', async () => {
     await repairedPair();
     await gate.registerRepairedBook('other__id__x', null);
-    await request(app).delete(`/api/books/${ID}`).set('X-Book-Read-Token', gate.repairedReadToken(ID)!);
-    expect(gate.repairedReadToken('other__id__x')).toBeTruthy();
+    await request(app).delete(`/api/books/${ID}`).set('X-Repair-Epoch', gate.currentRepairEpoch()!);
+    expect(gate.isRepairedBook('other__id__x')).toBe(true);
   });
 });

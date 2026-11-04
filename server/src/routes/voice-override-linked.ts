@@ -27,7 +27,7 @@
    Body: { override: { engine, name } | null }  (null clears the engine map).
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
    failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200.
-   A series-mate that is a repaired book (#3713) this request echoed no read token for is left
+   A series-mate that is a repaired book (#3713) on a request without the current repair epoch is left
    untouched and listed in `skippedBooks: [{ bookId, bookTitle, reason }]` (present only then). */
 
 import { Router } from 'express';
@@ -189,7 +189,7 @@ voiceOverrideLinkedRouter.post(
     const { canonicalVoiceId, canonicalVoiceUuid, byBook, series } = sourceStep;
 
     for (const [siblingBookId, { bookTitle, ids }] of byBook) {
-      /* #3713 pass 5 -- a gated repaired mate this request echoed no token for is left alone and
+      /* #3713 pass 5 -- a gated repaired mate, on a request without the current epoch, is left alone and
          reported in `skippedBooks`; the rest of the series still updates. */
       if (skipUnreadRepairedBook(siblingBookId, bookTitle)) continue;
       try {

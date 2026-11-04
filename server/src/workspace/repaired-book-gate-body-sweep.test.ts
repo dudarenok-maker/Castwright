@@ -1,7 +1,7 @@
 /* #3713 / PR #4004 pass 4 -- the remaining writes that name a book in the request BODY (or query) rather
    than the path: POST /books/:id/cast/add-from-roster and /cast/link-prior (body `targetBookId`) and
-   PUT /voices/:id/override (series scope, `bookId`). Each answers 409 with no token on a repaired book and
-   changes nothing on disk; with the book's token it succeeds. The real sweep repairs a pair in a temp
+   PUT /voices/:id/override (series scope, `bookId`). Each answers 409 without the current repair epoch on a
+   repaired book and changes nothing on disk; with it, it succeeds. The real sweep repairs a pair in a temp
    workspace and the real routers serve it. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -86,19 +86,18 @@ const read = (dir: string) => readFileSync(paths.castJsonPath(dir), 'utf8');
 describe('POST /books/:id/cast/add-from-roster with a repaired targetBookId (#3713)', () => {
   const body = { targetBookId: DUP, targetCharacterId: 'c0' };
 
-  it('no token: 409 book_repaired_reload naming the target, and nothing is written', async () => {
+  it('no epoch: 409 book_repaired_reload and nothing is written', async () => {
     await repaired();
     const before = read(src);
     const res = await request(app).post(`/api/books/${SRC}/cast/add-from-roster`).send(body);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_repaired_reload');
-    expect(res.body.bookId).toBe(DUP);
-    expect(read(src)).toBe(before);
+        expect(read(src)).toBe(before);
   });
 
-  it('with the target\'s token the row is added', async () => {
+  it('with the current epoch the row is added', async () => {
     await repaired();
-    const res = await request(app).post(`/api/books/${SRC}/cast/add-from-roster`).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).post(`/api/books/${SRC}/cast/add-from-roster`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(200);
     expect(JSON.parse(read(src)).characters).toHaveLength(3);
   });
@@ -107,20 +106,19 @@ describe('POST /books/:id/cast/add-from-roster with a repaired targetBookId (#37
 describe('POST /books/:id/cast/link-prior with a repaired targetBookId (#3713)', () => {
   const body = { sourceCharacterId: 'c0', targetBookId: DUP, targetCharacterId: 'c1' };
 
-  it('no token: 409 and neither cast.json changes', async () => {
+  it('no epoch: 409 and neither cast.json changes', async () => {
     await repaired();
     const before = [read(src), read(kept)];
     const res = await request(app).post(`/api/books/${SRC}/cast/link-prior`).send(body);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_repaired_reload');
-    expect(res.body.bookId).toBe(DUP);
-    expect([read(src), read(kept)]).toEqual(before);
+        expect([read(src), read(kept)]).toEqual(before);
   });
 
-  it('with the target\'s token the link is written to the target', async () => {
+  it('with the current epoch the link is written to the target', async () => {
     await repaired();
     const before = read(kept);
-    const res = await request(app).post(`/api/books/${SRC}/cast/link-prior`).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).post(`/api/books/${SRC}/cast/link-prior`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(200);
     expect(read(kept)).not.toBe(before);
   });
@@ -129,14 +127,13 @@ describe('POST /books/:id/cast/link-prior with a repaired targetBookId (#3713)',
 describe('PUT /voices/:id/override (series scope) with a repaired bookId (#3713)', () => {
   const body = { override: { engine: 'kokoro', name: 'af_heart' }, scope: 'series', bookId: DUP };
 
-  it('no token: 409 and no cast.json in the series changes', async () => {
+  it('no epoch: 409 and no cast.json in the series changes', async () => {
     await repaired();
     const before = [read(src), read(kept)];
     const res = await request(app).put('/api/voices/c0/override').send(body);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_repaired_reload');
-    expect(res.body.bookId).toBe(DUP);
-    expect([read(src), read(kept)]).toEqual(before);
+        expect([read(src), read(kept)]).toEqual(before);
   });
 
   it('the bookId in the query is gated the same way', async () => {
@@ -145,9 +142,9 @@ describe('PUT /voices/:id/override (series scope) with a repaired bookId (#3713)
     expect(res.status).toBe(409);
   });
 
-  it('with the token it writes the override across the series', async () => {
+  it('with the current epoch it writes the override across the series', async () => {
     await repaired();
-    const res = await request(app).put('/api/voices/c0/override').set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(204);
     expect(read(kept)).toContain('af_heart');
   });
@@ -163,38 +160,36 @@ describe('POST and DELETE /books/:id/cast/:characterId/not-linked-to with a repa
   const body = { otherBookId: DUP, otherCharacterId: 'c0' };
   const url = `/api/books/${SRC}/cast/c0/not-linked-to`;
 
-  it('POST, no token: 409 naming the other book, and neither cast.json changes', async () => {
+  it('POST, no epoch: 409, and neither cast.json changes', async () => {
     await repaired();
     const before = [read(src), read(kept)];
     const res = await request(app).post(url).send(body);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('book_repaired_reload');
-    expect(res.body.bookId).toBe(DUP);
-    expect([read(src), read(kept)]).toEqual(before);
+        expect([read(src), read(kept)]).toEqual(before);
   });
 
-  it('POST, with the other book\'s token: the pair is written on both sides', async () => {
+  it('POST, with the current epoch: the pair is written on both sides', async () => {
     await repaired();
-    const res = await request(app).post(url).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body);
+    const res = await request(app).post(url).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body);
     expect(res.status).toBe(200);
     expect(JSON.parse(read(kept)).characters[0].notLinkedTo).toEqual([{ bookId: SRC, characterId: 'c0' }]);
   });
 
-  it('DELETE, no token: 409 and the edge the kept twin carries stays', async () => {
+  it('DELETE, no epoch: 409 and the edge the kept twin carries stays', async () => {
     await repaired();
-    await request(app).post(url).set('X-Book-Read-Token', gate.repairedReadToken(DUP)!).send(body).expect(200);
+    await request(app).post(url).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send(body).expect(200);
     const before = [read(src), read(kept)];
     const res = await request(app).delete(url).send(body);
     expect(res.status).toBe(409);
-    expect(res.body.bookId).toBe(DUP);
-    expect([read(src), read(kept)]).toEqual(before);
+        expect([read(src), read(kept)]).toEqual(before);
   });
 
-  it('DELETE, with the other book\'s token: the edge is removed', async () => {
+  it('DELETE, with the current epoch: the edge is removed', async () => {
     await repaired();
-    const token = gate.repairedReadToken(DUP)!;
-    await request(app).post(url).set('X-Book-Read-Token', token).send(body).expect(200);
-    await request(app).delete(url).set('X-Book-Read-Token', token).send(body).expect(200);
+    const epoch = gate.currentRepairEpoch()!;
+    await request(app).post(url).set('X-Repair-Epoch', epoch).send(body).expect(200);
+    await request(app).delete(url).set('X-Repair-Epoch', epoch).send(body).expect(200);
     expect(JSON.parse(read(kept)).characters[0].notLinkedTo).toEqual([]);
   });
 });

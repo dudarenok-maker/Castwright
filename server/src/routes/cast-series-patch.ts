@@ -27,7 +27,7 @@
    standalone — `failed` is empty in that case). HTTP 207 (Multi-Status)
    when `failed.length > 0`; 200 otherwise.
 
-   A series-mate that is a repaired book (#3713) this request echoed no read token for is left
+   A series-mate that is a repaired book (#3713) on a request without the current repair epoch is left
    untouched and listed in `skippedBooks: [{ bookId, bookTitle, reason }]` (present only then). */
 
 import { Router } from 'express';
@@ -176,7 +176,7 @@ castSeriesPatchRouter.post(
     if (!('siblingTargets' in sourceStep)) return sourceStep;
 
     for (const t of sourceStep.siblingTargets) {
-      /* #3713 pass 5 -- a gated repaired mate this request echoed no token for is left alone and
+      /* #3713 pass 5 -- a gated repaired mate, on a request without the current epoch, is left alone and
          reported in `skippedBooks`; the rest of the series still updates. */
       if (skipUnreadRepairedBook(t.bookId, t.bookTitle)) continue;
       try {

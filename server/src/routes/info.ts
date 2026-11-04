@@ -28,6 +28,7 @@ import {
   normaliseCudaVerificationDetail,
 } from './sidecar-health.js';
 import { getDuplicateBookIdRepairs } from '../workspace/duplicate-bookid-sweep.js';
+import { currentRepairEpoch } from '../workspace/repaired-book-gate.js';
 import { getCachedUpdateStatus, refreshUpdateStatusInBackground } from './updates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -167,6 +168,9 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
        one. Folders are relative to the books root, never absolute (the app is
        served over LAN HTTPS). The list lasts for the life of the process. */
     duplicateBookIdRepairs: getDuplicateBookIdRepairs(),
+    /* #3713 — the value a page loaded NOW sends as X-Repair-Epoch on its writes; null when no
+       repaired id is gated. A page reads it once, at load, so one loaded before a repair can't hold it. */
+    repairEpoch: currentRepairEpoch(),
   });
 });
 
