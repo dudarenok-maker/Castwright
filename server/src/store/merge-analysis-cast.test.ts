@@ -1941,3 +1941,32 @@ describe('a recorded merge whose target moves this run (#3954 review finding N1)
     expect(r.retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
   });
 });
+
+describe('a prior row another fresh id has recorded as its merge target (#3954 P3-2, N2)', () => {
+  // brann-weir was merged into old-weir (history), and a second fresh row "Old
+  // Weir" (ow2) exact-name matches the same prior row. The remap refuses both
+  // joins; the fallback must not make the one the remap refused.
+  const existing: C[] = [
+    { id: 'brann', name: 'Brann', voiceState: 'locked' },
+    { id: 'old-weir', name: 'Old Weir', voiceState: 'locked' },
+  ];
+  const fresh: C[] = [
+    { id: 'brann-weir', name: 'Brann Weir' },
+    { id: 'ow2', name: 'Old Weir' },
+  ];
+
+  it('refuses the exact join onto a row another fresh id claims in the history', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {
+      'brann-weir': 'old-weir',
+    });
+    expect(r.retirements).toEqual([]);
+    expect(r.characters.map((c) => c.id).sort()).toEqual(
+      ['brann', 'brann-weir', 'old-weir', 'ow2'].sort(),
+    );
+  });
+
+  it('control: with no claim in the history the exact join is made', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {});
+    expect(r.retirements).toContainEqual({ from: 'old-weir', to: 'ow2' });
+  });
+});

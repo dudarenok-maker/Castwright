@@ -392,7 +392,15 @@ function mergeCore<T extends { id: string }>(
      notLinkedTo edge. */
   const recordedElsewhere = (cand: CastRecord, f: { id: string }): boolean => {
     const to = idHistory[f.id];
-    return to !== undefined && to !== cand.id && byId.has(to);
+    if (to !== undefined && to !== cand.id && byId.has(to)) return true;
+    /* The mirror of the remap's `adoptedRows` refusal (N2, #3954 P3-2): a
+       DIFFERENT fresh id in this run is recorded as retired to `cand` (it
+       claims `cand` as its merge target), so retiring `cand` onto `f` as well
+       would hand one prior row to two fresh rows. The remap refuses both joins
+       when it sees the pair; this makes the fallback refuse the same pair
+       instead of making the join in the opposite direction. `idHistory` is in
+       this run's rewritten id space, like `fresh`. */
+    return fresh.some((g) => g.id !== f.id && idHistory[g.id] === cand.id);
   };
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
     notLinkedToId(cand, f.id, currentBookId) ||

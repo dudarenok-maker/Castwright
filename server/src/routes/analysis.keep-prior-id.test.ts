@@ -602,11 +602,67 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         const cast = readCast(bookDir);
         const ids = cast.map((c) => String(c.id));
         expect(new Set(ids).size).toBe(ids.length);
-        // Neither join was made: both fresh rows are kept as rows of their own...
-        expect(ids).toEqual(expect.arrayContaining(['brann-weir', 'ow2', 'brann']));
+        /* Neither join was made, end to end: the fresh rows keep their own ids and
+           the prior rows are untouched. The old-weir assertion is the one that
+           catches mergeCore making the exact join the remap refused (it carries
+           the locked prior row forward only if it was NOT consumed); the voiceId
+           on the fixture would otherwise mask that join (P3-2). */
+        expect(ids).toEqual(expect.arrayContaining(['brann-weir', 'ow2', 'brann', 'old-weir']));
         expect(cast.find((c) => c.id === 'brann')?.voiceState).toBe('locked');
         // ...and mergeCore's existing path flags the recorded merge it could not honour.
         const history = readHistory(bookDir) as { displaced?: Record<string, string> };
+        expect(Object.keys(history.displaced ?? {})).toContain('brann-weir');
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* P3-2. The same fixture as N2 with NO voiceId on the prior rows. A voiceId
+     rides across mergeCore's exact join on its own (`voiceId` is a preserved
+     voice field), so N2 above passes even when mergeCore consumes old-weir.
+     Without a voiceId the voice keys on the row's id, so the join is a silent
+     voice change: old-weir must remain in cast.json under its own id and the
+     fresh ow2 row must stay a row of its own. */
+  it.each(['main', 'subset'] as const)(
+    'P3-2 %s job: with no voiceId the refused exact join is not made by mergeCore either',
+    async (kind) => {
+      const bw = {
+        ...WREN_FRESH,
+        id: 'brann-weir',
+        name: 'Brann Weir',
+        evidence: [{ quote: 'Brann asked' }],
+      } as CharacterOutput;
+      const ow2 = {
+        ...WREN_FRESH,
+        id: 'ow2',
+        name: 'Old Weir',
+        evidence: [{ quote: 'Olga nodded' }],
+      } as CharacterOutput;
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { id: 'brann', name: 'Brann', voiceState: 'locked' },
+          { id: 'old-weir', name: 'Old Weir', voiceState: 'locked' },
+        ],
+        { 'brann-weir': 'old-weir' },
+        BODY.replace('Wren asked', 'Brann asked'),
+      );
+      try {
+        await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, bw, ow2],
+          speakerId: ['brann-weir', 'ow2'],
+        });
+        const cast = readCast(bookDir);
+        const ids = cast.map((c) => String(c.id));
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(ids).toEqual(expect.arrayContaining(['brann-weir', 'ow2', 'brann', 'old-weir']));
+        expect(cast.find((c) => c.id === 'old-weir')?.voiceState).toBe('locked');
+        const history = readHistory(bookDir) as ReturnType<typeof readHistory> & {
+          displaced?: Record<string, string>;
+        };
+        // No retirement of old-weir onto ow2, and the recorded merge is flagged.
+        expect(history.supersededBy).not.toHaveProperty('old-weir');
         expect(Object.keys(history.displaced ?? {})).toContain('brann-weir');
       } finally {
         await cleanup(manuscriptId, bookDir);
