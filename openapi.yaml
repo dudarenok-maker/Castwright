@@ -2302,14 +2302,25 @@ paths:
         queue modal renders every `in_progress` entry as "In flight".
         Idempotent (already-in_progress / missing id both 200). Persists to
         `<workspace>/.queue.json`.
+
+        An entry for a repaired bookId (#3713) is changed only by a request
+        carrying the current `X-Repair-Epoch` (#4029); otherwise 409
+        `book_repaired_reload` and the entry is untouched. The same rule
+        gates `/retry` and `/confirm-fallback`.
       parameters:
         - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       responses:
         '200':
           description: Resulting queue snapshot
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
 
   /api/queue/{entryId}/complete:
     post:
@@ -2799,9 +2810,11 @@ paths:
         per-character Qwen design flow so a bespoke voice propagates across
         that series only.
 
-        When the walk would write a repaired book (#3713) and the request
-        lacks the current `X-Repair-Epoch`, nothing is written and the answer
-        is a 409 `book_repaired_reload` (`BookRepairedReloadError`).
+        When a repaired book (#3713) is in scope (the series for `scope:
+        'series'`, any gated book for the workspace-wide walk), whether or
+        not a voice match would write it, and the request lacks the current
+        `X-Repair-Epoch`, nothing is written and the answer is a 409
+        `book_repaired_reload` (`BookRepairedReloadError`).
       parameters:
         - { in: path, name: voiceId, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/RepairEpoch' }

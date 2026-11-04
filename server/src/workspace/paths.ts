@@ -410,7 +410,7 @@ export function queueJsonPath(): string {
   return join(WORKSPACE_ROOT, '.queue.json');
 }
 
-/** #3713 / PR #4004 pass 3 — the repaired-id write gate's 7-day persistence
+/** #3713 / PR #4004 pass 3 — the repaired-id write gate's persistence (no expiry)
     (`workspace/repaired-book-gate.ts`). Workspace-root sibling to `.queue.json`. */
 export function repairedBookGateJsonPath(): string {
   return join(WORKSPACE_ROOT, '.repaired-book-gate.json');

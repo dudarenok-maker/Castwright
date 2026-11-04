@@ -1574,6 +1574,11 @@ export interface paths {
          *     queue modal renders every `in_progress` entry as "In flight".
          *     Idempotent (already-in_progress / missing id both 200). Persists to
          *     `<workspace>/.queue.json`.
+         *
+         *     An entry for a repaired bookId (#3713) is changed only by a request
+         *     carrying the current `X-Repair-Epoch` (#4029); otherwise 409
+         *     `book_repaired_reload` and the entry is untouched. The same rule
+         *     gates `/retry` and `/confirm-fallback`.
          */
         post: operations["startQueueEntry"];
         delete?: never;
@@ -1901,9 +1906,11 @@ export interface paths {
          *     per-character Qwen design flow so a bespoke voice propagates across
          *     that series only.
          *
-         *     When the walk would write a repaired book (#3713) and the request
-         *     lacks the current `X-Repair-Epoch`, nothing is written and the answer
-         *     is a 409 `book_repaired_reload` (`BookRepairedReloadError`).
+         *     When a repaired book (#3713) is in scope (the series for `scope:
+         *     'series'`, any gated book for the workspace-wide walk), whether or
+         *     not a voice match would write it, and the request lacks the current
+         *     `X-Repair-Epoch`, nothing is written and the answer is a 409
+         *     `book_repaired_reload` (`BookRepairedReloadError`).
          */
         put: operations["setVoiceOverride"];
         post?: never;
@@ -10252,7 +10259,15 @@ export interface operations {
     startQueueEntry: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 entryId: string;
             };
@@ -10267,6 +10282,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
                 };
             };
         };

@@ -966,8 +966,11 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
 - **The queue enqueue is gated (pass 6).** `POST /api/queue/enqueue` names its book in the body; an entry for a
   repaired id from a request without the current epoch refuses the whole batch (409), so a stale tab's Regenerate
   cannot leave a queue entry the dispatcher later renders onto the twin that kept the id. `queue-thunks.ts` posts
-  through `repairFetch`, so the refusal reloads the page. The other queue routes stay ungated: they act on entries
-  that already exist.
+  through `repairFetch`, so the refusal reloads the page. `POST /api/queue/:entryId/{start,retry,confirm-fallback}`
+  carry only an entry id, so they are gated by the entry's own `bookId` (#4029; an id naming no entry stays an
+  idempotent no-op): a stale `/start` can no longer strand a fresh page's entry, and a stale fail+retry cannot requeue
+  it. The other queue routes name no book and stay ungated. `refuseUnreadRepairedBooks` and `refuseGatedSeriesFanOut`
+  retry an unreadable gate file first, the way the mount middlewares do (#4029).
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
