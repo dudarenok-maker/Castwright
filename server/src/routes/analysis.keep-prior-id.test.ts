@@ -527,7 +527,9 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         const brann = cast.find((c) => c.id === 'brann');
         expect(brann?.voiceState).toBe('locked');
         expect(brann?.voiceId).toBe('v_brann');
-        const history = readHistory(bookDir) as { displaced?: Record<string, string> };
+        const history = readHistory(bookDir) as ReturnType<typeof readHistory> & {
+          displaced?: Record<string, string>;
+        };
         expect(history.supersededBy).not.toHaveProperty('brann');
         expect(history.displaced).toEqual({ 'brann-weir': 'old-weir' });
         const ids = cast.map((c) => String(c.id));
