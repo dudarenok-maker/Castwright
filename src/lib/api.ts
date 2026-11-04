@@ -4969,8 +4969,9 @@ async function mockRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedTo
    the row keeps the earlier book's voiceUuid and nothing on disk says it was
    declined, so a re-analysis re-links it and a redesign overwrites the earlier
    book's voice. This records `declinedVoiceFrom` server-side (the cast PUT cannot:
-   it takes the field from disk) and clears `matchedFrom` on disk in the same
-   write; the caller applies the reducer only after it succeeds. Idempotent. */
+   it takes the field from disk), clears `matchedFrom` and moves the row onto a
+   voice no other book holds, in one locked step; `voiceUuid` is the row's uuid
+   after it. The caller applies the reducer only after it succeeds. Idempotent. */
 export interface DeclineVoiceLinkArgs {
   bookId: string;
   characterId: string;
@@ -4979,6 +4980,7 @@ export interface DeclineVoiceLinkArgs {
 export interface DeclineVoiceLinkResponse {
   declinedVoiceFrom: string[];
   declinedVoiceUuids: string[];
+  voiceUuid: string | null;
 }
 
 async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
@@ -5005,7 +5007,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
 
 async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   await wait(80);
-  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [] };
+  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null };
 }
 
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task

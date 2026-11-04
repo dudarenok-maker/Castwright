@@ -3,9 +3,10 @@
  * `castActions.declineMatch` only clears `matchedFrom` in redux. That is not
  * durable: the row keeps the earlier book's voiceUuid, a re-analysis re-links it,
  * and a redesign overwrites the earlier book's voice. The decline is therefore ONE
- * request: the decline-voice-link route records `declinedVoiceFrom` and clears
- * `matchedFrom` on disk in the same locked write, and only when it succeeds does
- * this thunk dispatch the reducer. A failed request leaves redux exactly as it
+ * request: the decline-voice-link route records `declinedVoiceFrom`, clears
+ * `matchedFrom` and moves the row onto a voice of its own in one locked step, and
+ * only when it succeeds does this thunk dispatch the reducer (and mirror the
+ * row's new `voiceUuid`). A failed request leaves redux exactly as it
  * was (the link still shows, so the 500 ms autosave cannot persist a decline the
  * server never recorded) and surfaces a toast, rather than the silent warning that
  * left the earlier book exposed. The source book is read BEFORE the reducer runs,
@@ -35,7 +36,9 @@ export function declineMatchFlow(characterId: string) {
     const fromBookId = state.cast.characters.find((c) => c.id === characterId)?.matchedFrom?.bookId;
     const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
 
-    let marker: { declinedVoiceFrom: string[]; declinedVoiceUuids: string[] } | undefined;
+    let marker:
+      | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null }
+      | undefined;
     if (bookId && fromBookId) {
       try {
         marker = await api.declineVoiceLink({ bookId, characterId, fromBookId });
@@ -53,6 +56,12 @@ export function declineMatchFlow(characterId: string) {
     }
     if (!selectIsOpenBook(getState(), openBook)) return;
     dispatch(castActions.declineMatch(characterId));
-    if (marker) dispatch(castActions.setDeclinedVoice({ characterId, ...marker }));
+    if (marker) {
+      const { voiceUuid, ...lists } = marker;
+      dispatch(castActions.setDeclinedVoice({ characterId, ...lists }));
+      /* The route may have moved the row onto a voice of its own; the reducer drops
+         the stale variant slots when the uuid changes. */
+      if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId, voiceUuid }));
+    }
   };
 }

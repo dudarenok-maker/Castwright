@@ -2930,19 +2930,29 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Record that a series voice link was declined ("Don't reuse") —
-         * @description Appends `fromBookId` to the character's `declinedVoiceFrom` marker (and the
-         *     voice uuid it holds to `declinedVoiceUuids`) so the
-         *     decline survives re-analysis and a later redesign forks the shared voice
-         *     instead of overwriting the earlier book's. Single-book write; `fromBookId`
-         *     need not be resolvable (a deleted book's id is still a valid decline).
-         *     In the same locked write it clears the row's `matchedFrom` when that link
-         *     names `fromBookId` (and sets `voiceState` back to `generated` unless the
-         *     voice is locked or tuned), so the decline is one request and a row is never
-         *     left both declined and linked. Idempotent — an already-recorded book with
-         *     no link left to clear is a no-op. The client calls it from the match
-         *     drawer's Don't reuse, which opens on the Cast view and on Confirm, and
-         *     applies its own reducer only after this succeeds.
+         * Decline a series voice link ("Don't reuse") and give the character a voice of its own —
+         * @description Establishes, in ONE locked step, the invariant every voice design relies
+         *     on: afterwards the character is on its own voice that no other book's
+         *     character holds, other than the characters in other books that link to it
+         *     directly (one hop), which move with it. So a design never refuses and never
+         *     decides anything about a shared voice.
+         *
+         *     The step appends `fromBookId` to the character's `declinedVoiceFrom`
+         *     marker, clears its `matchedFrom` when that link names `fromBookId` (and
+         *     sets `voiceState` back to `generated` unless the voice is locked or tuned),
+         *     and, when its voice is held by another book's character that is not a
+         *     direct follower (or a book cannot be read), mints a fresh `voiceUuid`,
+         *     copies the voice's base files to it (never an emotion variant), stamps it
+         *     onto the character and its direct followers and drops their emotion
+         *     variant slots; the voice it left is appended to `declinedVoiceUuids`. A
+         *     character with no `voiceUuid` always gets one. Any failure rolls every
+         *     write back and removes the copies, so nothing changes.
+         *
+         *     `fromBookId` need not be resolvable (a deleted book's id is still a valid
+         *     decline). Idempotent: repeating a decline of a character already on its own
+         *     voice is a no-op. The client calls it from the match drawer's Don't reuse,
+         *     which opens on the Cast view and on Confirm, and applies its own reducer
+         *     only after this succeeds.
          */
         post: operations["declineVoiceLink"];
         delete?: never;
@@ -6197,13 +6207,15 @@ export interface components {
              *     `POST /api/books/:bookId/cast/:characterId/decline-voice-link` (the
              *     whole-roster cast PUT takes it from disk and cannot set or clear it);
              *     a manual re-link to the book clears its entry. Honoured by the series
-             *     linker and the analysis merge (never re-linked to a declined book) and
-             *     by the voice-design fork (only a marked row forks the shared
-             *     `voiceUuid`).
+             *     linker and the analysis merge (never re-linked to a declined book). A
+             *     character declined before the decline route moved it onto a voice of
+             *     its own, and still on the voice it declined, is moved once by its
+             *     next design.
              */
             declinedVoiceFrom?: string[];
             /**
-             * @description The `voiceUuid`s that were declined, recorded with `declinedVoiceFrom`
+             * @description The `voiceUuid`s the character left when "Don't reuse" moved it onto a
+             *     voice of its own, recorded with `declinedVoiceFrom`
              *     (#3992): "not THIS voice" also excludes any other book holding the
              *     same uuid, so declining Book Two cannot re-link the row to Book One
              *     when both hold one voice. Server-owned like `declinedVoiceFrom`.
@@ -12846,7 +12858,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The marker after the write */
+            /** @description The marker after the step, and the character's voice uuid */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12855,6 +12867,8 @@ export interface operations {
                     "application/json": {
                         declinedVoiceFrom: string[];
                         declinedVoiceUuids: string[];
+                        /** @description The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own). */
+                        voiceUuid: string | null;
                     };
                 };
             };
@@ -12874,6 +12888,17 @@ export interface operations {
             };
             /** @description The book has no cast on disk yet */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description The step failed and nothing changed. The body's `error` is a fixed,
+             *     path-free sentence; one ending "try again." means a book in the series
+             *     was unreadable, moved or changed during the step and a retry can work.
+             */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

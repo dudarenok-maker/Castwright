@@ -48,7 +48,7 @@ function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books'
 
 beforeEach(() => {
   vi.mocked(api.declineVoiceLink).mockReset();
-  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] });
+  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null });
 });
 
 describe('declineMatchFlow (#3992)', () => {
@@ -110,7 +110,7 @@ describe('declineMatchFlow (#3992)', () => {
     const order: string[] = [];
     vi.mocked(api.declineVoiceLink).mockImplementation(async () => {
       order.push(`request saw matchedFrom=${store.getState().cast.characters[0].matchedFrom?.bookId}`);
-      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] };
+      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null };
     });
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(order).toEqual(['request saw matchedFrom=book-one']);
@@ -124,7 +124,7 @@ describe('declineMatchFlow (#3992)', () => {
     vi.mocked(api.declineVoiceLink).mockImplementation(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [] });
+          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null });
         }),
     );
     const pending = (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -146,6 +146,7 @@ describe('declineMatchFlow (#3992)', () => {
     vi.mocked(api.declineVoiceLink).mockResolvedValue({
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
+      voiceUuid: null,
     });
     const store = makeStore([matched]);
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -165,6 +166,25 @@ describe('declineMatchFlow (#3992)', () => {
       } as never),
     );
     expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
+  });
+
+  it('mirrors the uuid the route moved the row onto, dropping its stale variant slots', async () => {
+    vi.mocked(api.declineVoiceLink).mockResolvedValue({
+      declinedVoiceFrom: ['book-one'],
+      declinedVoiceUuids: ['u_shared'],
+      voiceUuid: 'u_own',
+    });
+    const store = makeStore([
+      {
+        ...matched,
+        voiceUuid: 'u_shared',
+        overrideTtsVoices: { qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+      } as unknown as Character,
+    ]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    const row = store.getState().cast.characters[0] as Character & { voiceUuid?: string };
+    expect(row.voiceUuid).toBe('u_own');
+    expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
   it('a failed record applies no marker either (the link and the row stay as they were)', async () => {
