@@ -1015,6 +1015,18 @@ describe('seedReuseGuardsFromPriorCast', () => {
     expect(fresh[0].matchedFrom).toBeUndefined();
   });
 
+  it('the tolerant widening unions only the declining twin, not an unrelated sibling (#3954 N4)', () => {
+    const existing: C[] = [
+      { id: 'anna-lee', name: 'Anna Lee', matchedFrom: { bookId: 'book-1', characterId: 'anna-lee' } },
+      { id: 'anna-lee-2', name: 'Anna Lee', notLinkedTo: [{ bookId: 'book-1', characterId: 'anna-lee' }] },
+      // A decision made only about Anna Smith; it has nothing to do with the twin pair.
+      { id: 'anna-smith', name: 'Anna Smith', notLinkedTo: [{ bookId: 'book-1', characterId: 'anna-s' }] },
+    ];
+    const fresh: C[] = [{ id: 'anna', name: 'Anna' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'anna-lee' }]);
+  });
+
   it('the seed never copies a link a same-name twin declines, even when the declining twin is skipped by the strict bridge (#3954 finding 7)', () => {
     const existing: C[] = [
       { id: 'thomas', name: 'Old Tom', matchedFrom: { bookId: 'book-1', characterId: 'old-tom' } },

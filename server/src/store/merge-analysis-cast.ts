@@ -737,9 +737,12 @@ export function seedReuseGuardsFromPriorCast<
         let union: unknown[] | undefined;
         for (const old of existing) {
           if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+          // Tolerant set: only a member of the declining pair itself, so an
+          // unrelated sibling's decline (a decision about someone else) stays off
+          // the speaker (#3954 N4).
           const inSet = looseBridge.ambiguous.has(key)
             ? nameOf(old) === key
-            : tolerantRows.includes(old);
+            : tolerantRows.includes(old) && tolerantRows.some((o) => o !== old && declinesLinkOf(old, o));
           if (!inSet) continue;
           if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
         }
