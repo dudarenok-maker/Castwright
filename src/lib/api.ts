@@ -138,7 +138,9 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
-import { bookFetch as fetch, bookFetchFor, rememberManuscriptBook, reportSkippedBookList } from './book-read-token';
+/* #3713 — every real call goes through `repairFetch`: the page-load repair epoch on each write, and a full
+   reload when the server refuses one as older than a duplicate-bookId repair (lib/repair-epoch.ts). */
+import { repairFetch as fetch, reportSkippedBookList } from './repair-epoch';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -2253,7 +2255,7 @@ async function realSetVoiceOverride(
   const body: { override: BaseVoice | null; scope?: string; bookId?: string } = { override };
   if (opts?.scope) body.scope = opts.scope;
   if (opts?.bookId) body.bookId = opts.bookId;
-  const res = await bookFetchFor(opts?.bookId ? [opts.bookId] : [])(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
+  const res = await fetch(`/api/voices/${encodeURIComponent(voiceId)}/override`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -2474,10 +2476,7 @@ async function realGetBookState(
     throw new Error(
       `Book state fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
-  const body = await res.json();
-  /* #3713 — a manuscript-keyed write (Analyse) echoes this book's repaired-id read token. */
-  rememberManuscriptBook(body?.manuscriptId, bookId);
-  return body;
+  return res.json();
 }
 
 /* Cold-boot rehydration for the top-bar AnalysisPill (plan 32, E2).
@@ -4783,8 +4782,7 @@ async function mockGenerateAllVoiceStyles(
 async function realOverrideLibraryCast(
   args: OverrideLibraryCastArgs,
 ): Promise<OverrideLibraryCastResponse> {
-  /* #3713 pass 3: the books are named in the body, so the token exchange is scoped to them. */
-  const res = await bookFetchFor([args.sourceBookId, args.targetBookId])('/api/library-cast/override', {
+  const res = await fetch('/api/library-cast/override', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(args),
@@ -4864,7 +4862,7 @@ async function realLinkPriorCharacter(
   args: LinkPriorCharacterArgs,
 ): Promise<LinkPriorCharacterResponse> {
   const { bookId, ...body } = args;
-  const res = await bookFetchFor([bookId, args.targetBookId])(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/link-prior`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -4902,8 +4900,7 @@ export interface NotLinkedToResponse {
 
 async function realNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
   const { bookId, characterId, ...body } = args;
-  /* #3713 (PR #4004 pass 4): the server writes the other book's cast.json too, so it asks for that token. */
-  const res = await bookFetchFor([bookId, args.otherBookId])(
+  const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
     {
       method: 'POST',
@@ -4940,7 +4937,7 @@ async function mockNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToRespon
    castActions.removeNotLinked + the foreign-cast cache counterpart. */
 async function realRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
   const { bookId, characterId, ...body } = args;
-  const res = await bookFetchFor([bookId, args.otherBookId])(
+  const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
     {
       method: 'DELETE',
@@ -5255,7 +5252,7 @@ async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
   const { bookId, ...body } = args;
-  const res = await bookFetchFor([bookId, args.targetBookId])(`/api/books/${encodeURIComponent(bookId)}/cast/add-from-roster`, {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/add-from-roster`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -6711,8 +6708,8 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
   let buffer = '';
 
   const handle = (e: CastDesignStreamEvent) => {
-    /* #3713 (PR #4004 pass 4): a design's voice write left a repaired series-mate alone. The headers
-       flushed before the job ran, so the stream carries the list; same toast as a plain series write. */
+    /* #3713: a design's voice write left a repaired series-mate alone, so this page predates the repair. The
+       headers flushed before the job ran, so the stream carries the list; it reloads like a plain series write. */
     if (e.skippedBooks !== undefined) reportSkippedBookList(e.skippedBooks);
     switch (e.type) {
       case 'resume_from':
@@ -10272,7 +10269,7 @@ async function realAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
 ): Promise<AssignLibraryVoiceResult> {
-  const res = await bookFetchFor([body.bookId])(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -10301,7 +10298,7 @@ async function realUnassignLibraryVoice(
   args: { bookId: string; characterId: string },
 ): Promise<UnassignLibraryVoiceResult> {
   const qs = new URLSearchParams({ bookId: args.bookId, characterId: args.characterId });
-  const res = await bookFetchFor([args.bookId])(
+  const res = await fetch(
     `/api/voice-library/${encodeURIComponent(voiceUuid)}/assign?${qs.toString()}`,
     { method: 'DELETE' },
   );

@@ -1073,32 +1073,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/repaired-books/ack/{bookId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Acknowledge a full read of a book whose duplicate bookId was repaired
-         * @description #3713 — after a duplicate-bookId repair the server refuses a write on the repaired id
-         *     unless the request echoes the `X-Book-Read-Token` that `GET /api/books/{bookId}/state`
-         *     hands out (409 `book_repaired_reload` otherwise), for 7 days across restarts. A client
-         *     that APPLIED a full read of the book as its snapshot sends this, carrying the token, and
-         *     only then does the server forget the book's persisted gate entry (this process keeps
-         *     refusing a tab with no token; the next restart does not). A bare state read clears
-         *     nothing. An id that is not gated is a quiet 204.
-         */
-        post: operations["ackRepairedBookRead"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/books/{bookId}/listen-stats": {
         parameters: {
             query?: never;
@@ -3619,20 +3593,23 @@ export interface components {
             message?: string;
             /**
              * @description #3713 — present on `character_designed`, `variant_designed` and the terminal `idle` ONLY when the
-             *     design's voice write left a repaired series-mate alone because the request echoed no read token for
-             *     it (the stream's headers flushed before the job ran, so the list rides the events). Cumulative for
-             *     the job. Absent otherwise.
+             *     design's voice write left a repaired series-mate alone because the request did not carry the current
+             *     `X-Repair-Epoch` (the stream's headers flushed before the job ran, so the list rides the events).
+             *     Cumulative for the job. Absent otherwise.
              */
             skippedBooks?: components["schemas"]["SkippedRepairedBook"][];
         };
         /**
-         * @description #3713 — a series-mate a fan-out left alone: a book whose duplicate bookId was repaired and that the
-         *     request echoed no read token for. The user reopens it, then repeats the change.
+         * @description #3713 — a series-mate a fan-out left alone: a book whose duplicate bookId was repaired, on a request
+         *     that did not carry the current `X-Repair-Epoch`. For 7 days after a repair every book-content write
+         *     naming a repaired id is refused with 409 `book_repaired_reload` unless it carries that header equal to
+         *     the `repairEpoch` `GET /api/info` serves; a page reads it once when it loads, so a page loaded before
+         *     the repair cannot hold it. The client reloads the page, then the user repeats the change.
          */
         SkippedRepairedBook: {
             bookId: string;
             bookTitle: string;
-            /** @description A sentence for the UI: Reopen "<title>" to apply this change there. */
+            /** @description A sentence for the UI: "<title>" was repaired after this page loaded. Reload Castwright, then repeat the change, to apply it there. */
             reason: string;
         };
         /** @description GET /api/books/{bookId}/cast/design/status response. */
@@ -3707,7 +3684,7 @@ export interface components {
             voiceUuid?: string;
             /**
              * @description #3713 — `designed` only, and only when the design's series-wide voice write left a repaired
-             *     series-mate alone because the request echoed no read token for it. Absent otherwise.
+             *     series-mate alone because the request did not carry the current `X-Repair-Epoch`. Absent otherwise.
              */
             skippedBooks?: components["schemas"]["SkippedRepairedBook"][];
             /** @description designed only. */
@@ -9481,35 +9458,6 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    ackRepairedBookRead: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Book-Read-Token"?: string;
-            };
-            path: {
-                bookId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Acknowledged (or the id is not gated) */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request did not carry this book's read token; nothing was cleared */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

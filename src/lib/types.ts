@@ -286,6 +286,9 @@ export interface AppInfo {
        every twin's, so an open tab can tell it holds that twin; null when shared. */
     reassignedManuscriptId?: string | null;
   }>;
+  /* #3713 — the value a page loaded now sends as X-Repair-Epoch on its writes; null when no
+     repaired id is gated. Read once at page load (lib/repair-epoch.ts), never from a later poll. */
+  repairEpoch?: string | null;
 }
 
 /* Result of the "is a newer release available?" check for the Account →

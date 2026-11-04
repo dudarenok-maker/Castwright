@@ -85,8 +85,7 @@ import { BulkReassignUndoBanner } from './bulk-reassign-undo-banner';
 import { UpdateNotifierBanner } from './update-notifier-banner';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { DuplicateBookRepairBanner } from './duplicate-book-repair-banner';
-import { DuplicateBookRepairReread } from './duplicate-book-repair-reread';
-import { commitBookReadToken, hasIssuedBookReadToken, revokeBookReadToken } from '../lib/book-read-token';
+import { RepairReloadBlocked } from './repair-reload-blocked';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -957,13 +956,7 @@ export function Layout() {
       const requestSeq = store.getState().revisions.adoptSeq;
       const marks = marksFor(bookId);
       revisionsOnly = manuscriptReady && marks === 0;
-      if (!revisionsOnly) {
-        fullReadInFlight.current = bookId;
-        /* #3713 (PR #4004 pass 4): until this read is applied the slices are not the book's snapshot,
-           so a save made now must not carry a token committed before it (the handler's off-stage
-           commit, or an earlier read): it is refused and the book re-read instead. */
-        revokeBookReadToken(bookId);
-      }
+      if (!revisionsOnly) fullReadInFlight.current = bookId;
       /* Plan 289 (D6) — a full read stamps its sequence before it is issued,
          so a save that lands while it is in flight wins over what it read. */
       const readSeq = revisionsOnly ? 0 : (dispatch(beginFullRead(bookId)) as unknown);
@@ -1018,9 +1011,7 @@ export function Layout() {
                A kept `state`-slice save that carries a base is not dropped
                (#3784 P2): it stays for the server to judge. Based whole-slice
                saves (cast, manuscript, changeLog) are dropped. */
-            /* #3713: when this read ISSUED a repaired-id token (committed below), a kept save
-               made before the commit carried none, so a based `state` one goes too. */
-            dispatch(dropRetainedSaves(bookId, true, hasIssuedBookReadToken(bookId)));
+            dispatch(dropRetainedSaves(bookId, true));
             /* #3916 — the same skip for a cast write made since this read went out
                (a voice match applied on Confirm): the roster it read predates that
                write, and hydrating it would wipe the applied match from the screen
@@ -1101,13 +1092,6 @@ export function Layout() {
                 analysis: res.analysis,
               }),
             );
-            /* #3713 — the slices now ARE this book's disk snapshot: the server's
-               repaired-id write gate (lib/book-read-token.ts) may let their saves through. */
-            /* A save QUEUED while this read was out (a debounce timer, a retry) was built from the
-               slices the hydrate above just replaced: it must not be armed by the commit (PR #4004
-               pass 4). The screen shows the disk snapshot, so nothing visible is lost. */
-            if (hasIssuedBookReadToken(bookId)) dispatch(dropRetainedSaves(bookId, true, true, true));
-            commitBookReadToken(bookId);
           }
           /* Always carry `bookId` — even when `res.revisions` is null (no
              revisions.json yet for a freshly-imported book) — so the slice's
@@ -2363,7 +2347,8 @@ export function Layout() {
       <BulkReassignUndoBanner />
       <SettingsCorruptBanner />
       <DuplicateBookRepairBanner />
-      <DuplicateBookRepairReread />
+      {/* #3713 — shown only when the repaired-id reload would loop (lib/repair-epoch.ts). */}
+      <RepairReloadBlocked />
 
       {/* fe-27 — "update available" notifier; self-gated, dark in mock mode. */}
       <UpdateNotifierBanner />

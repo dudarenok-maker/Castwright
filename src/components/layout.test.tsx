@@ -238,8 +238,8 @@ vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
 vi.mock('./duplicate-book-repair-banner', () => ({
   DuplicateBookRepairBanner: () => <div data-testid="duplicate-book-repair-banner-mount" />,
 }));
-vi.mock('./duplicate-book-repair-reread', () => ({
-  DuplicateBookRepairReread: () => <div data-testid="duplicate-book-repair-reread-mount" />,
+vi.mock('./repair-reload-blocked', () => ({
+  RepairReloadBlocked: () => <div data-testid="repair-reload-blocked-mount" />,
 }));
 
 /* The drawer is stood in for by one button so a test can drive Layout's own
@@ -270,8 +270,7 @@ vi.mock('../store/prosody-thunk', () => ({
 import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests, type LayoutContext } from './layout';
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
-import { bookFetch, __resetBookReadTokensForTest } from '../lib/book-read-token';
-import { installRepairedBookHandler, BOOK_REPAIRED_MESSAGE } from '../store/repaired-book-handler';
+import { repairFetch, __resetRepairEpochForTest } from '../lib/repair-epoch';
 import { revisionsActions } from '../store/revisions-slice';
 import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
@@ -2235,7 +2234,7 @@ describe('Layout — duplicate-bookId repair banner (#3713)', () => {
     expect(await screen.findByTestId('duplicate-book-repair-banner-mount')).toBeInTheDocument();
   });
 
-  it('mounts the DuplicateBookRepairReread (the poll-driven re-read)', async () => {
+  it('mounts the RepairReloadBlocked notice (the reload-loop fallback)', async () => {
     const store = makeStore();
     render(
       <Provider store={store}>
@@ -2246,7 +2245,7 @@ describe('Layout — duplicate-bookId repair banner (#3713)', () => {
         </MemoryRouter>
       </Provider>,
     );
-    expect(await screen.findByTestId('duplicate-book-repair-reread-mount')).toBeInTheDocument();
+    expect(await screen.findByTestId('repair-reload-blocked-mount')).toBeInTheDocument();
   });
 });
 
@@ -5559,11 +5558,13 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
   });
 });
 
-/* #3713 / PR #4004 pass 2 — the server's repaired-id write gate, end to end through the
-   real Layout, the real persistence middleware, the real `bookFetch` and the real
-   refused-write handler. A fake server answers `fetch` the way the gate does: a book
-   state read hands out a token; a write to the repaired id without it is a 409. */
-describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)', () => {
+/* #3713 / PR #4004 (owner decision after pass 5) — the blunt repaired-id gate, end to end through the real
+   Layout, the real persistence middleware and the real `repairFetch`. A fake server answers `fetch` the way the
+   gate does: once the sweep has run, a write to the repaired id without the current epoch is a 409
+   `book_repaired_reload`. This page never read an epoch (it loaded before the repair), so its first gated write
+   is refused and the page reloads, ONCE; nothing it sends afterwards reaches the server. These are the client
+   halves of the reviewers' repros from passes 3 to 5: the kept twin must come out byte-identical in each. */
+describe('Layout — a page loaded before a duplicate-bookId repair (#3713)', () => {
   const PREV = 'a__s__t';
   const row = (id: string, name: string) => ({ id, name, role: '', color: 'narrator' }) as Character;
   const names = (s: ReturnType<ReturnType<typeof makeStoreWithScopeAndPersistence>['getState']>) =>
@@ -5572,68 +5573,58 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
   const LOSER = [row('l', 'Loser Row')];
   const WINNER = [row('a', 'Winner A'), row('b', 'Winner B'), row('c', 'Winner C')];
 
+  let reload: ReturnType<typeof vi.fn>;
+
   function fakeServer() {
     const server = {
       gated: false,
+      down: false,
+      epoch: 'epoch-now',
       cast: LOSER as Character[],
-      ms: 'm_loser',
-      castPuts: 0,
-      deletes: 0,
-      /* wire-level record of every PUT: which slice, and the token it carried */
-      puts: [] as Array<{ slice: string; token: string | null; status: number }>,
-      readDelay: 0,
-      acks: [] as Array<string | null>,
+      /* the twin that kept the id: what its files hold, serialised, so "byte-identical" is literal */
+      kept: JSON.stringify({ cast: WINNER, title: 'Winner title', castConfirmed: false, sentences: [] }),
+      /* every write that reached the server, and what it answered */
+      writes: [] as Array<{ method: string; url: string; slice?: string; epoch: string | null; status: number }>,
     };
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/repaired-books/ack/')) {
-        server.acks.push(new Headers(init?.headers).get('x-book-read-token'));
-        return new Response(null, { status: 204 });
-      }
+      if (server.down) throw new TypeError('Failed to fetch');
       /* Only the book routes are modelled; anything else (queue, config) is a network failure. */
       if (!url.startsWith('/api/books/')) throw new Error('no network');
       const method = (init?.method ?? 'GET').toUpperCase();
-      const headers = new Headers(init?.headers);
-      if (method === 'GET') {
-        return new Response('{}', { headers: server.gated ? { 'x-book-read-token': 'tok' } : {} });
-      }
-      const token = headers.get('x-book-read-token');
-      if (server.gated && token !== 'tok') {
-        if (method === 'PUT') {
-          const { slice } = JSON.parse(String(init?.body ?? '{}')) as { slice: string };
-          server.puts.push({ slice, token, status: 409 });
-        }
+      if (method === 'GET') return new Response('{}');
+      const epoch = new Headers(init?.headers).get('x-repair-epoch');
+      const slice = init?.body ? (JSON.parse(String(init.body)) as { slice?: string }).slice : undefined;
+      const exempt = /\/(listen-progress|shelf-status|listen-stats)$/.test(url);
+      if (server.gated && !exempt && url.includes(PREV) && epoch !== server.epoch) {
+        server.writes.push({ method, url, slice, epoch, status: 409 });
         return new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
       }
-      if (method === 'DELETE') {
-        server.deletes += 1;
-        return new Response(null, { status: 204 });
-      }
-      const req = JSON.parse(String(init?.body ?? '{}')) as { slice: string; patch: { characters?: Character[] } };
-      server.puts.push({ slice: req.slice, token, status: 200 });
-      if (req.slice === 'cast') {
-        server.castPuts += 1;
-        server.cast = req.patch.characters ?? server.cast;
+      server.writes.push({ method, url, slice, epoch, status: 200 });
+      if (server.gated && !exempt) {
+        /* a write that got through lands on the kept twin */
+        const k = JSON.parse(server.kept) as { cast: Character[]; [k: string]: unknown };
+        const req = JSON.parse(String(init?.body ?? '{}')) as { slice?: string; patch?: Record<string, unknown> };
+        if (req.slice === 'cast') k.cast = (req.patch?.characters as Character[]) ?? k.cast;
+        else Object.assign(k, req.patch ?? { touched: url });
+        server.kept = JSON.stringify(k);
+      } else if (slice === 'cast') {
+        server.cast = (JSON.parse(String(init?.body)) as { patch: { characters: Character[] } }).patch.characters;
       }
       return new Response('{}', { status: 200 });
     });
     getBookStateMock.mockImplementation(async (id: string) => {
-      await bookFetch(`/api/books/${id}/state`);
+      await repairFetch(`/api/books/${id}/state`);
       const base = bookStateFor(id, revState(id, null, 0, []));
-      const snapshot = { ...base, state: { ...base.state, manuscriptId: server.ms, title: 'T' }, cast: { characters: server.cast } };
-      /* the disk is read when the request is served; the response lands readDelay later */
-      if (server.readDelay > 0) await new Promise((r) => setTimeout(r, server.readDelay));
-      return snapshot;
+      const cast = server.gated ? (JSON.parse(server.kept) as { cast: Character[] }).cast : server.cast;
+      return { ...base, state: { ...base.state, title: 'T' }, cast: { characters: cast } };
     });
     putBookStateMock.mockImplementation(async (id: string, req: unknown) => {
-      const res = await bookFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
-      if (!res.ok) {
-        const body = (await res.json()) as { code?: string };
-        throw Object.assign(new Error(`Book state PUT failed (${res.status}): refused`), { code: body.code });
-      }
+      const res = await repairFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
+      if (!res.ok) throw new Error(`Book state PUT failed (${res.status})`);
       return undefined;
     });
     deleteBookMock.mockImplementation(async (id: string) => {
-      const res = await bookFetch(`/api/books/${id}`, { method: 'DELETE' });
+      const res = await repairFetch(`/api/books/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`delete refused (${res.status})`);
     });
     return server;
@@ -5653,130 +5644,103 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     );
   }
 
+  /** A page that opened the id while it named the copy, before the restart. */
   async function openLoserTab() {
     const server = fakeServer();
     const store = makeStoreWithScopeAndPersistence();
-    installRepairedBookHandler(store);
     renderWithLibrary(store);
     act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
     await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
     await settle();
     return { server, store };
   }
-  /* The restart: the sweep gave the id to the other twin. No poll has landed. */
+  /* The restart: the sweep gave the id to the other twin, and the gate holds. */
   const sweep = (server: ReturnType<typeof fakeServer>) => {
     server.gated = true;
-    server.cast = WINNER;
-    server.ms = 'm_winner';
+    server.writes.length = 0;
+  };
+  const keptBefore = (server: ReturnType<typeof fakeServer>) => server.kept;
+  const refusedOnce = (server: ReturnType<typeof fakeServer>) => {
+    expect(server.writes.filter((w) => w.status === 200 && w.url.includes(PREV))).toEqual([]);
+    expect(server.writes.filter((w) => w.status === 409)).toHaveLength(1);
+    expect(reload).toHaveBeenCalledTimes(1);
   };
 
-  beforeEach(() => __resetBookReadTokensForTest());
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('left the book before the sweep, reopened it, edited: the kept twin is untouched, the user is told, the book is re-read, later edits land', async () => {
-    const { server, store } = await openLoserTab();
-    act(() => { store.dispatch(uiActions.goHome()); });
-    await settle();
-    expect(store.getState().manuscript.bookId).toBe(PREV); // the slices are kept
-    sweep(server);
-
-    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await settle(150);
-    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
-    await settle(900);
-
-    expect(server.cast).toEqual(WINNER);
-    expect(server.castPuts).toBe(0);
-    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
-    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
-
-    /* A client that has read the book since can still write. */
-    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the re-read'))); });
-    await settle(900);
-    expect(server.castPuts).toBe(1);
-    expect(server.cast.map((c) => c.name)).toContain('Edited after the re-read');
+  beforeEach(() => {
+    __resetRepairEpochForTest();
+    sessionStorage.clear();
+    reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __resetRepairEpochForTest();
   });
 
-  /* PR #4004 pass 4, finding 1: a Library write is refused while the slices still hold the copy; the
-     handler's off-stage read commits the token. Committing it over the copy's slices armed every save
-     the reopen (and its 1.5 s full read) made. */
-  it('a Library write refused off-stage, then the book reopened and edited mid-read: the kept twin is untouched', async () => {
+  it('Library edit, then reopen and edit (pass 4): the edit is refused, the page reloads once, nothing else is sent', async () => {
     const { server, store } = await openLoserTab();
     act(() => { store.dispatch(uiActions.goHome()); });
     await settle();
     sweep(server);
-    /* The Library Edit's PUT: refused, so the handler reads the book off-stage. */
-    await act(async () => {
-      await bookFetch(`/api/books/${PREV}/state`, { method: 'PUT', body: JSON.stringify({ slice: 'state', patch: {} }) });
-    });
-    await settle(200);
-    expect(server.cast).toEqual(WINNER);
-
-    server.readDelay = 1500;
-    server.puts.length = 0;
+    const before = keptBefore(server);
+    libraryEdit.current = { book: { bookId: PREV, title: 'T' }, patch: { title: 'Renamed original' } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await settle(300);
     act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
     await settle(300);
     act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
-    await settle(2200);
-
-    expect(server.puts.filter((p) => p.status === 200)).toEqual([]);
-    expect(server.cast).toEqual(WINNER);
-    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']), { timeout: 6000 });
+    await settle(1500);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
+    expect(store.getState().notifications.toasts).toEqual([]); // nothing shown: the reload is the answer
   });
 
-  it('open the whole time, edited before the poll lands: refused, told, re-read, and the next edit lands', async () => {
-    const { server, store } = await openLoserTab();
+  it('Voices Compare save, then Save again (pass 5): the second save is never sent', async () => {
+    const { server } = await openLoserTab();
     sweep(server);
-    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
-    await settle(900);
-    expect(server.cast).toEqual(WINNER);
-    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
-    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
-    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the re-read'))); });
-    await settle(900);
-    expect(server.castPuts).toBe(1);
+    const before = keptBefore(server);
+    const compare = JSON.stringify({ gender: 'male', ageRange: 'teen', tone: { warmth: 10, pace: 50 } });
+    const url = `/api/books/${PREV}/cast/l/series-patch`;
+    void repairFetch(url, { method: 'POST', body: compare });
+    await settle(50);
+    void repairFetch(url, { method: 'POST', body: compare }); // the modal stayed open and dirty
+    await settle(300);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
   });
 
-  /* PR #4004 pass 4, finding 2: a save queued while the full read that commits the token is out was built
-     from the stale slices; the commit must not arm it. One per non-cast slice, through the real
-     middleware, `bookFetch` and Layout, and asserted on the wire (the token each PUT carried). */
-  it.each([
-    ['manuscript', () => manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' })],
-    ['changeLog', () => changeLogActions.wipeBookShapeEvents()],
-    ['state', () => uiActions.confirmCast()],
-  ] as const)(
-    'a %s save queued in the last 500 ms of the committing full read is never sent with the token',
-    async (slice, action) => {
-      const { server, store } = await openLoserTab();
-      sweep(server);
-      server.readDelay = 1500;
-      server.puts.length = 0;
-      /* A cast edit is refused: the handler marks the book and Layout's full read goes out. */
-      act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
-      await settle(1700);
-      expect(server.puts).toEqual([{ slice: 'cast', token: null, status: 409 }]);
-      act(() => { store.dispatch(action() as never); }); // ~100 ms before the read lands
-      await settle(1500);
-      await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']), { timeout: 6000 });
-      await settle(900);
-      expect(server.puts.filter((p) => p.slice === slice && p.status === 200)).toEqual([]);
-      expect(server.cast).toEqual(WINNER);
-    },
-  );
+  it('a save kept across the restart, re-sent after the mini-player keepalive (pass 3): refused once, then nothing', async () => {
+    const { server, store } = await openLoserTab();
+    server.down = true; // the restart begins: the save fails on transport and is kept for a retry
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Kept across the restart'))); });
+    await settle(800);
+    sweep(server);
+    server.down = false;
+    const before = keptBefore(server);
+    /* the mini-player's keepalive flush: a listener write, exempt, so it lands */
+    await act(async () => {
+      await fetch(`/api/books/${PREV}/listen-stats`, { method: 'PUT', keepalive: true, body: '{"days":{}}' });
+    });
+    await settle(4500); // the kept save's retries
+    expect(server.writes.filter((w) => w.status === 200).map((w) => w.url)).toEqual([`/api/books/${PREV}/listen-stats`]);
+    expect(server.writes.filter((w) => w.status === 409)).toHaveLength(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(server.kept).toBe(before);
+  }, 15_000);
 
-  it('CONTROL: a save queued after the full read landed carries the token and lands', async () => {
+  it('a manuscript save queued behind a refused cast save (pass 4): the queued one is never sent', async () => {
     const { server, store } = await openLoserTab();
     sweep(server);
+    const before = keptBefore(server);
     act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
-    await settle(900);
-    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
-    server.puts.length = 0;
+    act(() => { store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' })); });
     act(() => { store.dispatch(changeLogActions.wipeBookShapeEvents()); });
-    await settle(900);
-    expect(server.puts).toEqual([{ slice: 'changeLog', token: 'tok', status: 200 }]);
+    await settle(1500);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
   });
 
-  it('a stale Library row: Delete on the repaired id is refused, deletes nothing, and tells the user', async () => {
+  it('a stale Library row: Delete on the repaired id is refused and reloads; nothing is deleted', async () => {
     const { server, store } = await openLoserTab();
     act(() => { store.dispatch(uiActions.goHome()); });
     await settle();
@@ -5784,78 +5748,38 @@ describe('Layout — a tab holding a stale snapshot of a repaired book (#3713)',
     libraryEdit.current = { book: { bookId: PREV, title: 'T' }, patch: {} };
     fireEvent.click(await screen.findByTestId('library-delete'));
     await settle(300);
-    expect(server.deletes).toBe(0);
-    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(BOOK_REPAIRED_MESSAGE);
+    refusedOnce(server);
   });
 
-  /* PR #4004 pass 3, finding 2: the full read that COMMITS a token must drop the book's kept
-     saves, based `state` ones included (a kept save made before the commit carried no token). */
-  const droppedOnRead = (store: ReturnType<typeof makeStoreWithScopeAndPersistence>) => {
-    const seen: Array<{ type?: string; payload?: unknown; onFullRead?: boolean; dropBased?: boolean }> = [];
-    const dispatch = store.dispatch.bind(store);
-    store.dispatch = ((a: { type?: string }) => {
-      seen.push(a);
-      return dispatch(a as never);
-    }) as typeof store.dispatch;
-    return () => seen.filter((a) => a.type === 'persistence/dropRetained' && a.onFullRead && a.payload === PREV);
-  };
-
-  it('the full read of a repaired id commits the token without arming a save queued before it, and asks for the drop', async () => {
+  it('CONTROL: a page loaded after the repair carries the current epoch and its edit lands on the kept twin', async () => {
     const server = fakeServer();
-    server.gated = true;
-    server.readDelay = 600;
+    sweep(server);
+    const fetchWrite = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      url === '/api/info' ? new Response(JSON.stringify({ repairEpoch: server.epoch })) : fetchWrite(url, init),
+    );
+    const { loadRepairEpoch } = await import('../lib/repair-epoch');
+    loadRepairEpoch();
     const store = makeStoreWithScopeAndPersistence();
-    installRepairedBookHandler(store);
-    const drops = droppedOnRead(store);
     renderWithLibrary(store);
     act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await settle(400);
-    act(() => { store.dispatch(uiActions.confirmCast()); }); // queued; its timer fires after the read lands
-    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']), { timeout: 3000 });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
+    await settle();
+    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the reload'))); });
     await settle(900);
-    expect(server.puts.filter((p) => p.status === 200)).toEqual([]);
-    expect(drops().length).toBeGreaterThan(0);
-    expect(drops().every((a) => a.dropBased === true)).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+    expect(server.writes.filter((w) => w.slice === 'cast')).toEqual([
+      expect.objectContaining({ status: 200, epoch: 'epoch-now' }),
+    ]);
+    expect(server.kept).toContain('Edited after the reload');
   });
 
-  /* PR #4004 pass 4, finding 5: the full read the stage triggers acknowledges its token to the server;
-     a revisions-only reopen read (no hydrate) does not. */
-  it('the full read of a repaired id acknowledges its token once; the revisions-only reopen read acknowledges nothing', async () => {
-    const server = fakeServer();
-    server.gated = true;
-    const store = makeStoreWithScopeAndPersistence();
-    installRepairedBookHandler(store);
-    renderWithLibrary(store);
-    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
-    await settle();
-    expect(server.acks).toEqual(['tok']);
-    act(() => { store.dispatch(uiActions.goHome()); });
-    await settle();
-    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await settle(300);
-    expect(server.acks).toEqual(['tok']); // the slices were kept: a revisions-only read, no new commit
-  });
-
-  it('CONTROL: a full read of an id that was never repaired keeps based state saves (the P2 rule)', async () => {
-    fakeServer();
-    const store = makeStoreWithScopeAndPersistence();
-    installRepairedBookHandler(store);
-    const drops = droppedOnRead(store);
-    renderWithLibrary(store);
-    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
-    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
-    await settle();
-    expect(drops().length).toBeGreaterThan(0);
-    expect(drops().some((a) => a.dropBased)).toBe(false);
-  });
-
-  it('CONTROL: with no repair the same edit goes through, untouched by the gate', async () => {
+  it('CONTROL: with no repair the same edit goes through, and nothing reloads', async () => {
     const { server, store } = await openLoserTab();
     act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
     await settle(900);
-    expect(server.castPuts).toBe(1);
-    expect(store.getState().notifications.toasts.map((t) => t.message)).not.toContain(BOOK_REPAIRED_MESSAGE);
+    expect(server.cast.map((c) => c.name)).toEqual(['Edited']);
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 
