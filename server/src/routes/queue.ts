@@ -222,6 +222,19 @@ queueRouter.post('/clear', async (req: Request, res: Response) => {
   }
 });
 
+/* #4029 -- start / retry / confirm-fallback carry only an entry id, so the gate keys on the entry's OWN bookId
+   (same rule as enqueue). A stale tab's /start would strand a fresh page's entry for a repaired book
+   in_progress; its fail+retry would requeue it. An id that names no entry stays an idempotent no-op. */
+function refuseRepairedEntry(
+  entryId: string,
+  file: { entries: Array<{ id: string; bookId: string }> },
+  req: Request,
+  res: Response,
+): boolean {
+  const entry = file.entries.find((e) => e.id === entryId);
+  return entry !== undefined && refuseUnreadRepairedBooks([entry.bookId], req, res);
+}
+
 /* Mark an entry in_progress — the dispatcher fires this the instant it claims
    an entry and opens that chapter's stream (one entry = one chapter actively
    starting). Status-only, no reorder: with N concurrent workers multiple
@@ -232,6 +245,7 @@ queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = markInProgress(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -270,6 +284,7 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = retry(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -287,6 +302,7 @@ queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Respons
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = confirmFallback(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
