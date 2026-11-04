@@ -7408,8 +7408,9 @@ export async function runMainAnalyzerJob(
     );
     /* #3954 — the id history the remap consults before retiring a fresh id
        onto a prior row (a recorded merge is not overwritten), read once and
-       shared with the final merge below. `null` = unreadable: the remap makes
-       no name join (N1, see `loadIdHistoryForRemap`). */
+       shared with the final merge below. `null` = unreadable: the remap runs
+       main's exact-name tier only, no tolerant join and no history adoption
+       (N1 / P3-1, see `loadIdHistoryForRemap`). */
     const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
     if (idHistoryForRemap === null) log(1, DEGRADED_HISTORY_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
