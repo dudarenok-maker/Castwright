@@ -419,7 +419,21 @@ async function mustForkUuid(
      (a book confirmed before the earlier one, a null seriesPosition), and a
      series-minted shared uuid on such a row is intentional. */
   if (!character.declinedVoiceFrom?.length) return false;
-  if (unreadable && character.declinedVoiceUuids?.includes(uuid)) return true;
+  /* ...and only while the row is still ON a voice it declined: its uuid is on its
+     own `declinedVoiceUuids`, or a holder of the uuid sits in a book it declined
+     (a decline recorded before the row had a uuid names only the book, and a later
+     series mint can stamp the decliner with the earlier book's fresh uuid). A row
+     that already forked sits on a voice of its own and never forks again, however
+     long the chain below it grows: it would drop its variants and split the chain. */
+  const onDeclined = !!character.declinedVoiceUuids?.includes(uuid);
+  if (unreadable && onDeclined) return true;
+  const declinedBooks = new Set(character.declinedVoiceFrom);
+  if (
+    !onDeclined &&
+    !books.some((b) => !!b.bookId && declinedBooks.has(b.bookId) && b.rows.some(holdsUuid(uuid)))
+  ) {
+    return false;
+  }
   const followed = new Set(
     (await directFollowers(selfDir, character, holdsUuid(uuid), books)).map((f) => rowKey(f.dir, f.characterId)),
   );

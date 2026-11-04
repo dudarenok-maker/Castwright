@@ -94,7 +94,7 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
     book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U, matchedFrom: { bookTitle: 'One' } }]);
-    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
+    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] })).toBe(true);
   });
 
   it('forks when Book Two links to a different character id of Book One', async () => {
@@ -103,7 +103,16 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     book('Two', TWO_ID, [
       { id: 'c2', voiceUuid: U, matchedFrom: { bookId: ONE_ID, characterId: 'c9' } },
     ]);
-    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
+    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] })).toBe(true);
+  });
+
+  it('does not fork a row that already left the declined voice, however long the chain below it', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: 'u-one' }]);
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', 'book-three-id', [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
+    book('Four', 'book-four-id', [{ id: 'c4', voiceUuid: U, matchedFrom: { bookId: 'book-three-id', characterId: 'c3' } }]);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: ['u-one'] })).toBe(false);
   });
 
   it('does not fork for a sole holder or a character without a uuid', async () => {
