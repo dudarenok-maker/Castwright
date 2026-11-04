@@ -580,6 +580,11 @@ describe('remapFreshToPriorIds', () => {
         { 'brann-weir': 'old-weir' },
       );
       expect(r.rewrites).toEqual({ 'brann-weir': 'old-weir' });
+      // P4-1: the adopted row keeps the target's name; the other fresh row is untouched.
+      expect(r.characters).toEqual([
+        { id: 'old-weir', name: 'Old Weir' },
+        { id: 'ow2', name: 'Someone Else' },
+      ]);
     });
 
     it('R17: the recorded merge target is not adopted across a same-book notLinkedTo edge', () => {

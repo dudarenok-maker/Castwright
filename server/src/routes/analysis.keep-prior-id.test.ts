@@ -373,6 +373,8 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         const brann = cast.find((c) => c.id === 'brann');
         expect(brann?.voiceState).toBe('locked');
         expect(brann?.name).toBe('Brann');
+        // P4-1: the adopted merge target keeps the name the user gave it.
+        expect(cast.find((c) => c.id === 'old-weir')?.name).toBe('Old Weir');
         const history = readHistory(bookDir);
         expect(history.supersededBy).toEqual({ 'brann-weir': 'old-weir' });
         expect(history).not.toHaveProperty('displaced');
@@ -569,6 +571,44 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
       } finally {
         warnSpy.mockRestore();
         blip.restore();
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* P4-1. When the remap adopts the recorded merge target, the fresh row's NAME
+     used to ride onto it: the target "Merged One" became a second "Wren" next to
+     the locked `w2 "Wren"`, and the next run's load-time same-name dedup then
+     retired one of the two locked rows. Two consecutive runs, same roster: both
+     rows keep their own names, voices and the history stays untouched. */
+  it.each(['main', 'subset'] as const)(
+    'P4-1 %s job: an adopted merge target keeps its own name across two runs',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { ...PRIOR_WREN },
+          { id: 'm1', name: 'Merged One', voiceState: 'locked', voiceId: 'v_m1' },
+        ],
+        { 'wren-2': 'm1' },
+      );
+      try {
+        for (const runNo of [1, 2]) {
+          await run(manuscriptId, bookDir, kind, { roster: [NARR, wrenTwo], speakerId: 'wren-2' });
+          const cast = readCast(bookDir);
+          const w2 = cast.find((c) => c.id === 'w2');
+          const m1 = cast.find((c) => c.id === 'm1');
+          expect([runNo, w2?.name, w2?.voiceState]).toEqual([runNo, 'Wren', 'locked']);
+          expect([runNo, m1?.name, m1?.voiceId]).toEqual([runNo, 'Merged One', 'v_m1']);
+          expect(cast.filter((c) => c.name === 'Wren')).toHaveLength(1);
+          const history = readHistory(bookDir) as ReturnType<typeof readHistory> & {
+            displaced?: Record<string, string>;
+          };
+          expect(history.supersededBy).toEqual({ 'wren-2': 'm1' });
+          expect(history.displaced).toBeUndefined();
+          expect(readEdits(bookDir).every((s) => s.characterId !== 'wren-2')).toBe(true);
+        }
+      } finally {
         await cleanup(manuscriptId, bookDir);
       }
     },

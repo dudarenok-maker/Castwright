@@ -309,10 +309,19 @@ export function remapFreshToPriorIds<
     if (pair.adopted) adoptedRows.add(pair.priorRow);
   }
   const rewrites: Record<string, string> = {};
+  /* P4-1: an adopted pair's target is a row the user merged under that name; the
+     fresh row's name matched a DIFFERENT prior row by construction, and
+     `mergeCore` builds the joined row from the fresh one. Without this the
+     target takes the fresh name, makes a same-name twin of that other row, and
+     the next run's `dedupePriorCastByName` retires one of the two. */
+  const adoptedNames: Record<string, string> = {};
   for (const pair of pairs) {
     const contested = (claims.get(pair.priorRow) ?? 0) > 1;
     if (contested && (!pair.exact || adoptedRows.has(pair.priorRow))) continue;
     rewrites[pair.freshRow.id] = pair.target;
+    if (pair.adopted && typeof pair.priorRow.name === 'string') {
+      adoptedNames[pair.freshRow.id] = pair.priorRow.name;
+    }
   }
 
   if (Object.keys(rewrites).length === 0) {
@@ -321,7 +330,9 @@ export function remapFreshToPriorIds<
 
   const characters = fresh.map((c) => {
     const to = rewrites[c.id];
-    return to ? { ...c, id: to } : c;
+    if (!to) return c;
+    const name = adoptedNames[c.id];
+    return name === undefined ? { ...c, id: to } : { ...c, id: to, name };
   });
   const remappedSentences = sentences.map((s) => {
     const to = rewrites[s.characterId];
