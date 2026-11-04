@@ -7,6 +7,10 @@
    write, because it is Book Two's voice it follows. Chains of several links all
    move; a row that does not (or no longer) follow stays put.
 
+   The decline is SEEDED, as one made before "Don't reuse" separated a row itself
+   (the decline route now does, cast-decline-voice-link.test.ts), so the row's
+   next design runs the same separation step once (mustSeparateOnDesign).
+
    Sidecar mocked as in qwen-voice.declined-fork.test.ts: it writes the voice it is
    asked for with DIFFERENT bytes, so an overwrite of Book One shows up as bytes. */
 
@@ -28,22 +32,28 @@ vi.mock('undici', async (importOriginal) => {
 });
 
 const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
-/* Runs once, just before the next copy: lets a test change a book in the window
-   between the fork's follower scan and its locked write. */
+/* Runs once, just before the separation takes its book-ops: lets a test change a
+   book in the window between the lock-free follower plan and the locked step. */
 const beforeCopy = vi.hoisted(() => ({ fn: null as (() => void) | null }));
-/* Fails any fs write whose path contains this text (an EBUSY from a scanner), to
-   prove the fork's failure paths: a cast.json write is the only writeFile under it. */
-const failWriteIn = vi.hoisted(() => ({ text: null as string | null }));
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
-  const copyFile = async (src: unknown, dest: unknown, mode?: number) => {
+vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
+  const withBookOps: typeof actual.withBookOps = (bookIds, fn, opts) => {
     if (beforeCopy.fn) {
       const run = beforeCopy.fn;
       beforeCopy.fn = null;
       run();
     }
-    return actual.copyFile(src as string, dest as string, mode);
+    return actual.withBookOps(bookIds, fn, opts);
   };
+  return { ...actual, withBookOps };
+});
+/* Fails any fs write whose path contains this text (an EBUSY from a scanner), to
+   prove the fork's failure paths: a cast.json write is the only writeFile under it. */
+const failWriteIn = vi.hoisted(() => ({ text: null as string | null }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const copyFile = async (src: unknown, dest: unknown, mode?: number) =>
+    actual.copyFile(src as string, dest as string, mode);
   const writeFile = async (path: unknown, ...rest: unknown[]) => {
     if (failWriteIn.text && String(path).includes(failWriteIn.text)) {
       throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${String(path)}'`), {
@@ -236,7 +246,7 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(existsSync(join(qwenDir(), `qwen-${fresh}.pt`))).toBe(true);
   });
 
-  it('the fork carries DIRECT followers only: a row two links down stays on u_shared, and its own design is refused (fail closed)', async () => {
+  it('the fork carries DIRECT followers only: a row two links down stays on u_shared', async () => {
     seedChain({ four: true });
     expect((await design('Book Two')).status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
@@ -245,16 +255,6 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(readRow('Book Four').voiceUuid).toBe('u_shared'); // links to Three, not to Two
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
     expect(book1Intact()).toBe(true);
-
-    requestedVoiceIds = [];
-    const four = await design('Book Four');
-    expect(four.status).toBe(409);
-    expect(four.body.error).toBe(
-      'This voice is shared with an earlier book. Choose "Don\'t reuse" to give this character its own.',
-    );
-    expect(requestedVoiceIds).toEqual([]);
-    expect(book1Intact()).toBe(true);
-    expect(readRow('Book Four').voiceUuid).toBe('u_shared');
   });
 
   it('a link cycle terminates: a row that names its own book (no characterId) is moved once, not looped on', async () => {

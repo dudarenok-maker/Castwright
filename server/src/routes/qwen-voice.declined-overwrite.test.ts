@@ -1,0 +1,600 @@
+/* #3992 — every earlier-book overwrite the PR #4007 review passes found (3-9),
+   re-run on the decline-time design: "Don't reuse" separates the row at once, so
+   a design never decides anything about a shared voice. Each test ends with
+   every voice file another book holds byte-identical (`othersIntact`): only the
+   designed row's own key may change.
+
+   Real routes (design-voice, promote-voice, decline-voice-link, link-prior),
+   real cast.json files. The sidecar mock writes NEW bytes for whatever voice it
+   is asked for, so an overwrite shows up as bytes. */
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) => (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
+const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+vi.mock('../tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
+});
+vi.mock('../gpu/gpu-load.js', () => ({
+  withGpuLoad: (fn: () => Promise<unknown>) => fn(),
+  GpuBusyError: class GpuBusyError extends Error {
+    code = 'GPU_BUSY';
+  },
+}));
+vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
+vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* Runs once, just before a separation takes its book-ops (the window between the
+   lock-free plan and the locked step). */
+const beforeLocks = vi.hoisted(() => ({ fn: null as (() => void) | null }));
+vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
+  const withBookOps: typeof actual.withBookOps = (ids, fn, opts) => {
+    if (beforeLocks.fn) {
+      const run = beforeLocks.fn;
+      beforeLocks.fn = null;
+      run();
+    }
+    return actual.withBookOps(ids, fn, opts);
+  };
+  return { ...actual, withBookOps };
+});
+
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
+const QWEN_KEY = 'qwen3-tts-0.6b';
+const ORIG = Buffer.from('BOOK-ONE-ORIGINAL');
+const NEW_PT = Buffer.from('REDESIGNED-BY-SIDECAR');
+const TITLES = ['Book One', 'Book Two', 'Book Three', 'Book Four', 'Book Five'] as const;
+type Title = (typeof TITLES)[number];
+
+let workspaceRoot: string;
+let audioDir: string;
+let app: Express;
+const ids = {} as Record<Title, string>;
+let requested: string[];
+const fetchMock = vi.fn();
+
+const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
+const bookDir = (t: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, t);
+const castPath = (t: string) => join(bookDir(t), '.audiobook', 'cast.json');
+const row = (t: string): Record<string, any> => JSON.parse(readFileSync(castPath(t), 'utf8')).characters[0];
+const writeRows = (t: string, rows: Array<Record<string, unknown>>) =>
+  writeFileSync(castPath(t), JSON.stringify({ characters: rows }));
+function writeBook(t: Title, rows: Array<Record<string, unknown>>, castConfirmed = true) {
+  const dir = bookDir(t);
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: ids[t],
+      manuscriptId: `m_${ids[t]}`,
+      title: t,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: TITLES.indexOf(t) + 1,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed,
+      chapters: [],
+      language: 'en',
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+  writeRows(t, rows);
+}
+const baseRow = {
+  id: 'wren',
+  name: 'Wren',
+  role: 'supporting',
+  color: 'sky',
+  voiceId: 'v_wren',
+  voiceUuid: 'u_shared',
+  voiceStyle: 'a bright voice',
+  evidence: [{ quote: '"Hello there."' }],
+  gender: 'female',
+  ageRange: 'adult',
+};
+const legacy = { ...baseRow, voiceUuid: undefined };
+const linkTo = (t: Title) => ({
+  matchedFrom: { bookId: ids[t], characterId: 'wren', bookTitle: t, confidence: 1 },
+});
+const slot = (u: string, variants?: string[]) => ({
+  overrideTtsVoices: {
+    qwen: {
+      name: `qwen-${u}`,
+      ...(variants ? { variants: Object.fromEntries(variants.map((e) => [e, { name: `qwen-${u}__${e}` }])) } : {}),
+    },
+  },
+});
+const pt = (k: string) => join(qwenDir(), `${k}.pt`);
+const design = (t: Title, extra: Record<string, unknown> = {}) =>
+  request(app)
+    .post(`/api/books/${ids[t]}/cast/wren/design-voice`)
+    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
+const decline = (t: Title, from: Title) =>
+  request(app).post(`/api/books/${ids[t]}/cast/wren/decline-voice-link`).send({ fromBookId: ids[from] });
+const linkPrior = (t: Title, target: Title) =>
+  request(app)
+    .post(`/api/books/${ids[t]}/cast/link-prior`)
+    .send({ sourceCharacterId: 'wren', targetBookId: ids[target], targetCharacterId: 'wren' });
+const reset = () => {
+  rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+  rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+  mkdirSync(qwenDir(), { recursive: true });
+};
+const variantsOf = (t: Title): string[] => Object.keys(row(t).overrideTtsVoices?.qwen?.variants ?? {}).sort();
+const torn = (t: Title) => writeFileSync(castPath(t), '{"characters":[');
+
+/* Every voice file on disk, by name. */
+function snapshot(): Map<string, Buffer> {
+  return new Map(readdirSync(qwenDir()).map((f) => [f, readFileSync(join(qwenDir(), f))]));
+}
+/* After designing `t`: every file that existed before is byte-identical, except
+   the ones keyed by `t`'s own voice (its uuid now). */
+function othersIntact(before: Map<string, Buffer>, t: Title) {
+  const own = `qwen-${row(t).voiceUuid}`;
+  for (const [name, bytes] of before) {
+    if (name === `${own}.pt` || name.startsWith(`${own}__`) || name.startsWith(`${own}-`) || name === `${own}.json`) continue;
+    expect(readFileSync(join(qwenDir(), name)).equals(bytes), `${name} was rewritten`).toBe(true);
+  }
+  expect(requested.every((k) => k.startsWith(own)), `the sidecar was asked for ${requested.join(', ')}`).toBe(true);
+}
+/* Design `t` (base or variant) and check nothing another book holds changed. */
+async function designSafely(t: Title, extra: Record<string, unknown> = {}) {
+  const before = snapshot();
+  requested = [];
+  const res = await design(t, extra);
+  expect(res.status, JSON.stringify(res.body)).toBe(200);
+  othersIntact(before, t);
+}
+
+beforeAll(async () => {
+  process.env.CASTWRIGHT_VRAM_SAMPLE = '0';
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'castwright-3992ow-'));
+  audioDir = mkdtempSync(join(tmpdir(), 'castwright-3992ow-audio-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+  process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+  vi.stubGlobal('fetch', fetchMock);
+  const { qwenVoiceRouter } = await import('../routes/qwen-voice.js');
+  const { castDeclineVoiceLinkRouter } = await import('../routes/cast-decline-voice-link.js');
+  const { castLinkPriorRouter } = await import('../routes/cast-link-prior.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  for (const t of TITLES) ids[t] = makeBookId(AUTHOR, SERIES, t);
+  app = express();
+  app.use(express.json());
+  app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/books', castDeclineVoiceLinkRouter);
+  app.use('/api/books', castLinkPriorRouter);
+});
+beforeEach(() => {
+  requested = [];
+  beforeLocks.fn = null;
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
+    let voiceId: string | undefined;
+    try {
+      const b = JSON.parse(init?.body ?? '{}');
+      voiceId = b.variantVoiceId ?? b.voiceId;
+    } catch {
+      /* */
+    }
+    if (voiceId && String(_url).includes('/qwen/') && !String(_url).includes('evict')) {
+      requested.push(voiceId);
+      mkdirSync(qwenDir(), { recursive: true });
+      writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
+    }
+    const bytes = new Uint8Array(24_000 * 2 * 0.3);
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => bytes.buffer,
+      json: async () => ({}),
+    };
+  });
+  synthesize.mockReset();
+  vi.mocked(withCapacityRetry).mockReset();
+  vi.mocked(withCapacityRetry).mockImplementation((doPost: any, opts: any) => doPost(opts.signal));
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+  rmSync(workspaceRoot, { recursive: true, force: true });
+  rmSync(audioDir, { recursive: true, force: true });
+});
+
+/* One <- Two <- Three, all on u_shared (the linker's output), One designed with angry. */
+function seedChain() {
+  reset();
+  writeBook('Book One', [{ ...baseRow, ...slot('u_shared', ['angry']) }]);
+  writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared', ['angry']) }]);
+  writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared', ['angry']) }]);
+  writeFileSync(pt('qwen-u_shared'), ORIG);
+  writeFileSync(pt('qwen-u_shared__angry'), Buffer.from('ONE-ANGRY'));
+}
+const oneIntact = () => {
+  expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  expect(readFileSync(pt('qwen-u_shared__angry')).toString()).toBe('ONE-ANGRY');
+};
+
+describe('the ordinary cases: a design decides nothing', () => {
+  it('a series voice nobody declined is redesigned together, from any book, as before', async () => {
+    seedChain();
+    expect((await design('Book Three')).status).toBe(200);
+    expect(requested).toEqual(['qwen-u_shared']);
+    expect(row('Book One').voiceUuid).toBe('u_shared');
+  });
+
+  it("after Don't reuse the decliner designs its own voice at once: no refusal, no fork at design time", async () => {
+    seedChain();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).toBe(two); // its direct follower moved with it
+    await designSafely('Book Two');
+    await designSafely('Book Three');
+    await designSafely('Book Two', { emotion: 'sad' });
+    expect(row('Book Two').voiceUuid).toBe(two);
+    oneIntact();
+  });
+});
+
+describe('pass 9', () => {
+  it("P9-1 (a): Don't reuse on Three, then on Two, then design both: One's files are untouched", async () => {
+    seedChain();
+    expect((await decline('Book Three', 'Book Two')).status).toBe(200);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).not.toBe(row('Book Two').voiceUuid);
+    await designSafely('Book Two');
+    await designSafely('Book Three');
+    await designSafely('Book Three', { emotion: 'angry' });
+    oneIntact();
+  });
+
+  it("P9-1 (b): Don't reuse on Three, delete Book Two, design Three: One's files are untouched", async () => {
+    seedChain();
+    expect((await decline('Book Three', 'Book Two')).status).toBe(200);
+    rmSync(bookDir('Book Two'), { recursive: true, force: true });
+    await designSafely('Book Three');
+    oneIntact();
+  });
+
+  it('P9-1 (b), a row declined before the route separated it: its next design separates it first', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Three', [
+      { ...baseRow, declinedVoiceFrom: [ids['Book Two']], declinedVoiceUuids: ['u_shared'], ...slot('u_shared') },
+    ]); // Book Two, the book it declined, has since been deleted
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    await designSafely('Book Three');
+    expect(row('Book Three').voiceUuid).not.toBe('u_shared');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("P9-1 (b'): Two declines One, Book One is deleted, Three (linked to the deleted One) still holds the voice: designing Two leaves Three's file alone", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    rmSync(bookDir('Book One'), { recursive: true, force: true });
+    await designSafely('Book Two');
+    expect(row('Book Three').voiceUuid).toBe('u_shared');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("P9-1 (b'), seeded before the route separated it: Two's next design separates it, Three's file is untouched", async () => {
+    reset();
+    writeBook('Book Two', [
+      { ...baseRow, declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], ...slot('u_shared') },
+    ]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    await designSafely('Book Two');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("P9-1 (c): a follower stranded on One's voice presses Don't reuse and designs (base and angry): One's files are untouched", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared', ['angry']) }]);
+    writeBook('Book Two', [
+      { ...baseRow, voiceUuid: 'u_two', declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], ...slot('u_two') },
+    ]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared', ['angry']) }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    writeFileSync(pt('qwen-u_shared__angry'), Buffer.from('ONE-ANGRY'));
+    writeFileSync(pt('qwen-u_two'), Buffer.from('TWO-OWN'));
+    const dec = await decline('Book Three', 'Book Two');
+    expect(dec.status).toBe(200);
+    expect(dec.body.voiceUuid).not.toBe('u_shared');
+    await designSafely('Book Three');
+    await designSafely('Book Three', { emotion: 'angry' });
+    oneIntact();
+    expect(readFileSync(pt('qwen-u_two')).toString()).toBe('TWO-OWN');
+  });
+
+  it("P9-2: Book One becomes unreadable between the decline's plan and its locks: Two is still separated, One's file untouched", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    beforeLocks.fn = () => torn('Book One');
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Two').voiceUuid).not.toBe('u_shared');
+    await designSafely('Book Two');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it('P9-2, seeded before the route separated it: One unreadable in the window, the design still separates first', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [
+      { ...baseRow, declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], ...slot('u_shared') },
+    ]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    beforeLocks.fn = () => torn('Book One');
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it('R1: a separated row with a torn book elsewhere designs (200) and is never refused', async () => {
+    seedChain();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    rmSync(bookDir('Book One'), { recursive: true, force: true });
+    const other = join(workspaceRoot, 'books', 'Other Author', 'Other Series', 'Other Book', '.audiobook');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'state.json'), '{"bookId":');
+    writeFileSync(join(other, 'cast.json'), JSON.stringify({ characters: [{ id: 'zed' }] }));
+    const two = row('Book Two').voiceUuid;
+    await designSafely('Book Two');
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two);
+  });
+});
+
+describe('pass 8', () => {
+  /* Two declined One and was separated onto u_two; Three links to Two, Four to Three. */
+  function seedForked() {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [
+      { ...baseRow, voiceUuid: 'u_two', declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], ...slot('u_two', ['angry']) },
+    ]);
+    writeBook('Book Three', [{ ...baseRow, voiceUuid: 'u_two', ...linkTo('Book Two'), ...slot('u_two', ['angry']) }]);
+    writeBook('Book Four', [{ ...baseRow, voiceUuid: 'u_two', ...linkTo('Book Three'), ...slot('u_two', ['angry']) }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    writeFileSync(pt('qwen-u_two'), Buffer.from('TWO-OWN'));
+    writeFileSync(pt('qwen-u_two__angry'), Buffer.from('TWO-ANGRY'));
+  }
+
+  it('P8-1 stale tab: declining again changes nothing; designing sad keeps u_two and {angry, sad}, and Four stays with Three', async () => {
+    seedForked();
+    const r = await decline('Book Two', 'Book One');
+    expect(r.status).toBe(200);
+    expect(r.body.voiceUuid).toBe('u_two');
+    await designSafely('Book Two', { emotion: 'sad' });
+    expect(row('Book Two').voiceUuid).toBe('u_two');
+    expect(variantsOf('Book Two')).toEqual(['angry', 'sad']);
+    expect(row('Book Four').voiceUuid).toBe('u_two');
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("P8-1 link back to One, then Don't reuse again: no other book's file is written", async () => {
+    seedForked();
+    writeRows('Book Two', [{ ...row('Book Two'), ...linkTo('Book One') }]);
+    expect((await linkPrior('Book Two', 'Book One')).status).toBe(200);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    await designSafely('Book Two', { emotion: 'sad' });
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+    expect(readFileSync(pt('qwen-u_two')).toString()).toBe('TWO-OWN');
+    expect(readFileSync(pt('qwen-u_two__angry')).toString()).toBe('TWO-ANGRY');
+  });
+
+  it('P8-2: a legacy decliner, separated at decline time, redesigns with a torn book elsewhere without a new uuid', async () => {
+    reset();
+    const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...legacySlot }]);
+    writeFileSync(pt('qwen-v_wren'), Buffer.from('LEGACY'));
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const t = row('Book Two').voiceUuid as string;
+    expect(t).toBeTruthy();
+    expect((await design('Book One')).status).toBe(200); // the series mint never restamps Two
+    expect(row('Book Two').voiceUuid).toBe(t);
+    torn('Book One');
+    await designSafely('Book Two');
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(t);
+  });
+});
+
+describe('pass 7', () => {
+  it('P7-A: a separated decliner whose chain grows a second hop keeps its uuid and variants; One is untouched', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid as string;
+    await designSafely('Book Two');
+    await designSafely('Book Two', { emotion: 'angry' });
+    // later books analysed: Three links to Two, Four to Three, all on Two's voice
+    writeBook('Book Three', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Two'), ...slot(two, ['angry']) }]);
+    writeBook('Book Four', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Three'), ...slot(two, ['angry']) }]);
+    await designSafely('Book Two', { emotion: 'sad' });
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two);
+    expect(variantsOf('Book Two')).toEqual(['angry', 'sad']);
+    expect(row('Book Four').voiceUuid).toBe(two);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it('P7-F: a decline made while the row had no uuid, then the earlier book designed: Two never writes the earlier voice', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect((await design('Book One')).status).toBe(200);
+    const n = row('Book One').voiceUuid as string;
+    expect(row('Book Two').voiceUuid).not.toBe(n);
+    writeFileSync(pt(`qwen-${n}`), ORIG);
+    torn('Book One');
+    await designSafely('Book Two');
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(ORIG);
+  });
+
+  it('#4027 (pass 7 C): a preview staged before the decline cannot be promoted onto the earlier book’s voice', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    expect((await design('Book Two', { preview: true })).status).toBe(200);
+    expect(requested).toEqual(['qwen-u_shared-preview']);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const res = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: 'qwen-u_shared-preview', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status).toBe(400); // the row's key moved: the stale preview id no longer matches it
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+    const own = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: `qwen-${row('Book Two').voiceUuid}-preview`, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(own.status).toBe(409); // nothing staged under its own key
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+});
+
+describe('passes 5 and 6', () => {
+  it('P5-1: design One, decline Two, confirm Three (legacy, linked to Two) and design it: no other book’s voice is written', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two') }], false);
+    expect((await design('Book One')).status).toBe(200);
+    const u = row('Book One').voiceUuid as string;
+    writeFileSync(pt(`qwen-${u}`), ORIG);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Two').voiceUuid).not.toBe(u);
+    writeBook('Book Three', [{ ...row('Book Three') }], true);
+    await designSafely('Book Three');
+    await designSafely('Book Two');
+    expect(row('Book One').voiceUuid).toBe(u);
+    expect(readFileSync(pt(`qwen-${u}`))).toEqual(ORIG);
+  });
+
+  it('P6-A: design One, decline Two, design Two, decline Five, re-link Three to Two, design Four: Book Five keeps its voice', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book One') }]);
+    writeBook('Book Five', [{ ...legacy, ...linkTo('Book Two') }]);
+    writeBook('Book Four', [{ ...legacy, ...linkTo('Book Three') }], false);
+    expect((await design('Book One')).status).toBe(200);
+    const u = row('Book One').voiceUuid as string;
+    writeFileSync(pt(`qwen-${u}`), ORIG);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const x = row('Book Two').voiceUuid as string;
+    expect(row('Book Five').voiceUuid).toBe(x); // its direct follower moved with it
+    await designSafely('Book Two');
+    expect((await decline('Book Five', 'Book Two')).status).toBe(200);
+    const five = row('Book Five').voiceUuid as string;
+    expect(five).not.toBe(x);
+    writeFileSync(pt(`qwen-${five}`), Buffer.from('BOOK-FIVE-OWN'));
+    expect((await linkPrior('Book Three', 'Book Two')).status).toBe(200);
+    writeBook('Book Four', [{ ...row('Book Four') }], true);
+    await designSafely('Book Four');
+    expect(readFileSync(pt(`qwen-${five}`)).toString()).toBe('BOOK-FIVE-OWN');
+    expect(readFileSync(pt(`qwen-${u}`))).toEqual(ORIG);
+  });
+
+  it('P6-B: a link cycle where each row declines the other answers promptly, and each designs only its own voice', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, voiceUuid: 'u_s', ...slot('u_s') }]);
+    writeBook('Book Two', [{ ...baseRow, voiceUuid: 'u_s', ...linkTo('Book Three'), ...slot('u_s') }]);
+    writeBook('Book Three', [{ ...baseRow, voiceUuid: 'u_s', ...linkTo('Book Two'), ...slot('u_s') }]);
+    writeFileSync(pt('qwen-u_s'), ORIG);
+    const started = Date.now();
+    expect((await decline('Book Two', 'Book Three')).status).toBe(200);
+    expect((await decline('Book Three', 'Book Two')).status).toBe(200);
+    await designSafely('Book Two');
+    await designSafely('Book Three');
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(row('Book Two').voiceUuid).not.toBe(row('Book Three').voiceUuid);
+    expect(readFileSync(pt('qwen-u_s'))).toEqual(ORIG);
+  });
+
+  it('P6-C: a chain hanging off the decliner never separates it twice; the decliner and its follower never write the earlier voice', async () => {
+    seedChain();
+    writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared') }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(row('Book Three').voiceUuid).toBe(two);
+    await designSafely('Book Two');
+    await designSafely('Book Three');
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two); // separated exactly once
+    oneIntact();
+  });
+
+  it('P6-D: a follower re-linked to Book One between the decline’s plan and its locks stays with Book One and is not written', async () => {
+    seedChain();
+    beforeLocks.fn = () => writeRows('Book Three', [{ ...row('Book Three'), ...linkTo('Book One') }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Three').voiceUuid).toBe('u_shared');
+    await designSafely('Book Two');
+    oneIntact();
+  });
+});
+
+describe('passes 3 and 4', () => {
+  it('a follower unreadable at the decline is not left behind silently: the decline fails, and the retry carries it', async () => {
+    seedChain();
+    beforeLocks.fn = () => torn('Book Three');
+    const res = await decline('Book Two', 'Book One');
+    expect(res.status).toBe(500);
+    expect(row('Book Two').voiceUuid).toBe('u_shared');
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared', ['angry']) }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Three').voiceUuid).toBe(row('Book Two').voiceUuid);
+    await designSafely('Book Three');
+    oneIntact();
+  });
+
+  it('the legacy key in three books: the decliner and its real follower take a uuid together; Book One keeps its legacy key', async () => {
+    reset();
+    const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...legacySlot }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two'), ...legacySlot }]);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).toBeTruthy();
+    expect(row('Book Three').voiceUuid).toBe(two);
+    expect(row('Book One').voiceUuid).toBeUndefined();
+    await designSafely('Book Three');
+    await designSafely('Book Two');
+    expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+    expect(row('Book One').voiceUuid).toBeUndefined();
+  });
+});

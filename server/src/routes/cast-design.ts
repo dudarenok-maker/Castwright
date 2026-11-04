@@ -628,7 +628,8 @@ async function runDesignJob(
          mint then can't load its base). #1057: this is exactly how a bulk
          "Emotion variants" run orphaned every base. A variant anchors on the
          base's CURRENT key, so it reuses the character's existing voiceUuid
-         (forking a declined, shared one first, never minting). */
+         (separating a row declined before "Don't reuse" did that first, never
+         minting). */
       let rideouts = 0;
       for (;;) {
         try {

@@ -1,45 +1,61 @@
 /* POST /api/books/:bookId/cast/:characterId/decline-voice-link  (#3992)
 
    "Don't reuse": the user declined the series voice link a character was given
-   from an earlier book. Redux clears `matchedFrom`, but the row keeps the earlier
-   book's `voiceUuid` (so both share one `qwen-<uuid>.pt`) and nothing on disk says
-   it was declined. This route records that, durably, as `declinedVoiceFrom`:
-   the ids of the books whose voice the row declined.
+   from an earlier book. The linker hands a linked row the earlier book's
+   `voiceUuid`, so both books share one `qwen-<uuid>.pt`, and a later redesign of
+   the row would overwrite the earlier book's voice. This route establishes the
+   invariant every design relies on, in ONE locked step:
+
+     After "Don't reuse" succeeds, the row is on its own voice that no other
+     book's row holds, other than its DIRECT followers, which move with it.
+
+   So a design never decides anything about a shared voice: it writes the row's
+   own key. The step (qwen-voice.ts separateVoiceLocked) records the marker
+   (`declinedVoiceFrom`, plus `declinedVoiceUuids` for the voice it left), clears
+   `matchedFrom`, and, when the row's voice is held by another book's row that is
+   not a direct follower (or a book cannot be read: copying writes no other book's
+   file, so not knowing separates), mints a fresh uuid, copies the base family with
+   COPYFILE_EXCL and stamps it onto the row and its direct followers, dropping
+   their `variants`. A row with no uuid always gets one (a series mint would move
+   the earlier book's legacy key). Any failure rolls every write back and removes
+   the copies; the route answers a curated error and nothing changes, so the
+   client keeps the link and shows its failure toast.
 
    The marker is deliberately NARROWER than `notLinkedTo`. It says "not THIS
    voice", never "not the same person", so it does not feed the same-book join
    gates in the analysis merge or the duplicate detector. It is honoured by the
-   series linker and the merge (never re-linked to a declined book) and by the
-   voice-design fork (only a row carrying it forks the shared uuid).
+   series linker and the merge (never re-linked to a declined book or voice).
 
-   Single-book write, so one book-op + one cast lock. The read and the decision
-   derived from it live inside the lock. The whole-roster cast PUT takes the field
-   from disk (preserveDeclinedVoiceFromOnCastWrite), so this route is its only
-   writer. `fromBookId` is NOT resolved against the library: a deleted earlier
-   book's id is still a real decline. Idempotent. */
+   Locks, in CLAUDE.md's global order: the book's design lock (so no design of
+   this book reads its uuid mid-step), then `withBookOps` over the row's book and
+   its direct followers' books, then `withCastLocks` over all of them. The book is
+   peeked lock-free only to key the design lock; the locked handle must resolve to
+   the same folder. The whole-roster cast PUT takes the marker from disk
+   (preserveDeclinedVoiceFromOnCastWrite) and keeps disk's voice slot when the
+   uuids differ, so a client autosave cannot undo the step. `fromBookId` is NOT
+   resolved against the library: a deleted earlier book's id is still a real
+   decline. Idempotent: a repeated decline of a row already on its own voice
+   changes nothing. */
 
 import { Router } from 'express';
+import { resolve } from 'node:path';
 import type { Request, Response } from '../http.js';
-import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, peekBook, withBookOps } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withCastLock } from '../workspace/cast-lock.js';
+import { withCastLocks } from '../workspace/cast-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
-import { bookHoldsVoiceUuid } from '../workspace/voice-uuid-fork.js';
+import { RetryableForkError } from '../workspace/voice-uuid-fork.js';
+import { withDesignLock } from '../tts/design-lock.js';
+import { CharacterGoneError, separationPlan, separateVoiceLocked } from './qwen-voice.js';
 
 export const castDeclineVoiceLinkRouter = Router();
 
-interface CastRow {
-  id: string;
-  voiceUuid?: string | null;
-  voiceState?: string;
-  matchedFrom?: { bookId?: string } | null;
-  declinedVoiceFrom?: string[];
-  declinedVoiceUuids?: string[];
-}
 interface CastFile {
-  characters: CastRow[];
+  characters?: Array<{ id: string }>;
 }
+
+type Answer = { status: number; body: Record<string, unknown> };
 
 castDeclineVoiceLinkRouter.post(
   '/:bookId/cast/:characterId/decline-voice-link',
@@ -54,70 +70,64 @@ castDeclineVoiceLinkRouter.post(
       return res.status(400).json({ error: 'fromBookId must name a different book.' });
     }
 
-    let outcome: Awaited<ReturnType<typeof withBookOp>>;
+    let answer: Answer;
     try {
-      outcome = await withBookOp(bookId, ({ bookDir }) =>
-        withCastLock(bookDir, async () => {
-          const cast = await readJson<CastFile>(castJsonPath(bookDir));
-          if (!cast?.characters?.length) {
-            return res.status(409).json({ error: 'Book has no cast on disk yet.' });
+      const peeked = await peekBook(bookId);
+      if (!peeked) return res.status(404).json({ error: 'Book not found.' });
+      const bookDir = peeked.bookDir;
+      answer = await withDesignLock(bookDir, async (): Promise<Answer> => {
+        const cast = await readJson<CastFile>(castJsonPath(bookDir));
+        if (!cast?.characters?.length) {
+          return { status: 409, body: { error: 'Book has no cast on disk yet.' } };
+        }
+        if (!cast.characters.some((c) => c.id === characterId)) {
+          return { status: 404, body: { error: `Character "${characterId}" not found.` } };
+        }
+        const plan = await separationPlan(bookDir, characterId);
+        const out = await withBookOps(plan.bookIds, (books) => {
+          const own = books.find((b) => b.bookId === bookId);
+          if (!own || resolve(own.bookDir) !== resolve(bookDir)) {
+            throw new RetryableForkError('This book moved while "Don\'t reuse" was being saved; try again.');
           }
-          const idx = cast.characters.findIndex((c) => c.id === characterId);
-          if (idx === -1) {
-            return res.status(404).json({ error: `Character "${characterId}" not found.` });
-          }
-          const row = cast.characters[idx];
-          /* The decline is ONE write: the marker and the cleared link land together,
-           so a client whose autosave never lands (refused, tab closed) cannot leave
-           a row that is both declined and still linked, which the fork would then
-           treat as an active link. Mirrors the reducer's declineMatch: clear
-           `matchedFrom` only when it is the link being declined, and never drop a
-           lock/tune. */
-          const unlink = row.matchedFrom?.bookId === fromBookId;
-          const existing = row.declinedVoiceFrom ?? [];
-          /* The voice being declined is the uuid the row holds right now, but only
-           when `fromBookId` actually holds it: a row that already forked (and was
-           linked back since, which moves no uuid) holds a voice of its own, and
-           recording that as "declined" would be a false fact. Recording it makes
-           the decline cover every book holding that voice, not only `fromBookId`. */
-          const uuids = row.declinedVoiceUuids ?? [];
-          const addUuid =
-            !!row.voiceUuid &&
-            !uuids.includes(row.voiceUuid) &&
-            (await bookHoldsVoiceUuid(bookDir, fromBookId, row.voiceUuid));
-          if (!existing.includes(fromBookId) || addUuid || unlink) {
-            const next: CastRow = {
-              ...row,
-              declinedVoiceFrom: existing.includes(fromBookId)
-                ? existing
-                : [...existing, fromBookId],
-              ...(addUuid ? { declinedVoiceUuids: [...uuids, row.voiceUuid as string] } : {}),
-            };
-            if (unlink) {
-              delete next.matchedFrom;
-              if (row.voiceState !== 'locked' && row.voiceState !== 'tuned')
-                next.voiceState = 'generated';
-            }
-            cast.characters[idx] = next;
-            await writeJsonAtomic(castJsonPath(bookDir), cast);
-            console.log(
-              `[cast-decline-voice-link] ${bookId}/${characterId} declined the voice of ${fromBookId}`,
-            );
-          }
-          const done = cast.characters[idx];
-          return res.json({
-            declinedVoiceFrom: done.declinedVoiceFrom ?? [fromBookId],
-            declinedVoiceUuids: done.declinedVoiceUuids ?? [],
-          });
-        }),
-      );
+          const dirs = books.map((b) => b.bookDir);
+          return withCastLocks(dirs, () =>
+            separateVoiceLocked(
+              bookDir,
+              characterId,
+              dirs,
+              plan.followers,
+              (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast),
+              { fromBookId },
+            ),
+          );
+        });
+        if (out === BOOK_GONE) {
+          throw new RetryableForkError('A book in this series was removed while "Don\'t reuse" was being saved; try again.');
+        }
+        console.log(
+          `[cast-decline-voice-link] ${bookId}/${characterId} declined the voice of ${fromBookId}` +
+            (out.separated ? ` and moved to its own voice ${out.voiceUuid}` : ''),
+        );
+        return {
+          status: 200,
+          body: {
+            declinedVoiceFrom: out.row.declinedVoiceFrom ?? [fromBookId],
+            declinedVoiceUuids: out.row.declinedVoiceUuids ?? [],
+            voiceUuid: out.voiceUuid ?? null,
+          },
+        };
+      });
     } catch (e) {
+      if (e instanceof CharacterGoneError) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
       console.error('[cast-decline-voice-link] failed', e);
+      /* A fixed, path-free sentence that says a retry can work. */
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
       return res
         .status(500)
         .json({ error: requestFailureMessageFs(e, 'Could not record the decline.') });
     }
-    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
-    return outcome;
+    return res.status(answer.status).json(answer.body);
   },
 );

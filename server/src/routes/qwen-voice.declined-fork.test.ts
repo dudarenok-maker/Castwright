@@ -5,7 +5,12 @@
    Two real books in one series; Book One's row and Book Two's row share
    `voiceId` + `voiceUuid: 'u_shared'`. The sidecar fetch is mocked: it records
    the voiceId it is asked for and writes that `.pt` with DIFFERENT bytes, so a
-   missing fork shows up as Book One's bytes being overwritten. */
+   missing fork shows up as Book One's bytes being overwritten.
+
+   Book Two's decline is SEEDED, as one made before "Don't reuse" separated a row
+   itself (the decline route now does, cast-decline-voice-link.test.ts), so its
+   next design runs the same separation step once (mustSeparateOnDesign). A row
+   with an active link carries no marker for that book (link-prior clears it). */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
@@ -256,7 +261,7 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
   });
 
   it('Linked: a design for Book Two goes to qwen-u_shared, no new uuid, no copy', async () => {
-    seed({});
+    seed({ declinedVoiceFrom: undefined });
     /* matchedFrom names the real Book One */
     const row = { ...readRow('Book Two'), matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } };
     writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
@@ -282,14 +287,14 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 
-  it('Assign: a bookId-less matchedFrom counts as an active link, so no fork; it names no book, so with the voice declined the design is refused (fail closed)', async () => {
+  it('Assign: a declined row with a bookId-less matchedFrom is separated before its design, never refused', async () => {
     seed({ matchedFrom: { bookTitle: 'Book One', confidence: 0.92 } });
     const res = await design(() => bookTwoId);
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/^This voice is shared with an earlier book/);
-    expect(requestedVoiceIds).toEqual([]);
-    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-    expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);
+    expect(res.status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).not.toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([`qwen-${fresh}`]);
+    expect(readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT)).toBe(true);
   });
 });
 
@@ -323,7 +328,7 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
   });
 
   it('Linked variant: sidecar asked for qwen-u_shared__angry; both rows carry the slot', async () => {
-    seedVariant({});
+    seedVariant({ declinedVoiceFrom: undefined });
     const row = { ...readRow('Book Two'), matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } };
     writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
 
@@ -334,8 +339,8 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect(slot('Book Two', 'angry')).toBe('qwen-u_shared__angry');
   });
 
-  it('No uuid: a variant design mints nothing', async () => {
-    seedVariant({});
+  it('No uuid: a variant design mints nothing (#1057)', async () => {
+    seedVariant({ declinedVoiceFrom: undefined });
     const row = { ...readRow('Book Two') };
     delete row.voiceUuid;
     writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
@@ -343,6 +348,23 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     await design(() => bookTwoId, { emotion: 'angry' });
     expect(readRow('Book Two').voiceUuid).toBeUndefined();
     expect(requestedVoiceIds).toEqual(['qwen-v_wren__angry']);
+  });
+
+  it('No uuid but declined: separated first (its legacy base family copied), so the variant never lands on the shared legacy key', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two') };
+    delete row.voiceUuid;
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), Buffer.from('LEGACY-BASE'));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt'), VAR_BYTES);
+
+    expect((await design(() => bookTwoId, { emotion: 'angry' })).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).toBeTruthy();
+    expect(requestedVoiceIds).toEqual([`qwen-${fresh}__angry`]);
+    expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).toString()).toBe('LEGACY-BASE'); // the base is not orphaned
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt')).equals(VAR_BYTES)).toBe(true);
+    expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).toString()).toBe('LEGACY-BASE');
   });
 });
 
@@ -546,7 +568,7 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
   });
 
   it('Linked (Book Two names Book One): the series mint still stamps both rows with one uuid', async () => {
-    seedLegacy({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } });
+    seedLegacy({ declinedVoiceFrom: undefined, matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } });
     const res = await design(() => bookTwoId);
     expect(res.status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
@@ -554,8 +576,8 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(readRow('Book One').voiceUuid).toBe(fresh);
   });
 
-  it('Nobody has designed yet: the series mint still stamps both rows with one uuid', async () => {
-    seed({});
+  it('Nobody has designed yet, nobody declined: the series mint still stamps both rows with one uuid', async () => {
+    seed({ declinedVoiceFrom: undefined });
     noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
     noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
     const res = await design(() => bookTwoId);
@@ -563,6 +585,15 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     const fresh = readRow('Book Two').voiceUuid;
     expect(fresh).toBeTruthy();
     expect(readRow('Book One').voiceUuid).toBe(fresh);
+  });
+
+  it('Nobody has designed yet, Book Two declined: Book Two gets a uuid of its own and Book One is not stamped', async () => {
+    seed({});
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    expect((await design(() => bookTwoId)).status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
   });
 });
 
@@ -682,7 +713,6 @@ describe('#3992 — fork internals', () => {
     for (const [name, bytes] of Object.entries(family)) writeFileSync(join(qwenDir(), name), bytes);
     writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('ONE-ANGRY'));
   };
-  const files = () => readdirSync(qwenDir()).sort();
   const rowsOf = (title: string): Array<Record<string, unknown>> =>
     JSON.parse(readFileSync(castPath(title), 'utf8')).characters;
 
@@ -725,68 +755,8 @@ describe('#3992 — fork internals', () => {
     expect(rows[3].voiceUuid).toBe('u_other');
   });
 
-  describe('re-decides on a fresh read inside the cast lock', () => {
-    const edit = (change: (rows: Array<Record<string, unknown>>) => void, title = 'Book Two') => () => {
-      const rows = rowsOf(title);
-      change(rows);
-      writeFileSync(castPath(title), JSON.stringify({ characters: rows }));
-    };
-
-    it('a link that appears after the copies abort the stamp and leave no stray copies', async () => {
-      seedFamily();
-      const before = files();
-      beforeCopy.fn = edit((rows) => {
-        rows[0].matchedFrom = { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 };
-      });
-      const res = await design(() => bookTwoId);
-      expect(res.status).toBe(200);
-      expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-      expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
-      expect(files()).toEqual(before);
-    });
-
-    it('the earlier holder vanishing after the copies aborts the stamp', async () => {
-      seedFamily();
-      const before = files();
-      beforeCopy.fn = edit((rows) => {
-        delete rows[0].voiceUuid;
-      }, 'Book One');
-      const res = await design(() => bookTwoId);
-      expect(res.status).toBe(200);
-      expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-      expect(files()).toEqual(before);
-    });
-
-    it('another writer’s uuid that is itself held elsewhere is still used, never forked a second time', async () => {
-      seedFamily();
-      writeFileSync(
-        castPath('Book One'),
-        JSON.stringify({ characters: [readRow('Book One'), { ...baseRow, id: 'wren_old', voiceUuid: 'u_other' }] }),
-      );
-      beforeCopy.fn = edit((rows) => {
-        rows[0].voiceUuid = 'u_other';
-      });
-      const res = await design(() => bookTwoId);
-      expect(res.status).toBe(200);
-      expect(readRow('Book Two').voiceUuid).toBe('u_other');
-      expect(requestedVoiceIds).toEqual(['qwen-u_other']);
-    });
-
-    it('another writer minting a different uuid wins: it is used, nothing is stamped over it', async () => {
-      seedFamily();
-      const before = files();
-      beforeCopy.fn = edit((rows) => {
-        rows[0].voiceUuid = 'u_other';
-      });
-      const res = await design(() => bookTwoId);
-      expect(res.status).toBe(200);
-      expect(readRow('Book Two').voiceUuid).toBe('u_other');
-      expect(requestedVoiceIds).toEqual(['qwen-u_other']);
-      expect(files().filter((f) => f.endsWith('.pt'))).toEqual(
-        [...before.filter((f) => f.endsWith('.pt')), 'qwen-u_other.pt'].sort(),
-      );
-    });
-  });
+  /* The decision is made on a fresh read INSIDE the locks, before any copy: the
+     plan-to-locks window is covered in cast-decline-voice-link.test.ts. */
 
   it('never overwrites: a destination that already exists fails the fork and is left alone', async () => {
     seed({});
