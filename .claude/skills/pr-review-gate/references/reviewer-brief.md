@@ -1024,6 +1024,18 @@ recite:
     reader of it, not only the one the change was made for, and for each
     reader ask what the excluded members now look like.
 
+81. **A fact recorded from the row's state when it was written, where another
+    path into that state breaks the writer's assumption** — PR #4007 pass 8
+    (#3992): the decline route recorded the row's current uuid as "the voice it
+    declined" on the premise that a linked row shares its source's uuid, but
+    `link-prior` re-links a row without moving its uuid, so a row that had
+    already forked and was linked back recorded its OWN uuid. The fork decision
+    then read that list as evidence, forked the row again and dropped its
+    variants. Checkable: for every recorded fact a later decision trusts, list
+    every path that produces the precondition the writer assumes, confirm each
+    one establishes it, and prefer deciding from the current disk state over
+    trusting the record.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
