@@ -25,7 +25,10 @@
 
    `updated` always contains the source book on success (even for a
    standalone — `failed` is empty in that case). HTTP 207 (Multi-Status)
-   when `failed.length > 0`; 200 otherwise. */
+   when `failed.length > 0`; 200 otherwise.
+
+   A series whose matched mate is a repaired book (#3713) is refused whole (409 book_repaired_reload) on a
+   request without the current repair epoch, before the source is written. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -36,6 +39,7 @@ import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -158,6 +162,10 @@ castSeriesPatchRouter.post(
           siblingTargets.push({ bookId: otherBookId, bookTitle, characterId: matching.id });
         }
       }
+
+      /* #3713 -- a matched mate that is a repaired book, on a request without the current epoch: refuse
+         the whole fan-out before the source (or any mate) is written. */
+      if (refuseUnreadRepairedBooks(siblingTargets.map((t) => t.bookId), req, res)) return res;
 
       try {
         await patchOne(source.bookDir, { bookId, bookTitle: source.state.title, characterId });

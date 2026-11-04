@@ -42,6 +42,7 @@ import { syncManifestRouter } from './routes/library-sync-manifest.js';
 import { seriesMemoryRouter } from './routes/series-memory.js';
 import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
+import { repairedBookGate, repairedManuscriptGate } from './workspace/repaired-book-gate.js';
 import { coverRouter } from './routes/cover.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterSpliceRouter } from './routes/chapter-splice.js';
@@ -291,6 +292,11 @@ app.use('/api/internal', designProgressRelayRouter); // sidecar→server single-
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
 app.use('/api/library', seriesMemoryRouter); // fe-40 — GET /api/library/series-memory
+/* #3713 — one gate for every write on a repaired bookId (and the manuscriptId-keyed
+   analysis writes): refused unless it carries the current X-Repair-Epoch. Mounted ahead
+   of every /api/books/:bookId and /api/manuscripts/:id router. */
+app.use('/api/books/:bookId', repairedBookGate);
+app.use('/api/manuscripts/:id', repairedManuscriptGate);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis

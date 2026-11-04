@@ -26,7 +26,9 @@
 
    Body: { override: { engine, name } | null }  (null clears the engine map).
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
-   failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200. */
+   failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200.
+   A series whose matched mate is a repaired book (#3713) is refused whole (409 book_repaired_reload) on a
+   request without the current repair epoch, before the source is written. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -35,6 +37,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -167,6 +170,10 @@ voiceOverrideLinkedRouter.post(
         if (!entry.ids.includes(cand.id)) entry.ids.push(cand.id);
         byBook.set(rec.bookId, entry);
       }
+
+      /* #3713 -- a matched mate that is a repaired book, on a request without the current epoch: refuse
+         the whole fan-out before the source (or any mate) is written. */
+      if (refuseUnreadRepairedBooks([...byBook.keys()], req, res)) return res;
 
       await writeBook(
         sourceLocated.bookDir,

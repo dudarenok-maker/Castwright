@@ -50,6 +50,7 @@ import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { forEachMatchingCastCharacter, hasClonedSlotAmongMatches } from './voices.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import {
   buildSampleText,
   voiceSampleFileName,
@@ -1006,6 +1007,9 @@ qwenVoiceRouter.post(
        promotes it on approve. Default false keeps the original in-place design. */
     const isStandalone = located.state?.isStandalone === true;
     const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
+    /* #3713 -- refused before any GPU work when the series fan-out would write a repaired mate and the
+       request lacks the current repair epoch. */
+    if (seriesInfo && (await refuseGatedSeriesFanOut(seriesInfo, req, res))) return;
     /* #1954 — refuse an emotion variant for a cloned character, series-wide
        (Task 7, #2006 v5). The design core holds the same invariant (see its
        comment for WHY refusal is the chosen resolution); this is the

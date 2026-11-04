@@ -23,6 +23,7 @@ import type { Request, Response } from '../http.js';
 import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
@@ -287,6 +288,9 @@ singleDesignRouter.post(
 
     const isStandalone = located.state?.isStandalone === true;
     const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
+    /* #3713 -- decided at START: a design that would write a repaired series-mate is refused (409, before
+       the stream opens) unless the request carries the current repair epoch. */
+    if (seriesInfo && (await refuseGatedSeriesFanOut(seriesInfo, req, res))) return;
 
     /* GATE 2 fix-lane-1b — a design sweep must not retarget a cloned
        character off its clone. The non-preview ("first design") branch of

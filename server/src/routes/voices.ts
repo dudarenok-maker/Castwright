@@ -39,6 +39,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
@@ -757,6 +759,9 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   if (scope === 'series' && !bookId) {
     return res.status(400).json({ error: "`scope: 'series'` requires `bookId`." });
   }
+  /* #3713 -- a series-scoped write names its book in the body/query, and resolves the series (hence every
+     cast.json it writes) from it, so the path gate cannot see it. The workspace scope names no book. */
+  if (scope === 'series' && refuseUnreadRepairedBooks([bookId], req, res)) return;
   try {
     ensureWorkspace();
     let seriesFilter: { author: string; series: string } | undefined;
@@ -769,6 +774,9 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       }
       seriesFilter = resolved;
     }
+    /* #3713 -- the fan-out matches mates by voice id, so a repaired one is never named: refuse the whole
+       write (before any cast.json changes) when the request lacks the current repair epoch. */
+    if (await refuseGatedSeriesFanOut(seriesFilter, req, res)) return;
     if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter))) {
       return res.status(409).json({
         error:

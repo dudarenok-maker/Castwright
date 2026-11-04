@@ -110,7 +110,7 @@ or a walk that found exactly one folder and read every other one. A caller's `hi
 pass 1). **(coordinator call)**
 
 A live `ManuscriptRecord` is healed only when `rec.bookId === bookId` **(coordinator call)**. Twin books can
-share a `manuscriptId`: twins that predate #3823 (a bundle import now mints a fresh id whenever its write would add a
+share a `manuscriptId` (the sweep re-mints the loser's, see "Shared `manuscriptId`" below): twins that predate #3823 (a bundle import now mints a fresh id whenever its write would add a
 carrier of an id another book holds; an overwrite of a target that already carries the bundle's id keeps
 it), or a hand-copied folder.
 
@@ -822,9 +822,236 @@ Pinned by `book-state.replace-manuscript-rename.test.ts` (a queued rename waits,
 new folder, and the old path is never recreated), `book-op-lock.test.ts` (a `book`-only holder
 excludes `moveBookFolder`), and `chapters-restructure.test.ts` (book-op → gate → book).
 
+## Repair of existing duplicate bookIds (#3713)
+
+Finding c above left existing duplicates unrepaired ("Repairing duplicates is #3713"). This section records the
+owner's two rulings of 2026-10-31 and the disposition of every reference class. The code children of #3713 cite it.
+
+### Owner decisions (2026-10-31)
+
+1. **The winner is ranked** (owner decision 1, **revised 2026-10-31**; this replaces "current first match").
+   Compare the twins in this order. The first criterion that differs decides:
+   1. most chapters whose `state.chapters[].audioRenderedAt` is a non-empty string (`scan.ts`);
+   2. most cast rows, i.e. the length of `characters` in the folder's `cast.json` (`castJsonPath`, `paths.ts`;
+      read precedent `scan.ts`), an absent `cast.json` counting as 0;
+   3. the older `createdAt` (`scan.ts`, ISO); a missing or unparseable value ranks after any valid one;
+   4. walk order, i.e. the sorted path (see "Walk order" below).
+
+   The twin that wins keeps the id; every other twin is re-minted. Why not the first match: in the usual case
+   (rename `A/S/T` to `A/S/T2`, then re-import `A/S/T`) the first match is the fresh import, yet every id-keyed
+   reference from before the duplicate was written by the original, so the original must keep the id.
+2. **A one-time startup sweep, with no reference remap.** The sweep detects duplicates and re-mints the loser's id
+   via `mintBookId` (`book-op-lock.ts`). It rewrites the loser's `state.json` under `withBookOp` +
+   `withBookPathClaim` (`book-op-lock.ts`), logs both paths, and raises a user-visible notification
+   naming both folders. Id-keyed references stay with the winner.
+   **Owner's caveat:** id-keyed state written *after* the duplicate appeared was resolved to the first match, so
+   it may belong to the twin that loses, and it still stays with whichever twin keeps the id.
+
+**Canonical case.** `A/S/T` was renamed to `A/S/T2` (its state keeps id `a__s__t`), then `A/S/T` was freshly
+imported on a build before #3711 and also got `a__s__t`. The original `A/S/T2` has the rendered audio and the
+cast, so **the renamed original `A/S/T2` keeps `a__s__t` and the fresh import `A/S/T` is re-minted** (to
+`a__s__t-2`, since `mintBookId`'s base is taken), even though `A/S/T` is first in walk order.
+
+### Walk order
+
+`resolveBook` (`book-op-lock.ts`) and `findBookBy` (`scan.ts`) pick the first match in tree-walk order,
+which matters until the sweep runs and for any group it has to skip. Before child 2 neither walk sorted:
+`walkBookDirs` (`book-op-lock.ts`) and `listDirs` (`scan.ts`) returned raw `readdirSync` order, which NTFS
+returns case-insensitively sorted and ext4 returns in hash order. Both walks now share one comparator
+(`sortDirNames`, `dir-order.ts`): upper-case both
+names and compare them by UTF-16 code unit, then break ties by the raw names. That approximates NTFS's own
+directory order, so the walk order on the operator's Windows box does not change. It is **not** `localeCompare`,
+which depends on ICU and differs between machines. A test pins it (child 2). It is also ranking criterion 4.
+
+### Sweep mechanics
+
+- **When:** awaited in `main()` (`await bootRepairDuplicateBookIds()`, `server/src/index.ts`) after the upgrade
+  coordinator (its contract is that nothing is migrated until a backup exists, and the sweep rewrites `state.json`)
+  and before either listen call, so no request can race it. The fire-and-forget `fsckAllBooks()` is started after
+  it, so the two never touch a `state.json` together; `index.test.ts` pins the order.
+- **Idempotent:** a second run finds no duplicates and writes nothing.
+- **Unreadable input fails closed:** if any `state.json` in the walk cannot be read (EBUSY / EPERM / EIO), no
+  group is repaired this boot, because that folder's id is unknown and it could be a twin with more work. The same
+  holds for a directory that exists but cannot be listed: the sweep's walk (`bookDirsInWalkOrder`) is strict, since a
+  hidden folder could hold a twin or the id `mintBookId` would pick next (every other caller of the walker stays
+  lenient). If one
+  twin's `cast.json` fails to read for any reason other than being absent, that group is skipped. Each case logs
+  a warning, and the next startup retries.
+- **Locking:** the ranking reads happen unlocked, before the server listens; the repair re-checks `bookId` under
+  the `state-json` leaf lock.
+- **The rewrite:** the loser's new id is `mintBookId(<its author dir>, <its series dir>, <its title dir>)`. The
+  rewrite changes `bookId` in `state.json` and in the loser's export manifests (see "Reference classes").
+
+### Notification
+
+The repairs, with folders shown **relative to the books root** and never absolute, are kept in memory. They are
+exposed on `GET /api/info` as `duplicateBookIdRepairs` and rendered as a dismissible banner. They last for the
+life of the server process. The server log line is the durable record. **Accepted residual:** a restart before
+the UI is opened loses the banner, but not the log line.
+
+### Repaired-id write gate (owner decision, PR #4004 after pass 5)
+
+After the sweep repairs a group, the server **refuses every book-content write that names the repaired id** from a
+page loaded before the repair, and the page answers by **reloading itself**. The repaired id is `previousBookId`: the
+twin that kept it and the loser's old id are the same string.
+
+**Why it is blunt.** Passes 2 to 5 gated writes on a per-tab read token that the client committed once it had
+applied a full read of the book. Every pass found another place a stale snapshot outlived the commit: slices left on
+the Library (pass 3), saves the middleware had kept or queued (passes 3 and 4), the Voices view's own cast cache
+(pass 5), and an acknowledgement sent by a path that had not applied the read (pass 5). Each fix closed one cache and
+left the class. The owner's decision replaces the token with a rule no client-side bookkeeping can get wrong: the
+server only asks *was this page loaded after the newest repair*, and a page that was not reloads, which discards
+every slice, cache, queue and modal at once.
+
+The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
+
+- **Registry.** The sweep registers each repaired `previousBookId` with its repair time, and **persists it** to
+  `<workspace>/.repaired-book-gate.json` with an atomic write. Boot re-reads that file **before** the sweep, so the
+  gate lasts **until the book is deleted, across restarts, with no expiry** (owner decision, PR #4004 pass 6: a tab
+  opened before the repair that first writes on day 30 must still be refused, and a fresh page always holds the epoch,
+  so a gate that never lapses costs only an old bundle or an operator script; the 7-day TTL of passes 3 to 5 is gone).
+  **Nothing a client does ends an entry early**; only deleting the gated book does (`forgetRepairedBook`, so a
+  fresh import minted with the same id does not inherit the refusal). A later repair rotates the epoch (fresh pages
+  reload once, as before).
+- **Epoch.** The registry carries one `epoch`, a random value minted the first time the registry gains an entry in a
+  process (only the boot sweep registers, so in practice: once per boot that repairs something) and persisted with it.
+  A restart that repairs nothing keeps it; one that repairs again rotates it. `GET /api/info` serves it as
+  `repairEpoch` (`null` while nothing is gated).
+- **The check.** Any non-GET/HEAD/OPTIONS request on `/api/books/:bookId/...` whose `:bookId` is gated must carry
+  `X-Repair-Epoch` equal to the current epoch. Without it, or with any other value, the answer is **409**
+  `{ error, code: 'book_repaired_reload' }`, a fixed, path-free sentence. Reads are never gated and hand out nothing.
+- **Fail closed.** A damaged file keeps every entry it can still read (one with a broken time is gated from now); a
+  lost epoch is replaced by a fresh one (every open page reloads once more), and the file is rewritten whole. A file
+  that cannot be READ at boot (anything but "absent": EBUSY, a locked file) is retried (100 ms, 300 ms), then **never
+  overwritten** by this process's own entries: persisting is skipped, the read is retried by the next gated write (at
+  most once a second) and merged (memory wins; a book deleted meanwhile is not brought back), and the merge is then
+  written back so this boot's own repairs survive the next restart.
+- **The gate covers book content only (owner decision, PR #4004 pass 3).** Per-listener records are exempt, since none
+  carries a snapshot of the book and the Android companion never sends the epoch. The exempt routes, exactly:
+  `PUT /api/books/:bookId/listen-progress`, `POST /api/books/:bookId/shelf-status`,
+  `PUT /api/books/:bookId/listen-stats` (the mini-player's keepalive flush is the last one). A stale page's listen
+  record landing on the twin that kept the id is accepted. Everything else non-GET is gated.
+- **Manuscript-keyed writes.** When the sweep had to re-mint the loser's `manuscriptId` because the twins shared it,
+  that manuscriptId is registered too, scoped to the book that carries it **after the sweep** (with three twins where
+  two losers share it only with each other, the second keeps it under its own new bookId; the scope follows it, so
+  deleting that book drops it). `/api/manuscripts/:id/analysis*` is gated by the same epoch rule.
+- **Body- and query-keyed writers are gated by the book they name**, each by `refuseUnreadRepairedBooks` before
+  anything else (409 without the current epoch, nothing written): `POST /api/library-cast/override` (`sourceBookId`,
+  `targetBookId`), `POST` / `DELETE /api/voice-library/:uuid/assign` (body `bookId`; query for the DELETE),
+  `POST /api/books/:bookId/cast/add-from-roster` and `POST /api/books/:bookId/cast/link-prior` (body `targetBookId`),
+  `POST` / `DELETE /api/books/:bookId/cast/:characterId/not-linked-to` (body `otherBookId`), and
+  `PUT /api/voices/:voiceId/override` with `scope: 'series'` (body or query `bookId`). The path book of each is gated by
+  the mount as well. Confirmed safe, with why: `POST /api/voice-library/promote` (reads the book's character, writes
+  only the voice library), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by
+  voice uuid, name no book),
+  `POST /api/queue/*` other than `enqueue` (see below), `POST /api/books` and `POST /api/import` (mint a new book),
+  `library-sync-manifest` (its `bookId` query only selects a manifest).
+- **A series fan-out that would write a repaired series-mate is refused whole (owner decision, PR #4004 pass 6,
+  replacing pass 5's skip).** The mates of `series-patch`, `voice-override-linked`, `cast/tier`, `PUT
+  /api/voices/:voiceId/override` (series AND workspace scope: the workspace walk reaches every book) and the design
+  writers that propagate a voice or variant (`single-design`, `cast-design`, `qwen-voice`) are matched by voice id or
+  name, so the client never names them. A request without the current epoch whose fan-out would write a gated mate
+  answers **409 `book_repaired_reload` before anything is written**, the source book included; the page reloads, the
+  user repeats the change, and the repeat carries the epoch and writes every mate, the repaired one included.
+  `series-patch` and `voice-override-linked` check their matched mates (`refuseUnreadRepairedBooks`) before the
+  source's write; the walker routes and the design routes use `refuseGatedSeriesFanOut`
+  (`workspace/repaired-series-refusal.ts`), which is series-level (a gated book anywhere in the series, whether or not
+  it holds a matching voice). **A design job decides at START**: `cast-design`, `single-design` and `qwen-voice` refuse
+  a start without the epoch (a plain JSON 409, before the stream or any job exists), so a running job never has to
+  report anything, and re-attaching to one (a bare POST) checks nothing new. This removed the pass 5 skip machinery
+  (the per-request skipped map, `repairedFanOutScope`, the `x-skipped-repaired-books` header, `skippedBooks` on the
+  four JSON routes and the SSE events, the client's reload-on-skip), and with it the pass 6 reviewer's loop: a stale
+  tab's job could report a skip to a fresh page that re-attached, which reloaded it again and again until
+  `RepairReloadBlocked` covered the app.
+- **The queue enqueue is gated (pass 6).** `POST /api/queue/enqueue` names its book in the body; an entry for a
+  repaired id from a request without the current epoch refuses the whole batch (409), so a stale tab's Regenerate
+  cannot leave a queue entry the dispatcher later renders onto the twin that kept the id. `queue-thunks.ts` posts
+  through `repairFetch`, so the refusal reloads the page. The other queue routes stay ungated: they act on entries
+  that already exist.
+- One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
+  ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
+  pins that order against `app.ts` itself.
+
+**Client** (`src/lib/repair-epoch.ts`). `main.tsx` calls `loadRepairEpoch()` once as the page loads, before anything
+can write; it reads `/api/info` and keeps the epoch for the life of the page. It is **never refreshed**: a later poll
+of `/api/info` that shows a new epoch must not reach a page loaded before it. `repairFetch` is `lib/api.ts`'s `fetch`;
+it sends `X-Repair-Epoch` on every write (waiting for the load-time read if it is still out) and nothing on reads. On a
+409 `book_repaired_reload` (including a refused series fan-out, design start or enqueue), it calls
+`window.location.reload()` and shows nothing. From that moment every request it would send is held (it never settles),
+so no second write goes out and no caller toasts, rolls back or retries. A failed load-time read leaves the page with
+no epoch, which is refused only while something is gated, and the reload reads it afresh. **Reload-loop cap:** a
+sessionStorage counter allows 2 automatic reloads per 5 minutes per tab; past that (or with no storage to count in) the
+page shows `RepairReloadBlocked`, a blocking notice with a Reload button, and holds every write. The Android companion
+writes only exempt routes.
+
+An **old bundle** knows nothing of the epoch, so it sends none and is refused for good. The refusal is
+**silent** in an old bundle (v1.14.0 logs a failed `PUT /state` to the console and shows nothing, so the edits stay
+on screen unsaved), which is why the release notes tell users to **reload any tab left open across the upgrade**.
+
+What this closes: every stale cache on the page at once (slices kept on another view, the Voices view's cast cache,
+the bulk duplicate review's reads, open modals, queued, kept and retrying saves), the stale Library row's Delete and
+Edit, the poll gap, and the direct `putBookState` callers, because the reload is the only way a page gets the epoch.
+**Costs, accepted by the owner:** an edit typed in a stale page and not yet saved is lost with the reload; every page
+open across a repairing restart reloads once, including one that never touched the repaired book's content (its first
+gated write anywhere triggers it); a page whose load-time `/api/info` read failed reloads at its first write to a
+gated id. There is no residual window: a page loaded before the repair is refused however late it first writes, and a
+page loaded after it holds the epoch.
+
+### Reference classes
+
+None is remapped (decision 2). Each is classified by where it is actually keyed.
+
+| Class | Keyed at | Classification |
+|---|---|---|
+| `queue.json` entries | Workspace-root `.queue.json` (`queueJsonPath`, `paths.ts`); each `QueueEntry` carries `bookId` (`queue-io.ts`) | id-keyed: stays with the twin that keeps the id |
+| Per-book backups | `<WORKSPACE_ROOT>/.backups/<bookId>/` (`bookBackupsDir`, `paths.ts`), outside the book folder | id-keyed: stays with the twin that keeps the id |
+| Series / library references | Series are the `<author>/<series>` directories (`scan.ts`); series memory is computed on each scan from the scanned books' own `cast.json` (`scan.ts`), but `cast.json` itself does persist bookIds: `matchedFrom.bookId` and `notLinkedTo[].bookId` on its characters (`series-memory.ts`, `cast-reject-orphan.ts`, `handoff/schemas.ts`), and voice-clone sample scopes are named `char-<bookId>__<id>` (`purge-clone-artifacts.ts`) | the files are folder-local, each twin keeps its own. The ids inside them are **not** rewritten (decision 2): a cross-book reference to the shared id resolves to the winner, and a same-book reject edge (`notLinkedTo` with the old id) in the loser's `cast.json` keeps the old id, so the reject-orphan Undo route (`removeNotLinked(character, bookId, ...)`) will not match it after the re-mint; that edge needs an owner call (rewrite vs. leave), because a loser edge carrying the old id can equally be a legitimate cross-book edge to the winner |
+| Share links | `<workspace>/.audiobook/share-links.json`, slug to `bookId` (`routes/share.ts`), resolved with `findBookByBookId` (`share.ts`) | id-keyed: stays with the twin that keeps the id |
+| `ManuscriptRecord.bookId` heal | Live record keyed by `manuscriptId`, healed in `healIndexAndRecord` only when `rec.bookId === bookId` (`book-op-lock.ts`) | id-keyed: stays with the twin that keeps the id |
+| Listen progress | `.audiobook/listen-progress.json` inside the book folder (`listenProgressJsonPath(bookDir)`, `paths.ts`; read and written by bookDir at `routes/book-state.ts`); the frontend copy `byBook[bookId]` in `src/store/listen-progress-slice.ts` is a client cache keyed by id | server file: folder-local, unaffected, each twin keeps its own; frontend cache: id-keyed, stays with the twin that keeps the id |
+| cast-id-history | `<bookDir>/.audiobook/cast-id-history.json` (`castIdHistoryPath`, `store/cast-id-history.ts`); its write lock is keyed by `bookDir`, not `bookId` | folder-local: unaffected, each twin keeps its own |
+| Export manifests | `<bookDir>/.audiobook/export-manifests/<exportId>.json` (`bookExportManifestsDir`); each manifest embeds `bookId` and a `downloadUrl` built from it, and `routes/export.ts` filters on `job.bookId` (`rehydrateBook`, `revokeStaleSameFormat`) | folder-local data holding an id: **rewritten** for the re-minted loser (old id to new id, `downloadUrl` re-pointed) inside the same `withBookOp` span as its `state.json` write, after it. Per manifest best-effort: a manifest that cannot be rewritten is logged and left untouched with its artifact, and the book stays reachable under the new id (the `state.json` write is authoritative); that one export is then not listed |
+| Frontend hash route | `#/books/<bookId>/...` (`src/lib/router.ts`) | id-keyed: stays with the twin that keeps the id |
+| Open tab (in-memory slices) | A tab alive across the restart holds one twin's cast, manuscript and chapters under `previousBookId`; a first cast save carries no `baseRevision`, so the server would write that snapshot into whichever twin now owns the id (PR #4004 pass 1) | **refused by the server, then the page reloads** (see "Repaired-id write gate" above): the page read the repair epoch when it loaded, before the repair, so its first gated write is a 409 and `lib/repair-epoch.ts` reloads it, which discards every in-memory copy. The pass 2 to 5 machinery (a client save hold, a poll-driven re-read, `ui.rebindBook`, a per-tab read token and its acknowledgement) was removed with the owner's switch to the reload |
+
+A bookmarked or open route, queue entry, share link or backup history for the id therefore follows the winner. A
+re-minted loser starts with a new id, an empty server-side queue and share table, and no backup history under the
+new id (its old snapshots remain under the old id, with the winner).
+
+### Shared `manuscriptId` (owner decision, PR #4004 pass 1)
+
+Twins that predate #3823 (a hand-copied folder, the #3711 split, a pre-#3823 bundle re-import) may share a
+`manuscriptId` as well as the `bookId`. One `ManuscriptRecord` lives per manuscriptId and `hydrateFromDisk` /
+`findBookByManuscriptId` take the first match, so once the sweep made the loser reachable by its own id, every
+manuscript-keyed operation started from it (Analyse, restructure) landed in the walk-first twin. `healIndexAndRecord`
+guards a repoint, not a hydrate, so it did not prevent this. **Decision: the sweep re-mints the loser's
+`manuscriptId`** in the same `updateStateAtDir` write as its `bookId`, only when another member of the group carries
+the same id (a differing id changes nothing; an unreadable twin counts as sharing). The new id is `mns_` + `nanoid(10)`,
+checked against `takenBookIds().takenManuscriptIds` under the path claim, like every other creator.
+
+What follows the loser (rekeyed in its own folder, after the state write, inside the same `withBookOp` span, per file
+best-effort: an absent file is skipped, an unreadable or unwritable one is logged and left byte-for-byte):
+
+| Store | Keyed at | Outcome |
+|---|---|---|
+| `manuscript-hints.json` | each `entries[].manuscriptId`; `hintsFromEntry` rejects a mismatch with `state.manuscriptId` | rekeyed; if it cannot be, the loser re-parses its manuscript and loses its restructure bodies |
+| `script-review-pending.json` | each `entries[chapterId].manuscriptId`; `readLedger` prunes a mismatch | rekeyed; if it cannot be, the pending findings are pruned at read time |
+| `dropped-quotes.json` | envelope `manuscriptId` (informational) | rekeyed |
+| `analysis-state.json`, `analysis-last-outcome.json` | top-level `manuscriptId` (the library scan reports it) | rekeyed |
+| `state.json` | `manuscriptId`, also the revision salt (`book-state.ts`) | rewritten; an open tab's `baseRevision` no longer matches, which is wanted |
+| **Analysis cache** `server/handoff/cache/{manuscriptId}.json` | global, outside the book folder, one file per id shared by both twins | **copied** to the loser's new id (`copyFile` with `COPYFILE_EXCL`, best-effort, after the state write); the winner keeps the old file. Both twins read the one file before the sweep, so the copy reproduces the loser's pre-sweep view exactly: an analysed, unconfirmed copy stays at Confirm instead of dropping back to Analysing (`scan.ts` reads the cache for the status). If it cannot be copied the failure is logged and the loser re-analyses from the first chapter |
+| `manuscript-edits.json`, `cast.json`, audio | folder-local, hold no manuscriptId | unaffected |
+| Auto-backup snapshots of the loser | contain the old manuscriptId (and old bookId) | not rewritten: restoring one re-creates the share, and the next start's sweep re-mints it again |
+
+A crash between the state write and the rekey leaves the files on the old id; no later start repairs them, because the
+group is no longer a duplicate. The sweep therefore logs the repair (and gates the id) immediately after the state write,
+before the manifests, the cache copy and the rekeys, so the log line survives such a crash as the only durable record. That degrades as the "cannot be rekeyed" column says rather than aliasing the other twin.
+The sweep stays idempotent: a second start finds no duplicate group and changes nothing. Books that share a
+`manuscriptId` but have different `bookId`s are not touched (not a duplicate-bookId group).
+
 ## Out of scope
 
-- Repair of pre-existing duplicate bookIds (filed, with the decision owed).
+- Repair of pre-existing duplicate bookIds: decided and specified in the section above (#3713).
 - A crash-safe staged DELETE (filed, finding i).
 - Quick ops racing a running long job on the same book. That is pre-existing and not a move.
 - Out-of-process moves and deletes. The existing #3706 and `withVerifiedBookDir` defences stay.

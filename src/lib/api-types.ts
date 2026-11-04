@@ -1283,6 +1283,11 @@ export interface paths {
          *     the instant it completes, so even that only loses the live pill).
          *     Streams `CastDesignEvent` frames; see that schema for the full event
          *     catalogue.
+         *
+         *     A START that would write a repaired series-mate (#3713) from a request
+         *     without the current `X-Repair-Epoch` is refused with a plain JSON 409
+         *     `book_repaired_reload` (`BookRepairedReloadError`) before any job or
+         *     stream exists; a re-subscribe checks nothing.
          */
         post: operations["streamCastDesign"];
         delete?: never;
@@ -1451,6 +1456,10 @@ export interface paths {
          *     pre-expands `scope: 'forward'` (regenerate chapter N + all subsequent)
          *     into per-chapter ids before posting, so this route only sees scoped
          *     entries that map 1:1 to a chapter id.
+         *
+         *     An entry for a repaired bookId (#3713) from a request without the
+         *     current `X-Repair-Epoch` refuses the whole batch with 409
+         *     `book_repaired_reload`.
          */
         post: operations["enqueueQueueEntries"];
         delete?: never;
@@ -1891,6 +1900,10 @@ export interface paths {
          *     `(author, series)` as `bookId` — used by the Profile Drawer's
          *     per-character Qwen design flow so a bespoke voice propagates across
          *     that series only.
+         *
+         *     When the walk would write a repaired book (#3713) and the request
+         *     lacks the current `X-Repair-Epoch`, nothing is written and the answer
+         *     is a 409 `book_repaired_reload` (`BookRepairedReloadError`).
          */
         put: operations["setVoiceOverride"];
         post?: never;
@@ -3346,6 +3359,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Server, sidecar and hardware info (plus the repair epoch)
+         * @description Only the field the contract pins is listed; the response carries more
+         *     (versions, hardware, devices, update status, release notes).
+         *     `repairEpoch` (#3713) is the value a page loaded now sends as
+         *     `X-Repair-Epoch` on every write: a random value minted when a boot
+         *     repairs a duplicate bookId and persisted with the gate, `null` when no
+         *     repaired id is gated. A page reads it once, when it loads.
+         */
+        get: operations["getInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/info/dismiss-whats-new": {
         parameters: {
             query?: never;
@@ -3632,6 +3670,18 @@ export interface components {
             code?: ("sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown") | components["schemas"]["FailureCode"];
             /** @description error only — human-readable abort message. */
             message?: string;
+        };
+        /**
+         * @description #3713 — 409 body of a write refused because it names (or, for a series fan-out, a design start or a
+         *     queue enqueue, would reach) a book whose duplicate bookId was repaired, on a request that did not carry
+         *     the current `X-Repair-Epoch`. The refusal is whole: nothing was written. It lasts until the repaired
+         *     book is deleted; a page reads the epoch once when it loads, so one loaded before the repair cannot hold
+         *     it. The client reloads the page, then the user repeats the change (which then carries the epoch).
+         */
+        BookRepairedReloadError: {
+            error: string;
+            /** @enum {string} */
+            code: "book_repaired_reload";
         };
         /** @description GET /api/books/{bookId}/cast/design/status response. */
         CastDesignStatusResponse: {
@@ -7549,7 +7599,15 @@ export interface components {
         };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /**
+         * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+         *     Required (in effect) on a write that names a repaired book; a request
+         *     without the current value is refused whole with 409
+         *     `book_repaired_reload`. Sent on every write by the client.
+         */
+        RepairEpoch: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -9771,7 +9829,15 @@ export interface operations {
     setCastTier: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 bookId: string;
             };
@@ -9811,12 +9877,29 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description A series book was repaired (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
+                };
+            };
         };
     };
     streamCastDesign: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 bookId: string;
             };
@@ -10076,7 +10159,15 @@ export interface operations {
     enqueueQueueEntries: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10093,6 +10184,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description An entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was queued. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
                 };
             };
         };
@@ -10751,7 +10851,15 @@ export interface operations {
     setVoiceOverride: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 voiceId: string;
             };
@@ -13605,6 +13713,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Info */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        repairEpoch?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
             };
         };
     };

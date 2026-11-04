@@ -35,6 +35,7 @@ import type { Request, Response } from '../http.js';
 import { requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -879,6 +880,13 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
         .json({ error: `modelKey must be one of: ${Object.keys(TTS_MODEL_LABELS).join(', ')}` });
     }
     modelKey = body.modelKey;
+    /* #3713 -- a start decides, once: a job that would write a repaired series-mate is refused (409,
+       before any job or stream exists) unless the request carries the current repair epoch, so a running
+       job never reports a skip and re-attaching to one checks nothing. */
+    if (located.state?.isStandalone !== true) {
+      const gateSeries = await findAuthorSeriesForBookId(bookId);
+      if (await refuseGatedSeriesFanOut(gateSeries ?? undefined, req, res)) return;
+    }
   }
 
   /* ── SSE setup (mirrors the analysis route's framing). */
