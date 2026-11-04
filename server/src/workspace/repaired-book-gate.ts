@@ -134,6 +134,7 @@ let writing: Promise<void> = Promise.resolve();
  *  unknown, so the file is never overwritten with this process's own, and a gated write retries the read. */
 let unreadable = false;
 let lastReadAttempt = 0;
+let retrying: Promise<void> | null = null;
 const READ_RETRY_DELAYS_MS = [100, 300];
 const READ_RETRY_INTERVAL_MS = 1000;
 
@@ -342,10 +343,20 @@ export async function repairedBookGate(req: Request, res: Response, next: NextFu
 /** A gate file that could not be read at boot is retried by the next gated write (at most once a second), so the
  *  ids it names are refused again as soon as it can be read instead of staying ungated for the whole boot. A
  *  retry that reads it writes the merge back, so this boot's own repairs survive the next restart. */
-export async function retryUnreadableGate(): Promise<void> {
-  if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return;
-  await ingestGateFile(Date.now(), false);
-  if (!unreadable) await persistRepairedBookGate();
+export function retryUnreadableGate(): Promise<void> {
+  /* One retry at a time: a request that arrives while the read is in flight AWAITS it. Returning at once (the
+     attempt time is stamped before the read) would let it pass ungated for a file that is readable right now. */
+  if (retrying) return retrying;
+  if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return Promise.resolve();
+  retrying = (async () => {
+    try {
+      await ingestGateFile(Date.now(), false);
+    } finally {
+      retrying = null;
+    }
+    if (!unreadable) await persistRepairedBookGate();
+  })();
+  return retrying;
 }
 
 /** `app.use('/api/manuscripts/:id', ...)`: the manuscriptId-keyed analysis writes. */
