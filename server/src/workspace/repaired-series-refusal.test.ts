@@ -51,6 +51,13 @@ describe('refuseGatedSeriesFanOut (#4029)', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
+  it('a STALE epoch is not "carries the epoch": it walks and answers 409', async () => {
+    const res = makeRes();
+    expect(await refusal.refuseGatedSeriesFanOut(series, reqWith('previous-boot-epoch'), res)).toBe(true);
+    expect(findAuthorSeriesForBookId).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
   it('CONTROL: without the epoch it walks, finds the gated mate in scope and answers 409', async () => {
     const res = makeRes();
     expect(await refusal.refuseGatedSeriesFanOut(series, reqWith(undefined), res)).toBe(true);

@@ -161,6 +161,13 @@ describe('POST /books/:id/cast/tier with a repaired series-mate (#3713)', () => 
     expect(everything()).toEqual(before);
   });
 
+  it('a stale epoch is refused the same way (#4029)', async () => {
+    await repaired();
+    const before = everything();
+    refused(await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Repair-Epoch', 'pre-repair').send(body));
+    expect(everything()).toEqual(before);
+  });
+
   it('with the current epoch every mate is written', async () => {
     await repaired();
     const res = await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Repair-Epoch', E()).send(body);
@@ -187,6 +194,13 @@ describe('PUT /voices/:id/override with a repaired series-mate (#3713)', () => {
     expect(res.status).toBe(204);
     expect(read(kept)).toContain('af_heart');
     expect(read(src)).toContain('af_heart');
+  });
+
+  it('workspace scope, a stale epoch: refused whole (#4029)', async () => {
+    await repaired();
+    const before = everything();
+    refused(await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', 'pre-repair').send(workspace));
+    expect(everything()).toEqual(before);
   });
 
   it('workspace scope, no epoch: refused whole; with the current epoch the kept twin is written', async () => {
