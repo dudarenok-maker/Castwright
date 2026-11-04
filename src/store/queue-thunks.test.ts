@@ -11,6 +11,7 @@ import { notificationsSlice } from './notifications-slice';
 import { chaptersSlice } from './chapters-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { api } from '../lib/api';
+import { __resetRepairEpochForTest, loadRepairEpoch } from '../lib/repair-epoch';
 import type { Chapter } from '../lib/types';
 import {
   cancelQueueEntry,
@@ -81,8 +82,8 @@ describe('loadQueue', () => {
     );
     const store = makeStore();
     await store.dispatch(loadQueue());
-    /* queueRequest forwards `init` (undefined for the GET) to fetch. */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue', undefined);
+    /* queueRequest goes through repairFetch, which sends a read untouched (no init). */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue');
     expect(store.getState().queue.entries).toHaveLength(1);
     expect(store.getState().queue.entries[0].id).toBe('q1');
     expect(store.getState().queue.loaded).toBe(true);
@@ -92,6 +93,47 @@ describe('loadQueue', () => {
     fetchMock.mockResolvedValue(mockJsonResponse({ error: 'workspace missing' }, 500));
     const store = makeStore();
     await expect(store.dispatch(loadQueue())).rejects.toThrowError(/workspace missing/);
+  });
+});
+
+describe('enqueueQueueEntries and the repair epoch (#3713, PR #4004 pass 6)', () => {
+  const reload = vi.fn();
+  const entries = [{ id: 'a1', bookId: 'book-A', chapterId: 1, scope: 'this' as const }];
+
+  beforeEach(() => {
+    __resetRepairEpochForTest();
+    reload.mockClear();
+    vi.stubGlobal('location', { ...window.location, reload });
+    sessionStorage.clear();
+  });
+  afterEach(() => __resetRepairEpochForTest());
+
+  const withEpoch = (enqueue: () => Response): void => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url === '/api/info' ? new Response(JSON.stringify({ repairEpoch: 'epoch-now' })) : enqueue(),
+    );
+  };
+
+  it('the enqueue POST carries the page-load epoch (a stale tab carries none)', async () => {
+    withEpoch(() => mockJsonResponse({ entries: [sampleEntry({ id: 'a1' })], paused: false }));
+    loadRepairEpoch();
+    await makeStore().dispatch(enqueueQueueEntries(entries));
+    const post = fetchMock.mock.calls.find(([url]) => url === '/api/queue/enqueue')!;
+    expect(new Headers(post[1].headers).get('X-Repair-Epoch')).toBe('epoch-now');
+  });
+
+  it('a book_repaired_reload refusal reloads the page and queues nothing, shows no toast', async () => {
+    withEpoch(() => new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 }));
+    loadRepairEpoch();
+    const store = makeStore();
+    const settled = await Promise.race([
+      store.dispatch(enqueueQueueEntries(entries)).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    expect(settled).toBe(false); // held: the reload is decided, no caller toasts or retries
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.getState().queue.entries).toHaveLength(0);
+    expect(store.getState().notifications.toasts).toHaveLength(0);
   });
 });
 

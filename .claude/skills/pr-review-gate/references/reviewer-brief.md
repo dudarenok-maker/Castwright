@@ -822,7 +822,17 @@ recite:
     and drive a test where the limit expires to see what then runs. Copying the
     retry is not the only acceptable remedy: the shipped one reads anyway on
     expiry, guarded by `castWrittenSince` so a read that post-dates a cast
-    save does not hydrate over it.
+    save does not hydrate over it. Copying the retry has two gaps of its own
+    (PR #4008 pass 2): a retry with a FIXED per-attempt bound never lands a read
+    slower than that bound (every attempt is aborted a second before it would
+    answer, so `readWithRetry` kept 9 reads open-and-aborted where the control
+    needed one), so drive a test where every attempt takes just over the bound,
+    not one that hangs once and then answers at once; and a bound on a re-sync
+    read whose expiry falls back to `null` must have that `null` checked for
+    what the client then acts on (Restructure's expired re-read left the
+    pre-restructure chapter list armed for a second merge; the analysis-stream
+    refusal re-read left a `running` snapshot the server had denied), because
+    the expiry path skips the hydrate the success path ran.
 
 61. **A timing threshold calibrated on a dev box that falls inside the CI
     runner's normal range** — PR #3951 pass 2 (#3917): C3 told a slow host
@@ -941,7 +951,36 @@ recite:
     writes a real decision in that shape, the shape needs a test through the
     real jobs, not a comment saying it cannot matter.
 
-71. **A refusal in the first matcher that the fallback matcher does not
+75. **A repair scheduled rather than applied, while the lock protecting the stale
+    state is released** — PR #4008 pass 4 (#3967): when a Restructure's
+    re-read expired or its remap was skipped, the fix was a mark that queues
+    Layout's full read. But `applyResponse` returned, and each handler's
+    `finally` lowered the edit lock, while the sentences still held the old
+    chapter ids; an edit in the window saved the whole stale list over the
+    route's rewrite, and the scheduled read is slowest in exactly the
+    condition that called for it (a stall). Checkable: for every "mark it and
+    let a later read repair it", ask what guards the state between the mark and
+    the repair, and whether that guard is released before the repair lands. A
+    repair that is only scheduled keeps the lock up until it lands (and comes
+    down on its landing, on its failure, and on leaving the book), or applies
+    the repair itself. Then drive the window: make an edit after the lock would
+    have come down and assert what reaches disk.
+
+76. **A per-book mark placed inside a cross-book slice-write guard** — PR #4008
+    pass 3 (#3967): Restructure's `markNeedsFullRead` sat inside the
+    `activeBookId === bookId` check that exists to stop a late result being
+    written into another book's slices. The mark is per book and writes no
+    slice, so it was dropped exactly when the user left the book, and
+    reopening then read revisions only and showed the pre-restructure list
+    (a second merge of the same ids swallowed the next chapter). The same
+    mark was also missing when a hydrate landed mid-request and the remap was
+    skipped. Checkable: for every guard that exists to stop a cross-book slice
+    write, list what else is inside it; anything keyed by book id that writes
+    no slice (a mark, a flag, a cache entry) belongs outside it. Then drive
+    the guard's false branch (leave the book before the read settles, once
+    with a hang and once with a prompt answer) and assert the mark.
+
+77. **A refusal in the first matcher that the fallback matcher does not
     mirror** — PR #4023 passes 1-3 (#3954): `remapFreshToPriorIds`, the first
     matcher, refuses a join, and `mergeCore`'s name fallback then makes the
     same join anyway. Three times: F3 (the tolerant twin-decline), P3-1 (a

@@ -15,6 +15,17 @@ info:
     audiobook. Six endpoints span the full flow: upload → analyse →
     voice-match → generate → playback → revisions/drift.
 
+    **Repaired books (#3713).** When two book folders shared one `bookId`, the
+    server repairs them at startup. From then until the repaired book is
+    deleted, every book-content write that names a repaired id (in the path,
+    the body, or — for a series fan-out, a design start, a queue enqueue — by
+    reaching it through the series) is refused whole with `409
+    book_repaired_reload` unless it carries the `X-Repair-Epoch` header
+    (`RepairEpoch`) equal to the `repairEpoch` that `GET /api/info` serves.
+    A page reads it once, when it loads; the client answers the 409 with a
+    full page reload. Per-listener writes (`listen-progress`, `shelf-status`,
+    `listen-stats`) are exempt.
+
 servers:
   - url: https://api.example.com
     description: Production (placeholder)
@@ -1887,6 +1898,7 @@ paths:
       operationId: setCastTier
       parameters:
         - { name: bookId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       requestBody:
         required: true
         content:
@@ -1913,6 +1925,11 @@ paths:
           description: voiceId missing or ttsModelKey invalid
         '404':
           description: Book not found
+        '409':
+          description: A series book was repaired (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
 
   /api/books/{bookId}/cast/design:
     post:
@@ -1930,8 +1947,14 @@ paths:
         the instant it completes, so even that only loses the live pill).
         Streams `CastDesignEvent` frames; see that schema for the full event
         catalogue.
+
+        A START that would write a repaired series-mate (#3713) from a request
+        without the current `X-Repair-Epoch` is refused with a plain JSON 409
+        `book_repaired_reload` (`BookRepairedReloadError`) before any job or
+        stream exists; a re-subscribe checks nothing.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       requestBody:
         required: false
         content:
@@ -2152,6 +2175,12 @@ paths:
         pre-expands `scope: 'forward'` (regenerate chapter N + all subsequent)
         into per-chapter ids before posting, so this route only sees scoped
         entries that map 1:1 to a chapter id.
+
+        An entry for a repaired bookId (#3713) from a request without the
+        current `X-Repair-Epoch` refuses the whole batch with 409
+        `book_repaired_reload`.
+      parameters:
+        - { $ref: '#/components/parameters/RepairEpoch' }
       requestBody:
         required: true
         content:
@@ -2163,6 +2192,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: An entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
 
   /api/queue/reorder:
     post:
@@ -2764,8 +2798,13 @@ paths:
         `(author, series)` as `bookId` — used by the Profile Drawer's
         per-character Qwen design flow so a bespoke voice propagates across
         that series only.
+
+        When the walk would write a repaired book (#3713) and the request
+        lacks the current `X-Repair-Epoch`, nothing is written and the answer
+        is a 409 `book_repaired_reload` (`BookRepairedReloadError`).
       parameters:
         - { in: path, name: voiceId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       requestBody:
         required: true
         content:
@@ -5123,6 +5162,28 @@ paths:
         '409': { description: Entry has no consent record to revoke }
         '502': { description: Revoke failed (write or artifact-purge error) }
 
+  /api/info:
+    get:
+      summary: Server, sidecar and hardware info (plus the repair epoch)
+      operationId: getInfo
+      description: |
+        Only the field the contract pins is listed; the response carries more
+        (versions, hardware, devices, update status, release notes).
+        `repairEpoch` (#3713) is the value a page loaded now sends as
+        `X-Repair-Epoch` on every write: a random value minted when a boot
+        repairs a duplicate bookId and persisted with the gate, `null` when no
+        repaired id is gated. A page reads it once, when it loads.
+      responses:
+        '200':
+          description: Info
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  repairEpoch: { type: string, nullable: true }
+
   /api/info/dismiss-whats-new:
     post:
       summary: Dismiss the what's-new banner
@@ -5265,6 +5326,17 @@ paths:
 # Schemas
 # ---------------------------------------------------------------------
 components:
+  parameters:
+    RepairEpoch:
+      name: X-Repair-Epoch
+      in: header
+      required: false
+      description: |
+        #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+        Required (in effect) on a write that names a repaired book; a request
+        without the current value is refused whole with 409
+        `book_repaired_reload`. Sent on every write by the client.
+      schema: { type: string }
   schemas:
     RestructureConflictError:
       type: object
@@ -5410,6 +5482,19 @@ components:
             silent English design; `unsupported_language` fires for a
             stated language with no sidecar mapping.
         message: { type: string, description: error only — human-readable abort message. }
+
+    BookRepairedReloadError:
+      type: object
+      required: [error, code]
+      description: |
+        #3713 — 409 body of a write refused because it names (or, for a series fan-out, a design start or a
+        queue enqueue, would reach) a book whose duplicate bookId was repaired, on a request that did not carry
+        the current `X-Repair-Epoch`. The refusal is whole: nothing was written. It lasts until the repaired
+        book is deleted; a page reads the epoch once when it loads, so one loaded before the repair cannot hold
+        it. The client reloads the page, then the user repeats the change (which then carries the epoch).
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [book_repaired_reload] }
 
     CastDesignStatusResponse:
       type: object

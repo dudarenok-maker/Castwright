@@ -7,7 +7,8 @@
    under its book-op, since the series walker skips standalones.
 
    Body:  { voiceId: string, ttsModelKey: 'qwen3-tts-1.7b' | null }
-   Response: { updated: number }
+   Response: { updated: number }. A series with a repaired book (#3713) is refused whole (409
+   book_repaired_reload) on a request without the current repair epoch, before anything is written.
 
    Mounted at /api/books in app.ts, so the handler path is RELATIVE
    (/:bookId/cast/tier). */
@@ -16,6 +17,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { applyTierToCastFiles } from './voices.js';
 
 export const castTierRouter = Router();
@@ -55,11 +57,11 @@ castTierRouter.post('/:bookId/cast/tier', async (req: Request, res: Response) =>
   }
 
   const seriesInfo = await findAuthorSeriesForBookId(bookId);
+  if (await refuseGatedSeriesFanOut(seriesInfo ?? undefined, req, res)) return;
   const updated = await applyTierToCastFiles(
     voiceId.trim(),
     ttsModelKey as 'qwen3-tts-1.7b' | null,
     seriesInfo ?? undefined,
   );
-
   return res.json({ updated });
 });

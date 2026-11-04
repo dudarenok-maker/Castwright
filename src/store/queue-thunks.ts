@@ -22,6 +22,7 @@ import { chaptersActions } from './chapters-slice';
 import { refuseIfEditsLocked } from './restructure-lock';
 import { mockQueueRequest } from '../mocks/mock-queue';
 import { api } from '../lib/api';
+import { repairFetch } from '../lib/repair-epoch';
 import { selectAnalysisBusyForBook, analysisBusyMessage } from './analysis-substage-selectors';
 
 /* Plan 111 — the persisted queue drives generation, so mock mode (dev app +
@@ -35,7 +36,8 @@ function queueRequest(
   init?: { method?: string; headers?: Record<string, string>; body?: string },
 ): Promise<Response> {
   if (USE_MOCKS) return Promise.resolve(mockQueueRequest(path, init) as unknown as Response);
-  return fetch(path, init);
+  /* #3713 -- a write carries the repair epoch, and a refusal for a repaired book reloads the page. */
+  return repairFetch(path, init);
 }
 
 export interface EnqueueInput {

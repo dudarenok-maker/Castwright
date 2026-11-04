@@ -67,6 +67,7 @@ import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
@@ -1629,6 +1630,8 @@ function advisoryMessage(block: CloneAssignBlock, engine: CloneEngine, voiceName
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
+    /* #3713 pass 3 -- the book is named in the body, so the path gate cannot see it. */
+    if (refuseUnreadRepairedBooks([(req.body as { bookId?: unknown } | undefined)?.bookId], req, res)) return;
 
     return await withLibraryVoiceLock(voiceUuid, async () => {
       const entry = await readEntry(voiceUuid);
@@ -2071,6 +2074,8 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
 voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
+    /* #3713 pass 3 -- the book is named in the query, so the path gate cannot see it. */
+    if (refuseUnreadRepairedBooks([req.query.bookId], req, res)) return;
     const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
     const characterId =
       typeof req.query.characterId === 'string' ? req.query.characterId : undefined;

@@ -34,6 +34,7 @@
    hand-built object is refused), replacing an AsyncLocalStorage order tracker. */
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
+import { sortDirNames } from './dir-order.js';
 import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
@@ -176,27 +177,41 @@ export function __duplicateBookIdsForTest(): Set<string> {
   return duplicateBookIds;
 }
 
-function listDirNames(path: string): string[] {
+/** `strict` makes a readdir failure throw instead of reading as "no children":
+ *  only the duplicate-bookId sweep asks for it, because a partial walk must not
+ *  stand in for the whole library there (every other caller stays lenient). */
+function listDirNames(path: string, strict = false): string[] {
   if (!existsSync(path)) return [];
   try {
-    return readdirSync(path, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  } catch {
+    return sortDirNames(
+      readdirSync(path, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name),
+    );
+  } catch (err) {
+    if (strict) throw err;
     return [];
   }
 }
 
 /** Every book folder dir under BOOKS_ROOT, in `findBookBy`'s order. */
-function* walkBookDirs(): Generator<string> {
+function* walkBookDirs(strict = false): Generator<string> {
   ensureWorkspace();
-  for (const author of listDirNames(BOOKS_ROOT)) {
-    for (const series of listDirNames(join(BOOKS_ROOT, author))) {
-      for (const title of listDirNames(join(BOOKS_ROOT, author, series))) {
+  for (const author of listDirNames(BOOKS_ROOT, strict)) {
+    for (const series of listDirNames(join(BOOKS_ROOT, author), strict)) {
+      for (const title of listDirNames(join(BOOKS_ROOT, author, series), strict)) {
         yield join(BOOKS_ROOT, author, series, title);
       }
     }
   }
+}
+
+/** Every book folder dir, as an array, in the SAME sorted order `resolveBook`
+ *  walks (#3713: the duplicate-bookId sweep ranks twins with this as its last
+ *  tie-break). STRICT: any directory that exists but cannot be listed throws, so
+ *  the sweep can skip rather than rank (or mint against) a partial library. */
+export function bookDirsInWalkOrder(): string[] {
+  return [...walkBookDirs(true)];
 }
 
 /** Log a state.json read failure in full (its message embeds the absolute

@@ -1,6 +1,12 @@
 import { installTimestamps } from './lib/logger';
 installTimestamps();
 
+import { loadRepairEpoch } from './lib/repair-epoch';
+/* #3713 — read the duplicate-bookId repair epoch once, as the page loads and before anything can write:
+   every write carries it, and a page loaded before a repair is refused and reloads (lib/repair-epoch.ts).
+   Mock mode has no server to ask. */
+if (import.meta.env.VITE_USE_MOCKS !== 'true') loadRepairEpoch();
+
 import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { RouterProvider } from 'react-router/dom';

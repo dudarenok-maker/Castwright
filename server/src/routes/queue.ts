@@ -28,6 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { isTtsModelKey } from '../tts/model-keys.js';
@@ -126,6 +127,9 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       ...(review ? { review } : {}),
     });
   }
+  /* #3713 -- an entry for a repaired bookId from a page that predates the repair would later render the
+     twin that kept the id: refused, whole batch, unless the request carries the current repair epoch. */
+  if (refuseUnreadRepairedBooks(inputs.map((i) => i.bookId), req, res)) return;
   /* Plan 108 Wave 3 — stamp each entry with the TTS engines its chapter needs
      (cast + analysis cache + book default), so the queue modal can name the
      engine(s) and warn on a multi-TTS chapter when dual-model mode is off.

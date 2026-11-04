@@ -35,6 +35,7 @@ import { BOOK_GONE, peekBook, withBookOps } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
@@ -90,6 +91,10 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
         'targetBookId must differ from the path bookId — use POST /:bookId/cast/merge for in-book merges.',
     });
   }
+
+  /* #3713 -- the path book is gated by the app-level repairedBookGate; the TARGET is named in the
+     body (and its cast.json is written below), so the path gate cannot see it. */
+  if (refuseUnreadRepairedBooks([targetBookId], req, res)) return;
 
   /* #3711 -- both books' book-op (sorted, so the opposite-role call cannot AB/BA),
      then both cast locks; the handles are resolved UNDER the locks, so a rename

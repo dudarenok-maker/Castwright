@@ -224,6 +224,27 @@ describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
     }
   });
 
+  /* #3967 pass 4 - whether the refused-against writer is still live or only draining is
+     the one fact the middleware needs to decide if its snapshot is stale, so it travels on
+     the error from the 409 body and from both SSE error frames. */
+  it('carries `draining` from the 409 body and from both readers SSE error frames', async () => {
+    const { api } = await import('./api');
+    const draining = async (call: () => Promise<unknown>) =>
+      ((await call().then(() => null, (e: unknown) => e)) as { draining?: boolean }).draining;
+    const frame = (b: Record<string, unknown>) =>
+      JSON.stringify({ kind: 'error', code: b.error, message: b.message, draining: b.draining });
+    for (const [body, want] of [[MAIN_DRAINING, true], [MAIN_RUNNING, false]] as const) {
+      fetchMock.mockResolvedValueOnce(refusedResponse(body));
+      expect(await draining(() => api.analyseManuscript('mns-1', {}))).toBe(want);
+      fetchMock.mockResolvedValueOnce(sseResponse([frame(body)]));
+      expect(await draining(() => api.analyseManuscript('mns-1', {}))).toBe(want);
+      fetchMock.mockResolvedValueOnce(sseResponse([frame(body)]));
+      expect(await draining(() => api.runAnalysisForChapters('mns-1', [4], {}))).toBe(want);
+    }
+    fetchMock.mockResolvedValueOnce(refusedResponse(SUBSET_RUNNING));
+    expect(await draining(() => api.analyseManuscript('mns-1', {}))).toBeUndefined();
+  });
+
   /* #3829 - a start on a book whose chapter hints are out of sync with state.json is a 409
      `{ error: <curated sentence>, code }` (the restructure routes' shape: the sentence is in
      `error`, the machine code in `code`). The user must see the sentence, not "failed (409)". */
