@@ -435,11 +435,131 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         // Flagged exactly as on main: the dropped alias is recorded as displaced
         expect(JSON.stringify(history)).toContain('"displaced"');
         expect(JSON.stringify((history as { displaced?: unknown }).displaced)).toContain('old-weir');
-        // ...and the run log tells the user the name joins were skipped.
-        expect(JSON.stringify(events)).toContain('Skipped keeping existing character ids');
+        // ...and the run log tells the user the name joins were limited to exact names.
+        expect(JSON.stringify(events)).toContain('only exact-name matches kept their existing character ids');
       } finally {
         warnSpy.mockRestore();
         vi.mocked(stateIo.readJson).mockImplementation(actualReadJson);
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* P3-1. A degraded history read must not regress main's exact tier. Prior
+     `w2 "Wren"` (locked, no voiceId) is re-minted by the analyzer as
+     `wren-2 "Wren"`. On main the remap's exact tier keeps `w2`. With the read
+     failing, the remap used to join nothing, so mergeCore's name fallback kept
+     the FRESH id and retired `w2` for good (the locked row's voice keys on
+     its id). Now the degraded remap runs main's exact tier. */
+  const wrenTwo = {
+    ...WREN_FRESH,
+    id: 'wren-2',
+    name: 'Wren',
+    evidence: [{ quote: 'Wren asked' }],
+  } as CharacterOutput;
+  const blipRemapRead = async (): Promise<{ count: () => number; restore: () => void }> => {
+    const actualReadJson = (
+      await vi.importActual<typeof import('../workspace/state-io.js')>('../workspace/state-io.js')
+    ).readJson;
+    let blips = 0;
+    vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path.endsWith('cast-id-history.json') && blips === 0) {
+        const frames = (new Error().stack ?? '').split(String.fromCharCode(10)).map((l) => l.trim());
+        const at = frames.findIndex((l) => l.includes('loadIdHistoryForRemap'));
+        const caller = at >= 0 ? (frames[at + 1] ?? '') : '';
+        if (/(runMainAnalyzerJob|runSubsetAnalyzerJob)/.test(caller)) {
+          blips += 1;
+          throw new Error('EBUSY: resource busy or locked (simulated transient read blip)');
+        }
+      }
+      return actualReadJson(path);
+    });
+    return {
+      count: () => blips,
+      restore: () => vi.mocked(stateIo.readJson).mockImplementation(actualReadJson),
+    };
+  };
+  const expectW2Kept = (bookDir: string): void => {
+    const cast = readCast(bookDir);
+    const wrens = cast.filter((c) => c.name === 'Wren');
+    expect(wrens).toHaveLength(1);
+    expect(wrens[0].id).toBe('w2');
+    expect(wrens[0].voiceState).toBe('locked');
+    expect(cast.some((c) => c.id === 'wren-2')).toBe(false);
+    const attributed = readEdits(bookDir).filter(
+      (s) => s.characterId === 'w2' || s.characterId === 'wren-2',
+    );
+    expect(attributed.length).toBeGreaterThan(0);
+    expect(attributed.every((s) => s.characterId === 'w2')).toBe(true);
+  };
+
+  it.each(['main', 'subset'] as const)(
+    'P3-1 %s job: one failed read of the history at the remap still keeps the prior id on an exact-name drift',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...PRIOR_WREN }], {});
+      const blip = await blipRemapRead();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const events = await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, wrenTwo],
+          speakerId: 'wren-2',
+        });
+        expect(blip.count()).toBe(1);
+        expectW2Kept(bookDir);
+        expect(readHistory(bookDir).supersededBy['wren-2']).toBe('w2');
+        expect(JSON.stringify(events)).toContain('only exact-name matches kept');
+      } finally {
+        warnSpy.mockRestore();
+        blip.restore();
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  it.each(['main', 'subset'] as const)(
+    'P3-1 %s job: a malformed history file still keeps the prior id on an exact-name drift',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...PRIOR_WREN }]);
+      writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), '{ not json');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await run(manuscriptId, bookDir, kind, { roster: [NARR, wrenTwo], speakerId: 'wren-2' });
+        expectW2Kept(bookDir);
+      } finally {
+        warnSpy.mockRestore();
+        errSpy.mockRestore();
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* P3-1 persist guard. The blind exact join (wren-2 -> w2) must not overwrite
+     a merge the history records: wren-2 was merged into `m1`, a live row. */
+  it.each(['main', 'subset'] as const)(
+    'P3-1 %s job: a blind exact join under a blip never overwrites a recorded merge, it files displaced',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook(
+        [{ ...NARR }, { ...PRIOR_WREN }, { id: 'm1', name: 'Merged One', voiceState: 'locked' }],
+        { 'wren-2': 'm1' },
+      );
+      const blip = await blipRemapRead();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const events = await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, wrenTwo],
+          speakerId: 'wren-2',
+        });
+        expect(blip.count()).toBe(1);
+        const history = readHistory(bookDir) as ReturnType<typeof readHistory> & {
+          displaced?: Record<string, string>;
+        };
+        expect(history.supersededBy['wren-2']).toBe('m1');
+        expect(history.displaced).toEqual({ 'wren-2': 'm1' });
+        expect(JSON.stringify(events)).toContain('Kept the recorded merge wren-2 -> m1');
+      } finally {
+        warnSpy.mockRestore();
+        blip.restore();
         await cleanup(manuscriptId, bookDir);
       }
     },

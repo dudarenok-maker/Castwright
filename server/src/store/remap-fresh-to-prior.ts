@@ -94,14 +94,17 @@ function nameKeyOf(c: Record<string, unknown>): string {
     `idHistory` (optional) is the book's `cast-id-history.json` `supersededBy`
     map. A pair whose fresh id is already recorded there as retired to a
     different live prior id is refused (see the guard below). `null` means the
-    file EXISTS but could not be read: the remap then makes no name join at
-    all, exact or tolerant, for any fresh id. A join made blind to a recorded
-    merge is written over that merge by the persist (it records the retirement
-    unconditionally), silently, where the unjoined run is flagged downstream
-    (`displaced` plus the "affected segments need review" log). The price is
-    that a book with an unreadable history keeps drifted fresh ids until the
-    next healthy run, which is the same state it was in before the remap
-    existed; a silent overwrite of a user's merge is the worse failure.
+    file EXISTS but could not be read: the remap then runs exactly what
+    `origin/main` ran, the exact-name tier with exactly one candidate on each
+    side and every guard below, and nothing #3954 added (no surname-tolerant
+    tier, no voiced-row tie-break, no history adoption). Making no join at all
+    is NOT the safe choice: the fresh id then reaches `mergeCore`'s name
+    fallback, which keeps the FRESH id and retires the prior one, so a locked
+    `w2 "Wren"` re-minted as `wren-2 "Wren"` would permanently become
+    `wren-2`, a regression from main that no later run can undo. The join main
+    made is blind to a recorded merge, so the persist refuses to overwrite one
+    (`recordRetirements`' `protectRecordedMerges` files `displaced` and logs
+    instead).
 
     Returns new arrays; `fresh`, `sentences` and `priorCast` are not
     mutated. */
@@ -116,9 +119,12 @@ export function remapFreshToPriorIds<
   currentBookId?: string,
   idHistory: Readonly<Record<string, string>> | null = {},
 ): { characters: C[]; sentences: S[]; rewrites: Record<string, string> } {
-  if (fresh.length === 0 || priorCast.length === 0 || idHistory === null) {
+  if (fresh.length === 0 || priorCast.length === 0) {
     return { characters: [...fresh], sentences: [...sentences], rewrites: {} };
   }
+  // Unreadable history: main's exact tier only (see the doc comment above).
+  const degraded = idHistory === null;
+  const history: Readonly<Record<string, string>> = idHistory ?? {};
 
   const priorIdAfter = (id: string): string => priorRewrites[id] ?? id;
   const priorLiveIds = new Set(priorCast.map((p) => priorIdAfter(p.id)));
@@ -197,11 +203,20 @@ export function remapFreshToPriorIds<
     if (freshCandidates.length !== 1) continue;
     const freshRow = freshCandidates[0];
 
-    const exactRow = choosePrior(priorByName.get(key) ?? []);
+    /* Degraded history: main's selection rule verbatim, exactly one prior row
+       carries the name; no voiced tie-break, no tolerant tier. */
+    const sameName = priorByName.get(key) ?? [];
+    const exactRow = degraded
+      ? sameName.length === 1
+        ? sameName[0]
+        : undefined
+      : choosePrior(sameName);
     // Tolerant tier — ONLY because the exact tier chose no row. The `??`
     // short-circuits, so the tolerant scan never even runs when it did.
-    const priorRow =
-      exactRow ?? choosePrior(priorCast.filter((p) => surnameTolerantMatch(key, nameKeyOf(p))));
+    const priorRow = degraded
+      ? exactRow
+      : (exactRow ??
+        choosePrior(priorCast.filter((p) => surnameTolerantMatch(key, nameKeyOf(p)))));
     if (!priorRow) continue;
     const exact = exactRow !== undefined;
     const target = priorIdAfter(priorRow.id);
@@ -251,7 +266,7 @@ export function remapFreshToPriorIds<
        (`target`, `priorLiveIds`, `freshIds`) is post-rewrite, so translate it
        first or a recorded target that is itself moving this run reads as
        unrecorded and the join overwrites the merge. */
-    const recordedRaw = idHistory[freshRow.id];
+    const recordedRaw = history[freshRow.id];
     const recordedTo = recordedRaw === undefined ? undefined : priorIdAfter(recordedRaw);
     if (recordedTo !== undefined && recordedTo !== target && priorLiveIds.has(recordedTo)) {
       const recordedRow = priorCast.find((p) => priorIdAfter(p.id) === recordedTo);

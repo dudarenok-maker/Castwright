@@ -511,22 +511,26 @@ describe('remapFreshToPriorIds', () => {
       expect(r.rewrites).toEqual({ 'brann-weir': 'old-weir-2' });
     });
 
-    it('N1a: an unreadable history (null) makes no name join, exact or tolerant (#3954)', () => {
+    it('N1a/P3-1: an unreadable history (null) runs the exact tier only (#3954)', () => {
+      // tolerant tier skipped: "Brann Weir" has no exact prior row
       expect(remapFreshToPriorIds(fresh, [], prior, {}, 'b2', null).rewrites).toEqual({});
+      // exact tier kept (what origin/main did): a lone exact-name prior row is joined
       expect(
-        remapFreshToPriorIds(
-          [{ id: 'ow2', name: 'Old Weir' }],
-          [],
-          prior,
-          {},
-          'b2',
-          null,
-        ).rewrites,
-      ).toEqual({});
-      // control: the same exact-name fresh row joins when the history is merely empty
-      expect(
-        remapFreshToPriorIds([{ id: 'ow2', name: 'Old Weir' }], [], prior, {}, 'b2', {}).rewrites,
+        remapFreshToPriorIds([{ id: 'ow2', name: 'Old Weir' }], [], prior, {}, 'b2', null)
+          .rewrites,
       ).toEqual({ ow2: 'old-weir' });
+      // voiced-row tie-break skipped: main needed exactly ONE prior row of that name
+      const twins = [
+        { id: 'ow-voiced', name: 'Old Weir', voiceState: 'locked' },
+        { id: 'ow-plain', name: 'Old Weir' },
+      ];
+      expect(
+        remapFreshToPriorIds([{ id: 'ow2', name: 'Old Weir' }], [], twins, {}, 'b2', null).rewrites,
+      ).toEqual({});
+      // control: healthy history applies the tie-break and joins the voiced twin
+      expect(
+        remapFreshToPriorIds([{ id: 'ow2', name: 'Old Weir' }], [], twins, {}, 'b2', {}).rewrites,
+      ).toEqual({ ow2: 'ow-voiced' });
     });
 
     it("N2: an adoption and another fresh row's join claiming one prior row make neither join (#3954)", () => {

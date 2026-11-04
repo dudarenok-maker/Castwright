@@ -302,7 +302,14 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    OWN lock — see cast-merge-base.ts's file-header invariant for why that
    can't route through `writeChecked`), this advances the baseline to match,
    so the next `writeChecked` doesn't report this run's own write as a
-   foreign conflict. */
+   foreign conflict.
+
+   `protectRecordedMerges` (#3954 P3-1, default off) is for the early remap's
+   retirements only: that join may have been made while the id history was
+   unreadable, blind to a recorded merge. When on, a retirement `from -> to`
+   whose `from` the history (read fresh, inside the lock) already records as
+   retired to a DIFFERENT live id is not written; `retireCharacterId` files
+   `from` into `displaced` instead, and it is logged here. */
 export async function recordRetirements(
   bookDir: string | null | undefined,
   bookId: string | null | undefined,
@@ -310,6 +317,7 @@ export async function recordRetirements(
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
   castBase: CastMergeBase | null,
+  protectRecordedMerges = false,
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -327,7 +335,19 @@ export async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    const result = await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(
+      bookDir,
+      from,
+      to,
+      protectRecordedMerges && liveIds ? new Set(liveIds) : undefined,
+    );
+    if (result.keptRecordedMerge !== undefined) {
+      log(
+        1,
+        `Kept the recorded merge ${from} -> ${result.keptRecordedMerge} instead of retiring ${from} onto ${to} — ` +
+          `the name join may have been made while cast-id-history.json could not be read, so affected segments need review.`,
+      );
+    }
     if (result.droppedSelfLoopRejections.length && bookId) {
       const written = await clearNotLinkedEdgesForDroppedRejections(
         bookDir,
@@ -1183,10 +1203,14 @@ async function remapInterimToPriorIds<T extends { id: string }>(
    read WITH its status. `loadCastIdHistory` collapses an unreadable file to
    `{}`, which the remap cannot tell from "no merges recorded": one transient
    EBUSY then turned a flagged case into a silent overwrite of the user's
-   merge. `null` means the file exists but could not be read; the remap makes
-   no name join at all for it (see `remapFreshToPriorIds`), so the run behaves
-   as it did before the remap widened and the downstream displaced / "affected
-   segments need review" path flags it. An absent file is the empty map. */
+   merge. `null` means the file exists but could not be read; the remap then
+   runs only the exact-name tier `origin/main` ran (see `remapFreshToPriorIds`:
+   no surname-tolerant join, no voiced tie-break, no history adoption), so a
+   locked `w2 "Wren"` re-minted as `wren-2` keeps `w2` exactly as on main.
+   Skipping every join instead would let `mergeCore` keep the fresh id and
+   retire the prior one for good. That exact join is blind to a recorded
+   merge, so the persist's `protectRecordedMerges` retirement refuses to
+   overwrite one. An absent file is the empty map. */
 async function loadIdHistoryForRemap(
   bookDir: string | null | undefined,
 ): Promise<Readonly<Record<string, string>> | null> {
@@ -1195,10 +1219,11 @@ async function loadIdHistoryForRemap(
   return status === 'degraded' ? null : history.supersededBy;
 }
 
-const SKIPPED_NAME_JOINS_LOG_MESSAGE =
-  `Skipped keeping existing character ids on name matches — cast-id-history.json for this book ` +
-  `could not be read, so a recorded merge could not be honoured. Re-run the analysis once the file ` +
-  `is readable; the file needs attention (see the server log for the cause).`;
+const DEGRADED_HISTORY_LOG_MESSAGE =
+  `cast-id-history.json for this book could not be read, so only exact-name matches kept their ` +
+  `existing character ids and a recorded merge could not be consulted. A surname-tolerant match ` +
+  `(e.g. "Wren" / "Wren Ashby") was NOT kept and may now sit under a new id; a re-run once the ` +
+  `file is readable does not undo that. The file needs attention (see the server log for the cause).`;
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
@@ -7312,7 +7337,7 @@ export async function runMainAnalyzerJob(
        shared with the final merge below. `null` = unreadable: the remap makes
        no name join (N1, see `loadIdHistoryForRemap`). */
     const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
-    if (idHistoryForRemap === null) log(1, SKIPPED_NAME_JOINS_LOG_MESSAGE);
+    if (idHistoryForRemap === null) log(1, DEGRADED_HISTORY_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
       folded.sentences,
@@ -7616,7 +7641,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase, true);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -9556,7 +9581,7 @@ export async function runSubsetAnalyzerJob(
     );
     // #3954 — see the main route's `idHistoryForRemap`.
     const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
-    if (idHistoryForRemap === null) log(1, SKIPPED_NAME_JOINS_LOG_MESSAGE);
+    if (idHistoryForRemap === null) log(1, DEGRADED_HISTORY_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
       folded.sentences,
@@ -9782,7 +9807,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase, true);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
