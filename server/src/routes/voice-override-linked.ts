@@ -27,8 +27,8 @@
    Body: { override: { engine, name } | null }  (null clears the engine map).
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
    failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200.
-   A series-mate that is a repaired book (#3713) on a request without the current repair epoch is left
-   untouched and listed in `skippedBooks: [{ bookId, bookTitle, reason }]` (present only then). */
+   A series whose matched mate is a repaired book (#3713) is refused whole (409 book_repaired_reload) on a
+   request without the current repair epoch, before the source is written. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -37,7 +37,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
-import { skipUnreadRepairedBook, skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -171,6 +171,10 @@ voiceOverrideLinkedRouter.post(
         byBook.set(rec.bookId, entry);
       }
 
+      /* #3713 -- a matched mate that is a repaired book, on a request without the current epoch: refuse
+         the whole fan-out before the source (or any mate) is written. */
+      if (refuseUnreadRepairedBooks([...byBook.keys()], req, res)) return res;
+
       await writeBook(
         sourceLocated.bookDir,
         { bookId, bookTitle: sourceLocated.state.title, ids: sourceIds },
@@ -189,9 +193,6 @@ voiceOverrideLinkedRouter.post(
     const { canonicalVoiceId, canonicalVoiceUuid, byBook, series } = sourceStep;
 
     for (const [siblingBookId, { bookTitle, ids }] of byBook) {
-      /* #3713 pass 5 -- a gated repaired mate, on a request without the current epoch, is left alone and
-         reported in `skippedBooks`; the rest of the series still updates. */
-      if (skipUnreadRepairedBook(siblingBookId, bookTitle)) continue;
       try {
       await withBookOp(siblingBookId, async (sibling) => {
         /* Re-apply the scope on the FRESH state: a book renamed out of the
@@ -225,10 +226,7 @@ voiceOverrideLinkedRouter.post(
         `updated=${updated.length} failed=${failed.length}`,
     );
 
-    const skippedBooks = skippedRepairedBooks();
-    return res
-      .status(failed.length > 0 ? 207 : 200)
-      .json({ canonicalVoiceId, updated, failed, ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
+    return res.status(failed.length > 0 ? 207 : 200).json({ canonicalVoiceId, updated, failed });
   },
 );
 

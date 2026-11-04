@@ -140,7 +140,7 @@ import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
 /* #3713 — every real call goes through `repairFetch`: the page-load repair epoch on each write, and a full
    reload when the server refuses one as older than a duplicate-bookId repair (lib/repair-epoch.ts). */
-import { repairFetch as fetch, reportSkippedBookList } from './repair-epoch';
+import { repairFetch as fetch } from './repair-epoch';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -6661,8 +6661,6 @@ interface CastDesignStreamEvent {
   url?: string;
   viaFallback?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
-  /** `designed` / `character_designed` / `variant_designed` / `idle`: repaired series-mates the write skipped (#3713). */
-  skippedBooks?: unknown;
 }
 
 /** Status of a possibly-live design job (the layout cold-boot probe reads this
@@ -6708,9 +6706,6 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
   let buffer = '';
 
   const handle = (e: CastDesignStreamEvent) => {
-    /* #3713: a design's voice write left a repaired series-mate alone, so this page predates the repair. The
-       headers flushed before the job ran, so the stream carries the list; it reloads like a plain series write. */
-    if (e.skippedBooks !== undefined) reportSkippedBookList(e.skippedBooks);
     switch (e.type) {
       case 'resume_from':
         if (e.mode === 'first' || e.mode === 'redesign') {

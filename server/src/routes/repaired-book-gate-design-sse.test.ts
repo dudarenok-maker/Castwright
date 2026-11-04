@@ -1,9 +1,10 @@
-/* #3713 / PR #4004 pass 4, finding 6 -- the SSE design streams report a repaired series-mate their voice
-   write skipped. A design persists across the series by voice id (the `voiceUuid` stamp and the override), so
-   the client never names the mates; a gated mate is left alone on a request without the current repair epoch (owner
-   decision) and the stream says so on `designed` (single), `character_designed` and the terminal `idle`
-   (bulk), for the client to show the same toast as a plain series write. The real sweep repairs a pair in a
-   temp workspace and the real routers serve it; only the sidecar design call is stubbed. */
+/* #3713 / PR #4004 pass 6 -- a design that would write a repaired series-mate is decided at START. A design
+   persists across the series by voice id (the `voiceUuid` stamp and the override), so the client never names
+   the mates: a start from a request without the current repair epoch is refused whole (409
+   `book_repaired_reload`, before the SSE stream or any job exists), and one with it writes every mate, the
+   repaired one included. A running job never reports a skip, and re-attaching to one checks nothing new. The real
+   sweep repairs a pair in a temp workspace and the real routers serve it; only the sidecar design call is
+   stubbed. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,12 +49,13 @@ beforeAll(async () => {
   designLock = await import('../tts/design-lock.js');
   const { singleDesignRouter } = await import('./single-design.js');
   const { castDesignRouter } = await import('./cast-design.js');
+  const { qwenVoiceRouter } = await import('./qwen-voice.js');
   app = express();
   app.use(express.json());
-  app.use('/api', gate.repairedFanOutScope);
   app.use('/api/books/:bookId', gate.repairedBookGate);
   app.use('/api/books', singleDesignRouter);
   app.use('/api/books', castDesignRouter);
+  app.use('/api/books', qwenVoiceRouter);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 }, 120_000);
@@ -107,7 +109,6 @@ async function repaired() {
 }
 
 const read = (dir: string) => readFileSync(paths.castJsonPath(dir), 'utf8');
-const skippedIds = (ev: { skippedBooks?: Array<{ bookId: string }> } | undefined) => (ev?.skippedBooks ?? []).map((s) => s.bookId);
 
 function sse(text: string): Array<Record<string, any>> {
   return text
@@ -122,57 +123,71 @@ const single = (epoch: string | null) => {
 };
 const bulk = (epoch: string | null) => {
   const r = request(app).post(`/api/books/${SRC}/cast/design`);
-  return (epoch === null ? r : r.set('X-Repair-Epoch', epoch)).send({ characterIds: ['c0'], modelKey: 'qwen3-tts-0.6b', scope: 'series' });
+  return (epoch === null ? r : r.set('X-Repair-Epoch', epoch)).send({ characterIds: ['c0'], modelKey: 'qwen3-tts-0.6b' });
+};
+const qwen = (epoch: string | null) => {
+  const r = request(app).post(`/api/books/${SRC}/cast/c0/design-voice`);
+  return (epoch === null ? r : r.set('X-Repair-Epoch', epoch)).send({ persona: 'a warm voice', sampleVoiceId: 'char-c0', modelKey: 'qwen3-tts-0.6b' });
+};
+const refused = (res: { status: number; body: { code?: string } }) => {
+  expect(res.status).toBe(409);
+  expect(res.body.code).toBe('book_repaired_reload');
 };
 
-describe('single design (SSE) with a repaired series-mate (#3713, pass 4)', () => {
-  it('no epoch: the kept twin is not written, and the `designed` event names it', async () => {
+describe('single design (SSE) with a repaired series-mate (#3713, pass 6)', () => {
+  it('no epoch: refused at start (409, no stream), nothing is written', async () => {
     await repaired();
-    const before = read(kept);
-    const res = await single(null);
-    const designed = sse(res.text).find((e) => e.type === 'designed');
-    expect(designed).toBeDefined();
-    expect(skippedIds(designed)).toContain(DUP);
-    expect(designed!.skippedBooks[0].reason).toMatch(/^".+" was repaired after this page loaded. Reload Castwright/);
-    expect(read(kept)).toBe(before);
-    expect(read(src)).toContain('qwen-c0');
+    const before = [read(kept), read(src)];
+    refused(await single(null));
+    expect([read(kept), read(src)]).toEqual(before);
   });
 
-  it('with the current epoch: written, and nothing is reported', async () => {
+  it('with the current epoch: the repaired twin is written too, and no event reports a skip', async () => {
     await repaired();
     const res = await single(gate.currentRepairEpoch()!);
     const designed = sse(res.text).find((e) => e.type === 'designed');
     expect(designed).toBeDefined();
-    expect(skippedIds(designed)).toEqual([]);
     expect(designed).not.toHaveProperty('skippedBooks');
     expect(read(kept)).toContain('qwen-c0');
   });
 
-  it('CONTROL: with no repair there is no skippedBooks field at all', async () => {
+  it('CONTROL: with no repair a start needs no epoch', async () => {
     seed('Book', 'auth__ser__book', { rendered: true });
     src = seed('Src', SRC, { rendered: false });
-    const designed = sse((await single(null)).text).find((e) => e.type === 'designed');
-    expect(designed).toBeDefined();
-    expect(designed).not.toHaveProperty('skippedBooks');
+    expect(sse((await single(null)).text).find((e) => e.type === 'designed')).toBeDefined();
   });
 });
 
-describe('bulk design (SSE) with a repaired series-mate (#3713, pass 4)', () => {
-  it('no epoch: `character_designed` and the terminal `idle` name the skipped twin; it is not written', async () => {
+describe('bulk design (SSE) with a repaired series-mate (#3713, pass 6)', () => {
+  it('no epoch: the START is refused (409, no stream, no job), nothing is written', async () => {
     await repaired();
-    const before = read(kept);
-    const res = await bulk(null);
-    const events = sse(res.text);
-    expect(skippedIds(events.find((e) => e.type === 'character_designed'))).toContain(DUP);
-    const idle = events.find((e) => e.type === 'idle');
-    expect(skippedIds(idle)).toContain(DUP);
-    expect(read(kept)).toBe(before);
+    const before = [read(kept), read(src)];
+    refused(await bulk(null));
+    expect([read(kept), read(src)]).toEqual(before);
   });
 
-  it('with the current epoch: written, and no event reports a skip', async () => {
+  it('the reviewer repro: a stale tab starts, a fresh page re-attaches -- the start is refused and the fresh page sees an idle stream (no skippedBooks, nothing to reload on)', async () => {
+    await repaired();
+    refused(await bulk(null));
+    const events = sse((await request(app).post(`/api/books/${SRC}/cast/design`).set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({})).text);
+    expect(events.map((e) => e.type)).toEqual(['idle']);
+    expect(events.filter((e) => e.skippedBooks)).toEqual([]);
+  });
+
+  it('with the current epoch: the repaired twin is written too, and no event reports a skip', async () => {
     await repaired();
     const events = sse((await bulk(gate.currentRepairEpoch()!)).text);
     expect(events.filter((e) => e.skippedBooks)).toEqual([]);
     expect(read(kept)).toContain('qwen-c0');
+  });
+});
+
+describe('qwen design-voice (JSON) with a repaired series-mate (#3713, pass 6)', () => {
+  it('no epoch: refused before any GPU work; with the current epoch it is not refused', async () => {
+    await repaired();
+    const before = [read(kept), read(src)];
+    refused(await qwen(null));
+    expect([read(kept), read(src)]).toEqual(before);
+    expect((await qwen(gate.currentRepairEpoch()!)).status).not.toBe(409);
   });
 });

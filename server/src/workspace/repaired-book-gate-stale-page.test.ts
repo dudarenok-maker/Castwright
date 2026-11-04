@@ -31,7 +31,6 @@ beforeAll(async () => {
   const { castSeriesPatchRouter } = await import('../routes/cast-series-patch.js');
   app = express();
   app.use(express.json());
-  app.use('/api', gate.repairedFanOutScope);
   app.use('/api/books/:bookId', gate.repairedBookGate);
   app.use('/api/books', castSeriesPatchRouter);
   app.use('/api/books', bookStateRouter);

@@ -1,5 +1,5 @@
 /* #3713 / PR #4004 (owner decision after pass 5) — the client half of the blunt repaired-id gate: the epoch is
-   read once at page load and sent on every write; a `book_repaired_reload` refusal (or a fan-out skip) reloads
+   read once at page load and sent on every write; a `book_repaired_reload` refusal reloads
    the page exactly once and nothing more is sent; a reload loop is capped by a sessionStorage counter. */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
@@ -8,7 +8,6 @@ import {
   loadRepairEpoch,
   reloadForRepair,
   repairFetch,
-  reportSkippedBookList,
   subscribeRepairReloadBlocked,
 } from './repair-epoch';
 
@@ -157,18 +156,10 @@ describe('a refused write reloads the page once and sends nothing more (#3713)',
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('a series fan-out that skipped a repaired mate (the response header) reloads too', async () => {
-    respond = () =>
-      new Response('{}', { status: 200, headers: { 'X-Skipped-Repaired-Books': encodeURIComponent('[{"bookId":"k"}]') } });
+  it('a refused series fan-out or design start (the same 409) reloads once and is held', async () => {
+    respond = () => REFUSED();
     expect(await settles(repairFetch('/api/books/s/cast/c0/series-patch', { method: 'POST', body: '{}' }))).toBe(false);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
-
-  it('a design stream that names a skipped mate reloads; an empty list does not', () => {
-    reportSkippedBookList([]);
-    reportSkippedBookList(undefined);
-    expect(reload).not.toHaveBeenCalled();
-    reportSkippedBookList([{ bookId: 'k', bookTitle: 'K', reason: 'r' }]);
+    expect(await settles(repairFetch('/api/books/s/cast/design', { method: 'POST', body: '{}' }))).toBe(false);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });

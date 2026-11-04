@@ -39,7 +39,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { refuseUnreadRepairedBooks, skipUnreadRepairedBook, skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
@@ -773,6 +774,9 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       }
       seriesFilter = resolved;
     }
+    /* #3713 -- the fan-out matches mates by voice id, so a repaired one is never named: refuse the whole
+       write (before any cast.json changes) when the request lacks the current repair epoch. */
+    if (await refuseGatedSeriesFanOut(seriesFilter, req, res)) return;
     if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter))) {
       return res.status(409).json({
         error:
@@ -793,11 +797,6 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       });
     }
     const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
-    /* #3713 pass 5 -- repaired series-mates left untouched (no current repair epoch). */
-    const skippedBooks = skippedRepairedBooks();
-    if (updated === 0 && skipped.length === 0 && skippedBooks.length > 0) {
-      return res.status(200).json({ updated, skippedBooks });
-    }
     if (updated === 0 && skipped.length === 0) {
       const where = seriesFilter
         ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`
@@ -814,8 +813,8 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
         skipped,
       });
     }
-    if (skipped.length > 0 || skippedBooks.length > 0) {
-      return res.status(200).json({ updated, ...(skipped.length > 0 ? { skipped } : {}), ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
+    if (skipped.length > 0) {
+      return res.status(200).json({ updated, skipped });
     }
     res.status(204).end();
   } catch (e) {
@@ -961,9 +960,6 @@ export async function forEachMatchingCastCharacter(
             }
             return bookUpdated;
           });
-        /* #3713 pass 5 -- a gated repaired mate, on a request without the current epoch, is left alone
-           and reported; the rest of the series updates. */
-        if (state.bookId && skipUnreadRepairedBook(state.bookId, state.title || state.bookId)) continue;
         if (!state.bookId) {
           /* A book whose state.json lacks a bookId can never be matched by the
              resolver, so no route can move it: it still receives the write, under

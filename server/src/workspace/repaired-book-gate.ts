@@ -46,15 +46,16 @@
    (keyed by voice, name no book); /api/queue/* (writes the queue); POST /api/books and /api/import (mint a
    new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
 
-   A series fan-out SKIPS a repaired mate, it does not refuse. Series-patch, voice-override-linked,
-   cast/tier, the series scope of PUT /api/voices/:id/override, and the design writers that propagate a
+   A series fan-out is REFUSED whole, never partly applied. Series-patch, voice-override-linked, cast/tier,
+   the series (and workspace) scope of PUT /api/voices/:id/override, and the design writers that propagate a
    voice or variant across the series (single-design, cast-design, qwen-voice) match their mates by voice
-   id or name, so the client never names them. A request without the current epoch leaves a gated mate
-   byte-identical and reports it; the rest of the series updates. `repairedFanOutScope` (mounted once in
-   app.ts) holds the request's epoch in an AsyncLocalStorage and stamps the skipped list on the response
-   header `x-skipped-repaired-books`; series-patch, voice-override-linked, cast/tier and the series override
-   also put it in the body as `skippedBooks` ({ bookId, bookTitle, reason }). The client treats a skip like
-   the 409: the page predates the repair, so it reloads.
+   id or name, so the client never names them. When such a request would write a gated repaired mate and
+   does not carry the current epoch, it answers 409 `book_repaired_reload` BEFORE anything is written (the
+   page reloads, the user repeats the change, and the repeat carries the epoch and writes every mate,
+   the repaired one included). A long design job decides at START: a request without the epoch is refused
+   before any job exists, so a running job never has to report a skip and re-attaching to one checks
+   nothing new. `refuseGatedSeriesFanOut` (workspace/repaired-series-refusal.ts) is the series-level check;
+   the body-named mates of series-patch and voice-override-linked go through `refuseUnreadRepairedBooks`.
 
    The kept twin's manuscriptId, when the sweep had to re-mint the loser's because they shared it, is
    registered too, so `/api/manuscripts/:id/analysis*` (which resolves a book by manuscriptId) is gated by
@@ -62,7 +63,6 @@
 
    Mounted once, in app.ts, ahead of every `/api/books/:bookId` router. */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -123,6 +123,12 @@ function anyActive(now = Date.now()): boolean {
  *  gated (a page then sends nothing, and needs nothing). */
 export function currentRepairEpoch(): string | null {
   return anyActive() ? requiredEpoch() : null;
+}
+
+/** Every id that is gated now. */
+export function gatedBookIds(): string[] {
+  const now = Date.now();
+  return [...books.keys()].filter((id) => isGatedBook(id, now));
 }
 
 /** True while `bookId` is a gated repaired id. */
@@ -369,64 +375,4 @@ export function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Requ
     passed = true;
   });
   return !passed;
-}
-
-/* ---- series fan-out: skip, don't refuse ---- */
-
-/** A series-mate a fan-out left alone, with the sentence the UI shows for it. */
-export interface SkippedRepairedBook {
-  bookId: string;
-  bookTitle: string;
-  reason: string;
-}
-interface FanOutScope {
-  epoch: string | undefined;
-  skipped: Map<string, SkippedRepairedBook>;
-}
-const fanOutScope = new AsyncLocalStorage<FanOutScope>();
-
-/** The response header that carries the skipped list (URI-encoded JSON), so the client reports a skip for any
- *  route, whatever its body (a 204, a plain count) looks like. Set when the headers are written. */
-export const SKIPPED_BOOKS_HEADER = 'x-skipped-repaired-books';
-
-/** `app.use('/api', ...)`: remembers the epoch THIS request carried for the whole async chain it starts (the
- *  fan-out walkers, a design job it launches), and stamps the skipped list on the response. Outside a request
- *  (a unit test of a walker, boot code) there is no scope and nothing is ever skipped. */
-export function repairedFanOutScope(req: Request, res: Response, next: NextFunction): void {
-  const scope: FanOutScope = { epoch: req.get(REPAIR_EPOCH_HEADER), skipped: new Map() };
-  const writeHead = res.writeHead as (...args: unknown[]) => Response;
-  res.writeHead = function (this: Response, ...args: unknown[]): Response {
-    if (scope.skipped.size > 0 && !this.headersSent) {
-      this.setHeader(SKIPPED_BOOKS_HEADER, encodeURIComponent(JSON.stringify([...scope.skipped.values()])));
-    }
-    return writeHead.apply(this, args);
-  } as Response['writeHead'];
-  fanOutScope.run(scope, next);
-}
-
-/** A series-scope fan-out onto a series-mate the client did not name: true when that mate is a gated repaired
- *  book and this request did not carry the current epoch, so the caller must leave its files alone. The skip is
- *  recorded for the response; the rest of the series updates. */
-export function skipUnreadRepairedBook(bookId: string, bookTitle: string): boolean {
-  const scope = fanOutScope.getStore();
-  if (!scope) return false;
-  if (!isGatedBook(bookId) || carriesEpoch(scope.epoch)) return false;
-  scope.skipped.set(`${bookId}\u0000${bookTitle}`, {
-    bookId,
-    bookTitle,
-    reason: `"${bookTitle}" was repaired after this page loaded. Reload Castwright, then repeat the change, to apply it there.`,
-  });
-  return true;
-}
-
-/** What this request's fan-outs skipped so far (empty outside a request). */
-export function skippedRepairedBooks(): SkippedRepairedBook[] {
-  return [...(fanOutScope.getStore()?.skipped.values() ?? [])];
-}
-
-/** `{ skippedBooks }` for an SSE event when this request's fan-outs skipped a repaired mate, else `{}`: a design
- *  job runs inside the request's scope, so the stream can say what its writes left alone. */
-export function skippedBooksField(): { skippedBooks?: SkippedRepairedBook[] } {
-  const skippedBooks = skippedRepairedBooks();
-  return skippedBooks.length > 0 ? { skippedBooks } : {};
 }

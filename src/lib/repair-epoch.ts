@@ -9,15 +9,13 @@
 
    The answer to a refusal is a full page reload, which discards every slice, cache, queue and modal the
    page holds, so nothing stale survives it and nothing on this side decides what is stale. A series
-   fan-out that skipped a repaired series-mate (the `x-skipped-repaired-books` header, or a design
-   stream's `skippedBooks`) proves the same thing about this page, so it reloads too. Nothing is shown:
-   once the reload is decided, every request this module would send is held, so no second write goes out
+   fan-out (or a design start) that would write a repaired series-mate is refused whole by the same 409, so
+   it reloads the same way and the repeat carries the epoch. Nothing is shown: once the reload is decided, every request this module would send is held, so no second write goes out
    and no caller toasts or retries. A reload loop (a server bug, a clock jump) is capped by a
    sessionStorage counter; past the cap the page shows a blocking notice instead
    (`components/repair-reload-blocked.tsx`). */
 
 const REPAIR_EPOCH_HEADER = 'X-Repair-Epoch';
-const SKIPPED_BOOKS_HEADER = 'X-Skipped-Repaired-Books';
 export const BOOK_REPAIRED_RELOAD = 'book_repaired_reload';
 
 /** At most this many automatic reloads per window, per tab. One is the legitimate case. */
@@ -96,11 +94,6 @@ export function reloadForRepair(): void {
   window.location.reload();
 }
 
-/** The skipped list a design SSE event carries (`skippedBooks`): a non-empty one means this page is stale. */
-export function reportSkippedBookList(list: unknown): void {
-  if (Array.isArray(list) && list.length > 0) reloadForRepair();
-}
-
 /** A request that never settles: what every caller sees once the reload is decided. */
 const held = (): Promise<Response> => new Promise<Response>(() => {});
 
@@ -108,7 +101,7 @@ function methodOf(input: RequestInfo | URL, init: RequestInit | undefined): stri
   return (init?.method ?? (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')).toUpperCase();
 }
 
-/** `fetch` plus the epoch on every write, and the reload on a refusal or a skip. A read is sent untouched. */
+/** `fetch` plus the epoch on every write, and the reload on a refusal. A read is sent untouched. */
 export const repairFetch: typeof fetch = async (input, init) => {
   if (reloading) return held();
   const method = methodOf(input, init);
@@ -136,10 +129,6 @@ export const repairFetch: typeof fetch = async (input, init) => {
     } catch {
       /* not JSON: an ordinary 409 */
     }
-  }
-  if (res.headers?.get?.(SKIPPED_BOOKS_HEADER)) {
-    reloadForRepair();
-    return held();
   }
   return res;
 };

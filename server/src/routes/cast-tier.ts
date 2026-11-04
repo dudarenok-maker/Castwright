@@ -7,8 +7,8 @@
    under its book-op, since the series walker skips standalones.
 
    Body:  { voiceId: string, ttsModelKey: 'qwen3-tts-1.7b' | null }
-   Response: { updated: number, skippedBooks?: [{ bookId, bookTitle, reason }] } -- skippedBooks names a
-   repaired series-mate left untouched on a request without the current repair epoch (#3713).
+   Response: { updated: number }. A series with a repaired book (#3713) is refused whole (409
+   book_repaired_reload) on a request without the current repair epoch, before anything is written.
 
    Mounted at /api/books in app.ts, so the handler path is RELATIVE
    (/:bookId/cast/tier). */
@@ -17,7 +17,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
-import { skippedRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
 import { applyTierToCastFiles } from './voices.js';
 
 export const castTierRouter = Router();
@@ -57,13 +57,11 @@ castTierRouter.post('/:bookId/cast/tier', async (req: Request, res: Response) =>
   }
 
   const seriesInfo = await findAuthorSeriesForBookId(bookId);
+  if (await refuseGatedSeriesFanOut(seriesInfo ?? undefined, req, res)) return;
   const updated = await applyTierToCastFiles(
     voiceId.trim(),
     ttsModelKey as 'qwen3-tts-1.7b' | null,
     seriesInfo ?? undefined,
   );
-
-  /* #3713 pass 5 -- repaired series-mates left untouched (no current repair epoch). */
-  const skippedBooks = skippedRepairedBooks();
-  return res.json({ updated, ...(skippedBooks.length > 0 ? { skippedBooks } : {}) });
+  return res.json({ updated });
 });

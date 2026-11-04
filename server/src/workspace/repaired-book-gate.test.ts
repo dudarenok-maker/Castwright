@@ -275,12 +275,6 @@ describe('where the gate is mounted (#3713)', () => {
       return i;
     };
     const booksGate = at("app.use('/api/books/:bookId', repairedBookGate)");
-    /* #3713: the fan-out scope holds the request's epoch for every walker, so it precedes every router
-       a fan-out lives in (/api/books/*, /api/voices). */
-    const fanOut = at("app.use('/api', repairedFanOutScope)");
-    expect(fanOut).toBeLessThan(booksGate);
-    expect(fanOut).toBeLessThan(at("app.use('/api/voices', voicesRouter)"));
-    expect(fanOut).toBeGreaterThan(at('app.use(express.json('));
     const msGate = at("app.use('/api/manuscripts/:id', repairedManuscriptGate)");
     expect(booksGate).toBeLessThan(at("app.use('/api/books', bookStateRouter)"));
     expect(booksGate).toBeLessThan(at("app.use('/api', importRouter)"));

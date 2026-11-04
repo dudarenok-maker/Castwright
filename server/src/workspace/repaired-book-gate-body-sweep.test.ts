@@ -149,10 +149,16 @@ describe('PUT /voices/:id/override (series scope) with a repaired bookId (#3713)
     expect(read(kept)).toContain('af_heart');
   });
 
-  it('the workspace scope names no book and is not gated', async () => {
+  it('the workspace scope names no book but walks every one: refused whole without the epoch, written with it', async () => {
     await repaired();
-    const res = await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } });
-    expect(res.status).not.toBe(409);
+    const before = [read(src), read(kept)];
+    const refused = await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('book_repaired_reload');
+    expect([read(src), read(kept)]).toEqual(before);
+    const res = await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({ override: { engine: 'kokoro', name: 'af_heart' } });
+    expect(res.status).toBe(204);
+    expect(read(kept)).toContain('af_heart');
   });
 });
 
