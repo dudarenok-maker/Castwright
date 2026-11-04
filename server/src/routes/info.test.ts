@@ -11,10 +11,24 @@ import { infoRouter } from './info.js';
 import { getAppVersion } from '../app-version.js';
 import { USER_SETTINGS_PATH, writeUpgradeMeta, _resetUserSettingsCache, readUserSettings } from '../workspace/user-settings.js';
 import {
+  __resetDuplicateBookIdRepairsForTest,
+  __setDuplicateBookIdRepairsForTest,
+} from '../workspace/duplicate-bookid-sweep.js';
+import {
   getCachedUpdateStatus,
   refreshUpdateStatusInBackground,
   __resetUpdateCacheForTests,
 } from './updates.js';
+import { currentRepairEpoch } from '../workspace/repaired-book-gate.js';
+
+/* #3713 -- the epoch is the gate's to compute (and registering a repair writes the workspace, which this
+   file does not isolate), so the route is pinned against a stub of it. */
+vi.mock('../workspace/repaired-book-gate.js', () => ({
+  currentRepairEpoch: vi.fn(() => null),
+  __resetRepairedBookGateForTest: vi.fn(),
+  registerRepairedBook: vi.fn(async () => {}),
+  scopeManuscriptToBook: vi.fn(async () => {}),
+}));
 
 let app: Express;
 
@@ -49,6 +63,40 @@ describe('GET /api/info', () => {
       syncManifest: 1, // srv-32 — companion compat-gates off this
     });
     expect(res.body.showWhatsNew).toBe(false);
+  });
+
+  it('carries duplicateBookIdRepairs: [] when nothing was repaired (#3713)', async () => {
+    __resetDuplicateBookIdRepairsForTest();
+    const res = await request(app).get('/api/info');
+    expect(res.body.duplicateBookIdRepairs).toEqual([]);
+  });
+
+  it('carries the seeded duplicateBookIdRepairs record (#3713)', async () => {
+    const record = {
+      previousBookId: 'a__s__t',
+      newBookId: 'a__s__t-2',
+      keptFolder: 'A/S/T2',
+      reassignedFolder: 'A/S/T',
+      reassignedManuscriptId: null,
+    };
+    __setDuplicateBookIdRepairsForTest([record]);
+    try {
+      const res = await request(app).get('/api/info');
+      expect(res.body.duplicateBookIdRepairs).toEqual([record]);
+    } finally {
+      __resetDuplicateBookIdRepairsForTest();
+    }
+  });
+
+  it('carries repairEpoch: null when no repaired id is gated (#3713)', async () => {
+    const res = await request(app).get('/api/info');
+    expect(res.body).toHaveProperty('repairEpoch', null);
+  });
+
+  it('carries the gate\'s current repairEpoch, read per request (#3713)', async () => {
+    vi.mocked(currentRepairEpoch).mockReturnValueOnce('epoch-1');
+    const res = await request(app).get('/api/info');
+    expect(res.body.repairEpoch).toBe('epoch-1');
   });
 
   it('reports host hardware for the device panel (fs-43)', async () => {

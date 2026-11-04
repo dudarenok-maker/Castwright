@@ -410,6 +410,12 @@ export function queueJsonPath(): string {
   return join(WORKSPACE_ROOT, '.queue.json');
 }
 
+/** #3713 / PR #4004 pass 3 — the repaired-id write gate's 7-day persistence
+    (`workspace/repaired-book-gate.ts`). Workspace-root sibling to `.queue.json`. */
+export function repairedBookGateJsonPath(): string {
+  return join(WORKSPACE_ROOT, '.repaired-book-gate.json');
+}
+
 /** srv-33 — workspace-level per-device access tokens (companion multi-device
     pairing + revoke, layered on srv-20's shared secret). One file holds every
     paired device's record `{ id, label, tokenHash, createdAt, lastSeenAt?,

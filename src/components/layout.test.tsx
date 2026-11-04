@@ -23,10 +23,10 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { revisionsSlice } from '../store/revisions-slice';
-import { manuscriptSlice } from '../store/manuscript-slice';
+import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { changeLogSlice } from '../store/change-log-slice';
+import { changeLogSlice, changeLogActions } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { exportsSlice } from '../store/exports-slice';
@@ -235,6 +235,12 @@ vi.mock('../views/book-library', () => ({
 
 /* The Account view is mounted for the restore case; its update card is not under test. */
 vi.mock('../components/upgrade-card', () => ({ UpgradeCard: () => null }));
+vi.mock('./duplicate-book-repair-banner', () => ({
+  DuplicateBookRepairBanner: () => <div data-testid="duplicate-book-repair-banner-mount" />,
+}));
+vi.mock('./repair-reload-blocked', () => ({
+  RepairReloadBlocked: () => <div data-testid="repair-reload-blocked-mount" />,
+}));
 
 /* The drawer is stood in for by one button so a test can drive Layout's own
    onSave (the profile-save stale-audio nudge) without the drawer's form. The
@@ -264,6 +270,7 @@ vi.mock('../store/prosody-thunk', () => ({
 import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests, type LayoutContext } from './layout';
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
+import { repairFetch, __resetRepairEpochForTest } from '../lib/repair-epoch';
 import { revisionsActions } from '../store/revisions-slice';
 import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
 import { castActions } from '../store/cast-slice';
@@ -2209,6 +2216,36 @@ describe('Layout — analyzer catalog loads at boot so endpoint labels resolve (
 
     await waitFor(() => expect(store.getState().account.analyzerCatalog).not.toBeNull());
     expect(modelLabel('openai:lab::qwen3-30b', store.getState().account.analyzerCatalog)).toBe('Lab server · qwen3-30b');
+  });
+});
+
+describe('Layout — duplicate-bookId repair banner (#3713)', () => {
+  it('mounts the DuplicateBookRepairBanner', async () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    expect(await screen.findByTestId('duplicate-book-repair-banner-mount')).toBeInTheDocument();
+  });
+
+  it('mounts the RepairReloadBlocked notice (the reload-loop fallback)', async () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    expect(await screen.findByTestId('repair-reload-blocked-mount')).toBeInTheDocument();
   });
 });
 
@@ -5518,6 +5555,231 @@ describe('Layout — a failed book read re-runs the save wait and aborts what it
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+/* #3713 / PR #4004 (owner decision after pass 5) — the blunt repaired-id gate, end to end through the real
+   Layout, the real persistence middleware and the real `repairFetch`. A fake server answers `fetch` the way the
+   gate does: once the sweep has run, a write to the repaired id without the current epoch is a 409
+   `book_repaired_reload`. This page never read an epoch (it loaded before the repair), so its first gated write
+   is refused and the page reloads, ONCE; nothing it sends afterwards reaches the server. These are the client
+   halves of the reviewers' repros from passes 3 to 5: the kept twin must come out byte-identical in each. */
+describe('Layout — a page loaded before a duplicate-bookId repair (#3713)', () => {
+  const PREV = 'a__s__t';
+  const row = (id: string, name: string) => ({ id, name, role: '', color: 'narrator' }) as Character;
+  const names = (s: ReturnType<ReturnType<typeof makeStoreWithScopeAndPersistence>['getState']>) =>
+    s.cast.characters.map((c) => c.name);
+  const settle = (ms = 60) => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+  const LOSER = [row('l', 'Loser Row')];
+  const WINNER = [row('a', 'Winner A'), row('b', 'Winner B'), row('c', 'Winner C')];
+
+  let reload: ReturnType<typeof vi.fn>;
+
+  function fakeServer() {
+    const server = {
+      gated: false,
+      down: false,
+      epoch: 'epoch-now',
+      cast: LOSER as Character[],
+      /* the twin that kept the id: what its files hold, serialised, so "byte-identical" is literal */
+      kept: JSON.stringify({ cast: WINNER, title: 'Winner title', castConfirmed: false, sentences: [] }),
+      /* every write that reached the server, and what it answered */
+      writes: [] as Array<{ method: string; url: string; slice?: string; epoch: string | null; status: number }>,
+    };
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (server.down) throw new TypeError('Failed to fetch');
+      /* Only the book routes are modelled; anything else (queue, config) is a network failure. */
+      if (!url.startsWith('/api/books/')) throw new Error('no network');
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (method === 'GET') return new Response('{}');
+      const epoch = new Headers(init?.headers).get('x-repair-epoch');
+      const slice = init?.body ? (JSON.parse(String(init.body)) as { slice?: string }).slice : undefined;
+      const exempt = /\/(listen-progress|shelf-status|listen-stats)$/.test(url);
+      if (server.gated && !exempt && url.includes(PREV) && epoch !== server.epoch) {
+        server.writes.push({ method, url, slice, epoch, status: 409 });
+        return new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 });
+      }
+      server.writes.push({ method, url, slice, epoch, status: 200 });
+      if (server.gated && !exempt) {
+        /* a write that got through lands on the kept twin */
+        const k = JSON.parse(server.kept) as { cast: Character[]; [k: string]: unknown };
+        const req = JSON.parse(String(init?.body ?? '{}')) as { slice?: string; patch?: Record<string, unknown> };
+        if (req.slice === 'cast') k.cast = (req.patch?.characters as Character[]) ?? k.cast;
+        else Object.assign(k, req.patch ?? { touched: url });
+        server.kept = JSON.stringify(k);
+      } else if (slice === 'cast') {
+        server.cast = (JSON.parse(String(init?.body)) as { patch: { characters: Character[] } }).patch.characters;
+      }
+      return new Response('{}', { status: 200 });
+    });
+    getBookStateMock.mockImplementation(async (id: string) => {
+      await repairFetch(`/api/books/${id}/state`);
+      const base = bookStateFor(id, revState(id, null, 0, []));
+      const cast = server.gated ? (JSON.parse(server.kept) as { cast: Character[] }).cast : server.cast;
+      return { ...base, state: { ...base.state, title: 'T' }, cast: { characters: cast } };
+    });
+    putBookStateMock.mockImplementation(async (id: string, req: unknown) => {
+      const res = await repairFetch(`/api/books/${id}/state`, { method: 'PUT', body: JSON.stringify(req) });
+      if (!res.ok) throw new Error(`Book state PUT failed (${res.status})`);
+      return undefined;
+    });
+    deleteBookMock.mockImplementation(async (id: string) => {
+      const res = await repairFetch(`/api/books/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`delete refused (${res.status})`);
+    });
+    return server;
+  }
+
+  function renderWithLibrary(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${PREV}/cast`]}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<BooksRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  /** A page that opened the id while it named the copy, before the restart. */
+  async function openLoserTab() {
+    const server = fakeServer();
+    const store = makeStoreWithScopeAndPersistence();
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Loser Row']));
+    await settle();
+    return { server, store };
+  }
+  /* The restart: the sweep gave the id to the other twin, and the gate holds. */
+  const sweep = (server: ReturnType<typeof fakeServer>) => {
+    server.gated = true;
+    server.writes.length = 0;
+  };
+  const keptBefore = (server: ReturnType<typeof fakeServer>) => server.kept;
+  const refusedOnce = (server: ReturnType<typeof fakeServer>) => {
+    expect(server.writes.filter((w) => w.status === 200 && w.url.includes(PREV))).toEqual([]);
+    expect(server.writes.filter((w) => w.status === 409)).toHaveLength(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+  };
+
+  beforeEach(() => {
+    __resetRepairEpochForTest();
+    sessionStorage.clear();
+    reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __resetRepairEpochForTest();
+  });
+
+  it('Library edit, then reopen and edit (pass 4): the edit is refused, the page reloads once, nothing else is sent', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    sweep(server);
+    const before = keptBefore(server);
+    libraryEdit.current = { book: { bookId: PREV, title: 'T' }, patch: { title: 'Renamed original' } };
+    fireEvent.click(await screen.findByTestId('library-edit'));
+    await settle(300);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await settle(300);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
+    await settle(1500);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
+    expect(store.getState().notifications.toasts).toEqual([]); // nothing shown: the reload is the answer
+  });
+
+  it('Voices Compare save, then Save again (pass 5): the second save is never sent', async () => {
+    const { server } = await openLoserTab();
+    sweep(server);
+    const before = keptBefore(server);
+    const compare = JSON.stringify({ gender: 'male', ageRange: 'teen', tone: { warmth: 10, pace: 50 } });
+    const url = `/api/books/${PREV}/cast/l/series-patch`;
+    void repairFetch(url, { method: 'POST', body: compare });
+    await settle(50);
+    void repairFetch(url, { method: 'POST', body: compare }); // the modal stayed open and dirty
+    await settle(300);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
+  });
+
+  it('a save kept across the restart, re-sent after the mini-player keepalive (pass 3): refused once, then nothing', async () => {
+    const { server, store } = await openLoserTab();
+    server.down = true; // the restart begins: the save fails on transport and is kept for a retry
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Kept across the restart'))); });
+    await settle(800);
+    sweep(server);
+    server.down = false;
+    const before = keptBefore(server);
+    /* the mini-player's keepalive flush: a listener write, exempt, so it lands */
+    await act(async () => {
+      await fetch(`/api/books/${PREV}/listen-stats`, { method: 'PUT', keepalive: true, body: '{"days":{}}' });
+    });
+    await settle(4500); // the kept save's retries
+    expect(server.writes.filter((w) => w.status === 200).map((w) => w.url)).toEqual([`/api/books/${PREV}/listen-stats`]);
+    expect(server.writes.filter((w) => w.status === 409)).toHaveLength(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(server.kept).toBe(before);
+  }, 15_000);
+
+  it('a manuscript save queued behind a refused cast save (pass 4): the queued one is never sent', async () => {
+    const { server, store } = await openLoserTab();
+    sweep(server);
+    const before = keptBefore(server);
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited in the gap'))); });
+    act(() => { store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' })); });
+    act(() => { store.dispatch(changeLogActions.wipeBookShapeEvents()); });
+    await settle(1500);
+    refusedOnce(server);
+    expect(server.kept).toBe(before);
+  });
+
+  it('a stale Library row: Delete on the repaired id is refused and reloads; nothing is deleted', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(uiActions.goHome()); });
+    await settle();
+    sweep(server);
+    libraryEdit.current = { book: { bookId: PREV, title: 'T' }, patch: {} };
+    fireEvent.click(await screen.findByTestId('library-delete'));
+    await settle(300);
+    refusedOnce(server);
+  });
+
+  it('CONTROL: a page loaded after the repair carries the current epoch and its edit lands on the kept twin', async () => {
+    const server = fakeServer();
+    sweep(server);
+    const fetchWrite = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      url === '/api/info' ? new Response(JSON.stringify({ repairEpoch: server.epoch })) : fetchWrite(url, init),
+    );
+    const { loadRepairEpoch } = await import('../lib/repair-epoch');
+    loadRepairEpoch();
+    const store = makeStoreWithScopeAndPersistence();
+    renderWithLibrary(store);
+    act(() => { store.dispatch(uiActions.openBook({ id: PREV, status: 'voices_pending' })); });
+    await waitFor(() => expect(names(store.getState())).toEqual(['Winner A', 'Winner B', 'Winner C']));
+    await settle();
+    act(() => { store.dispatch(castActions.updateCharacter(row('a', 'Edited after the reload'))); });
+    await settle(900);
+    expect(reload).not.toHaveBeenCalled();
+    expect(server.writes.filter((w) => w.slice === 'cast')).toEqual([
+      expect.objectContaining({ status: 200, epoch: 'epoch-now' }),
+    ]);
+    expect(server.kept).toContain('Edited after the reload');
+  });
+
+  it('CONTROL: with no repair the same edit goes through, and nothing reloads', async () => {
+    const { server, store } = await openLoserTab();
+    act(() => { store.dispatch(castActions.updateCharacter(row('l', 'Edited'))); });
+    await settle(900);
+    expect(server.cast.map((c) => c.name)).toEqual(['Edited']);
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

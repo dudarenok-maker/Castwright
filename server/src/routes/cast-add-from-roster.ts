@@ -38,6 +38,7 @@ import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const castAddFromRosterRouter = Router();
@@ -83,6 +84,11 @@ castAddFromRosterRouter.post(
           'targetBookId must differ from the path bookId — adding from the same book is a no-op.',
       });
     }
+
+    /* #3713 -- the path book is gated by the app-level repairedBookGate; the TARGET is named in the
+       body, so the path gate cannot see it. Its cast (and the matchedFrom stamp the new row carries)
+       is what this write copies from, so a stale client's target id must not be honoured unread. */
+    if (refuseUnreadRepairedBooks([targetBookId], req, res)) return;
 
     /* #3711 — book-op on the SOURCE (the only book written); the target is a
        read-only consultation through `peekBook`, which takes no lock and writes

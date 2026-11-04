@@ -138,6 +138,9 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
 import { firstVersionIn } from './release-notes';
+/* #3713 — every real call goes through `repairFetch`: the page-load repair epoch on each write, and a full
+   reload when the server refuses one as older than a duplicate-bookId repair (lib/repair-epoch.ts). */
+import { repairFetch as fetch } from './repair-epoch';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
