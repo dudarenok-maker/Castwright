@@ -32,8 +32,10 @@
       pre-persist verdict and the edge is genuinely cleared and reported —
       the one path where that captured verdict is actually consumed.
    3. A TRANSIENT one-shot read failure on cast-id-history.json's read at
-      the persist block's capture (the run's second physical read; the first
-      is the remap's own, #3954), with a genuinely well-formed file
+      the persist block's capture (keyed on its caller, not on a read count:
+      the capture calls `loadCastIdHistoryWithStatus` straight from
+      `runMainAnalyzerJob`, where the interim snapshots' and the final
+      remap's reads go through `loadIdHistoryForRemap`, #3954), with a genuinely well-formed file
       underneath it (the real-world case the module doc comment names: "a
       transient EPERM/EBUSY from an AV scanner or a cloud-sync client").
       Under the real capture position, the capture eats the blip
@@ -612,17 +614,22 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
         '../workspace/state-io.js',
       );
       let historyReadCount = 0;
+      let blipped = false;
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (path === historyPath) {
           historyReadCount += 1;
-          // Reads 1-4 are the interim snapshots' remap history reads (three
-          // chapters + the stage-1 snapshot, #3954), read 5 is the final
-          // remap's own (all fail open on a degraded file); read 6 is the
-          // persist block's capture.
-          if (historyReadCount === 6) {
-            // The one-shot blip — a transient EBUSY/EPERM, not a damaged
-            // file. loadCastIdHistoryWithStatus's own try/catch turns this
-            // into a 'degraded' verdict exactly as it would a real one.
+          /* The one-shot blip — a transient EBUSY/EPERM, not a damaged file —
+             on the read made by `loadCastIdHistoryWithStatus` called DIRECTLY
+             from `runMainAnalyzerJob` (the persist capture). The remap-side
+             reads have `loadIdHistoryForRemap` between the two. A wrong-caller
+             blip fails this test red: an earlier one lets reconcile clear the
+             edge, a later one throws from `loadHistoryOrThrow`. */
+          const frames = (new Error().stack ?? '').split(String.fromCharCode(10)).map((l) => l.trim());
+          const at = frames.findIndex((l) => l.includes('loadCastIdHistoryWithStatus'));
+          if (!blipped && at >= 0 && (frames[at + 1] ?? '').includes('runMainAnalyzerJob')) {
+            blipped = true;
+            // loadCastIdHistoryWithStatus's own try/catch turns this into a
+            // 'degraded' verdict exactly as it would a real one.
             throw new Error('EBUSY: resource busy or locked (simulated transient read blip)');
           }
         }
@@ -641,6 +648,7 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
           { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
         );
 
+        expect(blipped).toBe(true);
         expect(historyReadCount).toBeGreaterThan(1); // sanity: later reads did happen and succeeded
 
         const castAfter = JSON.parse(
