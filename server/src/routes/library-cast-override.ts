@@ -80,7 +80,7 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
     return res.status(400).json({ error: 'Source and target must differ — nothing to override.' });
   }
   /* #3713 pass 3 -- this write names its books in the body, so the path gate cannot see it. */
-  if (refuseUnreadRepairedBooks([sourceBookId, targetBookId], req, res)) return;
+  if (await refuseUnreadRepairedBooks([sourceBookId, targetBookId], req, res)) return;
 
   /* #3711 -- both books' book-op (sorted, deduped: the same-book case is one
      handle), then both cast locks; the handles are resolved UNDER the locks so a

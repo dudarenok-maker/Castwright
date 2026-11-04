@@ -173,7 +173,7 @@ voiceOverrideLinkedRouter.post(
 
       /* #3713 -- a matched mate that is a repaired book, on a request without the current epoch: refuse
          the whole fan-out before the source (or any mate) is written. */
-      if (refuseUnreadRepairedBooks([...byBook.keys()], req, res)) return res;
+      if (await refuseUnreadRepairedBooks([...byBook.keys()], req, res)) return res;
 
       await writeBook(
         sourceLocated.bookDir,

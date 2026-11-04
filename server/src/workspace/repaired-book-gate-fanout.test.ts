@@ -200,6 +200,58 @@ describe('PUT /voices/:id/override with a repaired series-mate (#3713)', () => {
   });
 });
 
+/* #4029 item 2 -- the body/series checks retry an unreadable gate file the way the mount middlewares do. */
+describe('a gate file that was unreadable at boot and is readable now (#4029)', () => {
+  const file = () => paths.repairedBookGateJsonPath();
+  /* A directory where the file should be: readFile fails with EISDIR -- the "exists but unreadable" shape. */
+  const makeUnreadable = () => {
+    rmSync(file(), { recursive: true, force: true });
+    mkdirSync(file(), { recursive: true });
+  };
+  const restoreFileNaming = (...ids: string[]) => {
+    rmSync(file(), { recursive: true, force: true });
+    writeFileSync(
+      file(),
+      JSON.stringify({ version: 2, epoch: 'ep-file', entries: ids.map((bookId) => ({ bookId, repairedAt: new Date().toISOString() })), manuscripts: [] }),
+    );
+  };
+  async function unreadableThenRestored(): Promise<void> {
+    seed('Book', DUP, { rendered: true });
+    kept = seed('Book other', 'auth__ser__kept', { rendered: true });
+    src = seed('Src', SRC, { rendered: false });
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    expect(gate.gatedBookIds()).toEqual([]);
+    restoreFileNaming('auth__ser__kept');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+  }
+  afterEach(() => {
+    vi.useRealTimers();
+    gate.__clearRepairedBookGateMemoryForTest();
+    rmSync(file(), { recursive: true, force: true });
+  });
+
+  it('a workspace-scope override without the epoch is refused whole and writes nothing', async () => {
+    await unreadableThenRestored();
+    const before = everything();
+    refused(await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } }));
+    expect(everything()).toEqual(before);
+  });
+
+  it('a series-scope override naming the gated book is refused whole and writes nothing', async () => {
+    await unreadableThenRestored();
+    const before = everything();
+    refused(
+      await request(app)
+        .put('/api/voices/c0/override')
+        .send({ override: { engine: 'kokoro', name: 'af_heart' }, scope: 'series', bookId: 'auth__ser__kept' }),
+    );
+    expect(everything()).toEqual(before);
+  });
+});
+
 describe('CONTROL: with no repair nothing is refused (#3713)', () => {
   it('a series-patch on an unrepaired series needs no epoch', async () => {
     seed('Book', DUP, { rendered: true });

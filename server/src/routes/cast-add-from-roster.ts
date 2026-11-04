@@ -88,7 +88,7 @@ castAddFromRosterRouter.post(
     /* #3713 -- the path book is gated by the app-level repairedBookGate; the TARGET is named in the
        body, so the path gate cannot see it. Its cast (and the matchedFrom stamp the new row carries)
        is what this write copies from, so a stale client's target id must not be honoured unread. */
-    if (refuseUnreadRepairedBooks([targetBookId], req, res)) return;
+    if (await refuseUnreadRepairedBooks([targetBookId], req, res)) return;
 
     /* #3711 — book-op on the SOURCE (the only book written); the target is a
        read-only consultation through `peekBook`, which takes no lock and writes

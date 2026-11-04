@@ -7,7 +7,7 @@
    not per-match: a stale page reloads once and the repeat carries the epoch. */
 
 import type { Request, Response } from 'express';
-import { gatedBookIds, refuseUnreadRepairedBooks } from './repaired-book-gate.js';
+import { gatedBookIds, refuseUnreadRepairedBooks, retryUnreadableGate } from './repaired-book-gate.js';
 import { findAuthorSeriesForBookId } from './series-cast-scan.js';
 
 export async function refuseGatedSeriesFanOut(
@@ -15,6 +15,7 @@ export async function refuseGatedSeriesFanOut(
   req: Request,
   res: Response,
 ): Promise<boolean> {
+  await retryUnreadableGate();
   const gated = gatedBookIds();
   if (gated.length === 0) return false;
   let inScope: string | undefined;

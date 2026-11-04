@@ -129,7 +129,7 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
   }
   /* #3713 -- an entry for a repaired bookId from a page that predates the repair would later render the
      twin that kept the id: refused, whole batch, unless the request carries the current repair epoch. */
-  if (refuseUnreadRepairedBooks(inputs.map((i) => i.bookId), req, res)) return;
+  if (await refuseUnreadRepairedBooks(inputs.map((i) => i.bookId), req, res)) return;
   /* Plan 108 Wave 3 — stamp each entry with the TTS engines its chapter needs
      (cast + analysis cache + book default), so the queue modal can name the
      engine(s) and warn on a multi-TTS chapter when dual-model mode is off.
@@ -225,14 +225,14 @@ queueRouter.post('/clear', async (req: Request, res: Response) => {
 /* #4029 -- start / retry / confirm-fallback carry only an entry id, so the gate keys on the entry's OWN bookId
    (same rule as enqueue). A stale tab's /start would strand a fresh page's entry for a repaired book
    in_progress; its fail+retry would requeue it. An id that names no entry stays an idempotent no-op. */
-function refuseRepairedEntry(
+async function refuseRepairedEntry(
   entryId: string,
   file: { entries: Array<{ id: string; bookId: string }> },
   req: Request,
   res: Response,
-): boolean {
+): Promise<boolean> {
   const entry = file.entries.find((e) => e.id === entryId);
-  return entry !== undefined && refuseUnreadRepairedBooks([entry.bookId], req, res);
+  return entry !== undefined && (await refuseUnreadRepairedBooks([entry.bookId], req, res));
 }
 
 /* Mark an entry in_progress — the dispatcher fires this the instant it claims
@@ -245,7 +245,7 @@ queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
+    if (await refuseRepairedEntry(entryId, before, req, res)) return;
     const after = markInProgress(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -284,7 +284,7 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
+    if (await refuseRepairedEntry(entryId, before, req, res)) return;
     const after = retry(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -302,7 +302,7 @@ queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Respons
   const { entryId } = req.params;
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
+    if (await refuseRepairedEntry(entryId, before, req, res)) return;
     const after = confirmFallback(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });

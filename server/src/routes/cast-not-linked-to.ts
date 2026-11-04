@@ -65,7 +65,7 @@ castNotLinkedToRouter.post(
     /* #3713 (PR #4004 pass 4): the pair is written to the OTHER book's cast.json too, and a stale
        tab's character id there may name a different row than the user saw. The path book is gated
        by the mount. */
-    if (refuseUnreadRepairedBooks([otherBookId], req, res)) return;
+    if (await refuseUnreadRepairedBooks([otherBookId], req, res)) return;
 
     /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
        resolved UNDER the locks so a rename of either book lands after this. */
@@ -183,7 +183,7 @@ castNotLinkedToRouter.delete(
       });
     }
     /* #3713 (PR #4004 pass 4): same as the POST -- the other book's edge is removed too. */
-    if (refuseUnreadRepairedBooks([otherBookId], req, res)) return;
+    if (await refuseUnreadRepairedBooks([otherBookId], req, res)) return;
 
     /* #3711 -- both books' book-op (sorted), then both cast locks; the handles are
        resolved UNDER the locks so a rename of either book lands after this. */

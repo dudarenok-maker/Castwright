@@ -338,7 +338,7 @@ export async function repairedBookGate(req: Request, res: Response, next: NextFu
 /** A gate file that could not be read at boot is retried by the next gated write (at most once a second), so the
  *  ids it names are refused again as soon as it can be read instead of staying ungated for the whole boot. A
  *  retry that reads it writes the merge back, so this boot's own repairs survive the next restart. */
-async function retryUnreadableGate(): Promise<void> {
+export async function retryUnreadableGate(): Promise<void> {
   if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return;
   await ingestGateFile(Date.now(), false);
   if (!unreadable) await persistRepairedBookGate();
@@ -355,7 +355,8 @@ export async function repairedManuscriptGate(req: Request, res: Response, next: 
 /** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the
  *  header comment): if any named book is gated, the request must carry the current epoch. Answers the 409
  *  itself; returns true when it did, so the handler returns. */
-export function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): boolean {
+export async function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): Promise<boolean> {
+  await retryUnreadableGate();
   const gated = bookIds.some((id) => typeof id === 'string' && id !== '' && isGatedBook(id));
   let passed = false;
   refuseUnlessCurrent(gated, req, res, () => {
