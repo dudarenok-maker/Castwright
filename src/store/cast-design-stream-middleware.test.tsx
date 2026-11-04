@@ -386,6 +386,36 @@ describe('castDesignMiddleware', () => {
     ).toBe('qwen-c1');
   });
 
+  it('a design the server refused as shared (#3992) toasts its message and changes nothing in the cast', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    openBook(store, 'b1');
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'c1', name: 'Aria', voiceUuid: 'u_shared', overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } } as never,
+      ]),
+    );
+    const castBefore = store.getState().cast;
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    const message = 'Redesign "Book Two" first. This voice is shared with it.';
+    singleStartCalls[0].cb.onError?.({ code: 'design_failed', message });
+
+    const toasts = store.getState().notifications.toasts as Array<{ kind: string; message: string }>;
+    expect(toasts.some((t) => t.kind === 'error' && t.message === message)).toBe(true);
+    expect(store.getState().cast).toBe(castBefore);
+    expect(recorded.map((a) => a.type).filter((t) => t.startsWith('cast/'))).toEqual(['cast/setCharacters']);
+  });
+
   it('preview_ready → ready-to-compare + a "ready to compare" toast', () => {
     const recorded: { type: string }[] = [];
     const store = makeStore(recorded);
