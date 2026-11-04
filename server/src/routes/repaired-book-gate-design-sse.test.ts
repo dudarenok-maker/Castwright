@@ -14,8 +14,10 @@ import request from 'supertest';
 
 vi.mock('./qwen-voice.js', async (orig) => ({
   ...(await orig<typeof import('./qwen-voice.js')>()),
-  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string }) => ({
-    voiceId: `qwen-${p.characterId}`,
+  /* The real core names the voice qwen-<voiceUuid> (qwenStorageKey), and the Save that follows only writes a
+     row on that uuid (#3992: a designed name for another uuid is not meant for it). */
+  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string; character: { voiceUuid?: string } }) => ({
+    voiceId: `qwen-${p.character.voiceUuid ?? p.characterId}`,
     url: `/api/voice-sample/${p.characterId}.mp3`,
   })),
 }));
@@ -109,6 +111,8 @@ async function repaired() {
 }
 
 const read = (dir: string) => readFileSync(paths.castJsonPath(dir), 'utf8');
+/* The name the design wrote: qwen-<the uuid it stamped>. */
+const designedName = () => `qwen-${JSON.parse(read(src)).characters[0].voiceUuid}`;
 
 function sse(text: string): Array<Record<string, any>> {
   return text
@@ -148,7 +152,7 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 6)', () =
     const designed = sse(res.text).find((e) => e.type === 'designed');
     expect(designed).toBeDefined();
     expect(designed).not.toHaveProperty('skippedBooks');
-    expect(read(kept)).toContain('qwen-c0');
+    expect(read(kept)).toContain(designedName());
   });
 
   it('CONTROL: with no repair a start needs no epoch', async () => {
@@ -178,7 +182,7 @@ describe('bulk design (SSE) with a repaired series-mate (#3713, pass 6)', () => 
     await repaired();
     const events = sse((await bulk(gate.currentRepairEpoch()!)).text);
     expect(events.filter((e) => e.skippedBooks)).toEqual([]);
-    expect(read(kept)).toContain('qwen-c0');
+    expect(read(kept)).toContain(designedName());
   });
 });
 
