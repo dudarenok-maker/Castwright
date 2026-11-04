@@ -1174,13 +1174,24 @@ function previewFoldForLiveView(
    leave every file agreeing: a snapshot drops the fresh id from cast.json while
    the Phase-1 roll writes the analyzer's raw ids into manuscript-edits.json, so
    a run stopped in Phase 1 and never resumed would leave lines on an id with no
-   cast row and no history entry (#3954 P3-3). The roll therefore maps its
-   sentence ids through the SAME table the snapshot used (`InterimIdTable`,
-   `interimRollIdTable`), keeping edits and cast.json on one row. That is safe
-   for N3 and F1: it only rewrites the ids of the rolled COPY of the sentences
-   (the analysis cache keeps the raw ids, and the authoritative write rebuilds
-   the edits from those takes, then joins against the whole roster), and it
-   persists no name, alias or description derived from a partial roster.
+   cast row and no history entry (#3954 P3-3). Once the FINAL roster exists the
+   roll therefore maps its sentence ids through the table that roster yields
+   (`interimRollIdTable`; the 0b snapshot is built from the same roster, so
+   edits and cast.json agree on one row). That is safe for N3 and F1: it only
+   rewrites the ids of the rolled COPY of the sentences (the analysis cache
+   keeps the raw ids, and the authoritative write rebuilds the edits from those
+   takes, then joins against the whole roster), and it persists no name, alias
+   or description derived from a partial roster.
+
+   The one exception is a PIPELINED run whose Phase 1 rolls before Phase 0b has
+   produced the final roster (#3954 P4-3, owner ruling). Its per-chapter
+   snapshots hold a partial roster, and a table built from it can make a join
+   the full roster refuses, putting a character's lines on a locked prior row
+   and so on its voice. Those rolls keep the raw fresh ids, as `origin/main`
+   does: a stopped run in that window leaves lines on an id with no cast row,
+   and a resume heals it. So "a stopped run leaves every line on a cast row"
+   holds for sequential runs and for a pipelined run stopped after Phase 0b,
+   not for a pipelined run stopped before it.
 
    #3954 review finding N3 — the remap's claim-once and held-by-a-fresh-row
    guards need the WHOLE roster, and a per-chapter snapshot has only the
@@ -1198,7 +1209,6 @@ async function remapInterimToPriorIds<T extends { id: string }>(
   priorCast: Parameters<typeof remapFreshToPriorIds>[2],
   bookDir: string,
   bookId: string | null | undefined,
-  table?: InterimIdTable,
 ): Promise<T[]> {
   const idHistory = await loadIdHistoryForRemap(bookDir);
   const remap = remapFreshToPriorIds(
@@ -1209,7 +1219,6 @@ async function remapInterimToPriorIds<T extends { id: string }>(
     bookId ?? undefined,
     idHistory,
   );
-  if (table) table.rewrites = remap.rewrites;
   const remapped = remap.characters;
   const priorById = new Map(priorCast.map((p) => [p.id, p]));
   return remapped.map((c, i) =>
@@ -1217,18 +1226,18 @@ async function remapInterimToPriorIds<T extends { id: string }>(
   );
 }
 
-/* #3954 P3-3 — the fresh→prior id table the LAST interim snapshot of a job
-   applied (`null` until one has run), so the Phase-1 roll can put its
-   sentences on the same row cast.json shows. See `remapInterimToPriorIds`. */
+/* #3954 P3-3 — the fresh→prior id table of the FINAL roster (`null` until
+   computed), so the Phase-1 roll can put its sentences on the row cast.json
+   shows. Never built from a partial roster; see `remapInterimToPriorIds`. */
 interface InterimIdTable {
   rewrites: Record<string, string> | null;
 }
 
-/* The table the Phase-1 roll maps its sentence ids through. The last snapshot's
-   table when this job wrote one; otherwise (a resume whose stage 1 was cached,
-   or a subset job, neither of which writes a snapshot) the table the snapshot
-   WOULD have used, computed from the roster. An empty roster computes nothing
-   and caches nothing, so a roll that precedes the roster is retried later. */
+/* Computes (once) the table the Phase-1 roll maps its sentence ids through,
+   from the FINAL roster: the table the Phase-0b snapshot used, built from the
+   same roster. Call it only once that roster exists (`phase1Stage1Ready`, or a
+   cached/subset roster); an empty roster computes nothing and caches nothing,
+   so a roll that precedes the roster is retried later. */
 async function interimRollIdTable(
   table: InterimIdTable,
   roster: ReadonlyArray<{ id: string }> | undefined,
@@ -1248,6 +1257,15 @@ async function interimRollIdTable(
     idHistory,
   ).rewrites;
   return table.rewrites;
+}
+
+/* The ids a roll maps through, read in the SAME synchronous step that builds the
+   roll's sentences (inside `rollManuscriptEdits`'s snapshot callback, after its
+   `withVerifiedBookDir` await): `ready` is false until the final roster exists,
+   and a roll before that keeps raw ids (#3954 P4-3). Both flags only ever flip
+   once, so reading them late is never staler than reading them early. */
+function rollIdsNow(table: InterimIdTable, ready: boolean): Readonly<Record<string, string>> {
+  return ready && table.rewrites ? table.rewrites : {};
 }
 
 function mapRollIds<S extends { characterId: string }>(
@@ -4941,8 +4959,8 @@ export async function runMainAnalyzerJob(
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
       ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
       : priorSnapshot.rows;
-    /* #3954 P3-3 — the id table the interim snapshots applied, shared with the
-       Phase-1 manuscript-edits roll (see `remapInterimToPriorIds`). */
+    /* #3954 P3-3 / P4-3 — the id table of the FINAL roster, for the Phase-1
+       manuscript-edits roll once that roster exists (see `remapInterimToPriorIds`). */
     const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write and reset by the Start-fresh delete below. */
@@ -5897,7 +5915,6 @@ export async function runMainAnalyzerJob(
                   priorCastForMerge,
                   recordRef.bookDir,
                   recordRef.bookId,
-                  interimIdTable,
                 ),
               );
               await castBase!.writeChecked(
@@ -6167,7 +6184,6 @@ export async function runMainAnalyzerJob(
                 priorCastForMerge,
                 recordRef.bookDir,
                 recordRef.bookId,
-                interimIdTable,
               ),
             );
             await castBase!.writeChecked(
@@ -6966,14 +6982,20 @@ export async function runMainAnalyzerJob(
              persist block is the single halt gate (C4).
              The snapshot is built inside `rollManuscriptEdits`, in the same
              synchronous step that joins the write queue (#3427), so the id
-             table it maps through is resolved BEFORE the call (#3954 P3-3). */
-          const rollIds = await interimRollIdTable(
-            interimIdTable,
-            stage1 ? previewFoldForLiveView(stage1.characters, bookLanguage) : undefined,
-            priorCastForMerge,
-            recordRef.bookDir,
-            recordRef.bookId,
-          );
+             table is computed BEFORE the call, but the ids it maps through (and
+             whether the final roster exists yet) are read inside the snapshot
+             callback, after `withVerifiedBookDir`'s await (#3954 P3-3, P4-3). A
+             roll before Phase 0b keeps the raw fresh ids: its snapshots hold a
+             partial roster. */
+          if (phase1Stage1Ready) {
+            await interimRollIdTable(
+              interimIdTable,
+              previewFoldForLiveView(stage1.characters, bookLanguage),
+              priorCastForMerge,
+              recordRef.bookDir,
+              recordRef.bookId,
+            );
+          }
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
@@ -6988,7 +7010,7 @@ export async function runMainAnalyzerJob(
                 const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return mapRollIds(running, rollIds);
+              return mapRollIds(running, rollIdsNow(interimIdTable, phase1Stage1Ready));
             },
             recordRef.bookId ?? undefined,
           );
@@ -8660,7 +8682,7 @@ export async function runSubsetAnalyzerJob(
       ? await readPriorCastForMerge(record.bookDir)
       : { rows: [], fingerprint: null, source: 'none' as const };
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
-    // #3954 P3-3 — see the main route's binding of the same name.
+    // #3954 P3-3 / P4-3 — see the main route's binding of the same name.
     const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write. */
@@ -8979,7 +9001,6 @@ export async function runSubsetAnalyzerJob(
                   priorCastForMerge,
                   record.bookDir,
                   record.bookId,
-                  interimIdTable,
                 ),
               );
               await castBase!.writeChecked(
@@ -9445,9 +9466,10 @@ export async function runSubsetAnalyzerJob(
         try {
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
              (no stale-dir recreation); the terminal persist halt-gates.
-             #3954 P3-3 — the id table is resolved before the synchronous
-             snapshot, as in the main route. */
-          const rollIds = await interimRollIdTable(
+             #3954 P3-3 — the id table is computed before the call and read
+             inside the snapshot callback, as in the main route. The subset job
+             rolls only against the cached, final roster. */
+          await interimRollIdTable(
             interimIdTable,
             cache.stage1 ? previewFoldForLiveView(cache.stage1.characters, bookLanguage) : undefined,
             priorCastForMerge,
@@ -9463,7 +9485,7 @@ export async function runSubsetAnalyzerJob(
                 const arr = cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return mapRollIds(running, rollIds);
+              return mapRollIds(running, rollIdsNow(interimIdTable, true));
             },
             record.bookId ?? undefined,
           );

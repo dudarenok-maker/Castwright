@@ -56,7 +56,8 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
       );
     },
-    isPerPhaseModelSelectionActive: () => false,
+    isPerPhaseModelSelectionActive: () =>
+      Boolean((globalThis as Record<string, unknown>).__keep_prior_id_pipelined),
   };
 });
 
@@ -89,9 +90,10 @@ function phase0(rosterRows: CharacterOutput[]): Analyzer {
 let phase1Hook: ((chapterId: number) => void) | undefined;
 let lastJob: AnalysisJob | undefined;
 
-function phase1(speakerId: string | string[]): Analyzer {
-  const speakers = [speakerId].flat();
-  const perChapter = speakers.length > 1 ? 3 : 1;
+function phase1(speakerId: string | string[] | ((chapterId: number) => string)): Analyzer {
+  const speakersFor = (chapterId: number): string[] =>
+    typeof speakerId === 'function' ? [speakerId(chapterId)] : [speakerId].flat();
+  const perChapter = typeof speakerId === 'function' || (Array.isArray(speakerId) && speakerId.length > 1) ? 3 : 1;
   return {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('phase1')),
@@ -99,6 +101,7 @@ function phase1(speakerId: string | string[]): Analyzer {
        lines per chapter handed out in turn, so each clears the minor-cast fold. */
     runStage2Chapter: (async (_m: string, chapterId: number) => {
       phase1Hook?.(chapterId);
+      const speakers = speakersFor(chapterId);
       return {
       sentences: Array.from({ length: perChapter }, (_, k) => ({
         id: chapterId * 100 + k + 1,
@@ -808,7 +811,8 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
      fresh id, but the Phase-1 roll used to stream the raw analyzer id into
      manuscript-edits.json: lines on `wren-ashby`, an id with no cast row and
      no history entry. Every attributed line must resolve to a cast row. One
-     chapter at a time, so chapter 1 is rolled before chapter 2 is stopped. */
+     chapter at a time, so chapter 1 is rolled before chapter 2 is stopped.
+     Sequential runs only: a pipelined run's early rolls keep raw ids (P4-3). */
   it.each([
     ['main', false],
     ['subset', false],
@@ -976,4 +980,120 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
       }
     },
   );
+
+  /* P4-3 (owner option b). Pipelined mode: Phase 1 starts `LAG` chapters behind
+     Phase 0, so a roll can land while Phase 0 is still writing per-chapter
+     snapshots from a PARTIAL roster. Chapters 1-2 bring "Wren Ashby", chapter 3
+     brings "Wren Cole"; the full roster refuses both tolerant joins to the locked
+     `w2 "Wren"` (claim-once), but a roster of chapter 1 alone would make one. A
+     roll that mapped its ids through that partial table put Wren Ashby's lines on
+     `w2` and the wrong locked voice on them. The roll now keeps the raw fresh ids
+     until the final roster exists (main's behaviour); a resume heals the rest.
+     Phase 0 chapter 3 waits until chapter 1's roll has landed, then the run stops
+     (or, for the control, carries on). */
+  const runPipelined = async (
+    stop: boolean,
+  ): Promise<{ atStop: { castIds: string[]; edits: Record<string, number> } | null; end: unknown }> => {
+    const saved = {
+      lag: process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS,
+      conc: process.env.ANALYZER_OLLAMA_CONCURRENCY,
+    };
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '1';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    (globalThis as Record<string, unknown>).__keep_prior_id_pipelined = true;
+    const wren = (id: string, name: string, gender: string): CharacterOutput =>
+      ({ ...WREN_FRESH, id, name, gender, evidence: [{ quote: `${name} asked` }] }) as CharacterOutput;
+    const ashby = wren('wren-ashby', 'Wren Ashby', 'female');
+    const cole = wren('wren-cole', 'Wren Cole', 'male');
+    const editCounts = (bookDir: string): Record<string, number> => {
+      let sentences: Row[];
+      try {
+        sentences = readEdits(bookDir);
+      } catch {
+        return {};
+      }
+      const counts: Record<string, number> = {};
+      for (const s of sentences) counts[String(s.characterId)] = (counts[String(s.characterId)] ?? 0) + 1;
+      return counts;
+    };
+    const { manuscriptId, bookDir } = mkBook([
+      { ...NARR },
+      { id: PRIOR_ID, name: 'Wren', voiceUuid: 'U-wren', voiceState: 'locked', lines: 7 },
+    ]);
+    let atStop: { castIds: string[]; edits: Record<string, number> } | null = null;
+    const bothRosters = (chapterId: number): CharacterOutput[] => [NARR, chapterId === 3 ? cole : ashby];
+    const p0 = phase0([]);
+    p0.runStage1Chapter = (async (_m: string, chapterId: number) => {
+      if (chapterId === 3) {
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline && Object.keys(editCounts(bookDir)).length === 0) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        atStop = { castIds: readCast(bookDir).map((c) => String(c.id)), edits: editCounts(bookDir) };
+        if (stop) {
+          lastJob!.controller.abort();
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          throw e;
+        }
+      }
+      return { characters: bothRosters(chapterId) };
+    }) as Analyzer['runStage1Chapter'];
+    const startJob = async (analyzer: Analyzer): Promise<void> => {
+      const { job } = mkJob(manuscriptId, bookDir, 'main');
+      lastJob = job;
+      (globalThis as Record<string, unknown>).__keep_prior_id_phase1 = sel(
+        phase1((chapterId) => (chapterId === 3 ? 'wren-cole' : 'wren-ashby')),
+        'phase1-model',
+      );
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId)! as never, sel(analyzer, 'phase0-model'), {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      } as never);
+    };
+    try {
+      await startJob(p0).catch(() => {});
+      if (stop) {
+        const resume = phase0([]);
+        resume.runStage1Chapter = (async (_m: string, chapterId: number) => ({
+          characters: bothRosters(chapterId),
+        })) as Analyzer['runStage1Chapter'];
+        await startJob(resume);
+      }
+      return {
+        atStop,
+        end: {
+          castIds: readCast(bookDir).map((c) => String(c.id)).sort(),
+          edits: editCounts(bookDir),
+          supersededBy: (() => {
+            try {
+              return readHistory(bookDir).supersededBy;
+            } catch {
+              return {};
+            }
+          })(),
+        },
+      };
+    } finally {
+      delete (globalThis as Record<string, unknown>).__keep_prior_id_pipelined;
+      if (saved.lag === undefined) delete process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+      else process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = saved.lag;
+      if (saved.conc === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      else process.env.ANALYZER_OLLAMA_CONCURRENCY = saved.conc;
+      await cleanup(manuscriptId, bookDir);
+    }
+  };
+
+  it('P4-3 pipelined main job: a stopped run leaves the lines on the fresh id, as main does, and a resume ends where an uninterrupted run ends', async () => {
+    const stopped = await runPipelined(true);
+    // The stop landed after chapter 1's roll. Nothing was written to `w2`: the
+    // partial roster decides nothing, so the lines are on the raw analyzer id.
+    expect(stopped.atStop).not.toBeNull();
+    expect(Object.keys(stopped.atStop!.edits)).toEqual(['wren-ashby']);
+    expect(stopped.atStop!.castIds).not.toContain('wren-ashby');
+    const control = await runPipelined(false);
+    expect(control.end).toMatchObject({ edits: { 'wren-ashby': 6, 'wren-cole': 3 } });
+    expect(stopped.end).toEqual(control.end);
+  });
 });
