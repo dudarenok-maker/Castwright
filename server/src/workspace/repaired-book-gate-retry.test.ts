@@ -110,3 +110,25 @@ describe('the retry inside refuseUnreadRepairedBooks (#4029)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('a retry that fails does not end the retrying (#4029 pass 2)', () => {
+  it('a retry that still cannot read leaves the NEXT retry able to read the restored file', async () => {
+    const file = paths.repairedBookGateJsonPath();
+    gate.__clearRepairedBookGateMemoryForTest();
+    rmSync(file, { recursive: true, force: true });
+    mkdirSync(file, { recursive: true });
+    await gate.loadRepairedBookGate();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+    // The retry fails (still a directory): the write passes, the gate stays unreadable.
+    expect((await request(app).post('/api/books/kept/x')).status).toBe(200);
+    rmSync(file, { recursive: true, force: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ version: 2, epoch: 'ep-file', entries: [{ bookId: 'kept', repairedAt: new Date().toISOString() }], manuscripts: [] }),
+    );
+    vi.setSystemTime(Date.now() + 10_000);
+    // The failed retry must not have left the shared marker set: this one reads the file.
+    expect((await request(app).post('/api/books/kept/x')).status).toBe(409);
+  });
+});

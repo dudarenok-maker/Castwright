@@ -305,6 +305,8 @@ export function __clearRepairedBookGateMemoryForTest(): void {
   epoch = null;
   mintedThisProcess = false;
   unreadable = false;
+  retrying = null;
+  lastReadAttempt = 0;
 }
 
 export function __resetRepairedBookGateForTest(): void {
