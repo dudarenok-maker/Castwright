@@ -1,4 +1,4 @@
-/* #3992 pass 7 — an already-forked declined row never forks again (finding A). Real design, decline and link routes plus the real series linker, on real cast.json files; the sidecar mock writes different bytes for whatever voice it is asked for. */
+/* #3992 pass 7 — an already-forked declined row never forks again (finding A), and a decline recorded before the row had a uuid still counts (finding F). Real design, decline and link routes plus the real series linker, on real cast.json files; the sidecar mock writes different bytes for whatever voice it is asked for. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -261,4 +261,41 @@ describe('A — an already-forked decliner never forks again when its chain grow
     expect(row('Book Four').voiceUuid).toBe(two);
   });
 });
-
+
+
+describe('F — a decline recorded while the row had no uuid still counts', () => {
+  /* Legacy One and Two (no uuid), linked; Two declines One (so it records the book
+     and no uuid); designing One then series-mints its fresh uuid N onto Two as well. */
+  async function legacyThenMint(): Promise<string> {
+    reset();
+    const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    writeFileSync(pt('qwen-v_wren'), Buffer.from('LEGACY'));
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Two').declinedVoiceUuids ?? []).toEqual([]);
+    expect((await design('Book One')).status).toBe(200);
+    const n = row('Book One').voiceUuid as string;
+    expect(row('Book Two').voiceUuid).toBe(n);
+    writeFileSync(pt(`qwen-${n}`), ORIG);
+    return n;
+  }
+
+  it('with Book One readable, Two forks off the minted uuid', async () => {
+    const n = await legacyThenMint();
+    expect((await design('Book Two')).status).toBe(200);
+    expect(row('Book Two').voiceUuid).not.toBe(n);
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(ORIG);
+  });
+
+  it('with Book One unreadable, Two does not design over Book One', async () => {
+    const n = await legacyThenMint();
+    writeFileSync(castPath('Book One'), '{"characters":[');
+    requested = [];
+    const r = await design('Book Two');
+    expect(r.status).toBe(200);
+    expect(requested).not.toContain(`qwen-${n}`);
+    expect(row('Book Two').voiceUuid).not.toBe(n);
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(ORIG);
+  });
+});

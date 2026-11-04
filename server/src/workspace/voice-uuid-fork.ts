@@ -409,7 +409,7 @@ async function mustForkUuid(
     declinedVoiceFrom?: string[] | null;
     declinedVoiceUuids?: string[] | null;
   },
-  { books, unreadable }: OtherBooks,
+  { books, unreadable, unreadableDirs }: OtherBooks,
 ): Promise<boolean> {
   const uuid = character.voiceUuid;
   if (!uuid) return false;
@@ -432,6 +432,13 @@ async function mustForkUuid(
     !onDeclined &&
     !books.some((b) => !!b.bookId && declinedBooks.has(b.bookId) && b.rows.some(holdsUuid(uuid)))
   ) {
+    /* A decline made while the row had no uuid records no uuid at all. If a book it
+       declined cannot be read, it may hold the uuid: treat it as declined (one
+       extra fork, writing nobody's file) rather than design over that book's .pt. */
+    if (!unreadable || character.declinedVoiceUuids?.length) return false;
+    for (const id of declinedBooks) {
+      if (await couldBeUnreadable(unreadableDirs, id)) return true;
+    }
     return false;
   }
   const followed = new Set(
