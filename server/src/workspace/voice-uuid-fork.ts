@@ -8,18 +8,21 @@
    at decline time, so a design never has to decide anything:
 
      After "Don't reuse" succeeds, the declining row is on its own voice that no
-     other book's row holds, other than its DIRECT followers, which move with it.
+     other book's row holds, other than its FOLLOWERS, which move with it.
 
    The separation (qwen-voice.ts separateVoiceLocked) mints a fresh uuid, copies
    the base family of the shared voice to it, and stamps it onto the row and its
-   direct followers, all under the decline's locks. A design then writes the
-   row's own key, whatever it is.
+   followers, all under the decline's locks. A design then writes the row's own
+   key, whatever it is.
 
-   A DIRECT follower of X is a row, in another book, holding X's voice whose
-   `matchedFrom` names X's bookId with a characterId that resolves to X (through
-   X's live cast and id history). A `matchedFrom` with a bookId but no
-   characterId names the row with the SAME id. One hop only: a row linking to a
-   follower is NOT carried, and stays on the voice it holds.
+   A row Y, in another book, links to Z when Y's `matchedFrom` names Z's bookId
+   with a characterId that resolves to Z (through Z's book's live cast and id
+   history); a `matchedFrom` with a bookId but no characterId names the row with
+   the SAME id. X's FOLLOWERS are the whole chain that leads down to it (Three
+   links to X, Four links to Three, ...) among rows that still hold X's voice: a
+   row that left the voice, or links elsewhere, is not one, and neither is what
+   links to it. One library scan builds the graph; a breadth-first walk with a
+   visited set computes the set, so a cycle terminates.
 
    The one place a design still separates is a row declined BEFORE the decline
    route did this (its voice is still a declined one): mustSeparateOnDesign.
@@ -158,9 +161,13 @@ export const voiceHeldBy = (row: CastRow): VoiceHolds =>
 
 type MatchedFrom = { bookId?: string; characterId?: string } | null | undefined;
 
-/* The rows in other books that link DIRECTLY to X (one hop, never further), among
-   rows holding the voice. A row that links to one of these is not a follower. */
-async function directFollowers(
+/* The rows in other books whose `matchedFrom` chain leads down to X (Three links
+   to X, Four links to Three, ...), among rows holding the voice, in breadth-first
+   order. The graph is the one library scan in `others`; a visited set makes a
+   cycle terminate. A row off the voice is no node, so it cuts the chain: what
+   links to it stays. Each hop resolves the link's characterId through the linked
+   book's live cast and id history. */
+async function chainFollowers(
   selfDir: string,
   character: { id: string },
   holds: VoiceHolds,
@@ -168,35 +175,55 @@ async function directFollowers(
 ): Promise<LinkFollower[]> {
   const selfBookId = await readBookId(selfDir);
   if (!selfBookId) return []; // a book with no id cannot be named by a link
-  let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
-  const namesX = async (characterId: string): Promise<boolean> => {
-    if (characterId === character.id) return true;
-    if (!resolver) {
-      const rows = (await readJson<CastFile>(castJsonPath(selfDir)))?.characters ?? [];
-      resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(selfDir));
+  type Resolver = ReturnType<typeof buildCastResolver<CastRow>>;
+  const resolvers = new Map<string, Resolver>();
+  const resolverFor = async (dir: string, rows: () => Promise<CastRow[]>): Promise<Resolver> => {
+    let r = resolvers.get(dir);
+    if (!r) {
+      r = buildCastResolver<CastRow>(await rows(), await loadCastIdHistory(dir));
+      resolvers.set(dir, r);
     }
-    return resolver.resolve(characterId)?.character.id === character.id;
+    return r;
   };
+  interface Node {
+    dir: string;
+    bookId: string;
+    id: string;
+    rows: () => Promise<CastRow[]>;
+  }
+  const names = async (z: Node, characterId: string): Promise<boolean> =>
+    characterId === z.id || (await resolverFor(z.dir, z.rows)).resolve(characterId)?.character.id === z.id;
+
+  const selfRows = async () => (await readJson<CastFile>(castJsonPath(selfDir)))?.characters ?? [];
+  const queue: Node[] = [{ dir: selfDir, bookId: selfBookId, id: character.id, rows: selfRows }];
+  const visited = new Set([rowKey(selfDir, character.id)]);
   const followers: LinkFollower[] = [];
-  for (const book of others) {
-    /* A book with no bookId cannot be locked by id (no route can move it either),
-       so it cannot be moved with X: it stays on the voice. */
-    if (!book.bookId) continue;
-    for (const y of book.rows) {
-      if (!holds(y)) continue;
-      const mf = y.matchedFrom as MatchedFrom;
-      if (!mf?.bookId || mf.bookId !== selfBookId) continue;
-      if (!(await namesX(mf.characterId ?? y.id))) continue;
-      followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
+  for (let z = queue.shift(); z; z = queue.shift()) {
+    for (const book of others) {
+      /* A book with no bookId cannot be locked by id (no route can move it either),
+         so it cannot be moved with X: it stays on the voice. */
+      if (!book.bookId) continue;
+      for (const y of book.rows) {
+        if (!holds(y)) continue;
+        const key = rowKey(book.dir, y.id);
+        if (visited.has(key)) continue;
+        const mf = y.matchedFrom as MatchedFrom;
+        if (!mf?.bookId || mf.bookId !== z.bookId) continue;
+        if (!(await names(z, mf.characterId ?? y.id))) continue;
+        visited.add(key);
+        followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
+        const rows = book.rows;
+        queue.push({ dir: book.dir, bookId: book.bookId, id: y.id, rows: async () => rows });
+      }
     }
   }
   return followers;
 }
 
 export interface VoiceScan {
-  /** Rows in other books that link directly to X and hold its voice: they move with it. */
+  /** Rows in other books whose link chain leads down to X and that hold its voice: they move with it. */
   followers: LinkFollower[];
-  /** A row in another readable book that is NOT a direct follower holds X's voice. */
+  /** A row in another readable book that is NOT a follower holds X's voice. */
   heldElsewhere: boolean;
   /** Readable bookIds with a row on X's voice. */
   holderBookIds: Set<string>;
@@ -205,7 +232,7 @@ export interface VoiceScan {
 }
 
 /* One bounded pass over the library: who else holds X's voice, split into X's
-   direct followers and everyone else. Read-only and lock-free; the separation
+   followers (the whole chain) and everyone else. Read-only and lock-free; the separation
    re-runs it inside the locks it takes. */
 export async function scanVoiceHolders(
   bookDir: string,
@@ -214,7 +241,7 @@ export async function scanVoiceHolders(
 ): Promise<VoiceScan> {
   const selfDir = resolve(bookDir);
   const { books, unreadableDirs } = await loadOtherBooks(selfDir);
-  const followers = await directFollowers(selfDir, character, holds, books);
+  const followers = await chainFollowers(selfDir, character, holds, books);
   const followed = new Set(followers.map((f) => rowKey(f.dir, f.characterId)));
   const holderBookIds = new Set<string>();
   let heldElsewhere = false;
@@ -237,8 +264,8 @@ interface MarkedRow {
 /* The decline route's rule (the invariant in the header). A row with no uuid
    always gets one of its own: a series mint would otherwise stamp the earlier
    book on the same legacy key and move its render key onto this row's design.
-   A row with a uuid separates when another book's row that is not a direct
-   follower holds it, or when a book cannot be read: copying writes no other
+   A row with a uuid separates when another book's row that is not a follower
+   holds it, or when a book cannot be read: copying writes no other
    book's file, so separating on not knowing is safe.
    A REPEATED decline is a no-op: a row that already declined `fromBookId` and is
    not on a voice it declined was separated by the first one, so a double click or

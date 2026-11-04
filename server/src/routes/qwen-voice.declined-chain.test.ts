@@ -246,14 +246,28 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(existsSync(join(qwenDir(), `qwen-${fresh}.pt`))).toBe(true);
   });
 
-  it('the fork carries DIRECT followers only: a row two links down stays on u_shared', async () => {
+  it('the fork carries the whole chain: a row two links down (Four links Three) moves too', async () => {
     seedChain({ four: true });
     expect((await design('Book Two')).status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
     expect(fresh).not.toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe(fresh);
-    expect(readRow('Book Four').voiceUuid).toBe('u_shared'); // links to Three, not to Two
+    expect(readRow('Book Four').voiceUuid).toBe(fresh);
+    expect(readRow('Book Four').matchedFrom.bookId).toBe(ids['Book Three']);
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
+    expect(book1Intact()).toBe(true);
+  });
+
+  it('a row two links down whose book becomes unreadable in between fails the fork; nothing is written', async () => {
+    seedChain({ four: true });
+    beforeCopy.fn = () => writeFileSync(castPath('Book Four'), '{"characters":[');
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
+    expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);
     expect(book1Intact()).toBe(true);
   });
 
@@ -305,9 +319,14 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(book1Intact()).toBe(true);
   });
 
-  it('a follower that stopped following between the scan and the locked write is NOT moved', async () => {
+  it('a follower that stopped following between the scan and the locked write fails the fork; the retry leaves it put', async () => {
     seedChain();
     beforeCopy.fn = () => writeRows('Book Three', [{ ...baseRow }]); // link dropped mid-fork
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(book1Intact()).toBe(true);
     expect((await design('Book Two')).status).toBe(200);
     expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');

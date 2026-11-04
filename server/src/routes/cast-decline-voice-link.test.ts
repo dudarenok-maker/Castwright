@@ -2,7 +2,8 @@
    only writer of the `declinedVoiceFrom` ("Don't reuse") marker. Since the
    decline-time redesign it also establishes the invariant every design relies
    on: after it succeeds the row is on its own voice that no other book's row
-   holds, other than its direct followers, which move with it. Real cast.json
+   holds, other than its followers (the whole chain that links down to it),
+   which move with it. Real cast.json
    files and real voice files; the manual re-link (cast/link-prior) that clears
    the marker again is covered at the end. Same lazy-import pattern as
    cast-not-linked-to.test.ts so WORKSPACE_DIR is set before paths.ts binds. */
@@ -276,22 +277,70 @@ describe('the separation: after a decline the row is on a voice no other book ho
     expect((await decline(twoId, 'wren', { fromBookId: 'a-deleted-book' })).body.voiceUuid).toBeTruthy();
   });
 
-  it('DIRECT followers move with it and lose their variants; a row two hops down, and a stranger, stay', async () => {
+  it('the whole chain moves with it and loses its variants (Three links Two, Four links Three); a stranger stays', async () => {
     seedShared();
     book('Book Three', [
       wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) }),
       { ...wren({ id: 'wren_b', voiceUuid: 'u_shared' }) }, // same voiceId in the follower's book: follows it
       { ...wren({ id: 'stranger', voiceId: 'v_other', voiceUuid: 'u_shared' }) }, // another voice: stays
     ]);
-    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared', ['angry']) })]);
     expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
     const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
     const three = readRows('Book Three');
     expect(three[0].voiceUuid).toBe(fresh);
     expect(three[0].overrideTtsVoices.qwen.variants).toBeUndefined();
     expect(three[0].matchedFrom.bookId).toBe(twoId); // the link itself is kept
     expect(three[1].voiceUuid).toBe(fresh);
     expect(three[2].voiceUuid).toBe('u_shared');
+    const four = readRows('Book Four')[0];
+    expect(four.voiceUuid).toBe(fresh);
+    expect(four.overrideTtsVoices.qwen.variants).toBeUndefined();
+    expect(four.matchedFrom.bookId).toBe(ids['Book Three']);
+    expect(readRows('Book One')[0]).toEqual(wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) }));
+    familyIntact();
+  });
+
+  it('a branch: two rows linking to Two both move, and what links to either', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book Four')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book One')[0].voiceUuid).toBe('u_shared');
+    familyIntact();
+  });
+
+  it('a cycle terminates: Two (whose own link names Four) <- Three <- Four all move once, One untouched', async () => {
+    seedShared({ matchedFrom: { bookId: ids['Book Four'], characterId: 'wren', bookTitle: 'Book Four', confidence: 1 } });
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    book('Book Four', [
+      wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') }),
+      // names its own book with no characterId: it names itself
+      wren({ id: 'wren_self', voiceId: 'v_self', voiceUuid: 'u_shared', matchedFrom: { bookId: ids['Book Four'], bookTitle: 'Book Four', confidence: 1 } }),
+    ]);
+    const started = Date.now();
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(5000);
+    const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book Four').map((r) => r.voiceUuid)).toEqual([fresh, 'u_shared']);
+    expect(readRows('Book One')[0].voiceUuid).toBe('u_shared');
+    familyIntact();
+  });
+
+  it('a row in the chain that already left the voice stays put, and so does what links to it', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_three', ...linkTo('Book Two') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    expect(readRows('Book Two')[0].voiceUuid).not.toBe('u_shared');
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_three');
     expect(readRows('Book Four')[0].voiceUuid).toBe('u_shared');
     familyIntact();
   });
@@ -333,16 +382,38 @@ describe('the separation: after a decline the row is on a voice no other book ho
     await decline(twoId, 'wren', { fromBookId: oneId });
     const fresh = readRows('Book Two')[0].voiceUuid;
     book('Book Three', [wren({ voiceUuid: fresh, ...linkTo('Book Two') })]);
-    book('Book Four', [wren({ voiceUuid: fresh, ...linkTo('Book Three') })]); // a second hop: not a follower
+    book('Book Four', [wren({ voiceUuid: fresh, ...linkTo('Book Three') })]); // a second hop
     writeBook('Book Two', twoId, [{ ...readRows('Book Two')[0], ...slot(fresh, ['angry']) }]);
     writeFileSync(join(root, 'books', AUTHOR, SERIES, 'Book One', '.audiobook', 'cast.json'), '{"characters":['); // and a torn book
     const files = voiceFiles();
+    const castTwo = readFileSync(castFile('Book Two'), 'utf8');
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.status).toBe(200);
     expect(res.body.voiceUuid).toBe(fresh);
     expect(Object.keys(readRows('Book Two')[0].overrideTtsVoices.qwen.variants)).toEqual(['angry']);
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
     expect(readRows('Book Four')[0].voiceUuid).toBe(fresh);
     expect(voiceFiles()).toEqual(files);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(castTwo); // not even rewritten
+  });
+
+  it('a double press separates once: two concurrent declines answer the same uuid and copy one family', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    const [a, b] = await Promise.all([
+      decline(twoId, 'wren', { fromBookId: oneId }),
+      decline(twoId, 'wren', { fromBookId: oneId }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(a.body.voiceUuid).toBe(fresh);
+    expect(b.body.voiceUuid).toBe(fresh);
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+    // Book One's five files plus ONE copied base family (four files), never two
+    expect(voiceFiles().filter((f) => !f.startsWith('qwen-u_shared'))).toHaveLength(4);
+    familyIntact();
   });
 });
 
@@ -420,12 +491,55 @@ describe('the step lands whole or not at all', () => {
     unchanged();
   });
 
-  it('a follower that stops following in between is not moved', async () => {
+  it('a follower that stops following in between fails the step with a retry sentence; the retry leaves it put', async () => {
     seedChain();
     beforeLocks.fn = () => book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book One') })]);
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    unchanged();
     expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    expect(readRows('Book Two')[0].voiceUuid).not.toBe('u_shared');
     expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
     familyIntact();
+  });
+
+  it('a book two hops down the chain becoming unreadable in between fails the step; nothing is written', async () => {
+    seedChain();
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    beforeLocks.fn = () => writeFileSync(castFile('Book Four'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(JSON.stringify(res.body)).not.toContain(root);
+    unchanged();
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
+    expect(readFileSync(castFile('Book Four'), 'utf8')).toBe('{"characters":[');
+  });
+
+  it('a row joining the chain two hops down in between fails the step; the retry carries it', async () => {
+    seedChain();
+    book('Book Four', [wren({ voiceUuid: 'u_shared' })]);
+    beforeLocks.fn = () => book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    unchanged();
+    expect(readRows('Book Four')[0].voiceUuid).toBe('u_shared');
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book Four')[0].voiceUuid).toBe(fresh);
+  });
+
+  it('a failed write two hops down rolls back every book already written and removes the copies', async () => {
+    seedChain();
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    failWriteIn.text = 'Book Four';
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(500);
+    unchanged();
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
+    expect(readRows('Book Four')[0].voiceUuid).toBe('u_shared');
   });
 
   it('the row vanishing in between answers 404 and leaves no copies', async () => {

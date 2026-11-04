@@ -245,11 +245,46 @@ describe('the ordinary cases: a design decides nothing', () => {
     expect((await decline('Book Two', 'Book One')).status).toBe(200);
     const two = row('Book Two').voiceUuid;
     expect(two).not.toBe('u_shared');
-    expect(row('Book Three').voiceUuid).toBe(two); // its direct follower moved with it
+    expect(row('Book Three').voiceUuid).toBe(two); // its follower moved with it
     await designSafely('Book Two');
     await designSafely('Book Three');
     await designSafely('Book Two', { emotion: 'sad' });
     expect(row('Book Two').voiceUuid).toBe(two);
+    oneIntact();
+  });
+});
+
+describe('owner decision: a decline moves the whole chain', () => {
+  it("One <- Two <- Three <- Four: decline Two moves Two, Three and Four; designing Four leaves One's files byte-identical", async () => {
+    seedChain();
+    writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared', ['angry']) }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).toBe(two);
+    expect(row('Book Four').voiceUuid).toBe(two);
+    expect(row('Book One')).toEqual({ ...baseRow, ...slot('u_shared', ['angry']) });
+    await designSafely('Book Four');
+    await designSafely('Book Four', { emotion: 'angry' });
+    oneIntact();
+    expect(row('Book One').voiceUuid).toBe('u_shared');
+  });
+
+  it('the same rule on a design of a row declined before the route separated it: Four moves with Two', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared', ['angry']) }]);
+    writeBook('Book Two', [
+      { ...baseRow, declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], ...slot('u_shared', ['angry']) },
+    ]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared', ['angry']) }]);
+    writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared', ['angry']) }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    writeFileSync(pt('qwen-u_shared__angry'), Buffer.from('ONE-ANGRY'));
+    await designSafely('Book Two');
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(row('Book Four').voiceUuid).toBe(two);
+    await designSafely('Book Four');
     oneIntact();
   });
 });
@@ -513,7 +548,7 @@ describe('passes 5 and 6', () => {
     writeFileSync(pt(`qwen-${u}`), ORIG);
     expect((await decline('Book Two', 'Book One')).status).toBe(200);
     const x = row('Book Two').voiceUuid as string;
-    expect(row('Book Five').voiceUuid).toBe(x); // its direct follower moved with it
+    expect(row('Book Five').voiceUuid).toBe(x); // its follower moved with it
     await designSafely('Book Two');
     expect((await decline('Book Five', 'Book Two')).status).toBe(200);
     const five = row('Book Five').voiceUuid as string;
@@ -556,9 +591,11 @@ describe('passes 5 and 6', () => {
     oneIntact();
   });
 
-  it('P6-D: a follower re-linked to Book One between the decline’s plan and its locks stays with Book One and is not written', async () => {
+  it('P6-D: a follower re-linked to Book One between the decline’s plan and its locks fails the step; the retry leaves it with Book One', async () => {
     seedChain();
     beforeLocks.fn = () => writeRows('Book Three', [{ ...row('Book Three'), ...linkTo('Book One') }]);
+    expect((await decline('Book Two', 'Book One')).status).toBe(500);
+    expect(row('Book Two').voiceUuid).toBe('u_shared');
     expect((await decline('Book Two', 'Book One')).status).toBe(200);
     expect(row('Book Three').voiceUuid).toBe('u_shared');
     await designSafely('Book Two');

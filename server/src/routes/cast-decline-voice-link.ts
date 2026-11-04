@@ -7,16 +7,19 @@
    invariant every design relies on, in ONE locked step:
 
      After "Don't reuse" succeeds, the row is on its own voice that no other
-     book's row holds, other than its DIRECT followers, which move with it.
+     book's row holds, other than its FOLLOWERS, which move with it.
 
+   Its followers are the whole chain that leads down to it among rows still on
+   its voice (Three links to it, Four links to Three, ...; voice-uuid-fork.ts).
    So a design never decides anything about a shared voice: it writes the row's
    own key. The step (qwen-voice.ts separateVoiceLocked) records the marker
    (`declinedVoiceFrom`, plus `declinedVoiceUuids` for the voice it left), clears
    `matchedFrom`, and, when the row's voice is held by another book's row that is
-   not a direct follower (or a book cannot be read: copying writes no other book's
+   not a follower (or a book cannot be read: copying writes no other book's
    file, so not knowing separates), mints a fresh uuid, copies the base family with
-   COPYFILE_EXCL and stamps it onto the row and its direct followers, dropping
-   their `variants`. A row with no uuid always gets one (a series mint would move
+   COPYFILE_EXCL and stamps it onto the row and every follower, dropping
+   their `variants`. The chain is re-computed inside the locks; one that differs
+   from the plan's fails the step with a retry sentence. A row with no uuid always gets one (a series mint would move
    the earlier book's legacy key). Any failure rolls every write back and removes
    the copies; the route answers a curated error and nothing changes, so the
    client keeps the link and shows its failure toast.
@@ -28,7 +31,7 @@
 
    Locks, in CLAUDE.md's global order: the book's design lock (so no design of
    this book reads its uuid mid-step), then `withBookOps` over the row's book and
-   its direct followers' books, then `withCastLocks` over all of them. The book is
+   every follower's book, then `withCastLocks` over all of them. The book is
    peeked lock-free only to key the design lock; the locked handle must resolve to
    the same folder. The whole-roster cast PUT takes the marker from disk
    (preserveDeclinedVoiceFromOnCastWrite) and keeps disk's voice slot when the

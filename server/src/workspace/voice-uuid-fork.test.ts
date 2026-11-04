@@ -55,19 +55,35 @@ afterAll(() => {
 });
 
 describe('scanVoiceHolders (#3992)', () => {
-  it('splits other books holding the uuid into DIRECT followers and everyone else', async () => {
+  it('splits other books holding the uuid into the chain that leads down to X (any depth) and everyone else', async () => {
     reset();
     book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
     const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U }]);
     book('Three', THREE_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c' } }]);
     book('Four', 'book-four-id', [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c' } }]);
     const s = await scan(two, { id: 'c' }, holdsUuid(U));
-    expect(s.followers.map((f) => f.bookId)).toEqual([THREE_ID]);
-    expect(s.heldElsewhere).toBe(true); // One, and Four two hops down
+    expect(s.followers.map((f) => f.bookId)).toEqual([THREE_ID, 'book-four-id']); // breadth-first order
+    expect(s.heldElsewhere).toBe(true); // One
     expect([...s.holderBookIds].sort()).toEqual([ONE_ID, 'book-four-id', THREE_ID].sort());
   });
 
-  it('only direct followers hold it: not held elsewhere', async () => {
+  it('a hop resolves through the MIDDLE book’s id history; a cycle terminates; a row off the voice cuts the chain', async () => {
+    reset();
+    const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: 'book-four-id', characterId: 'c' } }]);
+    const three = book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c' } }]);
+    writeFileSync(join(three, '.audiobook', 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: { 'old-c3': 'c3' } }));
+    book('Four', 'book-four-id', [
+      { id: 'c', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'old-c3' } },
+      { id: 'self', voiceUuid: U, matchedFrom: { bookId: 'book-four-id' } }, // names itself
+    ]);
+    book('Five', 'book-five-id', [{ id: 'c', voiceUuid: 'elsewhere', matchedFrom: { bookId: TWO_ID, characterId: 'c' } }]);
+    book('Six', 'book-six-id', [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: 'book-five-id', characterId: 'c' } }]);
+    const s = await scan(two, { id: 'c' }, holdsUuid(U));
+    expect(s.followers.map((f) => `${f.bookId}/${f.characterId}`)).toEqual([`${THREE_ID}/c3`, 'book-four-id/c']);
+    expect(s.heldElsewhere).toBe(true); // Four's `self`, and Six behind the row that left
+  });
+
+  it('only followers hold it: not held elsewhere', async () => {
     reset();
     const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U }]);
     book('Three', THREE_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c' } }]);

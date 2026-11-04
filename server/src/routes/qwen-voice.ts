@@ -358,8 +358,8 @@ function withDeclineMark(row: MarkedCharacter, fromBookId: string | undefined, l
   return next;
 }
 
-/* #3992 — the books a separation must hold: the row's own and those of its direct
-   followers (they move with it). Lock-free and read-only; the locked step re-scans
+/* #3992 — the books a separation must hold: the row's own and those of its
+   followers, the whole chain that leads down to it (they move with it). Lock-free and read-only; the locked step re-scans
    and fails when the set it finds is not covered. Throws CharacterGoneError for a
    row that is not there. */
 export async function separationPlan(
@@ -383,7 +383,7 @@ export type CastWriter = (dir: string, cast: CastFile) => Promise<void>;
 export interface SeparationResult {
   /** The row's voiceUuid after the step. */
   voiceUuid: string | undefined;
-  /** The row (and its direct followers) moved to a fresh uuid. */
+  /** The row (and its followers) moved to a fresh uuid. */
   separated: boolean;
   /** The row as it now stands on disk. */
   row: MarkedCharacter;
@@ -401,8 +401,9 @@ export interface SeparationResult {
    mustSeparateOnDesign and records nothing but the voice it left. Separating mints
    U', copies the base family of the row's current key (`qwen-<uuid>`, or the
    legacy `qwen-<voiceId ?? id>`) to `qwen-<U'>` with COPYFILE_EXCL, and stamps U'
-   (dropping `variants`) onto the row, the same-book rows on its key, and its direct
-   followers' rows on that key. Any failure rolls every written book back and
+   (dropping `variants`) onto the row, the same-book rows on its key, and every
+   follower's rows on that key; a follower set that differs from `planned` fails
+   with a retry sentence before anything is copied. Any failure rolls every written book back and
    removes the copies, so the step lands whole or not at all; a follower whose
    rollback also failed keeps the copies it now points at. */
 export async function separateVoiceLocked(
@@ -430,16 +431,18 @@ export async function separateVoiceLocked(
     return { voiceUuid: x.voiceUuid ?? undefined, separated: false, row: marked };
   }
 
-  /* A book the plan found as a follower, locked on that basis, that cannot be read
-     now is NOT skipped: skipping it would leave a row linked to X on the old voice
-     while X moves. A follower the locks do not cover (a link that landed after the
-     plan) would be left behind the same way. Fail; nothing has been written. */
+  /* A book the plan found in the chain, locked on that basis, that cannot be read
+     now is NOT skipped: skipping it would leave a row linked into the chain on the
+     old voice while X moves. A chain that differs in any way from the plan's (a
+     link that landed or left after the plan, a row that joined or left the voice)
+     is not the set the locks were taken for. Fail; nothing has been written. */
   const locked = new Set(lockedDirs.map((d) => resolve(d)));
   const unreadable = new Set(scan.unreadableDirs);
   if (planned.some((f) => unreadable.has(resolve(f.dir)))) {
     throw new RetryableForkError('A book in this series could not be read while the voice was being separated; try again.');
   }
-  if (scan.followers.some((f) => !locked.has(resolve(f.dir)))) {
+  const chainKey = (fs: LinkFollower[]) => fs.map((f) => `${resolve(f.dir)}|${f.characterId}`).sort().join('\n');
+  if (chainKey(scan.followers) !== chainKey(planned) || scan.followers.some((f) => !locked.has(resolve(f.dir)))) {
     throw new RetryableForkError('A book in this series changed while the voice was being separated; try again.');
   }
 

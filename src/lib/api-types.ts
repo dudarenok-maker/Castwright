@@ -2946,20 +2946,24 @@ export interface paths {
          * Decline a series voice link ("Don't reuse") and give the character a voice of its own —
          * @description Establishes, in ONE locked step, the invariant every voice design relies
          *     on: afterwards the character is on its own voice that no other book's
-         *     character holds, other than the characters in other books that link to it
-         *     directly (one hop), which move with it. So a design never refuses and never
-         *     decides anything about a shared voice.
+         *     character holds, other than its followers, which move with it: every
+         *     character in another book whose series link chain leads down to it (one
+         *     linking to it, one linking to that, and so on) and that still shares the
+         *     voice. So a design never refuses and never decides anything about a shared
+         *     voice.
          *
          *     The step appends `fromBookId` to the character's `declinedVoiceFrom`
          *     marker, clears its `matchedFrom` when that link names `fromBookId` (and
          *     sets `voiceState` back to `generated` unless the voice is locked or tuned),
          *     and, when its voice is held by another book's character that is not a
-         *     direct follower (or a book cannot be read), mints a fresh `voiceUuid`,
-         *     copies the voice's base files to it (never an emotion variant), stamps it
-         *     onto the character and its direct followers and drops their emotion
-         *     variant slots; the voice it left is appended to `declinedVoiceUuids`. A
-         *     character with no `voiceUuid` always gets one. Any failure rolls every
-         *     write back and removes the copies, so nothing changes.
+         *     follower (or a book cannot be read), mints a fresh `voiceUuid`, copies the
+         *     voice's base files to it (never an emotion variant), stamps it onto the
+         *     character and all its followers and drops their emotion variant slots; the
+         *     voice it left is appended to `declinedVoiceUuids`. A character with no
+         *     `voiceUuid` always gets one. If the follower set changed, or a book in it
+         *     became unreadable, between the plan and the locked step, the request fails
+         *     with a retry sentence. Any failure rolls every write back and removes the
+         *     copies, so nothing changes.
          *
          *     `fromBookId` need not be resolvable (a deleted book's id is still a valid
          *     decline). Idempotent: repeating a decline of a character already on its own
