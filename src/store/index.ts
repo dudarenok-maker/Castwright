@@ -62,7 +62,6 @@ import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
 import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
-import { installRepairedBookHandler } from './repaired-book-handler';
 import { restructureGuardMiddleware } from './restructure-guard-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
@@ -250,9 +249,6 @@ streamRunnerInstance = createStreamRunner(store);
    (design spec §5). Installed post-creation since it needs the live
    store's getState/dispatch; no-ops outside a DOM environment. */
 installVoiceLibraryFocusListener(store);
-
-/* #3713 — a write refused on a repaired bookId discards the stale snapshot and re-reads. */
-installRepairedBookHandler(store);
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
  *  `redux-persist/integration/react` if you want to delay first render

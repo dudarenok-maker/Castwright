@@ -393,23 +393,13 @@ export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, pay
    A re-parse or a manuscript replace drops nothing: it rotates the book's
    edit epoch, so the server refuses every kept save (plan 289, D8b). Touches
    only the kept saves — a newer edit already queued for the book is
-   untouched. `dropBased` (#3713, PR #4004 pass 3) lifts the based-`state` exception: it is
-   what a full read passes when it COMMITS a repaired-id read token, because a save kept from
-   before the commit was made without the token and must not be armed by it. Not a reducer
-   action. */
+   untouched. Not a reducer action. */
 const DROP_RETAINED = 'persistence/dropRetained';
-export const dropRetainedSaves = (bookId: string, onFullRead = false, dropBased = false, dropQueued = false) => ({
+export const dropRetainedSaves = (bookId: string, onFullRead = false) => ({
   type: DROP_RETAINED,
   payload: bookId,
   onFullRead,
-  dropBased,
-  dropQueued,
 });
-/* `dropQueued` (#3713, PR #4004 pass 4) goes further than `dropBased`: it also cancels the debounce
-   timers and empties the outbox of a key with a timer or a flight, so a save QUEUED or retrying
-   when a repaired-id token is committed is never sent with it (it was built from slices that are
-   not the snapshot the commit vouches for). A request already on the wire went out without the
-   token, and its retry finds the outbox empty. */
 
 /* Plan 289 (D6) — a re-sent save carries the revision it was built against, so
    the server can refuse it if the book changed since. The middleware learns
@@ -543,8 +533,6 @@ export const persistenceMiddleware: Middleware = (store) => {
     let failures = 0;
     let ok = true;
     for (;;) {
-      /* `dropQueued` can empty the box while a retry waits: there is nothing left to send. */
-      if (box.size === 0) break;
       const sent = new Map(Array.from(box, ([u, e]) => [u, { value: e.value, based: !!e.base, handler: e.handler }]));
       const base: SliceRevision = Object.assign({}, ...Array.from(box.values(), (e) => e.base));
       const knownAtSend = { ...known.get(key) };
@@ -758,24 +746,17 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === DROP_RETAINED && typeof a.payload === 'string') {
       const onRead = (a as { onFullRead?: boolean }).onFullRead;
-      const all = !!(a as { dropQueued?: boolean }).dropQueued;
       for (const slice of LEARNED_SLICES) {
         const key = flushKey(a.payload, slice);
-        if (all) {
-          const timer = timers.get(key);
-          if (timer) clearTimeout(timer);
-          timers.delete(key);
-        }
         const box = outbox.get(key);
-        if (!box || (!all && (timers.has(key) || flights.has(key)))) continue;
+        if (!box || timers.has(key) || flights.has(key)) continue;
         /* P2 — a based `state` save stays, for the server to judge. */
-        const keepBased = onRead && slice === 'state' && !all && !(a as { dropBased?: boolean }).dropBased;
+        const keepBased = onRead && slice === 'state';
         for (const [u, e] of Array.from(box)) {
           if (keepBased && e.base) continue;
           box.delete(u);
         }
-        /* A running flight holds this box and removes it itself when it ends. */
-        if (box.size === 0 && !flights.has(key)) outbox.delete(key);
+        if (box.size === 0) outbox.delete(key);
       }
       /* #3784 P12-1 — without `onFullRead` this is the book's delete: forget
          its details snapshot, and the draft if it was typed on that book. Done
@@ -798,15 +779,10 @@ export const persistenceMiddleware: Middleware = (store) => {
        returning to the same one (B -> home -> B keeps the user's typing), and
        it cannot use `lastBookId` because S3 above nulls that on the library —
        hence the separate `lastOpenBookId`, which only ever holds a book. */
-    /* #3713 — `ui/rebindBook` renames the SAME book (a duplicate-bookId repair
-       gave the open twin a new id): the draft typed on it is still its own. */
-    const rebind = (a as { payload?: { from?: string; to?: string } }).payload;
-    const sameBookRenamed = type === 'ui/rebindBook' && rebind?.from === lastOpenBookId && rebind?.to === bookId;
     if (
       bookId !== null &&
       lastOpenBookId !== null &&
       bookId !== lastOpenBookId &&
-      !sameBookRenamed &&
       Object.keys(after.bookMeta?.draft ?? {}).length > 0
     ) {
       store.dispatch(bookMetaActions.cancelDraft());

@@ -155,6 +155,15 @@ const ALLOWED_DIRECT_FETCH = new Map<string, { count: number; why: string }>([
     { count: 2, why: 'local install/poll provisioning surface, no mock counterpart (#2344 brief)' },
   ],
   [
+    'mini-player.tsx',
+    {
+      count: 1,
+      why:
+        "deliberate keepalive:true unload flush (line ~619) — must bypass the mock api because " +
+        'keepalive has to survive page unload; the primary 5s flush already uses api.putListenStats (#2344 brief)',
+    },
+  ],
+  [
     'model-pull-status.tsx',
     { count: 3, why: 'local ollama pull/refresh provisioning surface, no mock counterpart (#2344 brief)' },
   ],

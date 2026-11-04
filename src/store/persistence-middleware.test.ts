@@ -23,7 +23,7 @@ import { changeLogSlice } from './change-log-slice';
 import { createBookStateDisk } from '../test/book-state-disk';
 import type { Character, SliceRevision } from '../lib/types';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
-import { uiSlice, uiActions } from './ui-slice';
+import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
 import { bookMetaSlice, bookMetaActions, selectEffectiveMeta } from './book-meta-slice';
 
@@ -2528,27 +2528,6 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
       restore();
     });
 
-    /* #3713 / PR #4004 pass 3: committing a repaired-id read token arms every save the middleware
-       still holds, so a kept save made BEFORE the commit must not survive it, a based `state` one
-       included. `dropBased` (third argument) is what Layout and the repaired-book handler pass then. */
-    it('#3713: a commit-time drop also takes a based kept state save', async () => {
-      const { disk, store, restore } = setup();
-      await keepConfirm(store, disk);
-      store.dispatch(dropRetainedSaves('b1', true, true));
-      expect(store.dispatch(flushBookPersistence('b1'))).toBeNull();
-      expect(stateOnDisk(disk).castConfirmed).toBe(false);
-      restore();
-    });
-
-    it('#3713: a commit-time drop of one book leaves another books kept save alone', async () => {
-      const { disk, store, restore } = setup();
-      await keepConfirm(store, disk);
-      store.dispatch(dropRetainedSaves('some-other-book', true, true));
-      await store.dispatch(flushBookPersistence('b1'));
-      expect(stateOnDisk(disk).castConfirmed).toBe(true);
-      restore();
-    });
-
     /* P2 is narrowed to the `state` slice: a full read puts the screen back to
        disk without a kept whole-slice save, so keeping it would land a roster
        the screen no longer shows (F1). */
@@ -2803,91 +2782,5 @@ describe('castWrittenSince (#3916)', () => {
     store.dispatch(dropRetainedSaves('b1', true) as never);
     expect(written(store, 'b1', seq)).toBe(false);
     err.mockRestore();
-  });
-});
-
-describe('a repaired book (#3713)', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    putBookState.mockReset();
-    putBookState.mockResolvedValue(undefined);
-  });
-  afterEach(() => vi.useRealTimers());
-
-  it('a details commit the server refuses as book_repaired_reload is sent once, rolled back, and keeps the typed draft', async () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    putBookState.mockRejectedValue(
-      Object.assign(
-        new Error('Book state PUT failed (409): This book was repaired after a duplicate id was found.'),
-        { code: 'book_repaired_reload' },
-      ),
-    );
-    const store = makeBookMetaStore();
-    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'New Title' }));
-    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
-    await vi.runAllTimersAsync();
-
-    expect(putBookState).toHaveBeenCalledTimes(1);
-    const state = store.getState() as {
-      notifications: { toasts: { message: string }[] };
-      bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
-    };
-    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
-    expect(state.bookMeta.draft?.title).toBe('New Title');
-    expect(state.notifications.toasts.map((t) => t.message).join('\n')).toContain('repaired');
-    err.mockRestore();
-  });
-
-  /* PR #4004 pass 4, finding 2: `dropQueued` — what a token commit asks for — also cancels what is
-     queued behind a debounce timer or waiting out a retry, not only an idle kept save. */
-  describe('dropQueued', () => {
-    const edit = (store: ReturnType<typeof makeReduxStore>) =>
-      store.dispatch(uiActions.confirmCast());
-
-    it('cancels a save still behind its debounce timer', async () => {
-      const store = makeReduxStore();
-      edit(store);
-      store.dispatch(dropRetainedSaves('b1', true, true, true) as never);
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(putBookState).not.toHaveBeenCalled();
-    });
-
-    it('CONTROL: without dropQueued the same queued save is still sent', async () => {
-      const store = makeReduxStore();
-      edit(store);
-      store.dispatch(dropRetainedSaves('b1', true, true) as never);
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(putBookState).toHaveBeenCalledTimes(1);
-    });
-
-    it('stops a save waiting out a transport-failure retry from being re-sent', async () => {
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-      putBookState.mockRejectedValue(new Error('network down'));
-      const store = makeReduxStore();
-      edit(store);
-      await vi.advanceTimersByTimeAsync(600); // first attempt fails, the +1 s retry is pending
-      expect(putBookState).toHaveBeenCalledTimes(1);
-      store.dispatch(dropRetainedSaves('b1', true, true, true) as never);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(putBookState).toHaveBeenCalledTimes(1);
-      err.mockRestore();
-    });
-
-    it('another book is untouched', async () => {
-      const store = makeReduxStore();
-      edit(store);
-      store.dispatch(dropRetainedSaves('some-other-book', true, true, true) as never);
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(putBookState).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it('a rebind of the open book keeps its uncommitted details draft; opening another book still clears it', () => {
-    const store = makeBookMetaStore();
-    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Typed' }));
-    store.dispatch(uiActions.rebindBook({ from: 'b1', to: 'b1-2' }));
-    expect((store.getState() as { bookMeta: { draft: unknown } }).bookMeta.draft).toEqual({ title: 'Typed' });
-    store.dispatch(uiActions.openBook({ id: 'other', status: 'complete' }));
-    expect((store.getState() as { bookMeta: { draft: unknown } }).bookMeta.draft).toBeNull();
   });
 });
