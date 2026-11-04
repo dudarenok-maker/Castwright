@@ -133,7 +133,7 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 4)', () =
     const designed = sse(res.text).find((e) => e.type === 'designed');
     expect(designed).toBeDefined();
     expect(skippedIds(designed)).toContain(DUP);
-    expect(designed!.skippedBooks[0].reason).toMatch(/^Reopen ".+" to apply/);
+    expect(designed!.skippedBooks[0].reason).toMatch(/^".+" was repaired after this page loaded. Reload Castwright/);
     expect(read(kept)).toBe(before);
     expect(read(src)).toContain('qwen-c0');
   });
