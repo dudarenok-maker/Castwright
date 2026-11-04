@@ -250,7 +250,7 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     const four = await design('Book Four');
     expect(four.status).toBe(409);
     expect(four.body.error).toBe(
-      'This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.',
+      'Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.',
     );
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);

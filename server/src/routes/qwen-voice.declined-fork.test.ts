@@ -286,7 +286,7 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     seed({ matchedFrom: { bookTitle: 'Book One', confidence: 0.92 } });
     const res = await design(() => bookTwoId);
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/^This voice is still shared with "Book One"/);
+    expect(res.body.error).toMatch(/^Redesign "Book One" to change this shared voice/);
     expect(requestedVoiceIds).toEqual([]);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);

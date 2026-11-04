@@ -270,7 +270,7 @@ export const UNREADABLE_BOOK_MESSAGE = 'A book in this series could not be read;
 export const redesignFirstMessage = (title: string): string =>
   `Redesign "${title}" first. This voice is shared with it.`;
 export const sharedThroughChainMessage = (title: string): string =>
-  `This voice is still shared with "${title}" through another linked book. Choose "Don't reuse" for this character first.`;
+  `Redesign "${title}" to change this shared voice, or choose "Don't reuse" to give this character its own.`;
 
 const titleOf = (book: OtherBook): string => book.title || basename(book.dir);
 
@@ -297,8 +297,8 @@ const titleOf = (book: OtherBook): string => book.title || basename(book.dir);
       read, a legacy row whose source holds a uuid. A target that is an UNFORKED
       decliner on V names itself ("Redesign <it> first"): its own design forks and
       carries this row with it, after which this design is free. The rest name a
-      book still on V and point at "Don't reuse", which makes the row an unlinked
-      decliner of its own (case 1).
+      book still on V: redesign that book, or "Don't reuse", which makes the row an
+      unlinked decliner of its own (case 1).
 
    Writes nothing and takes no lock. */
 export async function decideSharedVoiceDesign(

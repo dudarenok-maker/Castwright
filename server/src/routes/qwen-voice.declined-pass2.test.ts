@@ -351,7 +351,7 @@ describe('pass-2 3 — designing a FOLLOWER of a declined, unforked row must not
     writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three') }]);
     const res = await design('Book Four');
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/^This voice is still shared with "Book One"/);
+    expect(res.body.error).toMatch(/^Redesign "Book One" to change this shared voice/);
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
     for (const t of ['Book Two', 'Book Three', 'Book Four'] as const) expect(readRow(t).voiceUuid).toBe('u_shared');

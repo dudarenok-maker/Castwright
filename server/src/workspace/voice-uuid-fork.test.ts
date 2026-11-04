@@ -379,7 +379,7 @@ describe('decideSharedVoiceDesign (#3992 fail-closed rule)', () => {
     expect(await decide(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) })).toEqual({
       kind: 'refuse',
       message:
-        'This voice is still shared with "One" through another linked book. Choose "Don\'t reuse" for this character first.',
+        'Redesign "One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.',
     });
   });
 

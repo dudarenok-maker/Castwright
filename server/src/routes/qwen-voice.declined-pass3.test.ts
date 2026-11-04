@@ -227,7 +227,7 @@ describe('pass-3 2 — a follower the fork could not see is not left on the earl
     const res = await design('Book Three');
     expect(res.status).toBe(409);
     expect(res.body.error).toBe(
-      'This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.',
+      'Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.',
     );
     expect(book1Intact()).toBe(true);
     expect(requestedVoiceIds).toEqual([]);

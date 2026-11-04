@@ -209,7 +209,7 @@ const ptOf = (key: string) => join(qwenDir(), `${key}.pt`);
 const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
 
 const CHAIN_ONE =
-  'This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.';
+  'Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.';
 const REDESIGN_TWO = 'Redesign "Book Two" first. This voice is shared with it.';
 const reset = () => {
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
