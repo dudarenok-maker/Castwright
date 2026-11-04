@@ -28,7 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
-import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
+import { refuseGatedBooksNow, refuseUnreadRepairedBooks, retryUnreadableGate } from '../workspace/repaired-book-gate.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { isTtsModelKey } from '../tts/model-keys.js';
@@ -222,17 +222,20 @@ queueRouter.post('/clear', async (req: Request, res: Response) => {
   }
 });
 
-/* #4029 -- start / retry / confirm-fallback carry only an entry id, so the gate keys on the entry's OWN bookId
-   (same rule as enqueue). A stale tab's /start would strand a fresh page's entry for a repaired book
-   in_progress; its fail+retry would requeue it. An id that names no entry stays an idempotent no-op. */
-async function refuseRepairedEntry(
+/* #4029 -- every route that carries only an entry id (start / retry / confirm-fallback, and the ones that remove or
+   fail an entry: complete, DELETE, skip-fallback) keys the gate on the entry's OWN bookId (same rule as enqueue),
+   so a page that predates a repair is refused whole. A stale tab's /start would strand a fresh page's entry for a
+   repaired book in_progress; its fail+retry would requeue it. An id that names no entry stays an idempotent no-op.
+   The gate-file retry settles BEFORE the queue is read (`await retryUnreadableGate()` in each handler), so this check
+   is synchronous and no await sits between the queue read and its write. */
+function refuseRepairedEntry(
   entryId: string,
   file: { entries: Array<{ id: string; bookId: string }> },
   req: Request,
   res: Response,
-): Promise<boolean> {
+): boolean {
   const entry = file.entries.find((e) => e.id === entryId);
-  return entry !== undefined && (await refuseUnreadRepairedBooks([entry.bookId], req, res));
+  return entry !== undefined && refuseGatedBooksNow([entry.bookId], req, res);
 }
 
 /* Mark an entry in_progress — the dispatcher fires this the instant it claims
@@ -243,9 +246,10 @@ async function refuseRepairedEntry(
    claim or a stale snapshot can't 4xx. */
 queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (await refuseRepairedEntry(entryId, before, req, res)) return;
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = markInProgress(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -267,8 +271,10 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { outcome?: unknown; errorReason?: unknown };
   const outcome = body.outcome === 'failed' ? 'failed' : 'done';
   const errorReason = typeof body.errorReason === 'string' ? body.errorReason : undefined;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = completeEntry(before, entryId, outcome, errorReason);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -282,9 +288,10 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
    non-failed entry. */
 queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (await refuseRepairedEntry(entryId, before, req, res)) return;
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = retry(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -300,9 +307,10 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
    — a double-click or stale id returns the current snapshot. */
 queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
-    if (await refuseRepairedEntry(entryId, before, req, res)) return;
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = confirmFallback(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -316,8 +324,10 @@ queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Respons
    (idempotent 200) unless the entry is awaiting_confirm. */
 queueRouter.post('/:entryId/skip-fallback', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = skipFallback(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
@@ -333,8 +343,10 @@ queueRouter.delete('/:entryId', async (req: Request, res: Response) => {
      re-claim (so Pause-then-cancel can't reach it). Any still-live stream for
      the chapter just idles into a no-op reconcile against the now-gone id. */
   const force = req.query.force === 'true';
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
+    if (refuseRepairedEntry(entryId, before, req, res)) return;
     const after = cancel(before, entryId, { force });
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });

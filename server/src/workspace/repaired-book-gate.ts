@@ -44,10 +44,10 @@
      POST   /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
      DELETE /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
      POST   /api/queue/enqueue                                    (every entry's bookId)
-     POST   /api/queue/:entryId/{start,retry,confirm-fallback}    (the entry's own bookId; an id naming no entry is a no-op)
+     POST   /api/queue/:entryId/{start,retry,confirm-fallback,complete,skip-fallback} and DELETE /api/queue/:entryId
+                                                                  (the entry's own bookId; an id naming no entry is a no-op)
    Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
-   library); voice-library revoke and DELETE /:uuid; the queue routes that name no book (reorder, pause, clear,
-   complete, DELETE, skip-fallback); POST /api/books and /api/import (mint a new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
+   library); voice-library revoke and DELETE /:uuid; the queue routes that name no book and no entry (reorder, pause, clear); POST /api/books and /api/import (mint a new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
 
    A series fan-out is REFUSED whole, never partly applied. Series-patch, voice-override-linked, cast/tier,
    the series (and workspace) scope of PUT /api/voices/:id/override, and the design writers that propagate a
@@ -372,6 +372,12 @@ export async function repairedManuscriptGate(req: Request, res: Response, next: 
  *  itself; returns true when it did, so the handler returns. */
 export async function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): Promise<boolean> {
   await retryUnreadableGate();
+  return refuseGatedBooksNow(bookIds, req, res);
+}
+
+/** The check of `refuseUnreadRepairedBooks` without the retry: synchronous, for a handler that has already awaited
+ *  `retryUnreadableGate()` and must not await between its read and its write. */
+export function refuseGatedBooksNow(bookIds: readonly unknown[], req: Request, res: Response): boolean {
   const gated = bookIds.some((id) => typeof id === 'string' && id !== '' && isGatedBook(id));
   let passed = false;
   refuseUnlessCurrent(gated, req, res, () => {

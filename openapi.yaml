@@ -2277,8 +2277,12 @@ paths:
       description: |
         Removes the entry from the queue. Refuses with 409 if the entry is
         currently `in_progress` — the user must Pause first.
+
+        An entry for a repaired bookId (#3713) is removed only by a request
+        carrying the current `X-Repair-Epoch` (#4029).
       parameters:
         - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       responses:
         '200':
           description: Resulting queue snapshot
@@ -2286,7 +2290,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
         '409':
-          description: Entry is in_progress; pause the queue first.
+          description: Entry is in_progress (pause the queue first), or the entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch` (`BookRepairedReloadError`; the entry was not changed).
 
   /api/queue/{entryId}/start:
     post:
@@ -2306,7 +2310,8 @@ paths:
         An entry for a repaired bookId (#3713) is changed only by a request
         carrying the current `X-Repair-Epoch` (#4029); otherwise 409
         `book_repaired_reload` and the entry is untouched. The same rule
-        gates `/retry` and `/confirm-fallback`.
+        gates `/retry`, `/confirm-fallback`, `/complete`, `/skip-fallback` and
+        `DELETE /api/queue/{entryId}`.
       parameters:
         - { in: path, name: entryId, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/RepairEpoch' }
@@ -2333,14 +2338,23 @@ paths:
         user-facing DELETE, which 409s an `in_progress` entry so the modal's
         cancel button keeps its "pause first" guard. Idempotent for a missing id.
         Persists to `<workspace>/.queue.json`.
+
+        Gated like `/start` (#4029): an entry for a repaired bookId needs the
+        current `X-Repair-Epoch`.
       parameters:
         - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
       responses:
         '200':
           description: Resulting queue snapshot
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
 
   /api/books/{bookId}/generation:
     post:

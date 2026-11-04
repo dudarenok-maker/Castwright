@@ -1547,6 +1547,9 @@ export interface paths {
          * Cancel (remove) a queued entry
          * @description Removes the entry from the queue. Refuses with 409 if the entry is
          *     currently `in_progress` — the user must Pause first.
+         *
+         *     An entry for a repaired bookId (#3713) is removed only by a request
+         *     carrying the current `X-Repair-Epoch` (#4029).
          */
         delete: operations["cancelQueueEntry"];
         options?: never;
@@ -1578,7 +1581,8 @@ export interface paths {
          *     An entry for a repaired bookId (#3713) is changed only by a request
          *     carrying the current `X-Repair-Epoch` (#4029); otherwise 409
          *     `book_repaired_reload` and the entry is untouched. The same rule
-         *     gates `/retry` and `/confirm-fallback`.
+         *     gates `/retry`, `/confirm-fallback`, `/complete`, `/skip-fallback` and
+         *     `DELETE /api/queue/{entryId}`.
          */
         post: operations["startQueueEntry"];
         delete?: never;
@@ -1604,6 +1608,9 @@ export interface paths {
          *     user-facing DELETE, which 409s an `in_progress` entry so the modal's
          *     cancel button keeps its "pause first" guard. Idempotent for a missing id.
          *     Persists to `<workspace>/.queue.json`.
+         *
+         *     Gated like `/start` (#4029): an entry for a repaired bookId needs the
+         *     current `X-Repair-Epoch`.
          */
         post: operations["completeQueueEntry"];
         delete?: never;
@@ -10230,7 +10237,15 @@ export interface operations {
     cancelQueueEntry: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 entryId: string;
             };
@@ -10247,7 +10262,7 @@ export interface operations {
                     "application/json": components["schemas"]["QueueListResponse"];
                 };
             };
-            /** @description Entry is in_progress; pause the queue first. */
+            /** @description Entry is in_progress (pause the queue first), or the entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch` (`BookRepairedReloadError`; the entry was not changed). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10298,7 +10313,15 @@ export interface operations {
     completeQueueEntry: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path: {
                 entryId: string;
             };
@@ -10313,6 +10336,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
                 };
             };
         };

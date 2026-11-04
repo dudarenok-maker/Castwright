@@ -127,3 +127,50 @@ describe.each([
     expect(res.status).toBe(200);
   });
 });
+
+/* #4029 pass 1 -- the routes that only remove or fail an entry key on its own bookId too ("refuse whole"): a
+   stale tab's first write after a restart is usually the /complete for the stream the restart killed. */
+describe.each([
+  ['complete', 'in_progress', (id: string, epoch?: string) => withEpoch(request(app).post(`/api/queue/${id}/complete`), epoch)],
+  ['DELETE', 'queued', (id: string, epoch?: string) => withEpoch(request(app).delete(`/api/queue/${id}`), epoch)],
+  ['skip-fallback', 'awaiting_confirm', (id: string, epoch?: string) => withEpoch(request(app).post(`/api/queue/${id}/skip-fallback`), epoch)],
+])('%s on an entry of a repaired book (#4029)', (_name, from, call) => {
+  it('no epoch: 409 book_repaired_reload and the entry is unchanged', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e1', bookId: DUP, status: from }]);
+    const res = await call('e1');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+    expect(await statusOf('e1')).toBe(from);
+  });
+
+  it('a stale epoch is refused', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e1', bookId: DUP, status: from }]);
+    expect((await call('e1', 'pre-repair')).status).toBe(409);
+    expect(await statusOf('e1')).toBe(from);
+  });
+
+  it('with the current epoch the entry is removed', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e1', bookId: DUP, status: from }]);
+    expect((await call('e1', gate.currentRepairEpoch()!)).status).toBe(200);
+    expect(await statusOf('e1')).toBeUndefined();
+  });
+
+  it('CONTROL: an entry of an unrelated book needs no epoch', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e1', bookId: OTHER, status: from }]);
+    expect((await call('e1')).status).toBe(200);
+    expect(await statusOf('e1')).toBeUndefined();
+  });
+
+  it('CONTROL: an id that names no entry stays an idempotent 200', async () => {
+    await repaired();
+    expect((await call('ghost')).status).toBe(200);
+  });
+});
+
+function withEpoch<T extends { set: (k: string, v: string) => T }>(r: T, epoch?: string): T {
+  return epoch === undefined ? r : r.set('X-Repair-Epoch', epoch);
+}
