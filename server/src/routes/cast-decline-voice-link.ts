@@ -25,6 +25,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { bookHoldsVoiceUuid } from '../workspace/voice-uuid-fork.js';
 
 export const castDeclineVoiceLinkRouter = Router();
 
@@ -74,11 +75,16 @@ castDeclineVoiceLinkRouter.post(
            lock/tune. */
           const unlink = row.matchedFrom?.bookId === fromBookId;
           const existing = row.declinedVoiceFrom ?? [];
-          /* The voice being declined is the uuid the row holds right now (a linked
-           row shares its source's). Recording it makes the decline cover every
-           book holding that voice, not only `fromBookId`. */
+          /* The voice being declined is the uuid the row holds right now, but only
+           when `fromBookId` actually holds it: a row that already forked (and was
+           linked back since, which moves no uuid) holds a voice of its own, and
+           recording that as "declined" would be a false fact. Recording it makes
+           the decline cover every book holding that voice, not only `fromBookId`. */
           const uuids = row.declinedVoiceUuids ?? [];
-          const addUuid = !!row.voiceUuid && !uuids.includes(row.voiceUuid);
+          const addUuid =
+            !!row.voiceUuid &&
+            !uuids.includes(row.voiceUuid) &&
+            (await bookHoldsVoiceUuid(bookDir, fromBookId, row.voiceUuid));
           if (!existing.includes(fromBookId) || addUuid || unlink) {
             const next: CastRow = {
               ...row,

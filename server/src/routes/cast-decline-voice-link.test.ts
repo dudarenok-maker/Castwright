@@ -96,17 +96,31 @@ describe('POST decline-voice-link', () => {
     expect(readRows('Book One')[0].declinedVoiceFrom).toBeUndefined();
   });
 
-  it('records the voice uuid the row holds, so the decline covers every book holding that voice (pass-2 V)', async () => {
+  it('records the voice uuid the row holds when the declined book holds it, so the decline covers every book holding that voice (pass-2 V)', async () => {
+    writeBook('Book One', oneId, [wren({ voiceUuid: 'u_shared' })]);
     writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_shared' })]);
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'] });
     expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
-    // a repeat is a no-op, and a row that has since forked adds its new uuid
+    // a repeat is a no-op
     await decline(twoId, 'wren', { fromBookId: oneId });
     expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+  });
+
+  it('records no uuid the declined book does not hold: a row on a voice of its own, or one whose declined book is gone or unreadable (pass 8)', async () => {
+    writeBook('Book One', oneId, [wren({ voiceUuid: 'u_shared' })]);
     writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_new', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'] })]);
     await decline(twoId, 'wren', { fromBookId: oneId });
-    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared', 'u_new']);
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+    // the declined book is not in the library at all
+    const res = await decline(twoId, 'wren', { fromBookId: 'a-deleted-book' });
+    expect(res.status).toBe(200);
+    expect(readRows('Book Two')[0].declinedVoiceFrom).toEqual([oneId, 'a-deleted-book']);
+    expect(readRows('Book Two')[0].declinedVoiceUuids).toEqual(['u_shared']);
+    // the declined book's cast.json cannot be read
+    writeFileSync(castFile('Book One'), '{"characters":[');
+    writeBook('Book Two', twoId, [wren({ voiceUuid: 'u_shared' })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).body.declinedVoiceUuids).toEqual([]);
   });
 
   it('clears matchedFrom on disk in the same write, mirroring the reducer (pass-2 D)', async () => {
