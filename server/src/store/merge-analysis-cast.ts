@@ -657,10 +657,12 @@ export function seedReuseGuardsFromPriorCast<
     // a fresh row with no by-id prior (an id-drifted speaker) would get no
     // decline at all, and the merge's name fallback could then hand it a link a
     // twin declined. Union every same-name prior row's declines onto it: a
-    // spurious copy only prevents a link, which fails safe.
+    // spurious copy only prevents a link, which fails safe. That holds for each
+    // of several same-name fresh rows too (one speaker held under two roster
+    // ids, #4032), so the union does not wait for a unique fresh name.
     if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
       const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+      if (key && looseBridge.ambiguous.has(key)) {
         let union: unknown[] | undefined;
         for (const old of existing) {
           if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;

@@ -966,20 +966,42 @@ describe('seedReuseGuardsFromPriorCast', () => {
     expect(existing[1].notLinkedTo).toHaveLength(1);
   });
 
-  it('the ambiguous-name union is skipped when the fresh name is shared or the narrator id (#3965)', () => {
+  it('the ambiguous-name union is skipped for the narrator id (#3965)', () => {
     const existing: C[] = [
       { id: 'a', name: 'Olga', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] },
       { id: 'b', name: 'Olga' },
     ];
-    const shared: C[] = [
-      { id: 'n1', name: 'Olga' },
-      { id: 'n2', name: 'Olga' },
-    ];
-    seedReuseGuardsFromPriorCast(existing, shared);
-    expect(shared.every((f) => f.notLinkedTo === undefined)).toBe(true);
     const narr: C[] = [{ id: 'narrator', name: 'Olga' }];
     seedReuseGuardsFromPriorCast(existing, narr);
     expect(narr[0].notLinkedTo).toBeUndefined();
+  });
+
+  it('the ambiguous-name union reaches EVERY no-by-id fresh row of a shared name, and only those (#4032)', () => {
+    const decline = { bookId: 'b1', characterId: 'x' };
+    const existing: C[] = [
+      { id: 'a', name: 'Olga', matchedFrom: { bookId: 'b1', characterId: 'x' } },
+      { id: 'b', name: 'Olga', notLinkedTo: [decline] },
+      { id: 'c', name: 'Mara', notLinkedTo: [{ bookId: 'b9', characterId: 'm' }] },
+      { id: 'd', name: 'Mara' },
+    ];
+    const fresh: C[] = [
+      { id: 'olga-3', name: 'Olga' },
+      { id: 'olga-4', name: 'Olga' },
+      // Control: a different name never receives Olga's decline.
+      { id: 'zed', name: 'Zed' },
+      // Control: a row with its own notLinkedTo keeps it untouched.
+      { id: 'olga-5', name: 'Olga', notLinkedTo: [{ bookId: 'b2', characterId: 'own' }] },
+      // Control: a by-id prior match takes that row, not the name union.
+      { id: 'a', name: 'Olga' },
+    ];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([decline]);
+    expect(fresh[1].notLinkedTo).toEqual([decline]);
+    expect(fresh[2].notLinkedTo).toBeUndefined();
+    expect(fresh[3].notLinkedTo).toEqual([{ bookId: 'b2', characterId: 'own' }]);
+    expect(fresh[4].notLinkedTo).toBeUndefined();
+    // The union copies into a fresh array, never aliasing a prior row's.
+    expect(fresh[0].notLinkedTo).not.toBe(existing[1].notLinkedTo);
   });
 
   it('id match takes precedence over the name-fallback', () => {

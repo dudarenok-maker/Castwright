@@ -59,11 +59,14 @@ const BOOK = 'author__series__book-two';
 const BODY = (who: string): string =>
   `“Are you sure this will work,” ${who} asked.\n\nOlga nodded and looked away.`;
 
-function phase0(rosterRows: CharacterOutput[]): Analyzer {
+function phase0(
+  rosterRows: CharacterOutput[],
+  byChapter?: (chapterId: number) => CharacterOutput[],
+): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
-    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
-      return { characters: rosterRows };
+    async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+      return { characters: byChapter ? byChapter(chapterId) : rosterRows };
     },
     runStage2Chapter: () => Promise.reject(new Error('phase0')),
     runEmotionChapter: () => Promise.reject(new Error('not used')),
@@ -73,7 +76,10 @@ function phase0(rosterRows: CharacterOutput[]): Analyzer {
   };
 }
 
-function phase1(speakerId: string, onCall?: (chapterId: number) => Promise<void>): Analyzer {
+function phase1(
+  speakerId: string | ((chapterId: number) => string),
+  onCall?: (chapterId: number) => Promise<void>,
+): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('phase1')),
@@ -84,7 +90,7 @@ function phase1(speakerId: string, onCall?: (chapterId: number) => Promise<void>
           {
             id: chapterId * 100 + 1,
             chapterId,
-            characterId: speakerId,
+            characterId: typeof speakerId === 'function' ? speakerId(chapterId) : speakerId,
             confidence: 0.9,
             text: 'Are you sure this will work',
           },
@@ -185,7 +191,9 @@ function mkJob(manuscriptId: string, bookDir: string, kind: 'main' | 'subset'): 
 }
 
 interface RunOpts {
-  speaker: string;
+  speaker: string | ((chapterId: number) => string);
+  /** Per-chapter stage-1 roster (default: `roster` for every chapter). */
+  rosterOf?: (chapterId: number) => CharacterOutput[];
   subset?: boolean;
   onCall?: (chapterId: number) => Promise<void>;
 }
@@ -214,7 +222,7 @@ async function run(
     await runSubsetAnalyzerJob(
       job,
       rec as never,
-      sel(phase0(roster), 'phase0-model'),
+      sel(phase0(roster, opts.rosterOf), 'phase0-model'),
       phase1Sel,
       rec.chapterHints,
       true,
@@ -222,7 +230,7 @@ async function run(
     return;
   }
   (globalThis as Record<string, unknown>).__same_book_gate_phase1 = phase1Sel;
-  await runMainAnalyzerJob(job, rec as never, sel(phase0(roster), 'phase0-model'), {
+  await runMainAnalyzerJob(job, rec as never, sel(phase0(roster, opts.rosterOf), 'phase0-model'), {
     requestedFresh: false,
     allowStage1Shrink: true,
     requestedModel: undefined,
@@ -640,6 +648,58 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         expect(speaker?.voiceUuid).toBeUndefined();
         expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
         expect(rows.find((r) => r.id === 'thomas')?.matchedFrom).toBeDefined();
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+  it.each(['main', 'subset'] as const)(
+    'one speaker held under two same-name roster ids keeps the twin decline and not the link it declined (%s job)',
+    async (kind) => {
+      /* The stage-1 roster drifts one speaker into `wren-3` and `wren-4`: two
+         fresh rows sharing a name. The unique-fresh-name condition on the seed's
+         decline union skipped both, so the merge handed the speaker the link the
+         declining twin refused and dropped the decline (#4032). */
+      const linked: CastRow = {
+        id: 'wren-a',
+        name: 'Wren',
+        voiceId: 'v_b1',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        lines: 0,
+        matchedFrom: {
+          bookId: 'book-1',
+          characterId: 'wren',
+          bookTitle: 'Book One',
+          confidence: 0.9,
+        },
+      };
+      const declining: CastRow = {
+        id: 'wren-b',
+        name: 'Wren',
+        lines: 3,
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'wren' }],
+      };
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, linked, declining], 'Wren');
+      const w3 = rosterRow('wren-3', 'Wren');
+      const w4 = rosterRow('wren-4', 'Wren');
+      try {
+        await run(manuscriptId, bookDir, [NARR, w3, w4], {
+          speaker: (ch) => (ch === 2 ? 'wren-4' : 'wren-3'),
+          rosterOf: (ch) => (ch === 2 ? [NARR, w4] : [NARR, w3]),
+          subset: kind === 'subset',
+        });
+        const rows = named(bookDir, 'Wren');
+        expect(rows.find((r) => r.id === 'wren-a')?.matchedFrom).toBeDefined();
+        const others = rows.filter((r) => r.id !== 'wren-a');
+        expect(others.length).toBeGreaterThan(0);
+        for (const r of others) {
+          expect(r.matchedFrom).toBeUndefined();
+          expect(r.voiceUuid).toBeUndefined();
+        }
+        expect(
+          others.some((r) => JSON.stringify(r.notLinkedTo ?? []).includes('"characterId":"wren"')),
+        ).toBe(true);
       } finally {
         await cleanup(manuscriptId, bookDir);
       }
