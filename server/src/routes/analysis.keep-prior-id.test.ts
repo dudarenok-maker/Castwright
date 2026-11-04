@@ -494,6 +494,50 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
     },
   );
 
+  /* N6. The remap does nothing here: the fresh roster holds the recorded target
+     (`old-weir`) by id, and `ow2` / `old-weir` share a name. The merge's own
+     name fallback is then the only thing between the locked Brann row and a
+     retirement into brann-weir, and it refuses only because it is handed the
+     id history (`recordedElsewhere`). Passing it `{}` instead retires the
+     locked row and moves its voice onto the Brann Weir row. */
+  it.each(['main', 'subset'] as const)(
+    'N6 %s job: the merge, not the remap, refuses to retire a locked row into a fresh id recorded elsewhere',
+    async (kind) => {
+      const fr = (id: string, name: string): CharacterOutput =>
+        ({ ...WREN_FRESH, id, name, evidence: [{ quote: 'Olga nodded' }] }) as CharacterOutput;
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { id: 'brann', name: 'Brann', voiceState: 'locked', voiceId: 'v_brann' },
+          { id: 'old-weir', name: 'Old Weir', voiceState: 'locked', voiceId: 'v_ow' },
+        ],
+        { 'brann-weir': 'old-weir' },
+      );
+      try {
+        await run(manuscriptId, bookDir, kind, {
+          roster: [
+            NARR,
+            fr('brann-weir', 'Brann Weir'),
+            fr('ow2', 'Old Weir'),
+            fr('old-weir', 'Old Weir'),
+          ],
+          speakerId: ['brann-weir', 'ow2', 'old-weir'],
+        });
+        const cast = readCast(bookDir);
+        const brann = cast.find((c) => c.id === 'brann');
+        expect(brann?.voiceState).toBe('locked');
+        expect(brann?.voiceId).toBe('v_brann');
+        const history = readHistory(bookDir) as { displaced?: Record<string, string> };
+        expect(history.supersededBy).not.toHaveProperty('brann');
+        expect(history.displaced).toEqual({ 'brann-weir': 'old-weir' });
+        const ids = cast.map((c) => String(c.id));
+        expect(new Set(ids).size).toBe(ids.length);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
   it('A3 a second main run is stable', async () => {
     const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...PRIOR_WREN }]);
     try {
