@@ -79,6 +79,11 @@ function phase0(rosterRows: CharacterOutput[]): Analyzer {
   };
 }
 
+/* P3-3: runs inside the Phase-1 call for a chapter, before it attributes. A
+   test installs it to stop the job (abort + throw) at a chosen chapter. */
+let phase1Hook: ((chapterId: number) => void) | undefined;
+let lastJob: AnalysisJob | undefined;
+
 function phase1(speakerId: string | string[]): Analyzer {
   const speakers = [speakerId].flat();
   const perChapter = speakers.length > 1 ? 3 : 1;
@@ -87,7 +92,9 @@ function phase1(speakerId: string | string[]): Analyzer {
     runStage1Chapter: () => Promise.reject(new Error('phase1')),
     /* One line per chapter for a single speaker; with several speakers, three
        lines per chapter handed out in turn, so each clears the minor-cast fold. */
-    runStage2Chapter: (async (_m: string, chapterId: number) => ({
+    runStage2Chapter: (async (_m: string, chapterId: number) => {
+      phase1Hook?.(chapterId);
+      return {
       sentences: Array.from({ length: perChapter }, (_, k) => ({
         id: chapterId * 100 + k + 1,
         chapterId,
@@ -95,7 +102,8 @@ function phase1(speakerId: string | string[]): Analyzer {
         confidence: 0.9,
         text: 'Are you sure this will work',
       })),
-    })) as unknown as Analyzer['runStage2Chapter'],
+      };
+    }) as unknown as Analyzer['runStage2Chapter'],
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
     runStage3Chapter: () => Promise.reject(new Error('not used')),
@@ -226,6 +234,7 @@ async function run(
   fresh: { roster: CharacterOutput[]; speakerId: string | string[] } = { roster, speakerId: FRESH_ID },
 ): Promise<Sent[]> {
   const { job, events } = mkJob(manuscriptId, bookDir, kind);
+  lastJob = job;
   const rec = getManuscript(manuscriptId);
   if (!rec) throw new Error('manuscript missing');
   const phase1Sel = sel(phase1(fresh.speakerId), 'phase1-model');
@@ -711,6 +720,73 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         const ids = cast.map((c) => String(c.id));
         expect(new Set(ids).size).toBe(ids.length);
       } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* P3-3. A run stopped in Phase 1 and never resumed. The interim snapshots
+     write the PRIOR row in place of the drifted fresh row (F1/N3) and drop the
+     fresh id, but the Phase-1 roll used to stream the raw analyzer id into
+     manuscript-edits.json: lines on `wren-ashby`, an id with no cast row and
+     no history entry. Every attributed line must resolve to a cast row. One
+     chapter at a time, so chapter 1 is rolled before chapter 2 is stopped. */
+  it.each([
+    ['main', false],
+    ['subset', false],
+    // stage 1 already cached: the job writes no snapshot of its own, so the roll
+    // computes the table the snapshot would have used from the cached roster
+    ['main', true],
+  ] as const)(
+    'P3-3 %s job (cached stage 1: %s): a Phase-1 stop that is never resumed leaves every attributed line on a cast row',
+    async (kind, cachedStage1) => {
+      const origC = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...PRIOR_WREN }]);
+      phase1Hook = (chapterId) => {
+        if (chapterId !== 2) return;
+        lastJob!.controller.abort();
+        const e = new Error('aborted');
+        e.name = 'AbortError';
+        throw e;
+      };
+      try {
+        if (cachedStage1) {
+          await saveAnalysisCache(manuscriptId, {
+            chapters: {},
+            stage1: {
+              characters: roster,
+              chapters: getManuscript(manuscriptId)!.chapterHints.map((c) => ({
+                id: c.id,
+                title: c.title,
+              })),
+            },
+          } as never);
+        }
+        await run(manuscriptId, bookDir, kind).catch(() => {});
+        const edits = readEdits(bookDir);
+        expect(edits.length).toBeGreaterThan(0);
+        const cast = readCast(bookDir);
+        const resolver = buildCastResolver(cast as Array<{ id: string }>, {
+          supersededBy: (() => {
+            try {
+              return readHistory(bookDir).supersededBy;
+            } catch {
+              return {};
+            }
+          })(),
+        });
+        const unresolved = [...new Set(edits.map((s) => String(s.characterId)))].filter(
+          (id) => resolver.resolve(id) === null || resolver.resolve(id) === undefined,
+        );
+        expect(unresolved).toEqual([]);
+        // the Wren lines sit on the same row the snapshot shows: the prior row
+        expect(edits.some((s) => s.characterId === PRIOR_ID)).toBe(true);
+        expect(cast.some((c) => c.id === PRIOR_ID)).toBe(true);
+      } finally {
+        phase1Hook = undefined;
+        if (origC === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+        else process.env.ANALYZER_OLLAMA_CONCURRENCY = origC;
         await cleanup(manuscriptId, bookDir);
       }
     },

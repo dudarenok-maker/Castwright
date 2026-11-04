@@ -1165,7 +1165,17 @@ function previewFoldForLiveView(
    character, but the snapshot knows the row it is about to write came from
    this join. Best-effort like the snapshot itself: it returns only the roster
    and records no retirement (the authoritative write records it, from the same
-   pair), so a timeout or a clobber leaves nothing diverged.
+   pair), so a timeout or a clobber leaves the history as it was. It does NOT
+   leave every file agreeing: a snapshot drops the fresh id from cast.json while
+   the Phase-1 roll writes the analyzer's raw ids into manuscript-edits.json, so
+   a run stopped in Phase 1 and never resumed would leave lines on an id with no
+   cast row and no history entry (#3954 P3-3). The roll therefore maps its
+   sentence ids through the SAME table the snapshot used (`InterimIdTable`,
+   `interimRollIdTable`), keeping edits and cast.json on one row. That is safe
+   for N3 and F1: it only rewrites the ids of the rolled COPY of the sentences
+   (the analysis cache keeps the raw ids, and the authoritative write rebuilds
+   the edits from those takes, then joins against the whole roster), and it
+   persists no name, alias or description derived from a partial roster.
 
    #3954 review finding N3 — the remap's claim-once and held-by-a-fresh-row
    guards need the WHOLE roster, and a per-chapter snapshot has only the
@@ -1183,19 +1193,65 @@ async function remapInterimToPriorIds<T extends { id: string }>(
   priorCast: Parameters<typeof remapFreshToPriorIds>[2],
   bookDir: string,
   bookId: string | null | undefined,
+  table?: InterimIdTable,
 ): Promise<T[]> {
   const idHistory = await loadIdHistoryForRemap(bookDir);
-  const remapped = remapFreshToPriorIds(
+  const remap = remapFreshToPriorIds(
     interim,
     [],
     priorCast,
     {},
     bookId ?? undefined,
     idHistory,
-  ).characters;
+  );
+  if (table) table.rewrites = remap.rewrites;
+  const remapped = remap.characters;
   const priorById = new Map(priorCast.map((p) => [p.id, p]));
   return remapped.map((c, i) =>
     c.id !== interim[i].id ? ((priorById.get(c.id) as unknown as T | undefined) ?? c) : c,
+  );
+}
+
+/* #3954 P3-3 — the fresh→prior id table the LAST interim snapshot of a job
+   applied (`null` until one has run), so the Phase-1 roll can put its
+   sentences on the same row cast.json shows. See `remapInterimToPriorIds`. */
+interface InterimIdTable {
+  rewrites: Record<string, string> | null;
+}
+
+/* The table the Phase-1 roll maps its sentence ids through. The last snapshot's
+   table when this job wrote one; otherwise (a resume whose stage 1 was cached,
+   or a subset job, neither of which writes a snapshot) the table the snapshot
+   WOULD have used, computed from the roster. An empty roster computes nothing
+   and caches nothing, so a roll that precedes the roster is retried later. */
+async function interimRollIdTable(
+  table: InterimIdTable,
+  roster: ReadonlyArray<{ id: string }> | undefined,
+  priorCast: Parameters<typeof remapFreshToPriorIds>[2],
+  bookDir: string,
+  bookId: string | null | undefined,
+): Promise<Readonly<Record<string, string>>> {
+  if (table.rewrites) return table.rewrites;
+  if (!roster?.length) return {};
+  const idHistory = await loadIdHistoryForRemap(bookDir);
+  table.rewrites = remapFreshToPriorIds(
+    [...roster],
+    [],
+    priorCast,
+    {},
+    bookId ?? undefined,
+    idHistory,
+  ).rewrites;
+  return table.rewrites;
+}
+
+function mapRollIds<S extends { characterId: string }>(
+  sentences: S[],
+  rewrites: Readonly<Record<string, string>>,
+): S[] {
+  if (Object.keys(rewrites).length === 0) return sentences;
+  return sentences.map((s) =>
+    rewrites[s.characterId] ? { ...s, characterId: rewrites[s.characterId] } : s,
   );
 }
 
@@ -4880,6 +4936,9 @@ export async function runMainAnalyzerJob(
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
       ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
       : priorSnapshot.rows;
+    /* #3954 P3-3 — the id table the interim snapshots applied, shared with the
+       Phase-1 manuscript-edits roll (see `remapInterimToPriorIds`). */
+    const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write and reset by the Start-fresh delete below. */
     const castBase: CastMergeBase | null = recordRef.bookDir
@@ -5833,6 +5892,7 @@ export async function runMainAnalyzerJob(
                   priorCastForMerge,
                   recordRef.bookDir,
                   recordRef.bookId,
+                  interimIdTable,
                 ),
               );
               await castBase!.writeChecked(
@@ -6102,6 +6162,7 @@ export async function runMainAnalyzerJob(
                 priorCastForMerge,
                 recordRef.bookDir,
                 recordRef.bookId,
+                interimIdTable,
               ),
             );
             await castBase!.writeChecked(
@@ -6899,7 +6960,15 @@ export async function runMainAnalyzerJob(
              Interim rolls simply skip on an unresolvable path; the terminal
              persist block is the single halt gate (C4).
              The snapshot is built inside `rollManuscriptEdits`, in the same
-             synchronous step that joins the write queue (#3427). */
+             synchronous step that joins the write queue (#3427), so the id
+             table it maps through is resolved BEFORE the call (#3954 P3-3). */
+          const rollIds = await interimRollIdTable(
+            interimIdTable,
+            stage1 ? previewFoldForLiveView(stage1.characters, bookLanguage) : undefined,
+            priorCastForMerge,
+            recordRef.bookDir,
+            recordRef.bookId,
+          );
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
@@ -6914,7 +6983,7 @@ export async function runMainAnalyzerJob(
                 const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return running;
+              return mapRollIds(running, rollIds);
             },
             recordRef.bookId ?? undefined,
           );
@@ -8576,6 +8645,8 @@ export async function runSubsetAnalyzerJob(
       ? await readPriorCastForMerge(record.bookDir)
       : { rows: [], fingerprint: null, source: 'none' as const };
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+    // #3954 P3-3 — see the main route's binding of the same name.
+    const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write. */
     const castBase: CastMergeBase | null = record.bookDir
@@ -8893,6 +8964,7 @@ export async function runSubsetAnalyzerJob(
                   priorCastForMerge,
                   record.bookDir,
                   record.bookId,
+                  interimIdTable,
                 ),
               );
               await castBase!.writeChecked(
@@ -9357,7 +9429,16 @@ export async function runSubsetAnalyzerJob(
       if (record.bookDir) {
         try {
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
-             (no stale-dir recreation); the terminal persist halt-gates. */
+             (no stale-dir recreation); the terminal persist halt-gates.
+             #3954 P3-3 — the id table is resolved before the synchronous
+             snapshot, as in the main route. */
+          const rollIds = await interimRollIdTable(
+            interimIdTable,
+            cache.stage1 ? previewFoldForLiveView(cache.stage1.characters, bookLanguage) : undefined,
+            priorCastForMerge,
+            record.bookDir,
+            record.bookId,
+          );
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
@@ -9367,7 +9448,7 @@ export async function runSubsetAnalyzerJob(
                 const arr = cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return running;
+              return mapRollIds(running, rollIds);
             },
             record.bookId ?? undefined,
           );
