@@ -230,7 +230,7 @@ describe('pass-4 A — moving a stranded follower carries the rows that follow i
     requestedVoiceIds = [];
     const three = await design('Book Three');
     expect(three.status).toBe(409);
-    expect(three.body.error).toBe('Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.');
+    expect(three.body.error).toBe('This voice is shared with an earlier book. Choose "Don\'t reuse" to give this character its own.');
     const four = await design('Book Four');
     expect(four.status).toBe(409);
     expect(four.body.error).toBe('Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.');
@@ -291,7 +291,7 @@ describe('pass-4 B — a stranded legacy follower takes its source’s uuid and 
     requestedVoiceIds = [];
     const res = await design('Book Three');
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe('Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.');
+    expect(res.body.error).toBe('This voice is shared with an earlier book. Choose "Don\'t reuse" to give this character its own.');
     expect(requestedVoiceIds).toEqual([]);
     expect(readRow('Book Two').voiceUuid).toBe(two);
     expect(readRow('Book Three').voiceUuid).toBeUndefined();

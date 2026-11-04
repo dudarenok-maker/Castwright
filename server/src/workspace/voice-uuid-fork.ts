@@ -6,7 +6,8 @@
    When the user declines that link, redux clears `matchedFrom` but the uuid
    survives on disk. A redesign would then overwrite the earlier book's file.
    The decline is recorded server-side as `declinedVoiceFrom` (and the voice it
-   declined as `declinedVoiceUuids`), so every decision is made from disk state.
+   declined as `declinedVoiceUuids`, which only lets the linker skip a link), so
+   every decision is made from disk state.
 
    THE TWO-BOOK FORK. A character X (book B, id cX, uuid U) forks when ALL hold:
    1. X has a uuid, NO `matchedFrom` at all (a bookId-less one, as written
@@ -14,7 +15,11 @@
       `declinedVoiceFrom` (the durable "Don't reuse" marker, #3992). A row
       declined before the marker shipped has none and never forks (it behaves as
       it did before #3992); a row nobody declined never forks.
-   2. At least one character in ANOTHER book has `voiceUuid === U` and is NOT a
+   2. A readable book whose bookId is in `declinedVoiceFrom` holds U right now (read
+      from disk at decide time; the stored `declinedVoiceUuids` is never trusted
+      to fork, it can be stale). A declined book that cannot be read, and that no
+      readable book carries the id of, refuses the design instead.
+   3. At least one character in ANOTHER book has `voiceUuid === U` and is NOT a
       DIRECT follower of X (below). That is the earlier book whose bytes must be
       kept.
    A DIRECT follower of X is a row, in another book, holding U whose `matchedFrom`
@@ -272,6 +277,8 @@ export const redesignFirstMessage = (title: string): string =>
 export const sharedThroughChainMessage = (title: string): string =>
   `Redesign "${title}" to change this shared voice, or choose "Don't reuse" to give this character its own.`;
 
+export const dontReuseMessage = `This voice is shared with an earlier book. Choose "Don't reuse" to give this character its own.`;
+
 const titleOf = (book: OtherBook): string => book.title || basename(book.dir);
 
 /* #3992 — the fail-closed rule, checked under the design lock before any write or
@@ -312,10 +319,12 @@ export async function decideSharedVoiceDesign(
   const holds = uuid ? holdsUuid(uuid) : holdsLegacyKey(linkId);
 
   if (!character.matchedFrom) {
-    const separate = uuid
-      ? await mustForkUuid(selfDir, character, lib)
-      : await mustMintApart(selfDir, character, lib);
-    return separate ? { kind: 'separate' } : { kind: 'proceed' };
+    if (uuid) {
+      const verdict = await mustForkUuid(selfDir, character, lib);
+      if (verdict === 'refuse') return { kind: 'refuse', message: UNREADABLE_BOOK_MESSAGE };
+      return verdict === 'fork' ? { kind: 'separate' } : { kind: 'proceed' };
+    }
+    return (await mustMintApart(selfDir, character, lib)) ? { kind: 'separate' } : { kind: 'proceed' };
   }
 
   const holders = lib.books.flatMap((book) => book.rows.filter(holds).map((row) => ({ book, row })));
@@ -366,26 +375,26 @@ export async function decideSharedVoiceDesign(
     if (!declines(target.row)) return { kind: 'proceed' };
     return { kind: 'refuse', message: redesignFirstMessage(titleOf(target.book)) };
   }
-  /* Name a book still on V, preferring the earlier book itself (an unlinked row
-     that did not decline it). */
-  const earlier =
-    holders.find((h) => !h.row.matchedFrom && !declines(h.row)) ?? holders[0] ?? target;
-  return {
-    kind: 'refuse',
-    message: sharedThroughChainMessage(earlier ? titleOf(earlier.book) : 'an earlier book'),
-  };
+  /* Name a book only when redesigning it changes this voice: the link target holds
+     V and the book named is an unlinked row that did not decline it (the earlier
+     book itself). Every other shape (a follower stranded on V, an earlier book that
+     cannot be read) gets the sentence that is true there. */
+  const earlier = holders.find((h) => !h.row.matchedFrom && !declines(h.row));
+  if (target && holds(target.row) && earlier) {
+    return { kind: 'refuse', message: sharedThroughChainMessage(titleOf(earlier.book)) };
+  }
+  return { kind: 'refuse', message: lib.unreadable ? UNREADABLE_BOOK_MESSAGE : dontReuseMessage };
 }
 
-/* An unreadable other book is treated as a possible HOLDER of the uuid (and, in
-   shouldMintApartFromLegacyKey, of the legacy key), but only by a row that could
-   still be sharing it. Assuming it holds the voice for a row that DOES still share
-   a declined voice costs one extra fork (a copy of the base family and a fresh
-   uuid, writing nobody's file), while assuming it holds nothing would let the
-   redesign overwrite that book's `.pt`. So a row whose uuid is on its own
-   `declinedVoiceUuids` forks. A row whose uuid is NOT on that list has already
-   left the declined voice: it is decided from the readable books alone. A
-   follower hidden in an unreadable book is left on U by the fork; its own design
-   then finds its link target off U and is refused (decideSharedVoiceDesign). */
+/* Is the row's current uuid a voice it declined? Decided from DISK at decide time,
+   never from the stored `declinedVoiceUuids`, which can be stale: link-prior moves
+   no uuid, so a re-decline records the row's own forked uuid, and a decline made
+   while the row had no uuid records none. The row forks only when a readable book
+   whose bookId is in its `declinedVoiceFrom` holds its uuid right now. A declined id
+   no readable book carries may be an unidentified book (its state.json is
+   unreadable) or an unreadable cast.json: that could hide the holder, so the design
+   is refused (a retry sentence), never forked. `declinedVoiceUuids` is not read
+   here; it only lets the linker, the merge and voice-match skip a link. */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: {
@@ -397,7 +406,7 @@ export async function shouldForkSharedVoiceUuid(
   },
 ): Promise<boolean> {
   const selfDir = resolve(bookDir);
-  return mustForkUuid(selfDir, character, await loadOtherBooks(selfDir));
+  return (await mustForkUuid(selfDir, character, await loadOtherBooks(selfDir))) === 'fork';
 }
 
 async function mustForkUuid(
@@ -407,46 +416,46 @@ async function mustForkUuid(
     voiceUuid?: string | null;
     matchedFrom?: unknown;
     declinedVoiceFrom?: string[] | null;
-    declinedVoiceUuids?: string[] | null;
   },
   { books, unreadable, unreadableDirs }: OtherBooks,
-): Promise<boolean> {
+): Promise<'fork' | 'refuse' | 'proceed'> {
   const uuid = character.voiceUuid;
-  if (!uuid) return false;
-  if (character.matchedFrom) return false;
+  if (!uuid) return 'proceed';
+  if (character.matchedFrom) return 'proceed';
   /* Only a row the user DECLINED forks. `declinedVoiceFrom` is the durable
      record; "no matchedFrom" alone is also what a never-linked row looks like
      (a book confirmed before the earlier one, a null seriesPosition), and a
      series-minted shared uuid on such a row is intentional. */
-  if (!character.declinedVoiceFrom?.length) return false;
-  /* ...and only while the row is still ON a voice it declined: its uuid is on its
-     own `declinedVoiceUuids`, or a holder of the uuid sits in a book it declined
-     (a decline recorded before the row had a uuid names only the book, and a later
-     series mint can stamp the decliner with the earlier book's fresh uuid). A row
-     that already forked sits on a voice of its own and never forks again, however
-     long the chain below it grows: it would drop its variants and split the chain. */
-  const onDeclined = !!character.declinedVoiceUuids?.includes(uuid);
-  if (unreadable && onDeclined) return true;
+  if (!character.declinedVoiceFrom?.length) return 'proceed';
   const declinedBooks = new Set(character.declinedVoiceFrom);
-  if (
-    !onDeclined &&
-    !books.some((b) => !!b.bookId && declinedBooks.has(b.bookId) && b.rows.some(holdsUuid(uuid)))
-  ) {
-    /* A decline made while the row had no uuid records no uuid at all. If a book it
-       declined cannot be read, it may hold the uuid: treat it as declined (one
-       extra fork, writing nobody's file) rather than design over that book's .pt. */
-    if (!unreadable || character.declinedVoiceUuids?.length) return false;
-    for (const id of declinedBooks) {
-      if (await couldBeUnreadable(unreadableDirs, id)) return true;
+  const readableDeclined = books.filter((b) => !!b.bookId && declinedBooks.has(b.bookId));
+  if (!readableDeclined.some((b) => b.rows.some(holdsUuid(uuid)))) {
+    /* No readable book it declined holds its uuid. A row that already forked sits
+       here for good and never forks again, however long the chain below it grows: it
+       would drop its variants and split the chain. Unless a declined book cannot be
+       read: it may hold the uuid, and a design would overwrite its .pt. */
+    if (unreadable) {
+      const carried = new Set(readableDeclined.map((b) => b.bookId));
+      for (const id of declinedBooks) {
+        if (!carried.has(id) && (await couldBeUnreadable(unreadableDirs, id))) return 'refuse';
+      }
     }
-    return false;
+    return 'proceed';
   }
   const followed = new Set(
     (await directFollowers(selfDir, character, holdsUuid(uuid), books)).map((f) => rowKey(f.dir, f.characterId)),
   );
-  return books.some((b) =>
-    b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))),
-  );
+  return books.some((b) => b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))))
+    ? 'fork'
+    : 'proceed';
+}
+
+/* Does a readable book with this bookId hold the uuid right now? The decline route
+   records a uuid only when it does (see mustForkUuid: the record is advisory, the
+   fork is decided from disk). */
+export async function bookHoldsVoiceUuid(bookDir: string, bookId: string, uuid: string): Promise<boolean> {
+  const { books } = await loadOtherBooks(resolve(bookDir));
+  return books.some((b) => b.bookId === bookId && b.rows.some(holdsUuid(uuid)));
 }
 
 /* #3992 — read-only: the no-uuid sibling of shouldForkSharedVoiceUuid. A row

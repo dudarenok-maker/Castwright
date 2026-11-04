@@ -288,14 +288,17 @@ describe('F — a decline recorded while the row had no uuid still counts', () =
     expect(readFileSync(pt(`qwen-${n}`))).toEqual(ORIG);
   });
 
-  it('with Book One unreadable, Two does not design over Book One', async () => {
+  it('with Book One unreadable, Two is refused with the retry sentence and nothing is written', async () => {
     const n = await legacyThenMint();
     writeFileSync(castPath('Book One'), '{"characters":[');
     requested = [];
+    const before = readFileSync(castPath('Book Two'), 'utf8');
     const r = await design('Book Two');
-    expect(r.status).toBe(200);
-    expect(requested).not.toContain(`qwen-${n}`);
-    expect(row('Book Two').voiceUuid).not.toBe(n);
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe('A book in this series could not be read; try again once it can.');
+    expect(requested).toEqual([]);
+    expect(row('Book Two').voiceUuid).toBe(n);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(before);
     expect(readFileSync(pt(`qwen-${n}`))).toEqual(ORIG);
   });
 });

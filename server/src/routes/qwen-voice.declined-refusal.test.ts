@@ -209,7 +209,8 @@ const ptOf = (key: string) => join(qwenDir(), `${key}.pt`);
 const legacy = { ...baseRow, voiceUuid: undefined, overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
 
 const CHAIN_ONE =
-  'Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.';
+  'This voice is shared with an earlier book. Choose "Don\'t reuse" to give this character its own.';
+const CHAIN_ONE_REDESIGN = CHAIN_ONE.replace(/^.*Choose /, 'Redesign "Book One" to change this shared voice, or choose ');
 const REDESIGN_TWO = 'Redesign "Book Two" first. This voice is shared with it.';
 const reset = () => {
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
@@ -442,7 +443,7 @@ describe('pass-6 — the shapes the recursive walker still overwrote, and its cy
     writeFileSync(ptOf('qwen-u_shared'), ORIG_PT);
     const four = await design('Book Four');
     expect(four.status).toBe(409);
-    expect(four.body.error).toBe(CHAIN_ONE);
+    expect(four.body.error).toBe(CHAIN_ONE_REDESIGN);
     expect(requestedVoiceIds).toEqual([]);
 
     expect((await design('Book Two')).status).toBe(200);

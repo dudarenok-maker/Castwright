@@ -92,18 +92,19 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
 
   it('a bookId-less link (manual Assign) is not a follower, so it counts as a holder and the row forks', async () => {
     reset();
-    const one = book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
-    book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U, matchedFrom: { bookTitle: 'One' } }]);
-    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] })).toBe(true);
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', 'book-three-id', [{ id: 'c3', voiceUuid: U, matchedFrom: { bookTitle: 'Two' } }]);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(true);
   });
 
-  it('forks when Book Two links to a different character id of Book One', async () => {
+  it('forks when the only holder links to a different character id of Book Two', async () => {
     reset();
-    const one = book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }, { id: 'c9' }]);
-    book('Two', TWO_ID, [
-      { id: 'c2', voiceUuid: U, matchedFrom: { bookId: ONE_ID, characterId: 'c9' } },
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }, { id: 'c9' }]);
+    book('Three', 'book-three-id', [
+      { id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c9' } },
     ]);
-    expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] })).toBe(true);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: ['book-three-id'] })).toBe(true);
   });
 
   it('does not fork a row that already left the declined voice, however long the chain below it', async () => {
@@ -144,15 +145,37 @@ describe('shouldForkSharedVoiceUuid (#3992)', () => {
     expect(await shouldFork(one, { id: 'c1', voiceUuid: U, declinedVoiceFrom: DECLINED })).toBe(false);
   });
 
-  it('an unreadable cast.json in another book is a possible holder: it forks, and does not throw (pass-2 U)', async () => {
+  it('a declined book whose cast.json cannot be read refuses the design, never forks (pass 8)', async () => {
     reset();
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    const one = book('One', ONE_ID, []);
+    writeFileSync(join(one, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    const still = { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
+    expect(await shouldFork(two, still)).toBe(false);
+    expect(await decide(two, still)).toEqual({ kind: 'refuse', message: expect.stringContaining('could not be read') });
+    writeFileSync(join(one, '.audiobook', 'cast.json'), JSON.stringify({ characters: [{ id: 'c1', voiceUuid: U }] }));
+    expect(await shouldFork(two, still)).toBe(true);
+  });
+
+  it('an unrelated book with an unreadable cast.json or state.json neither forks nor refuses a row (pass 8)', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: 'u-one' }]);
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     const bad = book('Bad', 'bad-id', []);
     writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
-    const still = { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
-    expect(await shouldFork(two, still)).toBe(true);
-    book('One', ONE_ID, [{ id: 'c1', voiceUuid: U }]);
-    expect(await shouldFork(two, still)).toBe(true);
+    const worse = book('Worse', 'worse-id', [{ id: 'c8' }]);
+    writeFileSync(join(worse, '.audiobook', 'state.json'), '{"bookId":');
+    const forked = { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
+    expect(await shouldFork(two, forked)).toBe(false);
+    expect(await decide(two, forked)).toEqual({ kind: 'proceed' });
+  });
+
+  it('the stored declinedVoiceUuids alone never forks a row (pass 8)', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c1', voiceUuid: 'u-one' }]);
+    const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
+    book('Three', 'book-three-id', [{ id: 'c3', voiceUuid: U }]);
+    expect(await shouldFork(two, { id: 'c2', voiceUuid: U, declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] })).toBe(false);
   });
 
   it('a row that already left the declined voice is not re-forked by an unreadable book (pass 3)', async () => {

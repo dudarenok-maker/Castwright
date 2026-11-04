@@ -227,7 +227,7 @@ describe('pass-3 2 — a follower the fork could not see is not left on the earl
     const res = await design('Book Three');
     expect(res.status).toBe(409);
     expect(res.body.error).toBe(
-      'Redesign "Book One" to change this shared voice, or choose "Don\'t reuse" to give this character its own.',
+      'This voice is shared with an earlier book. Choose "Don\'t reuse" to give this character its own.',
     );
     expect(book1Intact()).toBe(true);
     expect(requestedVoiceIds).toEqual([]);
@@ -338,17 +338,22 @@ describe('pass-3 3 — an unreadable book anywhere does not re-fork a row that a
     expect(existsSync(join(qwenDir(), 'qwen-u_two__angry.pt'))).toBe(true);
   });
 
-  it('failure path: a row still on the declined voice DOES fork when an unrelated book is torn (the earlier book wins)', async () => {
+  it('failure path: a declined book that cannot be identified refuses the design (pass 8: never forks)', async () => {
     seedChain();
     rmSync(bookDir('Book Three'), { recursive: true, force: true });
     writeRows('Book One', []); // Book One no longer visible as a holder...
-    tearUnrelated(); // ...and an unreadable book might be it
+    tearUnrelated(); // ...and an unidentifiable book might be it
+    writeFileSync(
+      join(workspaceRoot, 'books', 'Someone Else', 'Standalones', 'Unrelated', '.audiobook', 'state.json'),
+      '{"bookId":',
+    );
     const res = await design('Book Two');
     mend();
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('A book in this series could not be read; try again once it can.');
     expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
-    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 });
 

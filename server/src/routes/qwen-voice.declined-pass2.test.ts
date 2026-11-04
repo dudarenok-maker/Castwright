@@ -210,31 +210,32 @@ afterAll(() => {
 describe('pass-2 U — an unreadable earlier book is a holder, not an absence', () => {
   /* The safe direction costs one extra fork (a copy and a fresh uuid, nothing
      audible); the other silently destroys the earlier book's voice. */
-  it('a torn Book One does not let the declined Book Two overwrite qwen-u_shared.pt', async () => {
+  it('a torn Book One is refused with the retry sentence: Book Two is not designed over it, nothing is written', async () => {
     seedChain();
     writeRows('Book Three', []);
     const good = readFileSync(castPath('Book One'), 'utf8');
     writeFileSync(castPath('Book One'), '{"characters":[{"id":'); // torn / EBUSY stand-in
     const res = await design('Book Two');
     writeFileSync(castPath('Book One'), good);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('A book in this series could not be read; try again once it can.');
     expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds).toHaveLength(1);
-    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
-    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
   });
 
-  it('once forked, a second design while Book One stays unreadable does not fork again (pass 3), and never touches it', async () => {
+  it('every design while Book One stays unreadable is refused and writes nothing; once it reads, Book Two forks', async () => {
     seedChain();
     writeRows('Book Three', []);
     const good = readFileSync(castPath('Book One'), 'utf8');
     writeFileSync(castPath('Book One'), '{"characters":[{"id":');
-    expect((await design('Book Two')).status).toBe(200);
-    const first = readRow('Book Two').voiceUuid;
-    expect((await design('Book Two')).status).toBe(200);
+    expect((await design('Book Two')).status).toBe(409);
+    expect((await design('Book Two')).status).toBe(409);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     writeFileSync(castPath('Book One'), good);
-    expect(readRow('Book Two').voiceUuid).toBe(first);
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
     expect(book1Intact()).toBe(true);
   });
 
