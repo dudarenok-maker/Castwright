@@ -185,7 +185,13 @@ export function remapFreshToPriorIds<
   /* Surviving (fresh, prior) pairs — exact-tier pairs flagged — collected
      before `rewrites` is built so the claim-once guard below can count them
      per prior row. */
-  const pairs: { freshRow: C; priorRow: PriorCastRow; target: string; exact: boolean }[] = [];
+  const pairs: {
+    freshRow: C;
+    priorRow: PriorCastRow;
+    target: string;
+    exact: boolean;
+    adopted: boolean;
+  }[] = [];
 
   for (const [key, freshCandidates] of freshByName) {
     if (freshCandidates.length !== 1) continue;
@@ -257,7 +263,7 @@ export function remapFreshToPriorIds<
         !notLinkedToId(recordedRow, freshRow.id, currentBookId) &&
         !notLinkedToId(freshRow as unknown as Record<string, unknown>, recordedRow.id, currentBookId)
       ) {
-        pairs.push({ freshRow, priorRow: recordedRow, target: recordedTo, exact: true });
+        pairs.push({ freshRow, priorRow: recordedRow, target: recordedTo, exact: true, adopted: true });
       }
       continue;
     }
@@ -267,20 +273,30 @@ export function remapFreshToPriorIds<
     ) {
       continue;
     }
-    pairs.push({ freshRow, priorRow, target, exact });
+    pairs.push({ freshRow, priorRow, target, exact, adopted: false });
   }
 
   /* Claim-once (#3954, the mirror of mergeCore's `:328-390` guard): a prior
      row claimed by more than one surviving pair loses its TOLERANT pairs; an
-     exact pair is never removed (a prior row has exactly one normalised name,
-     so at most one exact pair can ever claim it). Only then build `rewrites`. */
+     exact-name pair survives, because a prior row has exactly one normalised
+     name so at most one exact-NAME pair can claim it. A history ADOPTION pair
+     (the recorded merge target, finding 4) is exact-flagged but is not
+     name-bound: any number of fresh ids can be recorded to one target, and an
+     exact-name pair can target the same row. Two fresh rows can never share an
+     id, and collapsing them is not this remap's call, so every pair claiming a
+     row an adoption also claims is refused (N2, owner ruling): neither join is
+     made and the fresh ids reach mergeCore, whose fallback keeps its own
+     displaced / "needs review" path. Only then build `rewrites`. */
   const claims = new Map<PriorCastRow, number>();
+  const adoptedRows = new Set<PriorCastRow>();
   for (const pair of pairs) {
     claims.set(pair.priorRow, (claims.get(pair.priorRow) ?? 0) + 1);
+    if (pair.adopted) adoptedRows.add(pair.priorRow);
   }
   const rewrites: Record<string, string> = {};
   for (const pair of pairs) {
-    if (!pair.exact && (claims.get(pair.priorRow) ?? 0) > 1) continue;
+    const contested = (claims.get(pair.priorRow) ?? 0) > 1;
+    if (contested && (!pair.exact || adoptedRows.has(pair.priorRow))) continue;
     rewrites[pair.freshRow.id] = pair.target;
   }
 

@@ -529,6 +529,55 @@ describe('remapFreshToPriorIds', () => {
       ).toEqual({ ow2: 'old-weir' });
     });
 
+    it("N2: an adoption and another fresh row's join claiming one prior row make neither join (#3954)", () => {
+      const r = remapFreshToPriorIds(
+        [
+          { id: 'brann-weir', name: 'Brann Weir' },
+          { id: 'ow2', name: 'Old Weir' },
+        ],
+        [],
+        [
+          { id: 'brann', name: 'Brann', voiceState: 'locked' },
+          { id: 'old-weir', name: 'Old Weir', voiceState: 'locked' },
+        ],
+        {},
+        'b2',
+        { 'brann-weir': 'old-weir' },
+      );
+      expect(r.rewrites).toEqual({});
+      expect(r.characters.map((c) => c.id)).toEqual(['brann-weir', 'ow2']);
+    });
+
+    it('N2: two fresh ids recorded to one target make neither adoption (#3954)', () => {
+      const r = remapFreshToPriorIds(
+        [
+          { id: 'brann-weir', name: 'Brann Weir' },
+          { id: 'bw-two', name: 'Brann Wyr' },
+        ],
+        [],
+        prior,
+        {},
+        'b2',
+        { 'brann-weir': 'old-weir', 'bw-two': 'old-weir' },
+      );
+      expect(r.rewrites).toEqual({});
+    });
+
+    it('N2 control: one adoption alone still follows the recorded merge (#3954)', () => {
+      const r = remapFreshToPriorIds(
+        [
+          { id: 'brann-weir', name: 'Brann Weir' },
+          { id: 'ow2', name: 'Someone Else' },
+        ],
+        [],
+        prior,
+        {},
+        'b2',
+        { 'brann-weir': 'old-weir' },
+      );
+      expect(r.rewrites).toEqual({ 'brann-weir': 'old-weir' });
+    });
+
     it('R17: the recorded merge target is not adopted across a same-book notLinkedTo edge', () => {
       const r = remapFreshToPriorIds(
         fresh,

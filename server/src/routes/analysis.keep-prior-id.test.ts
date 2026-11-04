@@ -79,20 +79,22 @@ function phase0(rosterRows: CharacterOutput[]): Analyzer {
   };
 }
 
-function phase1(speakerId: string): Analyzer {
+function phase1(speakerId: string | string[]): Analyzer {
+  const speakers = [speakerId].flat();
+  const perChapter = speakers.length > 1 ? 3 : 1;
   return {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('phase1')),
+    /* One line per chapter for a single speaker; with several speakers, three
+       lines per chapter handed out in turn, so each clears the minor-cast fold. */
     runStage2Chapter: (async (_m: string, chapterId: number) => ({
-      sentences: [
-        {
-          id: chapterId * 100 + 1,
-          chapterId,
-          characterId: speakerId,
-          confidence: 0.9,
-          text: 'Are you sure this will work',
-        },
-      ],
+      sentences: Array.from({ length: perChapter }, (_, k) => ({
+        id: chapterId * 100 + k + 1,
+        chapterId,
+        characterId: speakers[(k + (chapterId - 1) * perChapter) % speakers.length],
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      })),
     })) as unknown as Analyzer['runStage2Chapter'],
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
@@ -221,7 +223,7 @@ async function run(
   manuscriptId: string,
   bookDir: string,
   kind: 'main' | 'subset',
-  fresh: { roster: CharacterOutput[]; speakerId: string } = { roster, speakerId: FRESH_ID },
+  fresh: { roster: CharacterOutput[]; speakerId: string | string[] } = { roster, speakerId: FRESH_ID },
 ): Promise<Sent[]> {
   const { job, events } = mkJob(manuscriptId, bookDir, kind);
   const rec = getManuscript(manuscriptId);
@@ -438,6 +440,55 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
       } finally {
         warnSpy.mockRestore();
         vi.mocked(stateIo.readJson).mockImplementation(actualReadJson);
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* N2 (owner: refuse and flag). The recorded merge brann-weir -> old-weir
+     (adoption) and a drifted second fresh row "Old Weir" (an exact-name join)
+     both want the prior old-weir row. Joining both wrote two cast rows with
+     the id old-weir. The remap makes NEITHER join, so no two rows can share an
+     id, and the fresh rows are kept apart. */
+  it.each(['main', 'subset'] as const)(
+    'N2 %s job: an adoption and an exact-name join on one prior row never write a shared cast id',
+    async (kind) => {
+      const bw = {
+        ...WREN_FRESH,
+        id: 'brann-weir',
+        name: 'Brann Weir',
+        evidence: [{ quote: 'Brann asked' }],
+      } as CharacterOutput;
+      const ow2 = {
+        ...WREN_FRESH,
+        id: 'ow2',
+        name: 'Old Weir',
+        evidence: [{ quote: 'Olga nodded' }],
+      } as CharacterOutput;
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { id: 'brann', name: 'Brann', voiceState: 'locked', voiceId: 'v_brann' },
+          { id: 'old-weir', name: 'Old Weir', voiceState: 'locked', voiceId: 'v_ow' },
+        ],
+        { 'brann-weir': 'old-weir' },
+        BODY.replace('Wren asked', 'Brann asked'),
+      );
+      try {
+        await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, bw, ow2],
+          speakerId: ['brann-weir', 'ow2'],
+        });
+        const cast = readCast(bookDir);
+        const ids = cast.map((c) => String(c.id));
+        expect(new Set(ids).size).toBe(ids.length);
+        // Neither join was made: both fresh rows are kept as rows of their own...
+        expect(ids).toEqual(expect.arrayContaining(['brann-weir', 'ow2', 'brann']));
+        expect(cast.find((c) => c.id === 'brann')?.voiceState).toBe('locked');
+        // ...and mergeCore's existing path flags the recorded merge it could not honour.
+        const history = readHistory(bookDir) as { displaced?: Record<string, string> };
+        expect(Object.keys(history.displaced ?? {})).toContain('brann-weir');
+      } finally {
         await cleanup(manuscriptId, bookDir);
       }
     },
