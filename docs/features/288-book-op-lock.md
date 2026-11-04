@@ -907,9 +907,12 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
 
 - **Registry.** The sweep registers each repaired `previousBookId` with its repair time, and **persists it** to
   `<workspace>/.repaired-book-gate.json` with an atomic write. Boot re-reads that file **before** the sweep, so the
-  gate lasts **7 days from the repair, across restarts**. An entry older than 7 days is dropped at load and ignored at
-  check. **Nothing a client does ends an entry early**; only deleting the gated book does (`forgetRepairedBook`, so a
-  fresh import minted with the same id does not inherit the refusal).
+  gate lasts **until the book is deleted, across restarts, with no expiry** (owner decision, PR #4004 pass 6: a tab
+  opened before the repair that first writes on day 30 must still be refused, and a fresh page always holds the epoch,
+  so a gate that never lapses costs only an old bundle or an operator script; the 7-day TTL of passes 3 to 5 is gone).
+  **Nothing a client does ends an entry early**; only deleting the gated book does (`forgetRepairedBook`, so a
+  fresh import minted with the same id does not inherit the refusal). A later repair rotates the epoch (fresh pages
+  reload once, as before).
 - **Epoch.** The registry carries one `epoch`, a random value minted the first time the registry gains an entry in a
   process (only the boot sweep registers, so in practice: once per boot that repairs something) and persisted with it.
   A restart that repairs nothing keeps it; one that repairs again rotates it. `GET /api/info` serves it as
@@ -940,19 +943,31 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
   `PUT /api/voices/:voiceId/override` with `scope: 'series'` (body or query `bookId`). The path book of each is gated by
   the mount as well. Confirmed safe, with why: `POST /api/voice-library/promote` (reads the book's character, writes
   only the voice library), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by
-  voice uuid, name no book), `PUT /api/voices/:voiceId/override` with `scope: 'workspace'` (names no book),
-  `POST /api/queue/*` (writes the queue), `POST /api/books` and `POST /api/import` (mint a new book),
+  voice uuid, name no book),
+  `POST /api/queue/*` other than `enqueue` (see below), `POST /api/books` and `POST /api/import` (mint a new book),
   `library-sync-manifest` (its `bookId` query only selects a manifest).
-- **Series fan-out skips a repaired series-mate (owner decision, PR #4004 pass 5, kept).** The mates of
-  `series-patch`, `voice-override-linked`, `cast/tier`, the series scope of `PUT /api/voices/:voiceId/override` and the
-  design writers that propagate a voice or variant (`single-design`, `cast-design`, `qwen-voice`) are matched by voice
-  id or name, so the client never names them. On a request without the current epoch each fan-out calls
-  `skipUnreadRepairedBook` (the shared `forEachMatchingCastCharacter` walker does it itself), which leaves the gated
-  mate byte-identical and records it; the rest of the series updates. `repairedFanOutScope`, mounted once in `app.ts`,
-  keeps the request's epoch in an AsyncLocalStorage and stamps the skipped list on the `x-skipped-repaired-books`
-  response header; the four JSON routes also carry it as `skippedBooks` (`{ bookId, bookTitle, reason }`), and the SSE
-  design streams carry it on `designed`, `character_designed`, `variant_designed` and the terminal `idle`. A request
-  with the current epoch skips nothing.
+- **A series fan-out that would write a repaired series-mate is refused whole (owner decision, PR #4004 pass 6,
+  replacing pass 5's skip).** The mates of `series-patch`, `voice-override-linked`, `cast/tier`, `PUT
+  /api/voices/:voiceId/override` (series AND workspace scope: the workspace walk reaches every book) and the design
+  writers that propagate a voice or variant (`single-design`, `cast-design`, `qwen-voice`) are matched by voice id or
+  name, so the client never names them. A request without the current epoch whose fan-out would write a gated mate
+  answers **409 `book_repaired_reload` before anything is written**, the source book included; the page reloads, the
+  user repeats the change, and the repeat carries the epoch and writes every mate, the repaired one included.
+  `series-patch` and `voice-override-linked` check their matched mates (`refuseUnreadRepairedBooks`) before the
+  source's write; the walker routes and the design routes use `refuseGatedSeriesFanOut`
+  (`workspace/repaired-series-refusal.ts`), which is series-level (a gated book anywhere in the series, whether or not
+  it holds a matching voice). **A design job decides at START**: `cast-design`, `single-design` and `qwen-voice` refuse
+  a start without the epoch (a plain JSON 409, before the stream or any job exists), so a running job never has to
+  report anything, and re-attaching to one (a bare POST) checks nothing new. This removed the pass 5 skip machinery
+  (the per-request skipped map, `repairedFanOutScope`, the `x-skipped-repaired-books` header, `skippedBooks` on the
+  four JSON routes and the SSE events, the client's reload-on-skip), and with it the pass 6 reviewer's loop: a stale
+  tab's job could report a skip to a fresh page that re-attached, which reloaded it again and again until
+  `RepairReloadBlocked` covered the app.
+- **The queue enqueue is gated (pass 6).** `POST /api/queue/enqueue` names its book in the body; an entry for a
+  repaired id from a request without the current epoch refuses the whole batch (409), so a stale tab's Regenerate
+  cannot leave a queue entry the dispatcher later renders onto the twin that kept the id. `queue-thunks.ts` posts
+  through `repairFetch`, so the refusal reloads the page. The other queue routes stay ungated: they act on entries
+  that already exist.
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.
@@ -961,7 +976,7 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
 can write; it reads `/api/info` and keeps the epoch for the life of the page. It is **never refreshed**: a later poll
 of `/api/info` that shows a new epoch must not reach a page loaded before it. `repairFetch` is `lib/api.ts`'s `fetch`;
 it sends `X-Repair-Epoch` on every write (waiting for the load-time read if it is still out) and nothing on reads. On a
-409 `book_repaired_reload`, or a response or design stream that reports a skipped mate, it calls
+409 `book_repaired_reload` (including a refused series fan-out, design start or enqueue), it calls
 `window.location.reload()` and shows nothing. From that moment every request it would send is held (it never settles),
 so no second write goes out and no caller toasts, rolls back or retries. A failed load-time read leaves the page with
 no epoch, which is refused only while something is gated, and the reload reads it afresh. **Reload-loop cap:** a
@@ -969,7 +984,7 @@ sessionStorage counter allows 2 automatic reloads per 5 minutes per tab; past th
 page shows `RepairReloadBlocked`, a blocking notice with a Reload button, and holds every write. The Android companion
 writes only exempt routes.
 
-An **old bundle** knows nothing of the epoch, so it sends none and is refused for the full 7 days. The refusal is
+An **old bundle** knows nothing of the epoch, so it sends none and is refused for good. The refusal is
 **silent** in an old bundle (v1.14.0 logs a failed `PUT /state` to the console and shows nothing, so the edits stay
 on screen unsaved), which is why the release notes tell users to **reload any tab left open across the upgrade**.
 
@@ -978,9 +993,9 @@ the bulk duplicate review's reads, open modals, queued, kept and retrying saves)
 Edit, the poll gap, and the direct `putBookState` callers, because the reload is the only way a page gets the epoch.
 **Costs, accepted by the owner:** an edit typed in a stale page and not yet saved is lost with the reload; every page
 open across a repairing restart reloads once, including one that never touched the repaired book's content (its first
-gated write anywhere in the 7 days triggers it); a page whose load-time `/api/info` read failed reloads at its first
-write to a gated id. Residual: a page loaded more than 7 days after the repair is not gated at all (there is nothing
-left to protect it from: it loaded after the repair).
+gated write anywhere triggers it); a page whose load-time `/api/info` read failed reloads at its first write to a
+gated id. There is no residual window: a page loaded before the repair is refused however late it first writes, and a
+page loaded after it holds the epoch.
 
 ### Reference classes
 
