@@ -318,6 +318,9 @@ const LISTENER_WRITE_PATHS: ReadonlySet<string> = new Set(['/listen-progress', '
 /** True when the request carries the current epoch (a page loaded after the newest repair). */
 const carriesEpoch = (header: string | undefined): boolean => header !== undefined && header === requiredEpoch();
 
+/** True when `req` carries the current epoch: nothing it names can be refused. */
+export const carriesRepairEpoch = (req: Request): boolean => carriesEpoch(req.get(REPAIR_EPOCH_HEADER));
+
 function refuseUnlessCurrent(gated: boolean, req: Request, res: Response, next: NextFunction): void {
   if (!gated || carriesEpoch(req.get(REPAIR_EPOCH_HEADER))) {
     next();
