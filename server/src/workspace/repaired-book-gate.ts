@@ -3,7 +3,7 @@
    and the loser's old id: the same string) names a different folder than a page loaded before the
    repair saw. Such a page's next write would land in the twin that kept the id.
 
-   The rule is blunt on purpose. For 7 days after a repair, every book-content write that names a
+   The rule is blunt on purpose. From a repair until the book is deleted, every book-content write that names a
    repaired id is refused with 409 `book_repaired_reload` UNLESS it carries `x-repair-epoch` equal to
    the CURRENT repair epoch. The epoch is a random value minted when the registry gains an entry (once
    per process: only the boot sweep registers), persisted with it, and served by `GET /api/info`
@@ -13,10 +13,12 @@
    so no client-side bookkeeping decides what is stale (the per-tab read-token design it replaces kept
    finding caches it did not cover: PR #4004 passes 3 to 5).
 
-   Lifetime: 7 days from the repair, across restarts. The repaired ids, their repair times and the
-   epoch are persisted to `<workspace>/.repaired-book-gate.json` (atomic write), and the boot re-reads
-   them BEFORE the sweep runs. An entry older than 7 days is dropped at load and ignored at check.
-   Nothing else ends an entry early, except deleting the gated book (`forgetRepairedBook`). A damaged
+   Lifetime: NO EXPIRY (owner decision, PR #4004 pass 6). An entry lasts until the gated book is deleted
+   (`forgetRepairedBook`), across restarts: a tab opened before the repair can first write on any later
+   day and must still be refused, and a fresh page always holds the epoch, so a gate that never lapses
+   costs only an old bundle or an operator script. A later repair rotates the epoch (every open page
+   reloads once). The repaired ids, their repair times (kept for the record) and the epoch are persisted to
+   `<workspace>/.repaired-book-gate.json` (atomic write), and the boot re-reads them BEFORE the sweep runs. A damaged
    file fails CLOSED: every entry still readable is kept (one with a broken time is gated from now),
    a lost epoch is replaced by a fresh one (every open page reloads once more), and the file is
    rewritten whole. A file that cannot be READ at boot (anything but "absent") is retried, and if it
@@ -72,7 +74,6 @@ import { writeJsonAtomic } from './state-io.js';
 
 export const BOOK_REPAIRED_RELOAD = 'book_repaired_reload';
 export const REPAIR_EPOCH_HEADER = 'x-repair-epoch';
-export const REPAIRED_GATE_TTL_MS = 7 * 24 * 3600 * 1000;
 
 const BOOK_REPAIRED_MESSAGE =
   'This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.';
@@ -88,16 +89,7 @@ let mintedThisProcess = false;
 /** Ids deleted in this process: a later merge of an unreadable file must not bring them back. */
 const forgotten = new Set<string>();
 
-const isExpired = (repairedAt: number, now: number): boolean => now - repairedAt >= REPAIRED_GATE_TTL_MS;
-
-function isGatedBook(bookId: string, now = Date.now()): boolean {
-  const at = books.get(bookId);
-  if (at !== undefined && isExpired(at, now)) {
-    books.delete(bookId);
-    return false;
-  }
-  return at !== undefined;
-}
+const isGatedBook = (bookId: string): boolean => books.has(bookId);
 
 /** The epoch a write must carry; minted if an entry exists without one (fail closed: no page holds it). */
 function requiredEpoch(): string {
@@ -113,10 +105,8 @@ function rotateEpoch(): void {
 }
 
 /** True while any id or manuscript id is gated. */
-function anyActive(now = Date.now()): boolean {
-  for (const at of books.values()) if (!isExpired(at, now)) return true;
-  for (const s of manuscriptScopes.values()) if (!isExpired(s.repairedAt, now)) return true;
-  return false;
+function anyActive(): boolean {
+  return books.size > 0 || manuscriptScopes.size > 0;
 }
 
 /** `GET /api/info`'s `repairEpoch`: the value a page loaded now sends on its writes, or null when nothing is
@@ -127,8 +117,7 @@ export function currentRepairEpoch(): string | null {
 
 /** Every id that is gated now. */
 export function gatedBookIds(): string[] {
-  const now = Date.now();
-  return [...books.keys()].filter((id) => isGatedBook(id, now));
+  return [...books.keys()];
 }
 
 /** True while `bookId` is a gated repaired id. */
@@ -147,7 +136,7 @@ let lastReadAttempt = 0;
 const READ_RETRY_DELAYS_MS = [100, 300];
 const READ_RETRY_INTERVAL_MS = 1000;
 
-/** Write the live, unexpired entries and the epoch. Serialised; never rejects (the in-memory gate holds
+/** Write the live entries and the epoch. Serialised; never rejects (the in-memory gate holds
  *  either way, and a failure is logged). A file that could not be read is retried first and, if it still
  *  cannot be, left untouched: overwriting it would drop every id it names (PR #4004 pass 4). */
 export function persistRepairedBookGate(): Promise<void> {
@@ -159,14 +148,13 @@ export function persistRepairedBookGate(): Promise<void> {
         return;
       }
     }
-    const now = Date.now();
     const iso = (t: number): string => new Date(t).toISOString();
-    const entries = [...books]
-      .filter(([, at]) => !isExpired(at, now))
-      .map(([bookId, at]) => ({ bookId, repairedAt: iso(at) }));
-    const manuscripts = [...manuscriptScopes]
-      .filter(([, s]) => !isExpired(s.repairedAt, now))
-      .map(([manuscriptId, s]) => ({ manuscriptId, bookId: s.bookId, repairedAt: iso(s.repairedAt) }));
+    const entries = [...books].map(([bookId, at]) => ({ bookId, repairedAt: iso(at) }));
+    const manuscripts = [...manuscriptScopes].map(([manuscriptId, s]) => ({
+      manuscriptId,
+      bookId: s.bookId,
+      repairedAt: iso(s.repairedAt),
+    }));
     try {
       await writeJsonAtomic(repairedBookGateJsonPath(), { version: 2, epoch, entries, manuscripts });
     } catch (err) {
@@ -250,7 +238,6 @@ async function ingestGateFile(now: number, boot: boolean): Promise<void> {
   for (const r of records) {
     if (!nonEmpty(r.bookId) || forgotten.has(r.bookId)) continue;
     const repairedAt = readTime(r.repairedAt, now);
-    if (isExpired(repairedAt, now)) continue;
     if (nonEmpty(r.manuscriptId)) {
       if (!manuscriptScopes.has(r.manuscriptId)) manuscriptScopes.set(r.manuscriptId, { bookId: r.bookId, repairedAt });
     } else if (!books.has(r.bookId)) {
@@ -260,7 +247,7 @@ async function ingestGateFile(now: number, boot: boolean): Promise<void> {
   /* An epoch this process minted is newer than the file's. A file with entries and no readable epoch (a
      damaged one) gets a fresh one from `requiredEpoch`: every open page reloads once more. */
   if (!mintedThisProcess && nonEmpty(fileEpoch)) epoch = fileEpoch;
-  if (anyActive(now) && epoch === null) {
+  if (anyActive() && epoch === null) {
     requiredEpoch();
     damaged = true;
   }
@@ -274,7 +261,7 @@ async function ingestGateFile(now: number, boot: boolean): Promise<void> {
 
 /* ---- registry ---- */
 
-/** Gate `bookId` for 7 days (and `sharedManuscriptId`, when the sweep re-minted the other twin's). Persists. */
+/** Gate `bookId` until it is deleted (and `sharedManuscriptId`, when the sweep re-minted the other twin's). Persists. */
 export function registerRepairedBook(bookId: string, sharedManuscriptId: string | null): Promise<void> {
   const now = Date.now();
   forgotten.delete(bookId);
@@ -362,7 +349,7 @@ export async function repairedManuscriptGate(req: Request, res: Response, next: 
   if (isRead(req)) return next();
   await retryUnreadableGate();
   const scope = manuscriptScopes.get(String(req.params.id));
-  refuseUnlessCurrent(!!scope && !isExpired(scope.repairedAt, Date.now()), req, res, next);
+  refuseUnlessCurrent(!!scope, req, res, next);
 }
 
 /** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the

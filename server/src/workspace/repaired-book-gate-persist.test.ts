@@ -1,5 +1,5 @@
-/* #3713 / PR #4004 pass 3 (owner decision) -- the repaired-id gate outlives a restart for
-   7 days. The real sweep repairs a pair in a temp workspace; a "restart" is the gate's
+/* #3713 / PR #4004 pass 3 (owner decision) -- the repaired-id gate outlives a restart and
+   never lapses (owner decision, pass 6). The real sweep repairs a pair in a temp workspace; a "restart" is the gate's
    in-memory state being dropped and re-read from the file the sweep persisted. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -136,29 +136,40 @@ describe('the repaired-id gate across a restart (#3713)', () => {
   });
 });
 
-describe('the 7-day lifetime (#3713)', () => {
-  it('a restart 7 days after the repair no longer gates it, and one just inside still does', async () => {
+describe('the gate has no expiry (#3713, owner decision)', () => {
+  it('a restart 8 days after the repair still gates it, and the file still names the id', async () => {
     await repairedPair();
     const at = Date.parse(JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).entries[0].repairedAt);
     gate.__clearRepairedBookGateMemoryForTest();
-    await gate.loadRepairedBookGate(at + 7 * DAY - 1000);
+    await gate.loadRepairedBookGate(at + 8 * DAY);
     expect(await delStatus()).toBe(409);
-    gate.__clearRepairedBookGateMemoryForTest();
-    await gate.loadRepairedBookGate(at + 7 * DAY + 1000);
-    expect(await delStatus()).not.toBe(409);
+    expect(JSON.parse(readFileSync(paths.repairedBookGateJsonPath(), 'utf8')).entries).toHaveLength(1);
   });
 
-  it('a process that runs past 7 days stops gating without a restart, and serves no epoch', async () => {
+  it('a process that runs past 8 days keeps gating, and keeps serving the epoch', async () => {
     await repairedPair();
+    const epoch = gate.currentRepairEpoch();
+    expect(epoch).toBeTruthy();
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 7 * DAY + 5000);
-    expect(await delStatus()).not.toBe(409);
-    expect(gate.currentRepairEpoch()).toBeNull();
+    vi.setSystemTime(Date.now() + 8 * DAY + 5000);
+    expect(await delStatus()).toBe(409);
+    expect(gate.currentRepairEpoch()).toBe(epoch);
+  });
+
+  it('a page loaded before the repair that first writes after 8 days is still refused, and the kept twin is untouched', async () => {
+    await repairedPair();
+    const keptCast = paths.castJsonPath(join(paths.BOOKS_ROOT, 'Auth', 'Ser', 'Book original'));
+    const before = readFileSync(keptCast, 'utf8');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 8 * DAY + 5000);
+    const res = await request(app).put('/api/books/auth__ser__book/state').send({ slice: 'cast', patch: { characters: [{ id: 'c9', name: 'Stale' }] } });
+    expect(res.status).toBe(409);
+    expect(readFileSync(keptCast, 'utf8')).toBe(before);
   });
 });
 
 /* The owner's redesign after PR #4004 pass 5: nothing a client does ends an entry early. A read of the
-   book, any number of them, leaves an old-bundle page (no epoch) refused for the full 7 days. */
+   book, any number of them, leaves an old-bundle page (no epoch) refused for good. */
 describe('nothing a client does ends the gate early (#3713)', () => {
   const ID = 'auth__ser__book';
   const restart = async () => {
