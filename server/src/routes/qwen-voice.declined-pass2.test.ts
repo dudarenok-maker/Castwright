@@ -321,43 +321,53 @@ describe('pass-2 F — a follower never ends on a different uuid from the row it
 });
 
 describe('pass-2 3 — designing a FOLLOWER of a declined, unforked row must not overwrite the earlier book', () => {
-  it('Book Three (linked to the declined Book Two) forks the ancestor, moves with it, and designs under the new uuid', async () => {
+  it('Book Three (linked to the declined, unforked Book Two) is refused, writes nothing, and designs once Book Two has forked', async () => {
     seedChain();
     const res = await design('Book Three');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Redesign "Book Two" first. This voice is shared with it.');
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds).toHaveLength(1);
-    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
-    const two = readRow('Book Two');
-    const three = readRow('Book Three');
-    expect(two.voiceUuid).not.toBe('u_shared');
-    expect(three.voiceUuid).toBe(two.voiceUuid);
-    expect(requestedVoiceIds[0]).toBe(`qwen-${three.voiceUuid}`);
-    expect(three.matchedFrom?.bookId).toBe(ids['Book Two']);
-    expect(two.declinedVoiceFrom).toEqual([ids['Book One']]);
-    expect(readRow('Book One').voiceUuid).toBe('u_shared');
-  });
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
+    expect(strays()).toEqual([]);
 
-  it('walks a longer chain: Book Four -> Book Three -> the declined Book Two', async () => {
-    seedChain();
-    writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three') }]);
-    expect((await design('Book Four')).status).toBe(200);
-    expect(book1Intact()).toBe(true);
+    /* Following the message: Book Two's own design forks and carries Book Three. */
+    expect((await design('Book Two')).status).toBe(200);
     const two = readRow('Book Two').voiceUuid;
     expect(two).not.toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe(two);
-    expect(readRow('Book Four').voiceUuid).toBe(two);
+    requestedVoiceIds = [];
+    expect((await design('Book Three')).status).toBe(200);
+    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+    expect(book1Intact()).toBe(true);
+    expect(readRow('Book One').voiceUuid).toBe('u_shared');
+    expect(readRow('Book Three').matchedFrom?.bookId).toBe(ids['Book Two']);
   });
 
-  it('an emotion variant on Book Three forks the same way and never lands on Book One’s variant file', async () => {
+  it('never walks a longer chain: Book Four -> Book Three -> the declined Book Two is refused, nothing moves', async () => {
+    seedChain();
+    writeBook('Book Four', [{ ...baseRow, ...linkTo('Book Three') }]);
+    const res = await design('Book Four');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/^This voice is still shared with "Book One"/);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+    for (const t of ['Book Two', 'Book Three', 'Book Four'] as const) expect(readRow(t).voiceUuid).toBe('u_shared');
+  });
+
+  it('an emotion variant on Book Three follows the same rule: refused, and never lands on Book One’s variant file', async () => {
     seedChain();
     writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('ONE-ANGRY'));
-    await design('Book Three', { emotion: 'angry' });
+    const res = await design('Book Three', { emotion: 'angry' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Redesign "Book Two" first. This voice is shared with it.');
     expect(
       readFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt')).equals(Buffer.from('ONE-ANGRY')),
     ).toBe(true);
-    expect(requestedVoiceIds.every((v) => !v.startsWith('qwen-u_shared'))).toBe(true);
-    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
   });
 
   it('control: a chain nobody declined is shared by design and does not fork', async () => {
@@ -369,26 +379,14 @@ describe('pass-2 3 — designing a FOLLOWER of a declined, unforked row must not
     expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
   });
 
-  it('if forking the ancestor fails the design fails, Book One is intact, and nothing moved', async () => {
-    seedChain();
-    failWriteIn.text = 'Book Two';
-    const res = await design('Book Three');
-    expect(res.status).toBe(500);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
-    expect(requestedVoiceIds).toEqual([]);
-    expect(book1Intact()).toBe(true);
-    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-    expect(readRow('Book Three').voiceUuid).toBe('u_shared');
-    expect(strays()).toEqual([]);
-  });
-
-  it('a link into a book that cannot be read refuses the design (pass 3: the unreadable book may be the target)', async () => {
+  it('a link into a book that cannot be read refuses the design (the unreadable book may be the target)', async () => {
     seedChain();
     const goodTwo = readFileSync(castPath('Book Two'), 'utf8');
     writeFileSync(castPath('Book Two'), '{"characters":[{"id":');
     const res = await design('Book Three');
     writeFileSync(castPath('Book Two'), goodTwo);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/try again/);
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
   });

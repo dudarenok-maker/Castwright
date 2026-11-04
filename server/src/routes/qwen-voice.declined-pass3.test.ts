@@ -213,7 +213,7 @@ const strays = () => readdirSync(qwenDir()).filter((f) => !f.startsWith('qwen-u_
 const TORN = '{"characters":[{"id":';
 
 describe('pass-3 2 — a follower the fork could not see is not left on the earlier book’s voice', () => {
-  it('a follower unreadable at the fork is moved apart when ITS design comes, and never overwrites Book One', async () => {
+  it('a follower unreadable at the fork is left on u_shared, and ITS design is refused, never overwriting Book One', async () => {
     seedChain();
     const goodThree = readFileSync(castPath('Book Three'), 'utf8');
     writeFileSync(castPath('Book Three'), TORN);
@@ -225,29 +225,14 @@ describe('pass-3 2 — a follower the fork could not see is not left on the earl
 
     requestedVoiceIds = [];
     const res = await design('Book Three');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(
+      'This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.',
+    );
     expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
-    expect(readRow('Book Three').voiceUuid).toBe(two);
-    expect(readRow('Book Three').matchedFrom?.bookId).toBe(ids['Book Two']);
-    expect(readRow('Book One').voiceUuid).toBe('u_shared');
-  });
-
-  it('failure path: a failed write of the stranded follower fails the design and leaves Book One intact', async () => {
-    seedChain();
-    const goodThree = readFileSync(castPath('Book Three'), 'utf8');
-    writeFileSync(castPath('Book Three'), TORN);
-    expect((await design('Book Two')).status).toBe(200);
-    writeFileSync(castPath('Book Three'), goodThree);
-    requestedVoiceIds = [];
-    failWriteIn.text = 'Book Three';
-    const res = await design('Book Three');
-    failWriteIn.text = null;
-    expect(res.status).toBe(500);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
     expect(requestedVoiceIds).toEqual([]);
-    expect(book1Intact()).toBe(true);
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
+    expect(readRow('Book One').voiceUuid).toBe('u_shared');
   });
 
   it('a link that lands between the scan and the locks fails the fork, writes nothing, and retries clean', async () => {
@@ -275,17 +260,19 @@ describe('pass-3 2 — a follower the fork could not see is not left on the earl
     writeFileSync(castPath('Book Two'), TORN);
     const res = await design('Book Three');
     writeFileSync(castPath('Book Two'), goodTwo);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/try again/);
     expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
     expect(strays()).toEqual([]);
 
-    // readable again: the retry forks the pair together
-    expect((await design('Book Three')).status).toBe(200);
+    // readable again: Book Two is the declined row it follows, so it names it
+    const again = await design('Book Three');
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe('Redesign "Book Two" first. This voice is shared with it.');
     expect(book1Intact()).toBe(true);
-    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
   });
 
   it('control: a link target that is simply gone (no unreadable book) designs as before', async () => {
@@ -395,15 +382,16 @@ describe('pass-3 4 — the legacy-key path in three books matches the uuid path�
     expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
   });
 
-  it('designing Book Three FIRST walks up to the declined Book Two and does the same', async () => {
+  it('designing Book Three FIRST is refused, naming the declined Book Two, and stamps nothing', async () => {
     seedLegacyChain();
-    expect((await design('Book Three')).status).toBe(200);
-    const two = readRow('Book Two').voiceUuid;
-    expect(two).toBeTruthy();
-    expect(readRow('Book Three').voiceUuid).toBe(two);
-    expect(readRow('Book Three').matchedFrom?.bookId).toBe(ids['Book Two']);
+    const res = await design('Book Three');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Redesign "Book Two" first. This voice is shared with it.');
+    expect(readRow('Book Two').voiceUuid).toBeUndefined();
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
     expect(legacyOneIntact()).toBe(true);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+    expect(legacyStrays()).toEqual([]);
+    expect(requestedVoiceIds).toEqual([]);
   });
 
   it('control: without Book Three Book One stays on the legacy key', async () => {
@@ -431,15 +419,15 @@ describe('pass-3 4 — the legacy-key path in three books matches the uuid path�
 describe('pass-3 minor — a bookId link with no characterId reads the same in the walk and the follower rule', () => {
   const bookOnly = (t: Title) => ({ matchedFrom: { bookId: ids[t], bookTitle: t, confidence: 1 } });
 
-  it('designing the follower walks up to the declined source and never overwrites Book One', async () => {
+  it('designing the follower is refused, naming its declined source, and never overwrites Book One', async () => {
     seedChain();
     writeBook('Book Three', [{ ...baseRow, ...bookOnly('Book Two') }]);
-    expect((await design('Book Three')).status).toBe(200);
+    const res = await design('Book Three');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Redesign "Book Two" first. This voice is shared with it.');
     expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds).toHaveLength(1);
-    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
-    expect(readRow('Book Three').voiceUuid).toBe(readRow('Book Two').voiceUuid);
-    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(requestedVoiceIds).toEqual([]);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 
   it('designing the source still moves that follower with it (the rules agree)', async () => {

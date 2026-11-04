@@ -7,7 +7,7 @@ let root: string;
 let shouldFork: typeof import('./voice-uuid-fork.js').shouldForkSharedVoiceUuid;
 let shouldMintApart: typeof import('./voice-uuid-fork.js').shouldMintApartFromLegacyKey;
 let findFollowers: typeof import('./voice-uuid-fork.js').findLinkFollowers;
-let findAncestor: typeof import('./voice-uuid-fork.js').findDeclinedAncestor;
+let decide: typeof import('./voice-uuid-fork.js').decideSharedVoiceDesign;
 let scanFollowers: typeof import('./voice-uuid-fork.js').scanLinkFollowers;
 
 const U = 'uuid-shared';
@@ -41,7 +41,7 @@ beforeAll(async () => {
     shouldMintApartFromLegacyKey: shouldMintApart,
     findLinkFollowers: findFollowers,
     scanLinkFollowers: scanFollowers,
-    findDeclinedAncestor: findAncestor,
+    decideSharedVoiceDesign: decide,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -247,7 +247,7 @@ describe('findLinkFollowers (#3992)', () => {
   const names = (fs: Array<{ dir: string; characterId: string }>) =>
     fs.map((f) => `${basename(f.dir)}:${f.characterId}`).sort();
 
-  it('finds a chain end to end, and not a row whose uuid differs', async () => {
+  it('finds DIRECT followers only (one hop), and not a row whose uuid differs', async () => {
     reset();
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     book('Three', THREE_ID, [{ id: 'c3', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c2' } }]);
@@ -255,7 +255,7 @@ describe('findLinkFollowers (#3992)', () => {
       { id: 'c4', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
       { id: 'c4x', voiceUuid: 'other', matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
     ]);
-    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Four:c4', 'Three:c3']);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
   });
 
   it('does not follow a link that names another book or another character', async () => {
@@ -280,7 +280,7 @@ describe('findLinkFollowers (#3992)', () => {
     expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c2']);
   });
 
-  it('a cycle terminates and reports each row once', async () => {
+  it('a cycle cannot loop: only the rows that name X itself are reported, once', async () => {
     reset();
     const two = book('Two', TWO_ID, [{ id: 'c2', voiceUuid: U }]);
     book('Three', THREE_ID, [
@@ -291,7 +291,7 @@ describe('findLinkFollowers (#3992)', () => {
       { id: 'c4', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c3' } },
       { id: 'c4b', voiceUuid: U, matchedFrom: { bookId: FOUR_ID, characterId: 'c4' } },
     ]);
-    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Four:c4', 'Four:c4b', 'Three:c3', 'Three:c3b']);
+    expect(names(await findFollowers(two, { id: 'c2' }, U))).toEqual(['Three:c3']);
   });
 
   it('a link that names a RETIRED id of the followed character still follows', async () => {
@@ -328,111 +328,139 @@ describe('findLinkFollowers (#3992)', () => {
   });
 });
 
-describe('findDeclinedAncestor (#3992 pass-2 finding 3)', () => {
+describe('decideSharedVoiceDesign (#3992 fail-closed rule)', () => {
   const THREE = 'book-three-id';
   const FOUR = 'book-four-id';
   const link = (bookId: string, characterId: string | null = 'c') => ({ bookId, ...(characterId ? { characterId } : {}) });
+  const declined = { declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] };
 
   function chain() {
     reset();
     book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
-    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, declinedVoiceFrom: DECLINED }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, ...declined }]);
     return book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
   }
 
-  it('returns the declined row a linked row follows', async () => {
-    const three = chain();
-    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) });
-    expect(found && 'dir' in found && [basename(found.dir), found.characterId]).toEqual(['Two', 'c']);
-  });
-
-  it('walks several links up', async () => {
+  it('an unlinked declined row that shares its uuid separates (the two-book fork)', async () => {
     chain();
-    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
-    const found = await findAncestor(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) });
-    expect(found && 'dir' in found && basename(found.dir)).toBe('Two');
+    const two = join(root, 'books', 'Author', 'Series', 'Two');
+    expect(await decide(two, { id: 'c', voiceUuid: U, ...declined })).toEqual({ kind: 'separate' });
   });
 
-  it('returns the source’s uuid for a follower stranded on a voice the source forked away from (pass 3)', async () => {
+  it('the earlier book itself, and a never-shared voice, proceed', async () => {
+    chain();
+    const one = join(root, 'books', 'Author', 'Series', 'One');
+    expect(await decide(one, { id: 'c', voiceUuid: U })).toEqual({ kind: 'proceed' });
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
-    book('Two', TWO_ID, [
-      { id: 'c', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] },
-    ]);
-    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toEqual({
-      voiceUuid: 'u_two',
+    const solo = book('Solo', 'solo-id', [{ id: 'c', voiceUuid: 'u_solo', matchedFrom: link('gone-id') }]);
+    expect(await decide(solo, { id: 'c', voiceUuid: 'u_solo', matchedFrom: link('gone-id') })).toEqual({ kind: 'proceed' });
+  });
+
+  it('a direct follower of an unforked declined row is refused, naming that row’s book', async () => {
+    const three = chain();
+    expect(await decide(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toEqual({
+      kind: 'refuse',
+      message: 'Redesign "Two" first. This voice is shared with it.',
     });
   });
 
-  it('a source on another uuid that never declined this one is not a stranding', async () => {
-    reset();
-    book('Two', TWO_ID, [{ id: 'c', voiceUuid: 'u_two' }]);
-    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
+  it('a row two links below the declined row is refused, never walked', async () => {
+    chain();
+    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
+    expect(await decide(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) })).toEqual({
+      kind: 'refuse',
+      message:
+        'This voice is still shared with "One" through another linked book. Choose "Don\'t reuse" for this character first.',
+    });
   });
 
-  it('null when nothing up the chain declined: a plain link shares by design', async () => {
+  it('a stranded row (its source left the uuid it declined) is refused', async () => {
     reset();
     book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
-    const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) }]);
-    expect(await findAncestor(two, { id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) })).toBeNull();
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: 'u_two', ...declined }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    expect((await decide(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).kind).toBe('refuse');
   });
 
-  it('null when the linked row no longer holds the uuid, or names no character; a legacy walker takes the source uuid', async () => {
-    const three = chain();
-    expect(await findAncestor(three, { id: 'c', voiceUuid: 'other', matchedFrom: link(TWO_ID) })).toBeNull();
-    // a legacy walker (no uuid) whose source is a declined row still on the earlier book's uuid forks it first (#3992 pass 5)
-    const viaDeclined = await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) });
-    expect(viaDeclined && 'dir' in viaDeclined && [basename(viaDeclined.dir), viaDeclined.characterId, viaDeclined.forkUuid]).toEqual(['Two', 'c', U]);
-    // ...but a source with no uuid either has nothing to follow
-    expect(await findAncestor(three, { id: 'c', voiceId: 'v_none', matchedFrom: link(TWO_ID, 'nobody') })).toBeNull();
-    expect(await findAncestor(three, { id: 'zzz', voiceUuid: U, matchedFrom: link(TWO_ID, null) })).toBeNull();
-    // no characterId: the same id in the linked book is the source (the follower rule's reading)
-    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID, null) });
-    expect(found && 'dir' in found && found.characterId).toBe('c');
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: { characterId: 'c' } })).toBeNull();
-  });
-
-  it('a legacy walker takes its source’s uuid once the source owns it (#3992 pass 4)', async () => {
+  it('a decline recorded by book only (no uuid list) still counts', async () => {
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceUuid: 'u_one' }]);
-    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, declinedVoiceFrom: DECLINED }]);
-    const three = book('Three', THREE, [{ id: 'c', matchedFrom: link(TWO_ID) }]);
-    // nobody else holds U, so Two is not sharing it: Three takes it
-    expect(await findAncestor(three, { id: 'c', matchedFrom: link(TWO_ID) })).toEqual({ voiceUuid: U });
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    expect((await decide(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).kind).toBe('refuse');
   });
 
-  it('a legacy walker below a linked source forks the declined row above that source (#3992 pass 5)', async () => {
+  it('a plain series chain nobody declined proceeds, however long', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) }]);
+    book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
+    expect(await decide(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) })).toEqual({ kind: 'proceed' });
+  });
+
+  it('a direct follower of a non-declining root proceeds even with a decline elsewhere on the voice', async () => {
     chain();
-    const four = book('Four', FOUR, [{ id: 'c', matchedFrom: link(THREE) }]);
-    const found = await findAncestor(four, { id: 'c', matchedFrom: link(THREE) });
-    expect(found && 'dir' in found && [basename(found.dir), found.forkUuid]).toEqual(['Two', U]);
+    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) }]);
+    expect(await decide(four, { id: 'c', voiceUuid: U, matchedFrom: link(ONE_ID) })).toEqual({ kind: 'proceed' });
   });
 
-  it('a source already forked off a uuid but itself still shared forks again before a stranded follower takes it (#3992 pass 5)', async () => {
+  it('a link cycle returns at once', async () => {
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceUuid: 'u_two' }]);
-    book('Two', TWO_ID, [
-      { id: 'c', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED, declinedVoiceUuids: [U] },
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: 'u_s' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceUuid: 'u_s', matchedFrom: link(THREE), declinedVoiceUuids: ['u_t'] }]);
+    const three = book('Three', THREE, [
+      { id: 'c', voiceUuid: 'u_t', matchedFrom: link(TWO_ID), declinedVoiceFrom: [TWO_ID], declinedVoiceUuids: ['u_s'] },
     ]);
-    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
-    const found = await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) });
-    expect(found && 'dir' in found && [basename(found.dir), found.forkUuid]).toEqual(['Two', 'u_two']);
+    const two = join(root, 'books', 'Author', 'Series', 'Two');
+    expect((await decide(two, { id: 'c', voiceUuid: 'u_s', matchedFrom: link(THREE) })).kind).toBe('refuse');
+    expect((await decide(three, { id: 'c', voiceUuid: 'u_t', matchedFrom: link(TWO_ID) })).kind).toBe('proceed');
   });
 
-  it('terminates on a link cycle', async () => {
-    reset();
-    book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
-    const three = book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
-    expect(await findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toBeNull();
-  });
-
-  it('throws when the book it links to cannot be read (it may be the target), instead of walking on', async () => {
+  it('a link into a book whose cast.json or state.json cannot be read refuses with the retry sentence (#4025)', async () => {
     const three = chain();
-    writeFileSync(join(root, 'books', 'Author', 'Series', 'Two', '.audiobook', 'cast.json'), '{"characters":[{"id":');
-    await expect(findAncestor(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).rejects.toThrow(
-      /could not be read/,
-    );
+    const two = join(root, 'books', 'Author', 'Series', 'Two');
+    writeFileSync(join(two, '.audiobook', 'state.json'), '{"bookId":');
+    const retry = { kind: 'refuse', message: 'A book in this series could not be read; try again once it can.' };
+    expect(await decide(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toEqual(retry);
+    chain();
+    writeFileSync(join(two, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    expect(await decide(three, { id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) })).toEqual(retry);
+  });
+
+  it('a holder linking into an unreadable book puts a decline in play: a chain below it is refused', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U }]);
+    const bad = book('Bad', TWO_ID, []);
+    writeFileSync(join(bad, '.audiobook', 'cast.json'), '{"characters":[{"id":');
+    book('Three', THREE, [{ id: 'c', voiceUuid: U, matchedFrom: link(TWO_ID) }]);
+    const four = book('Four', FOUR, [{ id: 'c', voiceUuid: U, matchedFrom: link(THREE) }]);
+    expect((await decide(four, { id: 'c', voiceUuid: U, matchedFrom: link(THREE) })).kind).toBe('refuse');
+  });
+
+  it('legacy: a row linked to a declined legacy row is refused naming it; a legacy row nobody shares a key with proceeds', async () => {
+    reset();
+    const slot = { qwen: { name: 'qwen-v_x' } };
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v_x', overrideTtsVoices: slot }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v_x', overrideTtsVoices: slot, declinedVoiceFrom: DECLINED }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) }]);
+    expect(await decide(three, { id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) })).toEqual({
+      kind: 'refuse',
+      message: 'Redesign "Two" first. This voice is shared with it.',
+    });
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v_x', voiceUuid: U }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v_x', voiceUuid: U, ...declined }]);
+    const three2 = book('Three', THREE, [{ id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) }]);
+    expect(await decide(three2, { id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) })).toEqual({ kind: 'proceed' });
+  });
+
+  it('legacy: a row linked to a source that minted apart is refused while the earlier book keeps the legacy key', async () => {
+    reset();
+    const slot = { qwen: { name: 'qwen-v_x' } };
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v_x', overrideTtsVoices: slot }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v_x', voiceUuid: 'u_two', declinedVoiceFrom: DECLINED }]);
+    const three = book('Three', THREE, [{ id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) }]);
+    expect((await decide(three, { id: 'c', voiceId: 'v_x', matchedFrom: link(TWO_ID) })).kind).toBe('refuse');
   });
 });

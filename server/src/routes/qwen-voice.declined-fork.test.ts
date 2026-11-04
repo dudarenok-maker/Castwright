@@ -282,12 +282,14 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 
-  it('Assign: a bookId-less matchedFrom counts as an active link — no fork', async () => {
+  it('Assign: a bookId-less matchedFrom counts as an active link, so no fork; it names no book, so with the voice declined the design is refused (fail closed)', async () => {
     seed({ matchedFrom: { bookTitle: 'Book One', confidence: 0.92 } });
     const res = await design(() => bookTwoId);
-    expect(res.status).toBe(200);
-    expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/^This voice is still shared with "Book One"/);
+    expect(requestedVoiceIds).toEqual([]);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
+    expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);
   });
 });
 

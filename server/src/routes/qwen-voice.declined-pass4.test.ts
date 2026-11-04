@@ -223,66 +223,37 @@ describe('pass-4 A — moving a stranded follower carries the rows that follow i
     expect(readRow('Book Four').voiceUuid).toBe('u_shared');
   }
 
-  it('design Two (Three torn), restore, design Three, design Four: Book One stays intact', async () => {
+  it('design Two (Three torn), restore: designing Three, then Four, is refused and Book One stays intact', async () => {
     seedFour();
     await strandThreeAndFour();
-    const two = readRow('Book Two').voiceUuid;
 
     requestedVoiceIds = [];
-    expect((await design('Book Three')).status).toBe(200);
-    expect(readRow('Book Three').voiceUuid).toBe(two);
-    expect(readRow('Book Four').voiceUuid).toBe(two); // carried with Three
-
-    requestedVoiceIds = [];
-    expect((await design('Book Four')).status).toBe(200);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
-    expect(book1Intact()).toBe(true);
-    expect(readRow('Book One').voiceUuid).toBe('u_shared');
-  });
-
-  it('the walk is a backstop: Four left on U under a moved Three walks past it to the declined Two', async () => {
-    seedFour();
-    await strandThreeAndFour();
-    const two = readRow('Book Two').voiceUuid;
-    // Three is already on Two's uuid, Four was left behind on the declined one.
-    writeBook('Book Three', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Two') }]);
-    requestedVoiceIds = [];
-    expect((await design('Book Four')).status).toBe(200);
-    expect(book1Intact()).toBe(true);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
-    expect(readRow('Book Four').voiceUuid).toBe(two);
-  });
-
-  it('failure path: a failed write of the carried follower fails the design and leaves everything where it was', async () => {
-    seedFour();
-    await strandThreeAndFour();
-    requestedVoiceIds = [];
-    failWriteIn.text = 'Book Four';
-    const res = await design('Book Three');
-    failWriteIn.text = null;
-    expect(res.status).toBe(500);
-    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    const three = await design('Book Three');
+    expect(three.status).toBe(409);
+    expect(three.body.error).toBe('This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.');
+    const four = await design('Book Four');
+    expect(four.status).toBe(409);
+    expect(four.body.error).toBe('This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.');
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
     expect(readRow('Book Four').voiceUuid).toBe('u_shared');
+    expect(readRow('Book One').voiceUuid).toBe('u_shared');
   });
 
-  it('failure path: a follower unreadable at the move is left on U, and ITS design then walks up and follows, never writing Book One', async () => {
+  it('nothing walks: Four left on U under a Three already on Two’s uuid is refused, never designing over Book One', async () => {
     seedFour();
     await strandThreeAndFour();
     const two = readRow('Book Two').voiceUuid;
-    const goodFour = readFileSync(castPath('Book Four'), 'utf8');
-    writeFileSync(castPath('Book Four'), TORN);
-    expect((await design('Book Three')).status).toBe(200);
-    writeFileSync(castPath('Book Four'), goodFour);
-    expect(readRow('Book Four').voiceUuid).toBe('u_shared'); // not carried: it could not be read
+    writeBook('Book Three', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Two') }]);
     requestedVoiceIds = [];
-    expect((await design('Book Four')).status).toBe(200);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
+    const res = await design('Book Four');
+    expect(res.status).toBe(409);
+    expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);
-    expect(readRow('Book Four').voiceUuid).toBe(two);
+    expect(readRow('Book Four').voiceUuid).toBe('u_shared');
   });
+
 });
 
 describe('pass-4 B — a stranded legacy follower takes its source’s uuid and the series mint never restamps', () => {
@@ -310,7 +281,7 @@ describe('pass-4 B — a stranded legacy follower takes its source’s uuid and 
     writeFileSync(castPath('Book Three'), goodThree);
   }
 
-  it('design Two (Three torn), restore, design Three: Three takes Two’s uuid, Book One has none', async () => {
+  it('design Two (Three torn), restore, design Three: refused, and Book One keeps its legacy key', async () => {
     seedLegacyThree();
     await strandLegacyThree();
     const two = readRow('Book Two').voiceUuid;
@@ -318,25 +289,12 @@ describe('pass-4 B — a stranded legacy follower takes its source’s uuid and 
     expect(readRow('Book Three').voiceUuid).toBeUndefined();
 
     requestedVoiceIds = [];
-    expect((await design('Book Three')).status).toBe(200);
-    expect(requestedVoiceIds).toEqual([`qwen-${two}`]);
-    expect(readRow('Book Two').voiceUuid).toBe(two);
-    expect(readRow('Book Three').voiceUuid).toBe(two);
-    expect(oneIntact()).toBe(true);
-  });
-
-  it('failure path: a failed write of the legacy follower fails the design and stamps nothing', async () => {
-    seedLegacyThree();
-    await strandLegacyThree();
-    const two = readRow('Book Two').voiceUuid;
-    requestedVoiceIds = [];
-    failWriteIn.text = 'Book Three';
     const res = await design('Book Three');
-    failWriteIn.text = null;
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.');
     expect(requestedVoiceIds).toEqual([]);
-    expect(readRow('Book Three').voiceUuid).toBeUndefined();
     expect(readRow('Book Two').voiceUuid).toBe(two);
+    expect(readRow('Book Three').voiceUuid).toBeUndefined();
     expect(oneIntact()).toBe(true);
   });
 
@@ -398,7 +356,7 @@ describe('pass-4 minor — the unreadable-target refusal only fires for a book t
     tearUnrelatedWith('{"bookId":');
     const res = await design('Book Three');
     mend();
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/try again/);
     expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
     expect(requestedVoiceIds).toEqual([]);
@@ -409,7 +367,7 @@ describe('pass-4 minor — the unreadable-target refusal only fires for a book t
     seedChain();
     writeFileSync(castPath('Book Two'), TORN);
     const res = await design('Book Three');
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/try again/);
     expect(requestedVoiceIds).toEqual([]);
     expect(book1Intact()).toBe(true);

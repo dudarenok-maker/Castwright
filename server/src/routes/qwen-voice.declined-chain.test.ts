@@ -236,15 +236,25 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(existsSync(join(qwenDir(), `qwen-${fresh}.pt`))).toBe(true);
   });
 
-  it('a chain of several links all move; Book One still does not', async () => {
+  it('the fork carries DIRECT followers only: a row two links down stays on u_shared, and its own design is refused (fail closed)', async () => {
     seedChain({ four: true });
     expect((await design('Book Two')).status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
     expect(fresh).not.toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe(fresh);
-    expect(readRow('Book Four').voiceUuid).toBe(fresh);
+    expect(readRow('Book Four').voiceUuid).toBe('u_shared'); // links to Three, not to Two
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
     expect(book1Intact()).toBe(true);
+
+    requestedVoiceIds = [];
+    const four = await design('Book Four');
+    expect(four.status).toBe(409);
+    expect(four.body.error).toBe(
+      'This voice is still shared with "Book One" through another linked book. Choose "Don\'t reuse" for this character first.',
+    );
+    expect(requestedVoiceIds).toEqual([]);
+    expect(book1Intact()).toBe(true);
+    expect(readRow('Book Four').voiceUuid).toBe('u_shared');
   });
 
   it('a link cycle terminates: a row that names its own book (no characterId) is moved once, not looped on', async () => {
@@ -332,9 +342,9 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
   });
   it('a book that STARTED following between the scan and the locked write fails the fork (pass 3), never written outside the lock set', async () => {
-    seedChain({ four: true });
-    writeRows('Book Four', [{ ...baseRow }]); // holds u_shared, follows nobody yet
-    beforeCopy.fn = () => writeRows('Book Four', [{ ...baseRow, ...linkTo('Book Three') }]);
+    seedChain();
+    writeBook('Book Four', [{ ...baseRow }]); // holds u_shared, follows nobody yet
+    beforeCopy.fn = () => writeRows('Book Four', [{ ...baseRow, ...linkTo('Book Two') }]);
     expect((await design('Book Two')).status).toBe(500);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');

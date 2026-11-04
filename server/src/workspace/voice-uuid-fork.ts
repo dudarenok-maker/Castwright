@@ -1,44 +1,45 @@
-/* #3992 — read-only decision helper: must a character's shared `voiceUuid`
-   fork before it is redesigned?
+/* #3992 — read-only decision helper: may a character's voice be designed as it
+   is, must it fork first, or must the design be refused?
 
    The series linker hands a linked character the source book's `voiceUuid` on
    purpose (series-reuse-link.ts), so both books share one `qwen-<uuid>.pt`.
    When the user declines that link, redux clears `matchedFrom` but the uuid
    survives on disk. A redesign would then overwrite the earlier book's file.
-   The decline is recorded server-side as `declinedVoiceFrom`, so the decision is
-   made from disk state:
+   The decline is recorded server-side as `declinedVoiceFrom` (and the voice it
+   declined as `declinedVoiceUuids`), so every decision is made from disk state.
 
-   A character X (book B, id cX, uuid U) forks when ALL hold:
+   THE TWO-BOOK FORK. A character X (book B, id cX, uuid U) forks when ALL hold:
    1. X has a uuid, NO `matchedFrom` at all (a bookId-less one, as written
       by a manual Assign, still counts as an active link) AND a non-empty
       `declinedVoiceFrom` (the durable "Don't reuse" marker, #3992). A row
       declined before the marker shipped has none and never forks (it behaves as
       it did before #3992); a row nobody declined never forks.
    2. At least one character in ANOTHER book has `voiceUuid === U` and is NOT a
-      follower of X (below). That is the earlier book whose bytes must be kept.
+      DIRECT follower of X (below). That is the earlier book whose bytes must be
+      kept.
+   A DIRECT follower of X is a row, in another book, holding U whose `matchedFrom`
+   names B's bookId with a characterId that resolves to X (through B's live cast and
+   id history). A `matchedFrom` with a bookId but no characterId names the row with
+   the SAME id. One hop only: a row linking to a follower is NOT carried. Followers
+   move to the new uuid together with X, in one locked write (qwen-voice.ts
+   forkSharedVoiceUuid); everything else holding U stays.
 
-   A FOLLOWER of X is a row, in another book, holding U whose `matchedFrom` names
-   B's bookId with a characterId that resolves to X (through B's live cast and id
-   history), or that names an already-found follower the same way, so a chain Book
-   Three -> Book Two -> X is found end to end. A `matchedFrom` with a bookId but no
-   characterId names the row with the SAME id as the follower in that book, here
-   and in the walk up (findDeclinedAncestor). A bookId-less
-   `matchedFrom` could point at anyone, so it is NOT a follower: it stays on U (and
-   so counts as a holder), and neither is a row in a book with no bookId (it cannot
-   be locked by id). Followers move to the new uuid together with X, in one
-   locked write (qwen-voice.ts forkSharedVoiceUuid); everything else holding U is
-   the earlier book and stays. A visited set makes a link cycle terminate.
+   THE FAIL-CLOSED RULE (decideSharedVoiceDesign). Any other design that would
+   write a voice another book holds, while a decline of that voice is in play, is
+   refused unless the row is provably on the earlier book's side. Nothing walks a
+   link chain: each decision reads the library ONCE and looks at most one hop up
+   from the row being designed, so a cycle or a long chain cannot loop or reach a
+   book the fork did not lock. See decideSharedVoiceDesign for the exact rule.
 
    Writes nothing and takes no lock. */
 
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { declinesVoice } from '../store/declined-voice.js';
 
 interface CastRow {
   id: string;
@@ -93,30 +94,39 @@ async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNRE
 
 /* The ONE read of a book's state.json in this module (the state-json lock guard
    pins its stateJsonPath( count per file). Throws like any state read; the scan of
-   OTHER books catches it, the book being designed does not. Also exported for the
-   fork write, which needs the designed book's id to take its book-op. */
+   OTHER books catches it, the book being designed does not. */
+async function readBookMeta(dir: string): Promise<{ bookId?: string; title?: string }> {
+  const state = await readStateJsonWithRecovery(stateJsonPath(dir));
+  return { bookId: state?.bookId || undefined, title: state?.title || undefined };
+}
+
+/* Also exported for the fork write, which needs the designed book's id to take
+   its book-op. */
 export async function readBookId(dir: string): Promise<string | undefined> {
-  return (await readStateJsonWithRecovery(stateJsonPath(dir)))?.bookId || undefined;
+  return (await readBookMeta(dir)).bookId;
 }
 
 interface OtherBook {
   dir: string;
   bookId?: string;
+  title?: string;
   rows: CastRow[];
 }
 
 interface OtherBooks {
   books: OtherBook[];
-  /** Some other book's cast.json could not be read, so what it holds is unknown. */
+  /** Some other book could not be identified, so what it holds is unknown. */
   unreadable: boolean;
   /** Those books' folders. */
   unreadableDirs: string[];
 }
 
-/* Every OTHER book's readable cast, with its bookId. An unreadable cast.json is
-   not in `books` (it can be neither a follower nor named by a link we can see),
-   and is reported in `unreadable` so each caller decides what not knowing means:
-   the fork decisions read it as a possible HOLDER (see shouldForkSharedVoiceUuid). */
+/* Every OTHER book's readable cast, with its bookId and title: one bounded pass
+   over the library. A book whose cast.json OR state.json cannot be read is not in
+   `books` (without its bookId no link can be matched to it, so it could be any
+   link's target) and is reported in `unreadable` so each caller decides what not
+   knowing means (#4025: a torn state.json used to leave the book in `books` with
+   no id, where a link to it read as "deleted book"). */
 async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
   const out: OtherBook[] = [];
   const unreadableDirs: string[] = [];
@@ -131,13 +141,15 @@ async function loadOtherBooks(selfDir: string): Promise<OtherBooks> {
           continue;
         }
         if (!cast?.characters?.length) continue;
-        let bookId: string | undefined;
+        let meta: { bookId?: string; title?: string };
         try {
-          bookId = await readBookId(dir);
-        } catch {
-          bookId = undefined;
+          meta = await readBookMeta(dir);
+        } catch (e) {
+          console.warn(`[voice-uuid-fork] skipping unreadable state.json in ${dir}: ${(e as Error).message}`);
+          unreadableDirs.push(resolve(dir));
+          continue;
         }
-        out.push({ dir, bookId, rows: cast.characters });
+        out.push({ dir, bookId: meta.bookId, title: meta.title, rows: cast.characters });
       }
     }
   }
@@ -152,8 +164,8 @@ export interface LinkFollower {
 
 const rowKey = (dir: string, id: string): string => `${resolve(dir)}|${id}`;
 
-/* What "holds the shared voice" means for a walk: a row on the uuid, or (for a row
-   that never got a uuid) a row on the same legacy key `qwen-<voiceId ?? id>`. */
+/* What "holds the shared voice" means: a row on the uuid, or (for a row that never
+   got a uuid) a row on the same legacy key `qwen-<voiceId ?? id>`. */
 export type VoiceHolds = (row: CastRow) => boolean;
 const holdsUuid = (uuid: string): VoiceHolds => (y) => y.voiceUuid === uuid;
 export const holdsLegacyKey =
@@ -161,64 +173,43 @@ export const holdsLegacyKey =
   (y) =>
     !y.voiceUuid && (y.voiceId ?? y.id) === linkId;
 
-/* Breadth-first walk from X over `matchedFrom` links, among rows holding `uuid`.
-   A row already visited (X itself, one reached by another path, or one that names
-   its own book) is never revisited, so a cycle ends. */
-async function walkFollowers(
+/* The rows in other books that link DIRECTLY to X (one hop, never further), among
+   rows holding the voice. A row that links to one of these is not a follower. */
+async function directFollowers(
   selfDir: string,
   character: { id: string },
   holds: VoiceHolds,
   others: OtherBook[],
 ): Promise<LinkFollower[]> {
   const selfBookId = await readBookId(selfDir);
+  if (!selfBookId) return []; // a book with no id cannot be named by a link
+  let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
+  const namesX = async (characterId: string): Promise<boolean> => {
+    if (characterId === character.id) return true;
+    if (!resolver) {
+      const rows = (await readJson<CastFile>(castJsonPath(selfDir)))?.characters ?? [];
+      resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(selfDir));
+    }
+    return resolver.resolve(characterId)?.character.id === character.id;
+  };
   const followers: LinkFollower[] = [];
-  const visited = new Set<string>([rowKey(selfDir, character.id)]);
-  interface Node {
-    dir: string;
-    bookId: string | undefined;
-    characterId: string;
-    rows?: CastRow[];
-  }
-  const queue: Node[] = [
-    { dir: selfDir, bookId: selfBookId, characterId: character.id },
-  ];
-  while (queue.length) {
-    const node = queue.shift()!;
-    if (!node.bookId) continue; // a book with no id cannot be named by a link
-    let resolver: ReturnType<typeof buildCastResolver<CastRow>> | undefined;
-    const namesNode = async (characterId: string): Promise<boolean> => {
-      if (characterId === node.characterId) return true;
-      if (!resolver) {
-        const rows = node.rows ?? (await readJson<CastFile>(castJsonPath(node.dir)))?.characters ?? [];
-        resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(node.dir));
-      }
-      return resolver.resolve(characterId)?.character.id === node.characterId;
-    };
-    for (const book of others) {
-      /* A book with no bookId cannot be locked by id (no route can move it either),
-         so it cannot be moved with X: it stays on U. */
-      if (!book.bookId) continue;
-      for (const y of book.rows) {
-        if (!holds(y)) continue;
-        const key = rowKey(book.dir, y.id);
-        if (visited.has(key)) continue;
-        const mf = y.matchedFrom as MatchedFrom;
-        if (!mf?.bookId || mf.bookId !== node.bookId) continue;
-        /* A link with a bookId but no characterId names the row with the SAME id in
-           that book (series books share character ids): the walk up reads it the
-           same way (findDeclinedAncestor). */
-        if (!(await namesNode(mf.characterId ?? y.id))) continue;
-        visited.add(key);
-        followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
-        queue.push({ dir: book.dir, bookId: book.bookId, characterId: y.id, rows: book.rows });
-      }
+  for (const book of others) {
+    /* A book with no bookId cannot be locked by id (no route can move it either),
+       so it cannot be moved with X: it stays on U. */
+    if (!book.bookId) continue;
+    for (const y of book.rows) {
+      if (!holds(y)) continue;
+      const mf = y.matchedFrom as MatchedFrom;
+      if (!mf?.bookId || mf.bookId !== selfBookId) continue;
+      if (!(await namesX(mf.characterId ?? y.id))) continue;
+      followers.push({ dir: book.dir, bookId: book.bookId, characterId: y.id });
     }
   }
   return followers;
 }
 
-/* Every row in another book that follows X (see the header), transitively, and
-   the folders of the books that could not be read (a follower there would be
+/* Every row in another book that follows X directly (see the header), and the
+   folders of the books that could not be read (a follower there would be
    invisible). Read-only and lock-free; qwen-voice.ts re-runs it inside the locks
    it takes and fails the fork when a book it already locked as a follower has
    become unreadable. */
@@ -230,7 +221,7 @@ export async function scanLinkFollowers(
   const selfDir = resolve(bookDir);
   const { books, unreadableDirs } = await loadOtherBooks(selfDir);
   const holds = typeof voice === 'string' ? holdsUuid(voice) : voice;
-  return { followers: await walkFollowers(selfDir, character, holds, books), unreadableDirs };
+  return { followers: await directFollowers(selfDir, character, holds, books), unreadableDirs };
 }
 
 export async function findLinkFollowers(
@@ -241,29 +232,9 @@ export async function findLinkFollowers(
   return (await scanLinkFollowers(bookDir, character, voice)).followers;
 }
 
-/* #3992 — read-only: the declined row a LINKED row's voice really belongs to.
-   A row X with a `matchedFrom` never forks itself (the link says it shares by
-   design), but its source may be a declined row that has not forked yet (Book
-   Three linked to Book Two, which declined Book One's voice): designing X under
-   the shared uuid would overwrite Book One. Walks X's link chain UP, among rows
-   holding `uuid`, following each `matchedFrom` through the target book's live cast
-   and id history, and returns the first row `shouldForkSharedVoiceUuid` says must
-   fork, or null when the chain ends, leaves `uuid` or loops.
-
-   A source that already forked is the other half: it holds a different uuid and
-   lists X's uuid in its `declinedVoiceUuids`, so X is a follower the fork never
-   reached (its book was unreadable, or the link landed after the fork). It is
-   STRANDED on a voice its source left, and is returned as `{ voiceUuid }`, the
-   uuid the source holds now, for the caller to move it onto (the follow rule).
-   The walk keeps going up through a linked source on a third uuid, so a row left
-   behind by an earlier move still finds the declined row above it. A walker with
-   no uuid whose source holds one takes that uuid the same way.
-
-   A link whose target cannot be told apart from an unreadable book THROWS: the
-   unreadable book may be that target, and designing under the shared uuid would
-   then overwrite the earlier book. A target that is simply absent (a deleted
-   book, with every other book readable) ends the walk as it always did. Writes
-   nothing and takes no lock. */
+/* Could an unreadable book be the one with this bookId? One whose state.json
+   names another bookId cannot be; one whose state.json cannot be read is
+   unidentified, so it might be. */
 async function couldBeUnreadable(dirs: string[], bookId: string): Promise<boolean> {
   for (const dir of dirs) {
     try {
@@ -275,119 +246,146 @@ async function couldBeUnreadable(dirs: string[], bookId: string): Promise<boolea
   return false;
 }
 
-/* `forkUuid` names the uuid the row at `dir` must fork off when it is NOT the
-   uuid the asking row holds: a legacy walker (no uuid) whose source is a declined
-   row still on the earlier book's uuid. Absent, the row holds the asking row's own
-   voice (the uuid fork, or the legacy-key mint for a legacy source). */
-export type DeclinedAncestor =
-  | { dir: string; characterId: string; forkUuid?: string }
-  | { voiceUuid: string }
-  | null;
-
-/* A source row that holds a uuid the asking row does not (a legacy walker's
-   source; a source on a third uuid that declined the walker's): the asking row may
-   take that uuid only once it BELONGS to the source. Decided in uuid mode first: a
-   source that must fork off the uuid it shares (or has a row above it on that uuid
-   that must) is returned to be forked, carrying its followers, and the asker then
-   takes the uuid the source ends on. Otherwise the uuid is the source's own. */
-async function resolveSourceUuid(dir: string, row: CastRow): Promise<DeclinedAncestor> {
-  const uuid = row.voiceUuid as string;
-  if (await shouldForkSharedVoiceUuid(dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])) {
-    return { dir, characterId: row.id, forkUuid: uuid };
-  }
-  if (row.matchedFrom) {
-    const above = await findDeclinedAncestor(dir, row);
-    if (above && 'dir' in above) return { ...above, forkUuid: uuid };
-    if (above) return above;
-  }
-  return { voiceUuid: uuid };
+interface DesignRow {
+  id: string;
+  voiceId?: string | null;
+  voiceUuid?: string | null;
+  matchedFrom?: unknown;
+  declinedVoiceFrom?: string[] | null;
+  declinedVoiceUuids?: string[] | null;
+  overrideTtsVoices?: { qwen?: { name?: string } } | null;
 }
 
-export async function findDeclinedAncestor(
+/* What the design may do with the voice the row holds now. */
+export type SharedVoiceDesign =
+  /** Design under the row's current voice, as before #3992. */
+  | { kind: 'proceed' }
+  /** A declined, unlinked row: the two-book fork (uuid) or the legacy-key mint
+      apart runs first, then the design writes a voice nobody else holds. */
+  | { kind: 'separate' }
+  /** Writing would put this design on a voice another book still keeps. */
+  | { kind: 'refuse'; message: string };
+
+export const UNREADABLE_BOOK_MESSAGE = 'A book in this series could not be read; try again once it can.';
+export const redesignFirstMessage = (title: string): string =>
+  `Redesign "${title}" first. This voice is shared with it.`;
+export const sharedThroughChainMessage = (title: string): string =>
+  `This voice is still shared with "${title}" through another linked book. Choose "Don't reuse" for this character first.`;
+
+const titleOf = (book: OtherBook): string => book.title || basename(book.dir);
+
+/* #3992 — the fail-closed rule, checked under the design lock before any write or
+   sidecar call (qwen-voice.ts). Reads the library ONCE and never walks a link
+   chain. V is the voice the design would write: the uuid U, or, for a row with no
+   uuid, the legacy key `qwen-<voiceId ?? id>` (whose design takes the series mint
+   and so moves every series row on that key onto the redesign).
+
+   1. An UNLINKED row (no `matchedFrom`): it is the earlier book itself, a row the
+      series mint put on V, or a declined row. Only the declined row whose voice
+      another book holds is separated (the two-book fork, or the legacy-key mint
+      apart), and that writes a voice nobody else holds. Everything else proceeds.
+   2. A LINKED row whose voice no other readable book holds, with every book
+      readable, proceeds: nothing else can be written.
+   3. Otherwise it proceeds only when no decline of V is in play: no readable row
+      declined V (by `declinedVoiceUuids`, or by naming a book that holds V), and no
+      holder of V links to a book that could be an unreadable one (which could hide
+      a decline). Then V is shared by design.
+   4. With a decline in play it proceeds only when it is provably on the earlier
+      book's side: its ONE-hop link target holds V, has no link of its own, and did
+      not decline V. Every other shape is refused, never walked: a longer chain, a
+      link target that left V (a stranded row), a cycle, a target that cannot be
+      read, a legacy row whose source holds a uuid. A target that is an UNFORKED
+      decliner on V names itself ("Redesign <it> first"): its own design forks and
+      carries this row with it, after which this design is free. The rest name a
+      book still on V and point at "Don't reuse", which makes the row an unlinked
+      decliner of its own (case 1).
+
+   Writes nothing and takes no lock. */
+export async function decideSharedVoiceDesign(
   bookDir: string,
-  character: {
-    id: string;
-    voiceId?: string | null;
-    voiceUuid?: string | null;
-    matchedFrom?: unknown;
-  },
-): Promise<DeclinedAncestor> {
-  /* A row with no uuid shares the earlier book's LEGACY key instead, and the same
-     walk applies with the legacy reading of "holds" and of "must mint apart". */
-  const uuid = character.voiceUuid;
-  const holds = uuid ? holdsUuid(uuid) : holdsLegacyKey(character.voiceId ?? character.id);
-  const { books, unreadable, unreadableDirs } = await loadOtherBooks(resolve(bookDir));
-  const visited = new Set<string>([rowKey(bookDir, character.id)]);
-  let mf = character.matchedFrom as MatchedFrom;
-  let walkerId = character.id;
-  while (mf?.bookId) {
-    const target = books.find((b) => b.bookId === mf?.bookId);
-    if (!target) {
-      /* Only an unreadable book that could BE the target refuses: one whose
-         state.json names another bookId (or has none) cannot be it. A state.json
-         that cannot be read either leaves the book unidentified, so it might be. */
-      if (unreadable && (await couldBeUnreadable(unreadableDirs, mf.bookId))) {
-        throw new RetryableForkError('A book in this series could not be read; try again once it can.');
-      }
-      return null;
-    }
-    const rows = target.rows;
-    const resolver = buildCastResolver<CastRow>(rows, await loadCastIdHistory(target.dir));
-    const row: CastRow | undefined = resolver.resolve(mf.characterId ?? walkerId)?.character;
-    if (!row) return null;
-    if (!holds(row)) {
-      if (!row.voiceUuid) return null;
-      /* A legacy walker (no uuid) whose source holds one takes it: the source left
-         the shared legacy key, and the link says this row shares with the source. */
-      if (!uuid) return resolveSourceUuid(target.dir, row);
-      /* The source that declined the voice, already forked off it (unless it is
-         itself still sharing the uuid it forked to). */
-      if (declinesVoice(row, { voiceUuid: uuid })) return resolveSourceUuid(target.dir, row);
-      /* A linked source on yet another uuid (an earlier move carried it off U): the
-         declined row may be further up, so keep walking. Moving a row also carries
-         its followers (qwen-voice.ts moveStrandedFollower), but a row left behind
-         must not depend on that having happened. */
-      const key = rowKey(target.dir, row.id);
-      if (visited.has(key) || !(row.matchedFrom as MatchedFrom)?.bookId) return null;
-      visited.add(key);
-      mf = row.matchedFrom as MatchedFrom;
-      walkerId = row.id;
-      continue;
-    }
-    const key = rowKey(target.dir, row.id);
-    if (visited.has(key)) return null;
-    visited.add(key);
-    const mustFork = uuid
-      ? await shouldForkSharedVoiceUuid(target.dir, row as Parameters<typeof shouldForkSharedVoiceUuid>[1])
-      : await shouldMintApartFromLegacyKey(target.dir, row as LegacyRow);
-    if (mustFork) return { dir: target.dir, characterId: row.id };
-    mf = row.matchedFrom as MatchedFrom;
-    walkerId = row.id;
+  character: DesignRow,
+): Promise<SharedVoiceDesign> {
+  const selfDir = resolve(bookDir);
+  const lib = await loadOtherBooks(selfDir);
+  const uuid = character.voiceUuid || undefined;
+  const linkId = character.voiceId ?? character.id;
+  const holds = uuid ? holdsUuid(uuid) : holdsLegacyKey(linkId);
+
+  if (!character.matchedFrom) {
+    const separate = uuid
+      ? await mustForkUuid(selfDir, character, lib)
+      : await mustMintApart(selfDir, character, lib);
+    return separate ? { kind: 'separate' } : { kind: 'proceed' };
   }
-  return null;
+
+  const holders = lib.books.flatMap((book) => book.rows.filter(holds).map((row) => ({ book, row })));
+  if (!holders.length && !lib.unreadable) return { kind: 'proceed' };
+
+  const linkedBookIds = new Set(lib.books.map((b) => b.bookId).filter(Boolean));
+  const mightBeUnreadable = async (mf: MatchedFrom): Promise<boolean> =>
+    !!mf?.bookId && lib.unreadable && !linkedBookIds.has(mf.bookId) && (await couldBeUnreadable(lib.unreadableDirs, mf.bookId));
+
+  /* The row this one links to: one hop, never further. */
+  const mf = character.matchedFrom as MatchedFrom;
+  if (await mightBeUnreadable(mf)) return { kind: 'refuse', message: UNREADABLE_BOOK_MESSAGE };
+  let target: { book: OtherBook; row: CastRow } | undefined;
+  const targetBook = mf?.bookId ? lib.books.find((b) => b.bookId === mf.bookId) : undefined;
+  if (targetBook) {
+    const resolver = buildCastResolver<CastRow>(targetBook.rows, await loadCastIdHistory(targetBook.dir));
+    const row = resolver.resolve(mf?.characterId ?? character.id)?.character;
+    if (row) target = { book: targetBook, row };
+  }
+
+  /* Did this row decline V? By its uuid, or, on a row of the same `voiceId ?? id`,
+     by naming a book that holds V (a decline recorded before the row had a uuid
+     names only the book). A declined row still on V with no link is the unforked
+     decliner. A legacy key has no uuid to name, so a declined row on the same
+     `voiceId ?? id` declined it too (a row that minted apart keeps that voiceId and
+     its marker). */
+  const holderBookIds = new Set(holders.map((h) => h.book.bookId).filter((id): id is string => !!id));
+  const selfBookId = await readBookId(selfDir);
+  if (selfBookId) holderBookIds.add(selfBookId);
+  const declines = (row: CastRow): boolean =>
+    ((row.voiceId ?? row.id) === linkId && !!row.declinedVoiceFrom?.some((id) => holderBookIds.has(id))) ||
+    (uuid
+      ? !!row.declinedVoiceUuids?.includes(uuid)
+      : (row.voiceId ?? row.id) === linkId && !!row.declinedVoiceFrom?.length);
+
+  let inPlay = declines(character) || lib.books.some((b) => b.rows.some(declines));
+  if (!inPlay) {
+    for (const h of holders) {
+      if (await mightBeUnreadable(h.row.matchedFrom as MatchedFrom)) {
+        inPlay = true;
+        break;
+      }
+    }
+  }
+  if (!inPlay) return { kind: 'proceed' };
+
+  if (target && holds(target.row) && !target.row.matchedFrom) {
+    if (!declines(target.row)) return { kind: 'proceed' };
+    return { kind: 'refuse', message: redesignFirstMessage(titleOf(target.book)) };
+  }
+  /* Name a book still on V, preferring the earlier book itself (an unlinked row
+     that did not decline it). */
+  const earlier =
+    holders.find((h) => !h.row.matchedFrom && !declines(h.row)) ?? holders[0] ?? target;
+  return {
+    kind: 'refuse',
+    message: sharedThroughChainMessage(earlier ? titleOf(earlier.book) : 'an earlier book'),
+  };
 }
 
 /* An unreadable other book is treated as a possible HOLDER of the uuid (and, in
    shouldMintApartFromLegacyKey, of the legacy key), but only by a row that could
-   still be sharing it. The two outcomes are not symmetric: assuming it holds the
-   voice for a row that DOES still share a declined voice costs one extra fork (a
-   copy of the base family and a fresh uuid), while assuming it holds nothing lets
-   the redesign overwrite that book's `.pt` with no way to get it back. So a row
-   whose uuid is on its own `declinedVoiceUuids` (it still holds the voice it
-   declined) forks. A row whose uuid is NOT on that list has already left the
-   declined voice (a fork gives it a uuid no decline names): no unreadable book,
-   anywhere in the library, can be the earlier book for it, and re-forking it on
-   every design would drop its own variants and orphan its own files for as long as
-   some unrelated cast.json stays unreadable. It is decided from the readable
-   books alone. The other direction, a book that could be a FOLLOWER we cannot
-   see, is NOT covered at write time: a follower the first scan found that became unreadable, or a link that
-   landed after it, fails the fork (qwen-voice.ts), but one that was already
-   unreadable at the first scan is simply not in the set, so the fork leaves it on
-   U. It is caught later, when ITS design comes: findDeclinedAncestor walks up its
-   chain to the source that holds a different uuid and lists U as declined, and
-   moves the row onto it TOGETHER WITH the rows that follow it (qwen-voice.ts
-   moveStrandedFollower), so the rows below it are not left on U in turn. A row
-   left behind anyway still finds the declined row by walking up. */
+   still be sharing it. Assuming it holds the voice for a row that DOES still share
+   a declined voice costs one extra fork (a copy of the base family and a fresh
+   uuid, writing nobody's file), while assuming it holds nothing would let the
+   redesign overwrite that book's `.pt`. So a row whose uuid is on its own
+   `declinedVoiceUuids` forks. A row whose uuid is NOT on that list has already
+   left the declined voice: it is decided from the readable books alone. A
+   follower hidden in an unreadable book is left on U by the fork; its own design
+   then finds its link target off U and is refused (decideSharedVoiceDesign). */
 export async function shouldForkSharedVoiceUuid(
   bookDir: string,
   character: {
@@ -398,6 +396,21 @@ export async function shouldForkSharedVoiceUuid(
     declinedVoiceUuids?: string[] | null;
   },
 ): Promise<boolean> {
+  const selfDir = resolve(bookDir);
+  return mustForkUuid(selfDir, character, await loadOtherBooks(selfDir));
+}
+
+async function mustForkUuid(
+  selfDir: string,
+  character: {
+    id: string;
+    voiceUuid?: string | null;
+    matchedFrom?: unknown;
+    declinedVoiceFrom?: string[] | null;
+    declinedVoiceUuids?: string[] | null;
+  },
+  { books, unreadable }: OtherBooks,
+): Promise<boolean> {
   const uuid = character.voiceUuid;
   if (!uuid) return false;
   if (character.matchedFrom) return false;
@@ -406,12 +419,9 @@ export async function shouldForkSharedVoiceUuid(
      (a book confirmed before the earlier one, a null seriesPosition), and a
      series-minted shared uuid on such a row is intentional. */
   if (!character.declinedVoiceFrom?.length) return false;
-
-  const selfDir = resolve(bookDir);
-  const { books, unreadable } = await loadOtherBooks(selfDir);
   if (unreadable && character.declinedVoiceUuids?.includes(uuid)) return true;
   const followed = new Set(
-    (await walkFollowers(selfDir, character, holdsUuid(uuid), books)).map((f) => rowKey(f.dir, f.characterId)),
+    (await directFollowers(selfDir, character, holdsUuid(uuid), books)).map((f) => rowKey(f.dir, f.characterId)),
   );
   return books.some((b) =>
     b.rows.some((y) => y.voiceUuid === uuid && !followed.has(rowKey(b.dir, y.id))),
@@ -419,32 +429,34 @@ export async function shouldForkSharedVoiceUuid(
 }
 
 /* #3992 — read-only: the no-uuid sibling of shouldForkSharedVoiceUuid. A row
-   with NO uuid and no `matchedFrom` that already carries a designed qwen slot
-   (the linker denormalised the earlier book's `qwen-<voiceId>` onto it) shares
-   that legacy key with the earlier book. The series mint would stamp the earlier
-   book too and move ITS render key onto the redesign, so the row must mint a uuid
-   of its own instead. True only when ANOTHER book's row has the same
-   `voiceId ?? id`, no uuid and a designed qwen slot of its own, and is not a
-   FOLLOWER of X (links to it by bookId, transitively: same reading as the uuid
-   fork, so a bookId-less link is a holder). A row whose own slot is empty (nobody
-   designed yet) never trips it. */
+   with NO uuid and no `matchedFrom` shares the legacy key `qwen-<voiceId ?? id>`
+   with the earlier book. The series mint would stamp the earlier book too and move
+   ITS render key onto the redesign, so a declined row must mint a uuid of its own
+   instead. True only when ANOTHER book's row has the same `voiceId ?? id`, no uuid
+   and a designed qwen slot of its own, and is not a DIRECT follower of X (same
+   reading as the uuid fork). A key nobody else designed never trips it. */
 export async function shouldMintApartFromLegacyKey(
   bookDir: string,
   character: LegacyRow,
 ): Promise<boolean> {
+  const selfDir = resolve(bookDir);
+  return mustMintApart(selfDir, character, await loadOtherBooks(selfDir));
+}
+
+async function mustMintApart(
+  selfDir: string,
+  character: LegacyRow,
+  { books, unreadable }: OtherBooks,
+): Promise<boolean> {
   if (character.voiceUuid || character.matchedFrom) return false;
   if (!character.declinedVoiceFrom?.length) return false; // not declined: shares by design
-  if (!character.overrideTtsVoices?.qwen?.name) return false;
-
-  const selfDir = resolve(bookDir);
   const holds = holdsLegacyKey(character.voiceId ?? character.id);
-  const { books, unreadable } = await loadOtherBooks(selfDir);
   if (unreadable) return true; // unknown, so a possible holder (see shouldForkSharedVoiceUuid)
-  /* The followers of X (rows linking to it, transitively) move with it, so they are
-     not the earlier book. Any OTHER designed holder of the key is, and the earlier
-     book's render key must not move. */
+  /* The direct followers of X move with it, so they are not the earlier book. Any
+     OTHER designed holder of the key is, and the earlier book's render key must
+     not move. */
   const followed = new Set(
-    (await walkFollowers(selfDir, character, holds, books)).map((f) => rowKey(f.dir, f.characterId)),
+    (await directFollowers(selfDir, character, holds, books)).map((f) => rowKey(f.dir, f.characterId)),
   );
   return books.some((b) =>
     b.rows.some(
