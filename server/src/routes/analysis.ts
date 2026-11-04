@@ -1145,10 +1145,19 @@ function previewFoldForLiveView(
    character, but the snapshot knows the row it is about to write came from
    this join. Best-effort like the snapshot itself: it returns only the roster
    and records no retirement (the authoritative write records it, from the same
-   pair), so a timeout or a clobber leaves nothing diverged. Partial interim
-   rosters are safe here, unlike the overlay's own name-fallback: the remap only
-   rewrites a FRESH row's id onto a prior id, never drops or retires a prior
-   row, and every snapshot is recomputed from scratch. */
+   pair), so a timeout or a clobber leaves nothing diverged.
+
+   #3954 review finding N3 — the remap's claim-once and held-by-a-fresh-row
+   guards need the WHOLE roster, and a per-chapter snapshot has only the
+   chapters finished so far. A partial roster can make a join the full roster
+   would refuse ("Wren" against a lone "Wren Ashby", while a later chapter
+   brings "Wren Cole"). Persisting that fresh row (its name, aliases,
+   description) onto the prior id would carry the guess into the resume, which
+   would then match the renamed row exactly. So a remapped row is written as
+   the PRIOR row itself, untouched: the snapshot keeps the one fact F1 needs
+   (no fresh id next to the locked prior row) and persists nothing derived from
+   the partial roster. The authoritative write, which has the whole roster,
+   makes the join and takes the fresh fields. */
 async function remapInterimToPriorIds<T extends { id: string }>(
   interim: T[],
   priorCast: Parameters<typeof remapFreshToPriorIds>[2],
@@ -1156,8 +1165,18 @@ async function remapInterimToPriorIds<T extends { id: string }>(
   bookId: string | null | undefined,
 ): Promise<T[]> {
   const idHistory = await loadIdHistoryForRemap(bookDir);
-  return remapFreshToPriorIds(interim, [], priorCast, {}, bookId ?? undefined, idHistory)
-    .characters;
+  const remapped = remapFreshToPriorIds(
+    interim,
+    [],
+    priorCast,
+    {},
+    bookId ?? undefined,
+    idHistory,
+  ).characters;
+  const priorById = new Map(priorCast.map((p) => [p.id, p]));
+  return remapped.map((c, i) =>
+    c.id !== interim[i].id ? ((priorById.get(c.id) as unknown as T | undefined) ?? c) : c,
+  );
 }
 
 /* #3954 review finding N1 — the id history the fresh→prior remap consults,

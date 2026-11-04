@@ -74,7 +74,10 @@ function phase0(rosterRows: CharacterOutput[]): Analyzer {
   };
 }
 
-function phase1(speakerId: string, onCall?: (chapterId: number) => Promise<void>): Analyzer {
+function phase1(
+  speaker: string | ((chapterId: number) => string),
+  onCall?: (chapterId: number) => Promise<void>,
+): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('phase1')),
@@ -85,7 +88,7 @@ function phase1(speakerId: string, onCall?: (chapterId: number) => Promise<void>
           {
             id: chapterId * 100 + 1,
             chapterId,
-            characterId: speakerId,
+            characterId: typeof speaker === 'string' ? speaker : speaker(chapterId),
             confidence: 0.9,
             text: 'Are you sure this will work',
           },
@@ -111,7 +114,7 @@ type CastRow = Record<string, unknown>;
 
 function mkBook(
   characters: CastRow[],
-  name: string,
+  name: string | string[],
   history?: unknown,
 ): { manuscriptId: string; bookDir: string } {
   const manuscriptId = `t3965-${Date.now()}-${Math.random()}`;
@@ -145,9 +148,9 @@ function mkBook(
     writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify(history));
   }
   const chapterHints = [
-    { id: 1, title: 'Chapter One', body: BODY(name) },
-    { id: 2, title: 'Chapter Two', body: BODY(name) },
-    { id: 3, title: 'Chapter Three', body: BODY(name) },
+    { id: 1, title: 'Chapter One', body: BODY([name].flat()[0]) },
+    { id: 2, title: 'Chapter Two', body: BODY([name].flat()[1] ?? [name].flat()[0]) },
+    { id: 3, title: 'Chapter Three', body: BODY([name].flat()[2] ?? [name].flat()[0]) },
   ];
   putManuscript({
     manuscriptId,
@@ -186,9 +189,11 @@ function mkJob(manuscriptId: string, bookDir: string, kind: 'main' | 'subset'): 
 }
 
 interface RunOpts {
-  speaker: string;
+  speaker: string | ((chapterId: number) => string);
   subset?: boolean;
   onCall?: (chapterId: number) => Promise<void>;
+  /** Replaces the fixed-roster Phase 0 analyzer (a per-chapter roster, or one that dies). */
+  phase0Analyzer?: Analyzer;
 }
 
 async function run(
@@ -215,7 +220,7 @@ async function run(
     await runSubsetAnalyzerJob(
       job,
       rec as never,
-      sel(phase0(roster), 'phase0-model'),
+      sel(opts.phase0Analyzer ?? phase0(roster), 'phase0-model'),
       phase1Sel,
       rec.chapterHints,
       true,
@@ -223,7 +228,7 @@ async function run(
     return;
   }
   (globalThis as Record<string, unknown>).__same_book_gate_phase1 = phase1Sel;
-  await runMainAnalyzerJob(job, rec as never, sel(phase0(roster), 'phase0-model'), {
+  await runMainAnalyzerJob(job, rec as never, sel(opts.phase0Analyzer ?? phase0(roster), 'phase0-model'), {
     requestedFresh: false,
     allowStage1Shrink: true,
     requestedModel: undefined,
@@ -402,6 +407,94 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         }
       },
     );
+  });
+
+  /* #3954 review finding N3 — the snapshot decides on a PARTIAL roster, so it
+     must not persist a decision the full roster could reverse. Chapter 1 names
+     "Wren Ashby", chapters 2-3 "Wren Cole": both are surname-tolerant matches of
+     the locked "Wren", so the full roster's claim-once refuses BOTH and `w2`
+     keeps its name and voice. Chapter 1 alone looks like a lone match; if the
+     snapshot renamed `w2` to "Wren Ashby", the resume would match that name
+     exactly and hand Wren Ashby the locked voice. */
+  describe('a partial-roster snapshot leaves the locked row as the full roster would', () => {
+    const LOCKED_WREN: CastRow = {
+      id: 'w2',
+      name: 'Wren',
+      voiceUuid: 'U-wren',
+      voiceState: 'locked',
+    };
+    const ashby = rosterRow('wren-ashby', 'Wren Ashby');
+    const cole = rosterRow('wren-cole', 'Wren Cole');
+    const byChapter = (dieFrom?: number): Analyzer => ({
+      ...phase0([]),
+      async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        if (dieFrom !== undefined && chapterId >= dieFrom) throw new Error('simulated death');
+        return { characters: [NARR, chapterId === 1 ? ashby : cole] };
+      },
+    });
+    const WREN_BODIES = ['Wren Ashby', 'Wren Cole', 'Wren Cole'];
+    const wrenSpeaker = (chapterId: number): string => (chapterId === 1 ? 'wren-ashby' : 'wren-cole');
+    const summary = (bookDir: string): unknown =>
+      readCast(bookDir)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          voiceUuid: r.voiceUuid ?? null,
+          voiceState: r.voiceState ?? null,
+        }))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const origConcurrency = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+    beforeEach(() => {
+      // Sequential chapters: chapter 1's snapshot lands before chapter 2 dies.
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    });
+    afterEach(() => {
+      if (origConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      else process.env.ANALYZER_OLLAMA_CONCURRENCY = origConcurrency;
+    });
+
+    it.each(['main', 'subset'] as const)('an interrupted run then a resumed one ends as the uninterrupted run does (%s job)', async (kind) => {
+      const control = mkBook([{ ...NARR }, { ...LOCKED_WREN }], WREN_BODIES);
+      let controlEnd: unknown;
+      try {
+        await run(control.manuscriptId, control.bookDir, [NARR, ashby, cole], {
+          subset: kind === 'subset',
+          speaker: wrenSpeaker,
+          phase0Analyzer: byChapter(),
+        });
+        controlEnd = summary(control.bookDir);
+        // The control itself: the locked row keeps its name and voice.
+        expect(controlEnd).toContainEqual({
+          id: 'w2',
+          name: 'Wren',
+          voiceUuid: 'U-wren',
+          voiceState: 'locked',
+        });
+      } finally {
+        await cleanup(control.manuscriptId, control.bookDir);
+      }
+
+      const { manuscriptId, bookDir } = mkBook([{ ...NARR }, { ...LOCKED_WREN }], WREN_BODIES);
+      try {
+        await run(manuscriptId, bookDir, [NARR, ashby, cole], {
+          subset: kind === 'subset',
+          speaker: wrenSpeaker,
+          phase0Analyzer: byChapter(2),
+        }).catch(() => {});
+        // Chapter 1's snapshot landed (the run died mid-Phase 0), and it did not
+        // rename the locked row after a roster that is only a third of the book.
+        expect(readCast(bookDir).find((r) => r.id === 'w2')?.name).toBe('Wren');
+
+        await run(manuscriptId, bookDir, [NARR, ashby, cole], {
+          subset: kind === 'subset',
+          speaker: wrenSpeaker,
+          phase0Analyzer: byChapter(),
+        });
+        expect(summary(bookDir)).toEqual(controlEnd);
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    });
   });
 
   it('a book already split by the bug heals on re-analysis (main job)', async () => {
