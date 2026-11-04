@@ -847,9 +847,15 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
     },
   );
 
-  it.each(['main', 'subset'] as const)(
-    'a Phase-0b roster that reuses the decliner id under another name does not write a link with its own decline (%s job, #3954)',
-    async (kind) => {
+  /* Main job only (#3954 N5). The subset job cannot reach this seed shape: its
+     seed runs on the roster AFTER the fold, where "Tom" (no lines of its own,
+     and too few to survive as a minor) is gone, so the strict bridge never skips
+     the declining twin and the subset case passed with the seed's guard removed.
+     A subset roster that keeps "Tom" needs more than the three one-line chapters
+     this harness gives it. */
+  it(
+    'a Phase-0b roster that reuses the decliner id under another name does not write a link with its own decline (main job, #3954)',
+    async () => {
       /* Roster [old-tom "Tom", old-tom-2 "Old Tom"]: the strict bridge skips the
          declining twin (a fresh row holds its id), leaving the linked twin as
          the only candidate, so the seed copied matchedFrom next to a
@@ -880,7 +886,7 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
           manuscriptId,
           bookDir,
           [NARR, rosterRow('old-tom', 'Tom'), rosterRow('old-tom-2', 'Old Tom')],
-          { speaker: 'old-tom-2', subset: kind === 'subset' },
+          { speaker: 'old-tom-2' },
         );
         const rows = readCast(bookDir);
         const speaker = rows.find((r) => r.id === 'old-tom-2');
