@@ -174,3 +174,44 @@ describe.each([
 function withEpoch<T extends { set: (k: string, v: string) => T }>(r: T, epoch?: string): T {
   return epoch === undefined ? r : r.set('X-Repair-Epoch', epoch);
 }
+
+/* #4029 pass 2 -- POST /api/queue/clear is the bulk form of DELETE: gated by the bookIds of the entries it would drop. */
+describe('POST /api/queue/clear (#4029)', () => {
+  const ids = async () => ((await request(app).get('/api/queue')).body.entries as Array<{ id: string }>).map((e) => e.id).sort();
+
+  it('force: an entry of a repaired book would be dropped: 409 and nothing is dropped', async () => {
+    await repaired();
+    await seedQueue([
+      { id: 'e1', bookId: DUP, status: 'queued' },
+      { id: 'e2', bookId: DUP, status: 'in_progress' },
+      { id: 'e3', bookId: OTHER, status: 'queued' },
+    ]);
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+    expect(await ids()).toEqual(['e1', 'e2', 'e3']);
+  });
+
+  it('a stale epoch is refused; the current epoch clears', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e1', bookId: DUP, status: 'queued' }]);
+    expect((await request(app).post('/api/queue/clear').set('X-Repair-Epoch', 'pre-repair').send({})).status).toBe(409);
+    expect((await request(app).post('/api/queue/clear').set('X-Repair-Epoch', gate.currentRepairEpoch()!).send({})).status).toBe(200);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('non-force: a repaired book\'s in_progress entry is not dropped, so it does not trigger the refusal', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e2', bookId: DUP, status: 'in_progress' }, { id: 'e3', bookId: OTHER, status: 'queued' }]);
+    const res = await request(app).post('/api/queue/clear').send({});
+    expect(res.status).toBe(200);
+    expect(await ids()).toEqual(['e2']);
+  });
+
+  it('CONTROL: a queue holding only unrelated books clears without an epoch', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e3', bookId: OTHER, status: 'queued' }]);
+    expect((await request(app).post('/api/queue/clear').send({ force: true })).status).toBe(200);
+    expect(await ids()).toEqual([]);
+  });
+});

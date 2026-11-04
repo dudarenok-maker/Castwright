@@ -212,9 +212,14 @@ interface ClearRequestBody {
 queueRouter.post('/clear', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as ClearRequestBody;
   const force = body.force === true;
+  await retryUnreadableGate();
   try {
     const before = await readQueueFile(queueJsonPath());
     const after = clearQueue(before, { force });
+    /* #4029 -- the bulk form of DELETE: gated by the bookIds of the entries it would drop. */
+    const kept = new Set(after.entries.map((e) => e.id));
+    const dropped = before.entries.filter((e) => !kept.has(e.id)).map((e) => e.bookId);
+    if (refuseGatedBooksNow(dropped, req, res)) return;
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {

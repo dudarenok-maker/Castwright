@@ -46,8 +46,9 @@
      POST   /api/queue/enqueue                                    (every entry's bookId)
      POST   /api/queue/:entryId/{start,retry,confirm-fallback,complete,skip-fallback} and DELETE /api/queue/:entryId
                                                                   (the entry's own bookId; an id naming no entry is a no-op)
+     POST   /api/queue/clear                                      (the bookIds of the entries it would drop)
    Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
-   library); voice-library revoke and DELETE /:uuid; the queue routes that name no book and no entry (reorder, pause, clear); POST /api/books and /api/import (mint a new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
+   library); voice-library revoke and DELETE /:uuid; the queue routes that write no book and drop no entry (pause flips a flag; reorder only reorders the ids it is given, drops nothing, starts no render); POST /api/books and /api/import (mint a new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
 
    A series fan-out is REFUSED whole, never partly applied. Series-patch, voice-override-linked, cast/tier,
    the series (and workspace) scope of PUT /api/voices/:id/override, and the design writers that propagate a

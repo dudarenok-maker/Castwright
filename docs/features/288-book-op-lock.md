@@ -944,7 +944,7 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
   the mount as well. Confirmed safe, with why: `POST /api/voice-library/promote` (reads the book's character, writes
   only the voice library), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by
   voice uuid, name no book),
-  `POST /api/queue/{reorder,pause,clear}` (name no book and no entry; every route that takes an entry id is gated, see below), `POST /api/books` and `POST /api/import` (mint a new book),
+  `POST /api/queue/{reorder,pause}` (pause flips a flag; reorder only reorders the entry ids it is given, drops nothing and starts no render; `clear` and every route that takes an entry id are gated, see below), `POST /api/books` and `POST /api/import` (mint a new book),
   `library-sync-manifest` (its `bookId` query only selects a manifest).
 - **A series fan-out that would write a repaired series-mate is refused whole (owner decision, PR #4004 pass 6,
   replacing pass 5's skip).** The mates of `series-patch`, `voice-override-linked`, `cast/tier`, `PUT
@@ -970,7 +970,7 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
   and `DELETE /api/queue/:entryId` carry only an entry id, so they are gated by the entry's own `bookId` (#4029; an
   id naming no entry stays an idempotent no-op): a stale `/start` can no longer strand a fresh page's entry, a stale
   fail+retry cannot requeue it, and a stale `/complete`, cancel or skip is refused whole like every other write from a
-  page that predates the repair. Only `reorder`, `pause` and `clear` name no book and stay ungated. Each handler
+  page that predates the repair. `POST /api/queue/clear` is gated by the bookIds of the entries it would drop (the bulk form of DELETE; a non-force clear that leaves a repaired book's in_progress entry alone needs no epoch for it). Only `reorder` and `pause` stay ungated: neither drops an entry, writes a book or starts a render. Each handler
   settles the gate-file retry BEFORE it reads the queue, so no await sits between the queue's read and its write. `refuseUnreadRepairedBooks` and `refuseGatedSeriesFanOut`
   retry an unreadable gate file first, the way the mount middlewares do (#4029).
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
