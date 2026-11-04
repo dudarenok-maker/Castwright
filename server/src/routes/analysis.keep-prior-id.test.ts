@@ -65,10 +65,15 @@ const BODY = '“Are you sure this will work,” Wren asked.\n\nOlga nodded and 
 const FRESH_ID = 'wren-ashby';
 const PRIOR_ID = 'w2';
 
+/* P4-2 / P4-3: runs inside the Phase-0 call for a chapter and may throw or wait
+   to stop the job there. */
+let phase0Hook: ((chapterId: number) => void | Promise<void>) | undefined;
+
 function phase0(rosterRows: CharacterOutput[]): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
-    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+    async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+      await phase0Hook?.(chapterId);
       return { characters: rosterRows };
     },
     runStage2Chapter: () => Promise.reject(new Error('phase0')),
@@ -883,4 +888,92 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
       await cleanup(manuscriptId, bookDir);
     }
   });
+
+  /* P4-2 (catalogue 77). Prior `js "John Smith"` and `jd "John Doe"`, both
+     locked, neither with a voiceId. The analyzer returns `john-smith-2`, a
+     `john-brown` and a bare `john`. The remap joins john-smith-2 to js and
+     refuses "John" as ambiguous between js and jd. mergeCore, with js now held
+     by id, used to see jd as the only candidate and join john to it, keeping the
+     FRESH id: jd was retired and its implicit voice (`voiceId ?? id`) changed. */
+  const john = (id: string, name: string): CharacterOutput =>
+    ({ ...WREN_FRESH, id, name, gender: 'male', evidence: [{ quote: `${name} asked` }] }) as CharacterOutput;
+  const JOHN_ROSTER = [
+    NARR,
+    john('john-smith-2', 'John Smith'),
+    john('john-brown', 'John Brown'),
+    john('john', 'John'),
+  ];
+  const JOHN_BODY = [
+    '“Are you sure,” John Smith asked.',
+    '“Not at all,” John asked.',
+    '“Maybe,” John Brown asked.',
+    'Olga nodded and looked away.',
+  ].join('\n\n');
+  const JOHN_SPEAKERS =['john-smith-2', 'john', 'john-brown'];
+  const johnPrior = (): Row[] => [
+    { ...NARR },
+    { id: 'js', name: 'John Smith', voiceState: 'locked', lines: 3 },
+    { id: 'jd', name: 'John Doe', voiceState: 'locked', lines: 3 },
+  ];
+  const expectJdUntouched = (bookDir: string): void => {
+    const cast = readCast(bookDir);
+    expect(cast.map((c) => String(c.id))).toEqual(expect.arrayContaining(['js', 'jd', 'john']));
+    expect(cast.find((c) => c.id === 'jd')?.name).toBe('John Doe');
+    const supersededBy = readHistory(bookDir).supersededBy;
+    expect(supersededBy).not.toHaveProperty('jd');
+    expect(Object.values(supersededBy)).not.toContain('john');
+  };
+
+  it.each(['main', 'subset'] as const)(
+    'P4-2 %s job: a name the remap refused as ambiguous is not joined by the merge fallback',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook(johnPrior(), undefined, JOHN_BODY);
+      try {
+        await run(manuscriptId, bookDir, kind, { roster: JOHN_ROSTER, speakerId: JOHN_SPEAKERS });
+        expectJdUntouched(bookDir);
+        // the exact pair the remap DID make is kept on the prior id
+        expect(readHistory(bookDir).supersededBy['john-smith-2']).toBe('js');
+      } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* The interrupted variant: Phase 0 dies in chapter 2, then the run resumes. A
+     resume must end where an uninterrupted run ends, so it is compared with one
+     on a second book (the interim snapshot writes a fresh `john` row, which the
+     resume then matches by id: the fallback never runs there, and the end state
+     was the one the uninterrupted run only reached by retiring jd). */
+  it.each(['main', 'subset'] as const)(
+    'P4-2 %s job: interrupted in Phase 0 and resumed ends where an uninterrupted run ends',
+    async (kind) => {
+      const origC = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+      const three = { roster: JOHN_ROSTER, speakerId: JOHN_SPEAKERS };
+      const endState = (bookDir: string): unknown => ({
+        ids: readCast(bookDir).map((c) => String(c.id)).sort(),
+        supersededBy: readHistory(bookDir).supersededBy,
+      });
+      const control = mkBook(johnPrior(), undefined, JOHN_BODY);
+      const resumed = mkBook(johnPrior(), undefined, JOHN_BODY);
+      try {
+        await run(control.manuscriptId, control.bookDir, kind, three);
+        phase0Hook = (chapterId) => {
+          if (chapterId >= 2) throw new Error('simulated death');
+        };
+        await run(resumed.manuscriptId, resumed.bookDir, kind, three).catch(() => {});
+        phase0Hook = undefined;
+        await run(resumed.manuscriptId, resumed.bookDir, kind, three);
+        expectJdUntouched(control.bookDir);
+        expectJdUntouched(resumed.bookDir);
+        expect(endState(resumed.bookDir)).toEqual(endState(control.bookDir));
+      } finally {
+        phase0Hook = undefined;
+        if (origC === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+        else process.env.ANALYZER_OLLAMA_CONCURRENCY = origC;
+        await cleanup(control.manuscriptId, control.bookDir);
+        await cleanup(resumed.manuscriptId, resumed.bookDir);
+      }
+    },
+  );
 });

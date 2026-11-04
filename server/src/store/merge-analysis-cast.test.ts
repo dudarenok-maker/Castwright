@@ -1970,3 +1970,30 @@ describe('a prior row another fresh id has recorded as its merge target (#3954 P
     expect(r.retirements).toContainEqual({ from: 'old-weir', to: 'ow2' });
   });
 });
+
+describe('the fallback sees the candidate set the remap saw (#3954 P4-2, catalogue 77)', () => {
+  // js "John Smith" and jd "John Doe" are both locked. The remap joined
+  // john-smith-2 to js (rewritten to the id `js` below) and refused the bare
+  // "John" as ambiguous between js and jd. js is now held by id, so on its own
+  // the fallback sees ONE candidate (jd) and makes the join the remap refused.
+  const existing: C[] = [
+    { id: 'js', name: 'John Smith', voiceState: 'locked' },
+    { id: 'jd', name: 'John Doe', voiceState: 'locked' },
+  ];
+  const fresh: C[] = [
+    { id: 'js', name: 'John Smith' },
+    { id: 'john-brown', name: 'John Brown' },
+    { id: 'john', name: 'John' },
+  ];
+
+  it('refuses the tolerant name the remap found ambiguous, keeping jd and its id', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {}, new Set(['js']));
+    expect(r.retirements).toEqual([]);
+    expect(r.characters.map((c) => c.id)).toContain('jd');
+  });
+
+  it('control: without the remap-joined set the fallback joins John to jd and retires it', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {});
+    expect(r.retirements).toEqual([{ from: 'jd', to: 'john' }]);
+  });
+});

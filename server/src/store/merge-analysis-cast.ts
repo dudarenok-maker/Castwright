@@ -153,15 +153,20 @@ export function voicedSurvivorsDropped(
     `notLinkedTo` gate (see `notLinkedToId`). `idHistory` (optional) is the
     book's `supersededBy` map: a name-fallback pair whose fresh id is recorded
     there as retired to a DIFFERENT existing row is refused (#3954, the same
-    recorded-merge refusal `remapFreshToPriorIds` applies). See
-    `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
+    recorded-merge refusal `remapFreshToPriorIds` applies). `remapJoinedIds`
+    (optional) is the set of prior ids that remap just joined a fresh row to
+    (its rewrite targets): those rows are held by id here, but the remap still
+    chose among them, so the fallback counts them as candidates it must not
+    pick (#3954 P4-2). See `overlayInterimCastForLiveView` below for the
+    partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
   currentBookId?: string,
   idHistory?: Readonly<Record<string, string>>,
+  remapJoinedIds?: ReadonlySet<string>,
 ): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true, currentBookId, idHistory);
+  return mergeCore(existing, fresh, true, currentBookId, idHistory, remapJoinedIds);
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
@@ -235,6 +240,7 @@ function mergeCore<T extends { id: string }>(
   nameFallback: boolean,
   currentBookId?: string,
   idHistory: Readonly<Record<string, string>> = {},
+  remapJoinedIds: ReadonlySet<string> = new Set(),
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -297,7 +303,20 @@ function mergeCore<T extends { id: string }>(
     // whose name collides with the prior narrator's localized default name
     // would weld the narrator's voice fields onto that character and
     // durably retire the reserved 'narrator' id onto it.
-    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+    /* A row the remap just joined to a fresh row is held by id here, but it
+       was a candidate when the remap chose, so it stays one for the selection
+       rule below; `remapJoinedIds` stops it ever being the chosen match. Without
+       it the remap's refusal of an ambiguous name is undone by a fallback that
+       sees one candidate fewer (#3954 P4-2). The remap and this fallback are
+       two matchers over one decision; the structural unification is #4031, and
+       until then every refusal in one must be reproduced in the other (review
+       catalogue entry 77). */
+    if (
+      (freshIds.has(old.id) && !remapJoinedIds.has(old.id)) ||
+      NARRATOR_CHARACTER_IDS.includes(old.id)
+    ) {
+      continue;
+    }
     const key = nameOf(old);
     if (!key) continue;
     const list = droppedByName.get(key);
@@ -410,6 +429,7 @@ function mergeCore<T extends { id: string }>(
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
+    if (remapJoinedIds.has(cand.id)) return false; // already joined by the remap, never consumed here
     if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
     const f = freshByKey.get(key);
     if (!f) return false; // gate 2: must exist
@@ -460,8 +480,11 @@ function mergeCore<T extends { id: string }>(
       // legitimate id-drift case here for the fallback to rescue, and
       // :445-455 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-        const cand =
+        const picked =
           dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
+        // The selection chose a row the remap already joined elsewhere: the
+        // remap's own claim-once / ambiguity refusal stands, so no join here.
+        const cand = picked && !remapJoinedIds.has(picked.id) ? picked : undefined;
         // A notLinkedTo edge between this specific pair is the user's
         // explicit "not the same person" decision — widening the candidate
         // set past isVoicedOrReused must not let the fallback silently
