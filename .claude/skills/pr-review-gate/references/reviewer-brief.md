@@ -1032,9 +1032,23 @@ recite:
     already forked and was linked back recorded its OWN uuid. The fork decision
     then read that list as evidence, forked the row again and dropped its
     variants. Checkable: for every recorded fact a later decision trusts, list
-    every path that produces the precondition the writer assumes, confirm each
-    one establishes it, and prefer deciding from the current disk state over
-    trusting the record.
+    every path that produces the precondition the writer assumes, and confirm
+    each one establishes it. Do NOT answer it by swapping the record for a live
+    check of a proxy: that is entry 82.
+
+82. **A record of a past event replaced by a live check keyed on a proxy for
+    the protected thing** — PR #4007 pass 9 (#3992): to stop trusting the
+    recorded declined uuid (entry 81), the fork was made to ask whether the
+    declined BOOK still holds the row's voice. The protected thing was the
+    earlier VOICE; the book was only where it lived at decline time. Once that
+    book forked away, was deleted or re-imported, the check answered "no" and
+    the decliner's design overwrote the voice another book still held. The
+    owner's resolution moved the decision to the moment the fact is true:
+    "Don't reuse" separates the row at once, so nothing later has to infer what
+    the user declined. Checkable: for every record a change stops reading, list
+    what can move the proxy the new check reads (fork, delete, re-import,
+    rename) and test each move; better, establish the invariant at the event
+    instead of reconstructing it afterwards.
 
 ### Keeping the catalogue current
 
