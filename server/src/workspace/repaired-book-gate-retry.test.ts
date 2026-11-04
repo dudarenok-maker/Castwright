@@ -92,3 +92,21 @@ describe('concurrent gated requests during the retry read (#4029)', () => {
     expect([x.status, y.status]).toEqual([409, 409]);
   });
 });
+
+describe('the retry inside refuseUnreadRepairedBooks (#4029)', () => {
+  /* /api/queue/enqueue reaches ONLY the body-named check (no mount middleware, no series fan-out). */
+  it('POST /api/queue/enqueue for an id the restored file names is refused without the epoch', async () => {
+    await unreadableThenRestored('kept');
+    const res = await request(app).post('/api/queue/enqueue').send(enqueueBody('q1'));
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+  });
+
+  it('CONTROL: an id the restored file does not name is enqueued', async () => {
+    await unreadableThenRestored('kept');
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'q2', bookId: 'unrelated', chapterId: 1, scope: 'this' }] });
+    expect(res.status).toBe(200);
+  });
+});
