@@ -1525,6 +1525,11 @@ export interface paths {
          *     `{ force: true }` drops everything, including `in_progress`; the caller
          *     pairs this with a stream teardown so the live generation actually stops.
          *     Leaves the `paused` flag untouched. Persists to `<workspace>/.queue.json`.
+         *
+         *     Gated like `DELETE /api/queue/{entryId}` (#4029): it is refused whole
+         *     when any entry it would drop names a repaired bookId (#3713) and the
+         *     request lacks the current `X-Repair-Epoch`. A non-force clear leaves
+         *     `in_progress` entries alone, so those never trigger the refusal.
          */
         post: operations["clearQueue"];
         delete?: never;
@@ -1613,6 +1618,83 @@ export interface paths {
          *     current `X-Repair-Epoch`.
          */
         post: operations["completeQueueEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/{entryId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-queue a failed entry
+         * @description Flips a `failed` entry back to `queued` and clears its `errorReason` so
+         *     the dispatcher re-claims it. No-op (200) for a missing or non-failed
+         *     entry.
+         *
+         *     Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+         *     needs the current `X-Repair-Epoch`; otherwise 409
+         *     `book_repaired_reload` and the entry is untouched.
+         */
+        post: operations["retryQueueEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/{entryId}/confirm-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a parked chapter's Qwen to Kokoro fallback
+         * @description Flips an `awaiting_confirm` entry to `queued` with `fallbackConfirmed`
+         *     set so the worker renders straight through. Idempotent (200) unless the
+         *     entry is `awaiting_confirm`.
+         *
+         *     Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+         *     needs the current `X-Repair-Epoch`; otherwise 409
+         *     `book_repaired_reload` and the entry is untouched.
+         */
+        post: operations["confirmQueueFallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queue/{entryId}/skip-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip a parked chapter instead of rendering it in Kokoro
+         * @description Removes an `awaiting_confirm` entry. Idempotent (200) unless the entry
+         *     is `awaiting_confirm`.
+         *
+         *     Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+         *     needs the current `X-Repair-Epoch`; otherwise 409
+         *     `book_repaired_reload` and the entry is untouched.
+         */
+        post: operations["skipQueueFallback"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10207,7 +10289,15 @@ export interface operations {
     clearQueue: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10230,6 +10320,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description An entry it would drop names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was dropped. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
                 };
             };
         };
@@ -10311,6 +10410,123 @@ export interface operations {
         };
     };
     completeQueueEntry: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
+                };
+            };
+        };
+    };
+    retryQueueEntry: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
+                };
+            };
+        };
+    };
+    confirmQueueFallback: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+            /** @description The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
+                };
+            };
+        };
+    };
+    skipQueueFallback: {
         parameters: {
             query?: never;
             header?: {

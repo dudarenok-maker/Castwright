@@ -2252,6 +2252,13 @@ paths:
         `{ force: true }` drops everything, including `in_progress`; the caller
         pairs this with a stream teardown so the live generation actually stops.
         Leaves the `paused` flag untouched. Persists to `<workspace>/.queue.json`.
+
+        Gated like `DELETE /api/queue/{entryId}` (#4029): it is refused whole
+        when any entry it would drop names a repaired bookId (#3713) and the
+        request lacks the current `X-Repair-Epoch`. A non-force clear leaves
+        `in_progress` entries alone, so those never trigger the refusal.
+      parameters:
+        - { $ref: '#/components/parameters/RepairEpoch' }
       requestBody:
         required: false
         content:
@@ -2269,6 +2276,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: An entry it would drop names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was dropped.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
 
   /api/queue/{entryId}:
     delete:
@@ -2341,6 +2353,86 @@ paths:
 
         Gated like `/start` (#4029): an entry for a repaired bookId needs the
         current `X-Repair-Epoch`.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
+
+  /api/queue/{entryId}/retry:
+    post:
+      summary: Re-queue a failed entry
+      operationId: retryQueueEntry
+      description: |
+        Flips a `failed` entry back to `queued` and clears its `errorReason` so
+        the dispatcher re-claims it. No-op (200) for a missing or non-failed
+        entry.
+
+        Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+        needs the current `X-Repair-Epoch`; otherwise 409
+        `book_repaired_reload` and the entry is untouched.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
+
+  /api/queue/{entryId}/confirm-fallback:
+    post:
+      summary: Confirm a parked chapter's Qwen to Kokoro fallback
+      operationId: confirmQueueFallback
+      description: |
+        Flips an `awaiting_confirm` entry to `queued` with `fallbackConfirmed`
+        set so the worker renders straight through. Idempotent (200) unless the
+        entry is `awaiting_confirm`.
+
+        Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+        needs the current `X-Repair-Epoch`; otherwise 409
+        `book_repaired_reload` and the entry is untouched.
+      parameters:
+        - { in: path, name: entryId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+        '409':
+          description: The entry names a repaired book (#3713) and the request lacks the current `X-Repair-Epoch`; the entry was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookRepairedReloadError' }
+
+  /api/queue/{entryId}/skip-fallback:
+    post:
+      summary: Skip a parked chapter instead of rendering it in Kokoro
+      operationId: skipQueueFallback
+      description: |
+        Removes an `awaiting_confirm` entry. Idempotent (200) unless the entry
+        is `awaiting_confirm`.
+
+        Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
+        needs the current `X-Repair-Epoch`; otherwise 409
+        `book_repaired_reload` and the entry is untouched.
       parameters:
         - { in: path, name: entryId, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/RepairEpoch' }
