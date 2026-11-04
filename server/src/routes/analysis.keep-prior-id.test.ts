@@ -614,6 +614,39 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
     },
   );
 
+  /* P4-4. The persist guard's "live" set was the persisted roster only. An
+     UNVOICED merge target the fresh roster omits is in the prior cast (the
+     healthy remap adopts it) but not in that roster, so a blip on the remap's
+     read let the blind exact join overwrite the recorded merge with no flag. */
+  it.each(['main', 'subset'] as const)(
+    'P4-4 %s job: a blind exact join under a blip does not overwrite a merge into an unvoiced prior row',
+    async (kind) => {
+      const { manuscriptId, bookDir } = mkBook(
+        [{ ...NARR }, { ...PRIOR_WREN }, { id: 'm1', name: 'Merged One' }],
+        { 'wren-2': 'm1' },
+      );
+      const blip = await blipRemapRead();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const events = await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, wrenTwo],
+          speakerId: 'wren-2',
+        });
+        expect(blip.count()).toBe(1);
+        const history = readHistory(bookDir) as ReturnType<typeof readHistory> & {
+          displaced?: Record<string, string>;
+        };
+        expect(history.supersededBy['wren-2']).not.toBe('w2');
+        expect(history.displaced).toEqual({ 'wren-2': 'm1' });
+        expect(JSON.stringify(events)).toContain('Kept the recorded merge wren-2 -> m1');
+      } finally {
+        warnSpy.mockRestore();
+        blip.restore();
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
   /* N2 (owner: refuse and flag). The recorded merge brann-weir -> old-weir
      (adoption) and a drifted second fresh row "Old Weir" (an exact-name join)
      both want the prior old-weir row. Joining both wrote two cast rows with

@@ -309,7 +309,11 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    unreadable, blind to a recorded merge. When on, a retirement `from -> to`
    whose `from` the history (read fresh, inside the lock) already records as
    retired to a DIFFERENT live id is not written; `retireCharacterId` files
-   `from` into `displaced` instead, and it is logged here. */
+   `from` into `displaced` instead, and it is logged here. `priorLiveIds` (P4-4) widens that
+   "live" set beyond `liveIds`: the prior cast's own ids in post-rewrite space.
+   The healthy remap adopts a recorded target from the prior cast, so an
+   unvoiced target the fresh roster omits is live to it but not in the
+   persisted roster, and would otherwise lose its recorded merge on a blip. */
 export async function recordRetirements(
   bookDir: string | null | undefined,
   bookId: string | null | undefined,
@@ -318,6 +322,7 @@ export async function recordRetirements(
   log: (phaseId: number, message: string) => void,
   castBase: CastMergeBase | null,
   protectRecordedMerges = false,
+  priorLiveIds: ReadonlyArray<string> = [],
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -339,7 +344,7 @@ export async function recordRetirements(
       bookDir,
       from,
       to,
-      protectRecordedMerges && liveIds ? new Set(liveIds) : undefined,
+      protectRecordedMerges && liveIds ? new Set([...liveIds, ...priorLiveIds]) : undefined,
     );
     if (result.keptRecordedMerge !== undefined) {
       log(
@@ -7710,7 +7715,16 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase, true);
+            await recordRetirements(
+              writeDir,
+              retirementBookId,
+              remapRetirements,
+              liveIds,
+              log,
+              castBase,
+              true,
+              remapped.priorCast.map((c) => c.id),
+            );
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -9888,7 +9902,16 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase, true);
+            await recordRetirements(
+              writeDir,
+              subsetBookId,
+              remapRetirements,
+              liveIds,
+              log,
+              castBase,
+              true,
+              remapped.priorCast.map((c) => c.id),
+            );
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
