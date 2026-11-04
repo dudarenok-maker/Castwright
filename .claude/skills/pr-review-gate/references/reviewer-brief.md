@@ -994,6 +994,36 @@ recite:
     on the neighbour, not on them). Then build a chain one longer than the
     case the fix was written for and drive the repair from its middle.
 
+78. **A recursive resolver that re-wraps an inner result and overwrites the
+    field the inner level set** — PR #4007 pass 6 (#3992): a walker that
+    resolved a link source recursively returned `{ ...above, forkUuid: uuid }`
+    at every level, so the outer level replaced the `forkUuid` the inner level
+    had already set with its own, and the fork then named the wrong uuid and a
+    guard comparing against that same value passed. Checkable: for every
+    recursive function that decorates the result of its own recursive call,
+    ask which fields the inner call may already have set and whether the outer
+    spread overwrites them; then drive a case one level deeper than the one
+    the fix was written for.
+
+79. **Recursion that starts a fresh visited set at each level, bypassing the
+    loop's cycle guard** — PR #4007 pass 6 (#3992): two functions called each
+    other, and each call began with a new `visited` set, so the "a visited set
+    makes a link cycle terminate" promise held for one function and not for the
+    pair; a cycle where each row declined the other's uuid read the library
+    without end while holding the book busy. Checkable: for every cycle guard,
+    find every function that can re-enter the guarded walk and confirm they
+    share one set; then build the smallest cycle (two rows pointing at each
+    other) and see that the call returns.
+
+80. **A set narrowed for one consumer still feeds a second consumer** — PR
+    #4007 pass 7 (#3992): the followers of a fork were narrowed from a
+    transitive walk to direct links so that fewer rows would MOVE with it, but
+    the same set also decided who counts as an outsider holding the voice, so
+    a row two hops below read as an outsider and the already-forked row forked
+    again, dropping its variants. Checkable: when a set shrinks, list every
+    reader of it, not only the one the change was made for, and for each
+    reader ask what the excluded members now look like.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
