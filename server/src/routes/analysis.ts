@@ -146,6 +146,7 @@ import {
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
+  historyInRewrittenIds,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
   type Retirement,
@@ -155,7 +156,6 @@ import {
   dropSupersededIdsReclaimedByLiveCast,
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
-  loadCastIdHistory,
   loadCastIdHistoryWithStatus,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
@@ -1155,10 +1155,31 @@ async function remapInterimToPriorIds<T extends { id: string }>(
   bookDir: string,
   bookId: string | null | undefined,
 ): Promise<T[]> {
-  const idHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+  const idHistory = await loadIdHistoryForRemap(bookDir);
   return remapFreshToPriorIds(interim, [], priorCast, {}, bookId ?? undefined, idHistory)
     .characters;
 }
+
+/* #3954 review finding N1 — the id history the fresh→prior remap consults,
+   read WITH its status. `loadCastIdHistory` collapses an unreadable file to
+   `{}`, which the remap cannot tell from "no merges recorded": one transient
+   EBUSY then turned a flagged case into a silent overwrite of the user's
+   merge. `null` means the file exists but could not be read; the remap makes
+   no name join at all for it (see `remapFreshToPriorIds`), so the run behaves
+   as it did before the remap widened and the downstream displaced / "affected
+   segments need review" path flags it. An absent file is the empty map. */
+async function loadIdHistoryForRemap(
+  bookDir: string | null | undefined,
+): Promise<Readonly<Record<string, string>> | null> {
+  if (!bookDir) return {};
+  const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+  return status === 'degraded' ? null : history.supersededBy;
+}
+
+const SKIPPED_NAME_JOINS_LOG_MESSAGE =
+  `Skipped keeping existing character ids on name matches — cast-id-history.json for this book ` +
+  `could not be read, so a recorded merge could not be honoured. Re-run the analysis once the file ` +
+  `is readable; the file needs attention (see the server log for the cause).`;
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
@@ -7268,11 +7289,11 @@ export async function runMainAnalyzerJob(
       characters0,
     );
     /* #3954 — the id history the remap consults before retiring a fresh id
-       onto a prior row (a recorded merge is not overwritten). `loadCastIdHistory`
-       never throws; an absent or degraded file is the empty map. */
-    const idHistoryForRemap = record.bookDir
-      ? (await loadCastIdHistory(record.bookDir)).supersededBy
-      : {};
+       onto a prior row (a recorded merge is not overwritten), read once and
+       shared with the final merge below. `null` = unreadable: the remap makes
+       no name join (N1, see `loadIdHistoryForRemap`). */
+    const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
+    if (idHistoryForRemap === null) log(1, SKIPPED_NAME_JOINS_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
       folded.sentences,
@@ -7492,7 +7513,7 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined, idHistoryForRemap);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined, historyInRewrittenIds(idHistoryForRemap ?? {}, cumulative));
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -9515,9 +9536,8 @@ export async function runSubsetAnalyzerJob(
       enriched0,
     );
     // #3954 — see the main route's `idHistoryForRemap`.
-    const idHistoryForRemap = record.bookDir
-      ? (await loadCastIdHistory(record.bookDir)).supersededBy
-      : {};
+    const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
+    if (idHistoryForRemap === null) log(1, SKIPPED_NAME_JOINS_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
       folded.sentences,
@@ -9694,7 +9714,7 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined, idHistoryForRemap);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined, historyInRewrittenIds(idHistoryForRemap ?? {}, cumulative));
           /* #2295 — the authoritative cast.json write; mirrors the main job's
              same-named wrap, including WHY it is wrapped at the write rather
              than at `catch (persistErr)` (which also covers the journals) and

@@ -500,6 +500,35 @@ describe('remapFreshToPriorIds', () => {
       expect(r.rewrites).toEqual({ 'brann-weir': 'brann' });
     });
 
+    it('N1b: the recorded target is compared in post-rewrite id space (#3954)', () => {
+      // old-weir is itself heading to old-weir-2 this run. The history value is
+      // the raw id; comparing it unrewritten made the pair look unrecorded and
+      // joined brann-weir -> brann, which the persist then wrote over the
+      // user's merge.
+      const r = remapFreshToPriorIds(fresh, [], prior, { 'old-weir': 'old-weir-2' }, 'b2', {
+        'brann-weir': 'old-weir',
+      });
+      expect(r.rewrites).toEqual({ 'brann-weir': 'old-weir-2' });
+    });
+
+    it('N1a: an unreadable history (null) makes no name join, exact or tolerant (#3954)', () => {
+      expect(remapFreshToPriorIds(fresh, [], prior, {}, 'b2', null).rewrites).toEqual({});
+      expect(
+        remapFreshToPriorIds(
+          [{ id: 'ow2', name: 'Old Weir' }],
+          [],
+          prior,
+          {},
+          'b2',
+          null,
+        ).rewrites,
+      ).toEqual({});
+      // control: the same exact-name fresh row joins when the history is merely empty
+      expect(
+        remapFreshToPriorIds([{ id: 'ow2', name: 'Old Weir' }], [], prior, {}, 'b2', {}).rewrites,
+      ).toEqual({ ow2: 'old-weir' });
+    });
+
     it('R17: the recorded merge target is not adopted across a same-book notLinkedTo edge', () => {
       const r = remapFreshToPriorIds(
         fresh,

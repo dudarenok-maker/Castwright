@@ -18,6 +18,7 @@ import {
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
+  historyInRewrittenIds,
 } from './merge-analysis-cast.js';
 
 type C = Record<string, unknown> & { id: string };
@@ -1897,3 +1898,34 @@ describe('mergeAnalysisResultWithExistingCast — locked/tuned voice is taken wh
   });
 });
 
+describe('a recorded merge whose target moves this run (#3954 review finding N1)', () => {
+  // The user merged brann-weir into old-weir; this run's dedup moves old-weir to
+  // old-weir-2, so the existing cast the merge sees already holds old-weir-2.
+  const existing: C[] = [
+    { id: 'brann', name: 'Brann', voiceState: 'locked', voiceId: 'v_brann' },
+    { id: 'old-weir-2', name: 'Old Weir' },
+  ];
+  const fresh: C[] = [{ id: 'brann-weir', name: 'Brann Weir' }];
+  const raw = { 'brann-weir': 'old-weir' };
+  const rewrites = { 'old-weir': 'old-weir-2' };
+
+  it('translates history targets through the rewrite table and leaves keys alone', () => {
+    expect(historyInRewrittenIds(raw, rewrites)).toEqual({ 'brann-weir': 'old-weir-2' });
+    expect(historyInRewrittenIds(raw, {})).toEqual(raw);
+  });
+
+  it('refuses the name fallback once the target is in post-rewrite space', () => {
+    const r = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'b2',
+      historyInRewrittenIds(raw, rewrites),
+    );
+    expect(r.retirements).toEqual([]);
+  });
+
+  it('control: the raw target reads as not-live and the fallback retires the locked row', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', raw);
+    expect(r.retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+  });
+});

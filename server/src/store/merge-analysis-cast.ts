@@ -209,6 +209,20 @@ export function surnameTolerantMatch(a: string, b: string): boolean {
   return true;
 }
 
+/** The id history's TARGET ids translated through this run's cumulative
+    dedup→fold rewrite table, so they are in the same (post-rewrite) id space as
+    the `existing` cast `mergeAnalysisResultWithExistingCast` receives
+    (`applyRewriteToPriorCast` already moved those rows). `recordedElsewhere`
+    compares a history target against that cast's ids; a raw target whose row is
+    heading elsewhere this run would read as not-live and let the fallback
+    overwrite the recorded merge (#3954 review finding N1). Keys are untouched. */
+export function historyInRewrittenIds(
+  idHistory: Readonly<Record<string, string>>,
+  rewrites: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(Object.entries(idHistory).map(([k, v]) => [k, rewrites[v] ?? v]));
+}
+
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
     same-name match (`:401-437`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the

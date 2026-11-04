@@ -93,7 +93,15 @@ function nameKeyOf(c: Record<string, unknown>): string {
 
     `idHistory` (optional) is the book's `cast-id-history.json` `supersededBy`
     map. A pair whose fresh id is already recorded there as retired to a
-    different live prior id is refused (see the guard below).
+    different live prior id is refused (see the guard below). `null` means the
+    file EXISTS but could not be read: the remap then makes no name join at
+    all, exact or tolerant, for any fresh id. A join made blind to a recorded
+    merge is written over that merge by the persist (it records the retirement
+    unconditionally), silently, where the unjoined run is flagged downstream
+    (`displaced` plus the "affected segments need review" log). The price is
+    that a book with an unreadable history keeps drifted fresh ids until the
+    next healthy run, which is the same state it was in before the remap
+    existed; a silent overwrite of a user's merge is the worse failure.
 
     Returns new arrays; `fresh`, `sentences` and `priorCast` are not
     mutated. */
@@ -106,9 +114,9 @@ export function remapFreshToPriorIds<
   priorCast: ReadonlyArray<PriorCastRow>,
   priorRewrites: Readonly<Record<string, string>> = {},
   currentBookId?: string,
-  idHistory: Readonly<Record<string, string>> = {},
+  idHistory: Readonly<Record<string, string>> | null = {},
 ): { characters: C[]; sentences: S[]; rewrites: Record<string, string> } {
-  if (fresh.length === 0 || priorCast.length === 0) {
+  if (fresh.length === 0 || priorCast.length === 0 || idHistory === null) {
     return { characters: [...fresh], sentences: [...sentences], rewrites: {} };
   }
 
@@ -233,7 +241,12 @@ export function remapFreshToPriorIds<
        the recorded target instead of the name-join one, subject to the same
        reserved / notLinkedTo / held-by-a-fresh-row guards, and the retirement
        it records is the entry already on file. */
-    const recordedTo = idHistory[freshRow.id];
+    /* The history value is a RAW id; every id this function compares it with
+       (`target`, `priorLiveIds`, `freshIds`) is post-rewrite, so translate it
+       first or a recorded target that is itself moving this run reads as
+       unrecorded and the join overwrites the merge. */
+    const recordedRaw = idHistory[freshRow.id];
+    const recordedTo = recordedRaw === undefined ? undefined : priorIdAfter(recordedRaw);
     if (recordedTo !== undefined && recordedTo !== target && priorLiveIds.has(recordedTo)) {
       const recordedRow = priorCast.find((p) => priorIdAfter(p.id) === recordedTo);
       if (

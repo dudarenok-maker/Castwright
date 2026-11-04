@@ -21,6 +21,14 @@ import type { CharacterOutput, Stage1ChapterOutput } from '../handoff/schemas.js
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript } from '../store/manuscripts.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+import * as stateIo from '../workspace/state-io.js';
+
+/* Passthrough by default; N1 installs a one-shot failure on the remap's own
+   history read, the way a transient AV / cloud-sync EBUSY would. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
 
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
@@ -366,6 +374,70 @@ describe('#3954 the prior id survives a surname-tolerant join, through the real 
         expect(readEdits(bookDir).some((s) => s.characterId === 'brann')).toBe(false);
         expect(cast.some((c) => c.id === 'brann-weir')).toBe(false);
       } finally {
+        await cleanup(manuscriptId, bookDir);
+      }
+    },
+  );
+
+  /* N1(a). The remap used to read the history through the collapsing loader, so
+     one transient read failure on THAT read turned the A5 case (a recorded
+     merge, flagged downstream) into `{brann-weir: brann}`: the merge silently
+     overwritten. The blip is keyed on the caller (the final remap's read, not
+     a read count) and every other read stays healthy. The remap then makes no
+     name join and the run falls to mergeCore's displaced path. */
+  it.each(['main', 'subset'] as const)(
+    'N1 %s job: one failed read of the history at the remap never overwrites a recorded merge',
+    async (kind) => {
+      const brannFresh = {
+        ...WREN_FRESH,
+        id: 'brann-weir',
+        name: 'Brann Weir',
+        evidence: [{ quote: 'Brann asked' }],
+      } as CharacterOutput;
+      const { manuscriptId, bookDir } = mkBook(
+        [
+          { ...NARR },
+          { id: 'brann', name: 'Brann', voiceState: 'locked' },
+          { id: 'old-weir', name: 'Old Weir', aliases: ['Brann Weir'] },
+        ],
+        { 'brann-weir': 'old-weir' },
+        BODY.replace('Wren asked', 'Brann asked'),
+      );
+      const actualReadJson = (await vi.importActual<typeof import('../workspace/state-io.js')>(
+        '../workspace/state-io.js',
+      )).readJson;
+      let blips = 0;
+      vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+        if (path.endsWith('cast-id-history.json') && blips === 0) {
+          const frames = (new Error().stack ?? '').split(String.fromCharCode(10)).map((l) => l.trim());
+          const at = frames.findIndex((l) => l.includes('loadIdHistoryForRemap'));
+          const caller = at >= 0 ? frames[at + 1] ?? '' : '';
+          if (/(runMainAnalyzerJob|runSubsetAnalyzerJob)/.test(caller)) {
+            blips += 1;
+            throw new Error('EBUSY: resource busy or locked (simulated transient read blip)');
+          }
+        }
+        return actualReadJson(path);
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const events = await run(manuscriptId, bookDir, kind, {
+          roster: [NARR, brannFresh],
+          speakerId: 'brann-weir',
+        });
+        expect(events.length).toBeGreaterThan(0);
+        expect(blips).toBe(1);
+        const history = readHistory(bookDir);
+        // The silent overwrite is the one outcome this must never reach.
+        expect(history.supersededBy['brann-weir']).not.toBe('brann');
+        // Flagged exactly as on main: the dropped alias is recorded as displaced
+        expect(JSON.stringify(history)).toContain('"displaced"');
+        expect(JSON.stringify((history as { displaced?: unknown }).displaced)).toContain('old-weir');
+        // ...and the run log tells the user the name joins were skipped.
+        expect(JSON.stringify(events)).toContain('Skipped keeping existing character ids');
+      } finally {
+        warnSpy.mockRestore();
+        vi.mocked(stateIo.readJson).mockImplementation(actualReadJson);
         await cleanup(manuscriptId, bookDir);
       }
     },
