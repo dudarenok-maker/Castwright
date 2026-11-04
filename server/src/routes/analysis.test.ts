@@ -6144,9 +6144,12 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
         expect(antonX!.voiceUuid).toBe('U-anton');
 
         // Assertion 2: the interim write still does its job — the
-        // freshly-detected row is there too (mid-run duplicate, by design;
-        // see the interim-write comment in analysis.ts).
-        expect(idsAfter).toContain('anton-y');
+        // freshly-detected row is there, under the KEPT prior id: the snapshot
+        // applies the same name-join remap as the final write (#3954 review
+        // finding 1), so no `anton-y` duplicate is persisted, and no history
+        // record is made for it (assertion 3).
+        expect(idsAfter).not.toContain('anton-y');
+        expect(idsAfter.filter((id) => id === 'anton-x')).toHaveLength(1);
 
         // Assertion 3: cast-id-history.json is BYTE-IDENTICAL to the seed —
         // no provisional retirement was recorded, and the pre-existing

@@ -18,6 +18,7 @@ import {
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
+  historyInRewrittenIds,
 } from './merge-analysis-cast.js';
 
 type C = Record<string, unknown> & { id: string };
@@ -524,6 +525,21 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('a fresh id the id history already retired to another existing row does not name-join (#3954)', () => {
+    const existing: C[] = [
+      { id: 'brann', name: 'Brann', voiceId: 'v_brann', voiceState: 'locked' },
+      { id: 'old-weir', name: 'Old Weir' },
+    ];
+    const fresh: C[] = [{ id: 'brann-weir', name: 'Brann Weir' } as C];
+    const history = { 'brann-weir': 'old-weir' };
+    const refused = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2', history);
+    expect(refused.retirements).toEqual([]);
+    expect(refused.characters.find((c) => c.id === 'brann')?.voiceId).toBe('v_brann');
+    // Control: with no history the tolerant name-fallback retires brann.
+    const control = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2');
+    expect(control.retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+  });
+
   it('a fresh row that declines the link a prior row carries in matchedFrom does not name-join it (#3965)', () => {
     const existing: C[] = [
       {
@@ -549,6 +565,28 @@ describe('mergeAnalysisResultWithExistingCast', () => {
       'book-2',
     );
     expect(control.retirements).toEqual([{ from: 'thomas', to: 'old-tom-2' }]);
+  });
+
+  it('a tolerant name join is ambiguous when one candidate declines the link another carries (#3954 finding 3, #3965)', () => {
+    const existing: C[] = [
+      {
+        id: 'thomas',
+        name: 'Old Tom',
+        voiceId: 'v_b1',
+        voiceUuid: 'U-b1',
+        voiceState: 'reused',
+        matchedFrom: { bookId: 'book-1', characterId: 'old-tom' },
+      },
+      { id: 'old-tom', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] },
+    ];
+    const fresh: C[] = [{ id: 'old-tom-weir', name: 'Old Tom Weir' }];
+    const { characters, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh, 'book-2');
+    expect(retirements).toEqual([]);
+    expect(characters.find((c) => c.id === 'old-tom-weir')?.matchedFrom).toBeUndefined();
+    expect(characters.find((c) => c.id === 'old-tom-weir')?.voiceUuid).toBeUndefined();
+    // Control: without the decliner the lone voiced twin still joins.
+    const control = mergeAnalysisResultWithExistingCast([existing[0]], fresh, 'book-2');
+    expect(control.retirements).toEqual([{ from: 'thomas', to: 'old-tom-weir' }]);
   });
 
   it('book scoping: the claim-once count ignores a cross-book edge too, so a doubly-claimed prior stays unwelded (#3965 T5)', () => {
@@ -964,6 +1002,46 @@ describe('seedReuseGuardsFromPriorCast', () => {
     expect(fresh[0].matchedFrom).toBeUndefined();
     // Inputs untouched.
     expect(existing[1].notLinkedTo).toHaveLength(1);
+  });
+
+  it('a surname-tolerant twin pair that declines a link seeds the union onto a drifted fresh row (#3954 finding 3)', () => {
+    const existing: C[] = [
+      { id: 'thomas', name: 'Old Tom', matchedFrom: { bookId: 'book-1', characterId: 'old-tom' } },
+      { id: 'old-tom', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] },
+    ];
+    const fresh: C[] = [{ id: 'old-tom-weir', name: 'Old Tom Weir' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
+    expect(fresh[0].matchedFrom).toBeUndefined();
+  });
+
+  it('the tolerant widening unions only the declining twin, not an unrelated sibling (#3954 N4)', () => {
+    const existing: C[] = [
+      { id: 'anna-lee', name: 'Anna Lee', matchedFrom: { bookId: 'book-1', characterId: 'anna-lee' } },
+      { id: 'anna-lee-2', name: 'Anna Lee', notLinkedTo: [{ bookId: 'book-1', characterId: 'anna-lee' }] },
+      // A decision made only about Anna Smith; it has nothing to do with the twin pair.
+      { id: 'anna-smith', name: 'Anna Smith', notLinkedTo: [{ bookId: 'book-1', characterId: 'anna-s' }] },
+    ];
+    const fresh: C[] = [{ id: 'anna', name: 'Anna' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'anna-lee' }]);
+  });
+
+  it('the seed never copies a link a same-name twin declines, even when the declining twin is skipped by the strict bridge (#3954 finding 7)', () => {
+    const existing: C[] = [
+      { id: 'thomas', name: 'Old Tom', matchedFrom: { bookId: 'book-1', characterId: 'old-tom' } },
+      { id: 'old-tom', name: 'Old Tom', notLinkedTo: [{ bookId: 'book-1', characterId: 'old-tom' }] },
+    ];
+    // A fresh row holds the declining twin's id under another name, so the
+    // strict bridge sees only `thomas` for "Old Tom".
+    const fresh: C[] = [
+      { id: 'old-tom', name: 'Tom' },
+      { id: 'old-tom-2', name: 'Old Tom' },
+    ];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    const speaker = fresh.find((f) => f.id === 'old-tom-2');
+    expect(speaker?.matchedFrom).toBeUndefined();
+    expect(speaker?.notLinkedTo).toEqual([{ bookId: 'book-1', characterId: 'old-tom' }]);
   });
 
   it('the ambiguous-name union is skipped when the fresh name is shared or the narrator id (#3965)', () => {
@@ -1832,3 +1910,90 @@ describe('mergeAnalysisResultWithExistingCast — locked/tuned voice is taken wh
   });
 });
 
+describe('a recorded merge whose target moves this run (#3954 review finding N1)', () => {
+  // The user merged brann-weir into old-weir; this run's dedup moves old-weir to
+  // old-weir-2, so the existing cast the merge sees already holds old-weir-2.
+  const existing: C[] = [
+    { id: 'brann', name: 'Brann', voiceState: 'locked', voiceId: 'v_brann' },
+    { id: 'old-weir-2', name: 'Old Weir' },
+  ];
+  const fresh: C[] = [{ id: 'brann-weir', name: 'Brann Weir' }];
+  const raw = { 'brann-weir': 'old-weir' };
+  const rewrites = { 'old-weir': 'old-weir-2' };
+
+  it('translates history targets through the rewrite table and leaves keys alone', () => {
+    expect(historyInRewrittenIds(raw, rewrites)).toEqual({ 'brann-weir': 'old-weir-2' });
+    expect(historyInRewrittenIds(raw, {})).toEqual(raw);
+  });
+
+  it('refuses the name fallback once the target is in post-rewrite space', () => {
+    const r = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+      'b2',
+      historyInRewrittenIds(raw, rewrites),
+    );
+    expect(r.retirements).toEqual([]);
+  });
+
+  it('control: the raw target reads as not-live and the fallback retires the locked row', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', raw);
+    expect(r.retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+  });
+});
+
+describe('a prior row another fresh id has recorded as its merge target (#3954 P3-2, N2)', () => {
+  // brann-weir was merged into old-weir (history), and a second fresh row "Old
+  // Weir" (ow2) exact-name matches the same prior row. The remap refuses both
+  // joins; the fallback must not make the one the remap refused.
+  const existing: C[] = [
+    { id: 'brann', name: 'Brann', voiceState: 'locked' },
+    { id: 'old-weir', name: 'Old Weir', voiceState: 'locked' },
+  ];
+  const fresh: C[] = [
+    { id: 'brann-weir', name: 'Brann Weir' },
+    { id: 'ow2', name: 'Old Weir' },
+  ];
+
+  it('refuses the exact join onto a row another fresh id claims in the history', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {
+      'brann-weir': 'old-weir',
+    });
+    expect(r.retirements).toEqual([]);
+    expect(r.characters.map((c) => c.id).sort()).toEqual(
+      ['brann', 'brann-weir', 'old-weir', 'ow2'].sort(),
+    );
+  });
+
+  it('control: with no claim in the history the exact join is made', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {});
+    expect(r.retirements).toContainEqual({ from: 'old-weir', to: 'ow2' });
+  });
+});
+
+describe('the fallback sees the candidate set the remap saw (#3954 P4-2, catalogue 77)', () => {
+  // js "John Smith" and jd "John Doe" are both locked. The remap joined
+  // john-smith-2 to js (rewritten to the id `js` below) and refused the bare
+  // "John" as ambiguous between js and jd. js is now held by id, so on its own
+  // the fallback sees ONE candidate (jd) and makes the join the remap refused.
+  const existing: C[] = [
+    { id: 'js', name: 'John Smith', voiceState: 'locked' },
+    { id: 'jd', name: 'John Doe', voiceState: 'locked' },
+  ];
+  const fresh: C[] = [
+    { id: 'js', name: 'John Smith' },
+    { id: 'john-brown', name: 'John Brown' },
+    { id: 'john', name: 'John' },
+  ];
+
+  it('refuses the tolerant name the remap found ambiguous, keeping jd and its id', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {}, new Set(['js']));
+    expect(r.retirements).toEqual([]);
+    expect(r.characters.map((c) => c.id)).toContain('jd');
+  });
+
+  it('control: without the remap-joined set the fallback joins John to jd and retires it', () => {
+    const r = mergeAnalysisResultWithExistingCast(existing, fresh, 'b2', {});
+    expect(r.retirements).toEqual([{ from: 'jd', to: 'john' }]);
+  });
+});

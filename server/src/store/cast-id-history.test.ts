@@ -34,6 +34,19 @@ describe('cast id history', () => {
     expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
   });
 
+  it('protectRecordedMergeAmong files displaced instead of overwriting a recorded merge to a live id (#3954 P3-1)', async () => {
+    await retireCharacterId(dir, 'wren-2', 'm1');
+    const r = await retireCharacterId(dir, 'wren-2', 'w2', new Set(['w2', 'm1']));
+    expect(r.keptRecordedMerge).toBe('m1');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ 'wren-2': 'm1' });
+    expect(h.displaced).toEqual({ 'wren-2': 'm1' });
+    // a recorded target that is no longer live does not block the retirement
+    const r2 = await retireCharacterId(dir, 'wren-2', 'w2', new Set(['w2']));
+    expect(r2.keptRecordedMerge).toBeUndefined();
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'wren-2': 'w2' });
+  });
+
   it('records a retirement', async () => {
     await retireCharacterId(dir, 'mayrin', 'mairin');
     expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mairin' });

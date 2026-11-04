@@ -92,7 +92,7 @@ export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
 
 /** A character carries continuity worth rescuing when it has a non-generated
     voice state or any concrete voice/reuse field. */
-function isVoicedOrReused(c: CastRecord): boolean {
+export function isVoicedOrReused(c: CastRecord): boolean {
   const state = c.voiceState;
   if (state === 'reused' || state === 'tuned' || state === 'locked') return true;
   // voiceUuid counts as a designed voice (srv-43): a voiceUuid-only row must be
@@ -139,7 +139,8 @@ export function voicedSurvivorsDropped(
 }
 
 /** Overlay the existing cast's voice-design fields onto the freshly-analysed
-    roster (matched by `id`, with a same-name fallback for analyzer id drift),
+    roster (matched by `id`, with a same-name fallback for the joins the id
+    remap refused, chiefly a reserved prior id),
     union aliases, and re-add voiced characters the fresh roster dropped.
     Returns a new array plus the id retirements the name-fallback performed
     (a dropped-by-id existing row matched to a differently-id'd fresh row);
@@ -149,14 +150,23 @@ export function voicedSurvivorsDropped(
     for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
     the whole book and a dropped prior row really is gone. `currentBookId`
     (optional) is the id of the book being analysed; it scopes the
-    `notLinkedTo` gate (see `notLinkedToId`). See
-    `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
+    `notLinkedTo` gate (see `notLinkedToId`). `idHistory` (optional) is the
+    book's `supersededBy` map: a name-fallback pair whose fresh id is recorded
+    there as retired to a DIFFERENT existing row is refused (#3954, the same
+    recorded-merge refusal `remapFreshToPriorIds` applies). `remapJoinedIds`
+    (optional) is the set of prior ids that remap just joined a fresh row to
+    (its rewrite targets): those rows are held by id here, but the remap still
+    chose among them, so the fallback counts them as candidates it must not
+    pick (#3954 P4-2). See `overlayInterimCastForLiveView` below for the
+    partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
   currentBookId?: string,
+  idHistory?: Readonly<Record<string, string>>,
+  remapJoinedIds?: ReadonlySet<string>,
 ): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true, currentBookId);
+  return mergeCore(existing, fresh, true, currentBookId, idHistory, remapJoinedIds);
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
@@ -191,7 +201,7 @@ export function overlayInterimCastForLiveView<T extends { id: string }>(
     similarity measure could weld two genuinely different characters whose names
     merely resemble each other, and token-count + strict-leading-prefix keeps
     that from happening (#2536 decision — surname-aware, not fuzzy). */
-function surnameTolerantMatch(a: string, b: string): boolean {
+export function surnameTolerantMatch(a: string, b: string): boolean {
   if (a === b) return true;
   const ta = a.split(' ');
   const tb = b.split(' ');
@@ -202,6 +212,20 @@ function surnameTolerantMatch(a: string, b: string): boolean {
     if (shorter[i] !== longer[i]) return false;
   }
   return true;
+}
+
+/** The id history's TARGET ids translated through this run's cumulative
+    dedup→fold rewrite table, so they are in the same (post-rewrite) id space as
+    the `existing` cast `mergeAnalysisResultWithExistingCast` receives
+    (`applyRewriteToPriorCast` already moved those rows). `recordedElsewhere`
+    compares a history target against that cast's ids; a raw target whose row is
+    heading elsewhere this run would read as not-live and let the fallback
+    overwrite the recorded merge (#3954 review finding N1). Keys are untouched. */
+export function historyInRewrittenIds(
+  idHistory: Readonly<Record<string, string>>,
+  rewrites: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(Object.entries(idHistory).map(([k, v]) => [k, rewrites[v] ?? v]));
 }
 
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
@@ -215,6 +239,8 @@ function mergeCore<T extends { id: string }>(
   fresh: T[],
   nameFallback: boolean,
   currentBookId?: string,
+  idHistory: Readonly<Record<string, string>> = {},
+  remapJoinedIds: ReadonlySet<string> = new Set(),
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -223,7 +249,12 @@ function mergeCore<T extends { id: string }>(
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
     typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
 
-  /* Name-fallback for analyzer id drift. The analyzer is non-deterministic about
+  /* Name-fallback for the joins `remapFreshToPriorIds` refused. The id drift
+     itself is handled before this code runs: the remap keeps the PRIOR id
+     for an exact or surname-tolerant name join (#3954), so a fresh row
+     arrives here already under the prior id and joins by id. What reaches
+     this fallback is a join the remap declined, chiefly a reserved prior id
+     (a bucket such as `unknown-male` is never the survivor). The analyzer is non-deterministic about
      a character's id across runs (it relabelled the dragon `coalfall` →
      `coalfall-dragon` between two analyses of the same book). The id-keyed
      overlay then misses: a voiced dropped row would come back voiceless AND
@@ -272,7 +303,20 @@ function mergeCore<T extends { id: string }>(
     // whose name collides with the prior narrator's localized default name
     // would weld the narrator's voice fields onto that character and
     // durably retire the reserved 'narrator' id onto it.
-    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+    /* A row the remap just joined to a fresh row is held by id here, but it
+       was a candidate when the remap chose, so it stays one for the selection
+       rule below; `remapJoinedIds` stops it ever being the chosen match. Without
+       it the remap's refusal of an ambiguous name is undone by a fallback that
+       sees one candidate fewer (#3954 P4-2). The remap and this fallback are
+       two matchers over one decision; the structural unification is #4031, and
+       until then every refusal in one must be reproduced in the other (review
+       catalogue entry 77). */
+    if (
+      (freshIds.has(old.id) && !remapJoinedIds.has(old.id)) ||
+      NARRATOR_CHARACTER_IDS.includes(old.id)
+    ) {
+      continue;
+    }
     const key = nameOf(old);
     if (!key) continue;
     const list = droppedByName.get(key);
@@ -317,6 +361,12 @@ function mergeCore<T extends { id: string }>(
         if (surnameTolerantMatch(key, nameOf(old))) matches.push(old);
       }
     }
+    /* #3965 owner rule, #3954 finding 3: a candidate set in which one row
+       declines (`notLinkedTo`) the series link another carries (`matchedFrom`)
+       is ambiguous, whatever the voiced rule would pick; the lone voiced twin
+       would otherwise hand the declined link to the drifted speaker, and the
+       remap's own refusal (`choosePrior`) would have no effect end to end. */
+    if (matches.some((c) => matches.some((o) => o !== c && declinesLinkOf(c, o)))) continue;
     const voiced = matches.filter(isVoicedOrReused);
     if (voiced.length === 1) {
       tolerantCandidateByName.set(key, voiced[0]);
@@ -354,13 +404,32 @@ function mergeCore<T extends { id: string }>(
     const k = nameOf(f as T & Record<string, unknown>);
     if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
   }
+  /* #3954 — the fresh id is already retired in the id history to a DIFFERENT
+     existing row: the user merged that character into it. Retiring `cand`
+     onto the fresh id would drop that entry as "reclaimed by a live id" and
+     send the merged lines to `cand`, so the pair is refused like a
+     notLinkedTo edge. */
+  const recordedElsewhere = (cand: CastRecord, f: { id: string }): boolean => {
+    const to = idHistory[f.id];
+    if (to !== undefined && to !== cand.id && byId.has(to)) return true;
+    /* The mirror of the remap's `adoptedRows` refusal (N2, #3954 P3-2): a
+       DIFFERENT fresh id in this run is recorded as retired to `cand` (it
+       claims `cand` as its merge target), so retiring `cand` onto `f` as well
+       would hand one prior row to two fresh rows. The remap refuses both joins
+       when it sees the pair; this makes the fallback refuse the same pair
+       instead of making the join in the opposite direction. `idHistory` is in
+       this run's rewritten id space, like `fresh`. */
+    return fresh.some((g) => g.id !== f.id && idHistory[g.id] === cand.id);
+  };
   const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
     notLinkedToId(cand, f.id, currentBookId) ||
     notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
-    declinesLinkOf(f as unknown as CastRecord, cand);
+    declinesLinkOf(f as unknown as CastRecord, cand) ||
+    recordedElsewhere(cand, f);
   const consumable = (key: string, cand: CastRecord): boolean => {
     // Mirror the exact four gates from the call site (not-already-id-matched,
     // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
+    if (remapJoinedIds.has(cand.id)) return false; // already joined by the remap, never consumed here
     if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
     const f = freshByKey.get(key);
     if (!f) return false; // gate 2: must exist
@@ -411,8 +480,11 @@ function mergeCore<T extends { id: string }>(
       // legitimate id-drift case here for the fallback to rescue, and
       // :445-455 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-        const cand =
+        const picked =
           dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
+        // The selection chose a row the remap already joined elsewhere: the
+        // remap's own claim-once / ambiguity refusal stands, so no join here.
+        const cand = picked && !remapJoinedIds.has(picked.id) ? picked : undefined;
         // A notLinkedTo edge between this specific pair is the user's
         // explicit "not the same person" decision — widening the candidate
         // set past isVoicedOrReused must not let the fallback silently
@@ -424,7 +496,8 @@ function mergeCore<T extends { id: string }>(
           cand &&
           !notLinkedToId(cand, f.id, currentBookId) &&
           !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
-          !declinesLinkOf(f as unknown as CastRecord, cand)
+          !declinesLinkOf(f as unknown as CastRecord, cand) &&
+          !recordedElsewhere(cand, f)
         ) {
           old = cand;
           claimedByName.add(cand.id);
@@ -436,10 +509,11 @@ function mergeCore<T extends { id: string }>(
     const merged = { ...(f as Record<string, unknown>) };
     // #3920: the merge must apply the #3842 owner rule — no voice match,
     // automatic or manual, replaces a voice the user locked or tuned. A
-    // locked or tuned character WITH AN ASSIGNED VOICE (a voiceId) keeps it
-    // whole; one with no voiceId still keys its voice on its id, so a name
-    // join that changes the id changes the voice (pre-existing, tracked in
-    // #3954). The assigned voice is therefore taken whole from the prior row:
+    // locked or tuned character keeps its voice whole, with or without an
+    // assigned voice (a voiceId): a row with no voiceId keys its voice on its
+    // id, and the id remap keeps the prior id through an exact or
+    // surname-tolerant name join (#3954), so that key holds. The voice is
+    // taken whole from the prior row:
     // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
     // key it lacks is deleted, so nothing the series linker stamped onto the
     // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
@@ -642,6 +716,15 @@ export function seedReuseGuardsFromPriorCast<
     return bridge.byName.get(key);
   };
 
+  const sameNameTwinDeclines = (f: T): boolean => {
+    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+    if (!key) return false;
+    const twins = existing.filter(
+      (old) => !NARRATOR_CHARACTER_IDS.includes(old.id) && nameOf(old) === key,
+    );
+    return twins.some((c) => twins.some((o) => o !== c && declinesLinkOf(c, o)));
+  };
+
   for (const f of fresh) {
     const byIdRow = byId.get(f.id);
     // #3920 (A2): a fresh narrator row never takes a matchedFrom name-fallback
@@ -650,7 +733,15 @@ export function seedReuseGuardsFromPriorCast<
     // never by name.
     const isNarrator = NARRATOR_CHARACTER_IDS.includes(f.id);
     const nlFrom = byIdRow ?? (isNarrator ? uniquePriorNarrator : bridged(f, looseBridge));
-    const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
+    /* #3954 finding 7, the #3965 owner rule: a link is never copied onto a row
+       that a same-name twin declines it for. The strict bridge skips a twin a
+       fresh row holds by id, so the declining twin can drop out and leave the
+       linked twin as the lone candidate, while the decline union below copies
+       the decline: a matchedFrom beside a notLinkedTo naming the same link.
+       Treated as an ambiguous bridge (no link bridged) rather than patching the
+       one record, so the seed refuses the same set every other gate refuses. */
+    const bridgedMf = isNarrator ? undefined : bridged(f, strictBridge);
+    const mfFrom = byIdRow ?? (bridgedMf && sameNameTwinDeclines(f) ? undefined : bridgedMf);
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
     // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
@@ -660,10 +751,30 @@ export function seedReuseGuardsFromPriorCast<
     // spurious copy only prevents a link, which fails safe.
     if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
       const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-      if (key && freshNameCounts.get(key) === 1 && looseBridge.ambiguous.has(key)) {
+      // The exact-name set, or — when the name is not ambiguous exactly — the
+      // surname-tolerant set, but only when it holds a twin pair where one row
+      // declines the link the other carries: that is the set mergeCore's
+      // tolerant fallback refuses (#3954 finding 3), and the decline must still
+      // reach the drifted speaker. Widening only for that pair keeps an
+      // unrelated tolerant sibling's decline off the speaker.
+      const tolerantRows = existing.filter(
+        (old) =>
+          !NARRATOR_CHARACTER_IDS.includes(old.id) && surnameTolerantMatch(key, nameOf(old)),
+      );
+      const tolerantTwins = tolerantRows.some((c) =>
+        tolerantRows.some((o) => o !== c && declinesLinkOf(c, o)),
+      );
+      if (key && freshNameCounts.get(key) === 1 && (looseBridge.ambiguous.has(key) || tolerantTwins)) {
         let union: unknown[] | undefined;
         for (const old of existing) {
-          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
+          if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
+          // Tolerant set: only a member of the declining pair itself, so an
+          // unrelated sibling's decline (a decision about someone else) stays off
+          // the speaker (#3954 N4).
+          const inSet = looseBridge.ambiguous.has(key)
+            ? nameOf(old) === key
+            : tolerantRows.includes(old) && tolerantRows.some((o) => o !== old && declinesLinkOf(old, o));
+          if (!inSet) continue;
           if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
         }
         if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];
@@ -723,7 +834,7 @@ function groupHasNotLinkedEdge(
     cannot see it; but a collapse keeps one row and would hand the declined link
     to the survivor, for the next run's linker to land (#3965). Matched on the
     link's own (bookId, characterId); a bare string matches by characterId. */
-function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
+export function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
   const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
   if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
   return (c.notLinkedTo as unknown[]).some((entry) => {

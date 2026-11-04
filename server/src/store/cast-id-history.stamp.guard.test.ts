@@ -155,12 +155,13 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
 
   it('finds the write sites at all — a scan matching nothing must not pass green', () => {
     // Exact, not a floor — see file header for why a floor is too weak to
-    // trust here. 11 write sites: retireCharacterId (x2, two branches),
+    // trust here. 12 write sites: retireCharacterId (x3, two branches plus the
+    // protectRecordedMergeAmong displaced write, #3954 P3-1),
     // dropSupersededIdsReclaimedByLiveCast, dropSupersededTargetsNoLongerLive,
     // forgetSupersededId, restoreSupersededId, rejectOrphanedId,
     // rejectOrphanedPair, unrejectOrphanedPair, undoRejectedPairs,
     // stampRecordedAtSeqIfAbsent.
-    expect(SRC.match(WRITE_RE)?.length ?? 0).toBe(11);
+    expect(SRC.match(WRITE_RE)?.length ?? 0).toBe(12);
     // 9 raw regex matches, verified line-by-line (round-1 review, M5 —
     // corrects an earlier version of this comment that miscounted the
     // split): 5 REAL assignments, all inside retireCharacterId or

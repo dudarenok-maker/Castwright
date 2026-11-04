@@ -530,12 +530,24 @@ function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: s
  *  report the drop — cleanup is necessarily the caller's job. */
 export interface RetireCharacterIdResult {
   droppedSelfLoopRejections: RejectedPair[];
+  /** Set only when `protectRecordedMergeAmong` refused the write: the live id
+   *  `from` was already recorded as retired to. */
+  keptRecordedMerge?: string;
 }
 
+/** `protectRecordedMergeAmong` (#3954 P3-1, optional) is the set of live cast
+ *  ids. When given, and the history it reads already records `from` as
+ *  retired to a DIFFERENT id in that set (a merge the user made), the entry is
+ *  NOT overwritten: `from` is filed into `displaced` instead (the same
+ *  reservation `dropSupersededIdsReclaimedByLiveCast` makes) and
+ *  `keptRecordedMerge` reports the target the history keeps. Used for the
+ *  early remap's retirements, whose join may have been chosen blind to the
+ *  history (an unreadable read at remap time). */
 export async function retireCharacterId(
   bookDir: string,
   from: string,
   to: string,
+  protectRecordedMergeAmong?: ReadonlySet<string>,
 ): Promise<RetireCharacterIdResult> {
   // No-op if from === to
   if (from === to) {
@@ -548,6 +560,19 @@ export async function retireCharacterId(
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
+
+    if (protectRecordedMergeAmong) {
+      const recorded = history.supersededBy[from];
+      const target = history.supersededBy[to] ?? to;
+      if (recorded !== undefined && recorded !== target && protectRecordedMergeAmong.has(recorded)) {
+        if (history.displaced?.[from] !== recorded) {
+          history.displaced = { ...(history.displaced ?? {}), [from]: recorded };
+          bumpSeqAndStamp(history, []);
+          await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+        }
+        return { droppedSelfLoopRejections: [], keptRecordedMerge: recorded };
+      }
+    }
 
     /* Direct reversal (#2040 Task 8 fix round 1, item 3): `to` is itself
        recorded as having been retired in favour of `from` — an earlier call

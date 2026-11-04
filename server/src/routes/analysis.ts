@@ -146,6 +146,7 @@ import {
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
+  historyInRewrittenIds,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
   type Retirement,
@@ -301,7 +302,18 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    OWN lock — see cast-merge-base.ts's file-header invariant for why that
    can't route through `writeChecked`), this advances the baseline to match,
    so the next `writeChecked` doesn't report this run's own write as a
-   foreign conflict. */
+   foreign conflict.
+
+   `protectRecordedMerges` (#3954 P3-1, default off) is for the early remap's
+   retirements only: that join may have been made while the id history was
+   unreadable, blind to a recorded merge. When on, a retirement `from -> to`
+   whose `from` the history (read fresh, inside the lock) already records as
+   retired to a DIFFERENT live id is not written; `retireCharacterId` files
+   `from` into `displaced` instead, and it is logged here. `priorLiveIds` (P4-4) widens that
+   "live" set beyond `liveIds`: the prior cast's own ids in post-rewrite space.
+   The healthy remap adopts a recorded target from the prior cast, so an
+   unvoiced target the fresh roster omits is live to it but not in the
+   persisted roster, and would otherwise lose its recorded merge on a blip. */
 export async function recordRetirements(
   bookDir: string | null | undefined,
   bookId: string | null | undefined,
@@ -309,6 +321,8 @@ export async function recordRetirements(
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
   castBase: CastMergeBase | null,
+  protectRecordedMerges = false,
+  priorLiveIds: ReadonlyArray<string> = [],
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -326,7 +340,19 @@ export async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    const result = await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(
+      bookDir,
+      from,
+      to,
+      protectRecordedMerges && liveIds ? new Set([...liveIds, ...priorLiveIds]) : undefined,
+    );
+    if (result.keptRecordedMerge !== undefined) {
+      log(
+        1,
+        `Kept the recorded merge ${from} -> ${result.keptRecordedMerge} instead of retiring ${from} onto ${to} — ` +
+          `the name join may have been made while cast-id-history.json could not be read, so affected segments need review.`,
+      );
+    }
     if (result.droppedSelfLoopRejections.length && bookId) {
       const written = await clearNotLinkedEdgesForDroppedRejections(
         bookDir,
@@ -1131,6 +1157,152 @@ function previewFoldForLiveView(
   const deduped = dedupeRosterByName(characters, [], { language }).characters;
   return foldMinorCast(deduped, [], { nameOnly: true, language }).characters;
 }
+
+/* #3954 review finding 1 — the three interim cast.json snapshots run the same
+   fresh→prior name-join remap the authoritative write does, BEFORE the overlay.
+   Without it an interrupted run persists the drifted fresh id ("Wren Ashby")
+   next to the locked prior row ("Wren"); on resume that interim row holds the
+   fresh id, so the remap's "another prior row holds the fresh id" guard refuses
+   the join and the split is permanent (the locked row's lines go to an
+   unlocked default-voice duplicate). Fixing the SNAPSHOT rather than loosening
+   that guard keeps the guard sound: an unlocked voiceless row holding the
+   fresh id is indistinguishable, on resume, from a genuinely distinct
+   character, but the snapshot knows the row it is about to write came from
+   this join. Best-effort like the snapshot itself: it returns only the roster
+   and records no retirement (the authoritative write records it, from the same
+   pair), so a timeout or a clobber leaves the history as it was. It does NOT
+   leave every file agreeing: a snapshot drops the fresh id from cast.json while
+   the Phase-1 roll writes the analyzer's raw ids into manuscript-edits.json, so
+   a run stopped in Phase 1 and never resumed would leave lines on an id with no
+   cast row and no history entry (#3954 P3-3). Once the FINAL roster exists the
+   roll therefore maps its sentence ids through the table that roster yields
+   (`interimRollIdTable`; the 0b snapshot is built from the same roster, so
+   edits and cast.json agree on one row). That is safe for N3 and F1: it only
+   rewrites the ids of the rolled COPY of the sentences (the analysis cache
+   keeps the raw ids, and the authoritative write rebuilds the edits from those
+   takes, then joins against the whole roster), and it persists no name, alias
+   or description derived from a partial roster.
+
+   The one exception is a PIPELINED run whose Phase 1 rolls before Phase 0b has
+   produced the final roster (#3954 P4-3, owner ruling). Its per-chapter
+   snapshots hold a partial roster, and a table built from it can make a join
+   the full roster refuses, putting a character's lines on a locked prior row
+   and so on its voice. Those rolls keep the raw fresh ids, as `origin/main`
+   does: a stopped run in that window leaves lines on an id with no cast row,
+   and a resume heals it. So "a stopped run leaves every line on a cast row"
+   holds for sequential runs and for a pipelined run stopped after Phase 0b,
+   not for a pipelined run stopped before it.
+
+   #3954 review finding N3 — the remap's claim-once and held-by-a-fresh-row
+   guards need the WHOLE roster, and a per-chapter snapshot has only the
+   chapters finished so far. A partial roster can make a join the full roster
+   would refuse ("Wren" against a lone "Wren Ashby", while a later chapter
+   brings "Wren Cole"). Persisting that fresh row (its name, aliases,
+   description) onto the prior id would carry the guess into the resume, which
+   would then match the renamed row exactly. So a remapped row is written as
+   the PRIOR row itself, untouched: the snapshot keeps the one fact F1 needs
+   (no fresh id next to the locked prior row) and persists nothing derived from
+   the partial roster. The authoritative write, which has the whole roster,
+   makes the join and takes the fresh fields. */
+async function remapInterimToPriorIds<T extends { id: string }>(
+  interim: T[],
+  priorCast: Parameters<typeof remapFreshToPriorIds>[2],
+  bookDir: string,
+  bookId: string | null | undefined,
+): Promise<T[]> {
+  const idHistory = await loadIdHistoryForRemap(bookDir);
+  const remap = remapFreshToPriorIds(
+    interim,
+    [],
+    priorCast,
+    {},
+    bookId ?? undefined,
+    idHistory,
+  );
+  const remapped = remap.characters;
+  const priorById = new Map(priorCast.map((p) => [p.id, p]));
+  return remapped.map((c, i) =>
+    c.id !== interim[i].id ? ((priorById.get(c.id) as unknown as T | undefined) ?? c) : c,
+  );
+}
+
+/* #3954 P3-3 — the fresh→prior id table of the FINAL roster (`null` until
+   computed), so the Phase-1 roll can put its sentences on the row cast.json
+   shows. Never built from a partial roster; see `remapInterimToPriorIds`. */
+interface InterimIdTable {
+  rewrites: Record<string, string> | null;
+}
+
+/* Computes (once) the table the Phase-1 roll maps its sentence ids through,
+   from the FINAL roster: the table the Phase-0b snapshot used, built from the
+   same roster. Call it only once that roster exists (`phase1Stage1Ready`, or a
+   cached/subset roster); an empty roster computes nothing and caches nothing,
+   so a roll that precedes the roster is retried later. */
+async function interimRollIdTable(
+  table: InterimIdTable,
+  roster: ReadonlyArray<{ id: string }> | undefined,
+  priorCast: Parameters<typeof remapFreshToPriorIds>[2],
+  bookDir: string,
+  bookId: string | null | undefined,
+): Promise<Readonly<Record<string, string>>> {
+  if (table.rewrites) return table.rewrites;
+  if (!roster?.length) return {};
+  const idHistory = await loadIdHistoryForRemap(bookDir);
+  table.rewrites = remapFreshToPriorIds(
+    [...roster],
+    [],
+    priorCast,
+    {},
+    bookId ?? undefined,
+    idHistory,
+  ).rewrites;
+  return table.rewrites;
+}
+
+/* The ids a roll maps through, read in the SAME synchronous step that builds the
+   roll's sentences (inside `rollManuscriptEdits`'s snapshot callback, after its
+   `withVerifiedBookDir` await): `ready` is false until the final roster exists,
+   and a roll before that keeps raw ids (#3954 P4-3). Both flags only ever flip
+   once, so reading them late is never staler than reading them early. */
+function rollIdsNow(table: InterimIdTable, ready: boolean): Readonly<Record<string, string>> {
+  return ready && table.rewrites ? table.rewrites : {};
+}
+
+function mapRollIds<S extends { characterId: string }>(
+  sentences: S[],
+  rewrites: Readonly<Record<string, string>>,
+): S[] {
+  if (Object.keys(rewrites).length === 0) return sentences;
+  return sentences.map((s) =>
+    rewrites[s.characterId] ? { ...s, characterId: rewrites[s.characterId] } : s,
+  );
+}
+
+/* #3954 review finding N1 — the id history the fresh→prior remap consults,
+   read WITH its status. `loadCastIdHistory` collapses an unreadable file to
+   `{}`, which the remap cannot tell from "no merges recorded": one transient
+   EBUSY then turned a flagged case into a silent overwrite of the user's
+   merge. `null` means the file exists but could not be read; the remap then
+   runs only the exact-name tier `origin/main` ran (see `remapFreshToPriorIds`:
+   no surname-tolerant join, no voiced tie-break, no history adoption), so a
+   locked `w2 "Wren"` re-minted as `wren-2` keeps `w2` exactly as on main.
+   Skipping every join instead would let `mergeCore` keep the fresh id and
+   retire the prior one for good. That exact join is blind to a recorded
+   merge, so the persist's `protectRecordedMerges` retirement refuses to
+   overwrite one. An absent file is the empty map. */
+async function loadIdHistoryForRemap(
+  bookDir: string | null | undefined,
+): Promise<Readonly<Record<string, string>> | null> {
+  if (!bookDir) return {};
+  const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+  return status === 'degraded' ? null : history.supersededBy;
+}
+
+const DEGRADED_HISTORY_LOG_MESSAGE =
+  `cast-id-history.json for this book could not be read, so only exact-name matches kept their ` +
+  `existing character ids and a recorded merge could not be consulted. A surname-tolerant match ` +
+  `(e.g. "Wren" / "Wren Ashby") was NOT kept and may now sit under a new id; a re-run once the ` +
+  `file is readable does not undo that. The file needs attention (see the server log for the cause).`;
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
    and scenes (distinct chapters appeared in) from stage 2 output once we
@@ -4787,6 +4959,9 @@ export async function runMainAnalyzerJob(
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
       ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
       : priorSnapshot.rows;
+    /* #3954 P3-3 / P4-3 — the id table of the FINAL roster, for the Phase-1
+       manuscript-edits roll once that roster exists (see `remapInterimToPriorIds`). */
+    const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write and reset by the Start-fresh delete below. */
     const castBase: CastMergeBase | null = recordRef.bookDir
@@ -5733,7 +5908,15 @@ export async function runMainAnalyzerJob(
                  here may simply not have been reached yet, so it must not be
                  able to swap a persisted id. Only §4.4's five listed sites
                  record retirements, and none of them is this one. */
-              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
+              const mergedInterim = overlayInterimCastForLiveView(
+                priorCastForMerge,
+                await remapInterimToPriorIds(
+                  interim,
+                  priorCastForMerge,
+                  recordRef.bookDir,
+                  recordRef.bookId,
+                ),
+              );
               await castBase!.writeChecked(
                 { characters: mergedInterim },
                 reportCastConflict('interim'),
@@ -5994,7 +6177,15 @@ export async function runMainAnalyzerJob(
             // `overlayInterimCastForLiveView` has no name-fallback and
             // produces no retirements — see the interim-write comment above
             // for the full rationale.
-            const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
+            const mergedStage1 = overlayInterimCastForLiveView(
+              priorCastForMerge,
+              await remapInterimToPriorIds(
+                stage1Cast,
+                priorCastForMerge,
+                recordRef.bookDir,
+                recordRef.bookId,
+              ),
+            );
             await castBase!.writeChecked(
               { characters: mergedStage1 },
               reportCastConflict('stage1'),
@@ -6790,7 +6981,21 @@ export async function runMainAnalyzerJob(
              Interim rolls simply skip on an unresolvable path; the terminal
              persist block is the single halt gate (C4).
              The snapshot is built inside `rollManuscriptEdits`, in the same
-             synchronous step that joins the write queue (#3427). */
+             synchronous step that joins the write queue (#3427), so the id
+             table is computed BEFORE the call, but the ids it maps through (and
+             whether the final roster exists yet) are read inside the snapshot
+             callback, after `withVerifiedBookDir`'s await (#3954 P3-3, P4-3). A
+             roll before Phase 0b keeps the raw fresh ids: its snapshots hold a
+             partial roster. */
+          if (phase1Stage1Ready) {
+            await interimRollIdTable(
+              interimIdTable,
+              previewFoldForLiveView(stage1.characters, bookLanguage),
+              priorCastForMerge,
+              recordRef.bookDir,
+              recordRef.bookId,
+            );
+          }
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
@@ -6805,7 +7010,7 @@ export async function runMainAnalyzerJob(
                 const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return running;
+              return mapRollIds(running, rollIdsNow(interimIdTable, phase1Stage1Ready));
             },
             recordRef.bookId ?? undefined,
           );
@@ -7223,12 +7428,20 @@ export async function runMainAnalyzerJob(
       priorCastForMerge,
       characters0,
     );
+    /* #3954 — the id history the remap consults before retiring a fresh id
+       onto a prior row (a recorded merge is not overwritten), read once and
+       shared with the final merge below. `null` = unreadable: the remap runs
+       main's exact-name tier only, no tolerant join and no history adoption
+       (N1 / P3-1, see `loadIdHistoryForRemap`). */
+    const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
+    if (idHistoryForRemap === null) log(1, DEGRADED_HISTORY_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
       record.bookId ?? undefined,
+      idHistoryForRemap,
     );
     const characters = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -7441,7 +7654,7 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined, historyInRewrittenIds(idHistoryForRemap ?? {}, cumulative), new Set(Object.values(remappedToPrior.rewrites)));
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -7525,7 +7738,16 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(
+              writeDir,
+              retirementBookId,
+              remapRetirements,
+              liveIds,
+              log,
+              castBase,
+              true,
+              remapped.priorCast.map((c) => c.id),
+            );
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -8460,6 +8682,8 @@ export async function runSubsetAnalyzerJob(
       ? await readPriorCastForMerge(record.bookDir)
       : { rows: [], fingerprint: null, source: 'none' as const };
     let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+    // #3954 P3-3 / P4-3 — see the main route's binding of the same name.
+    const interimIdTable: InterimIdTable = { rewrites: null };
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write. */
     const castBase: CastMergeBase | null = record.bookDir
@@ -8770,7 +8994,15 @@ export async function runSubsetAnalyzerJob(
               // write below clobbers it. `overlayInterimCastForLiveView` has
               // no name-fallback and produces no retirements — see the main
               // route's interim-write comment for the full rationale.
-              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
+              const mergedInterim = overlayInterimCastForLiveView(
+                priorCastForMerge,
+                await remapInterimToPriorIds(
+                  interim,
+                  priorCastForMerge,
+                  record.bookDir,
+                  record.bookId,
+                ),
+              );
               await castBase!.writeChecked(
                 { characters: mergedInterim },
                 reportCastConflict('subset-interim'),
@@ -9233,7 +9465,17 @@ export async function runSubsetAnalyzerJob(
       if (record.bookDir) {
         try {
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
-             (no stale-dir recreation); the terminal persist halt-gates. */
+             (no stale-dir recreation); the terminal persist halt-gates.
+             #3954 P3-3 — the id table is computed before the call and read
+             inside the snapshot callback, as in the main route. The subset job
+             rolls only against the cached, final roster. */
+          await interimRollIdTable(
+            interimIdTable,
+            cache.stage1 ? previewFoldForLiveView(cache.stage1.characters, bookLanguage) : undefined,
+            priorCastForMerge,
+            record.bookDir,
+            record.bookId,
+          );
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
@@ -9243,7 +9485,7 @@ export async function runSubsetAnalyzerJob(
                 const arr = cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
-              return running;
+              return mapRollIds(running, rollIdsNow(interimIdTable, true));
             },
             record.bookId ?? undefined,
           );
@@ -9455,12 +9697,16 @@ export async function runSubsetAnalyzerJob(
       priorCastForMerge,
       enriched0,
     );
+    // #3954 — see the main route's `idHistoryForRemap`.
+    const idHistoryForRemap = await loadIdHistoryForRemap(record.bookDir);
+    if (idHistoryForRemap === null) log(1, DEGRADED_HISTORY_LOG_MESSAGE);
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
       folded.sentences,
       priorCastForMerge,
       cumulativeForRemap,
       record.bookId ?? undefined,
+      idHistoryForRemap,
     );
     const enriched = remappedToPrior.characters;
     folded.sentences = remappedToPrior.sentences;
@@ -9630,7 +9876,7 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched, record.bookId ?? undefined, historyInRewrittenIds(idHistoryForRemap ?? {}, cumulative), new Set(Object.values(remappedToPrior.rewrites)));
           /* #2295 — the authoritative cast.json write; mirrors the main job's
              same-named wrap, including WHY it is wrapped at the write rather
              than at `catch (persistErr)` (which also covers the journals) and
@@ -9679,7 +9925,16 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(
+              writeDir,
+              subsetBookId,
+              remapRetirements,
+              liveIds,
+              log,
+              castBase,
+              true,
+              remapped.priorCast.map((c) => c.id),
+            );
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
