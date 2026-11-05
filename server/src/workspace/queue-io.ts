@@ -156,7 +156,9 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
  *  on success; throws on mismatch (concurrent enqueue happened; client
  *  refetches + retries). */
 export function reorder(file: QueueFile, desiredOrder: string[]): QueueFile {
-  const inFlight = file.entries.find((e) => e.status === 'in_progress');
+  /* EVERY in-flight entry stays (the dispatcher runs several workers): dropping all but the first
+     deleted a rendering entry (#4029). */
+  const inFlight = file.entries.filter((e) => e.status === 'in_progress');
   const reorderable = file.entries.filter((e) => e.status !== 'in_progress');
   const reorderableIds = new Set(reorderable.map((e) => e.id));
 
@@ -173,8 +175,7 @@ export function reorder(file: QueueFile, desiredOrder: string[]): QueueFile {
 
   const byId = new Map(reorderable.map((e) => [e.id, e]));
   const reordered = desiredOrder.map((id) => byId.get(id)!);
-  const nextEntries = inFlight ? [inFlight, ...reordered] : reordered;
-  return renumber({ ...file, entries: nextEntries });
+  return renumber({ ...file, entries: [...inFlight, ...reordered] });
 }
 
 /** Cancel (remove) an entry. Refuses to drop an in_progress entry unless

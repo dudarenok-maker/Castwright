@@ -175,6 +175,24 @@ function withEpoch<T extends { set: (k: string, v: string) => T }>(r: T, epoch?:
   return epoch === undefined ? r : r.set('X-Repair-Epoch', epoch);
 }
 
+/* #4029 pass 3 -- reorder is ungated because it drops nothing; that held only for ONE in-flight entry, and the
+   dispatcher runs two. A stale reorder (the modal sends the order with every in-flight id removed) must keep both. */
+describe('POST /api/queue/reorder (#4029)', () => {
+  it('keeps every in_progress entry, so a stale reorder cannot drop a repaired book\'s in-flight entry', async () => {
+    await repaired();
+    await seedQueue([
+      { id: 'e1', bookId: OTHER, status: 'in_progress' },
+      { id: 'e2', bookId: DUP, status: 'in_progress' },
+      { id: 'e3', bookId: OTHER, status: 'queued' },
+    ]);
+    expect((await request(app).delete('/api/queue/e2?force=true')).status).toBe(409);
+    const res = await request(app).post('/api/queue/reorder').send({ order: ['e3'] });
+    expect(res.status).toBe(200);
+    const after = (await request(app).get('/api/queue')).body.entries as Array<{ id: string; status: string }>;
+    expect(after.map((e) => `${e.id}:${e.status}`)).toEqual(['e1:in_progress', 'e2:in_progress', 'e3:queued']);
+  });
+});
+
 /* #4029 pass 2 -- POST /api/queue/clear is the bulk form of DELETE: gated by the bookIds of the entries it would drop. */
 describe('POST /api/queue/clear (#4029)', () => {
   const ids = async () => ((await request(app).get('/api/queue')).body.entries as Array<{ id: string }>).map((e) => e.id).sort();
