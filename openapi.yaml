@@ -2401,7 +2401,7 @@ paths:
       operationId: confirmQueueFallback
       description: |
         Flips an `awaiting_confirm` entry to `queued` with `fallbackConfirmed`
-        set so the worker renders straight through. Idempotent (200) unless the
+        set so the worker renders straight through. No-op (200) unless the
         entry is `awaiting_confirm`.
 
         Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
@@ -2427,8 +2427,8 @@ paths:
       summary: Skip a parked chapter instead of rendering it in Kokoro
       operationId: skipQueueFallback
       description: |
-        Removes an `awaiting_confirm` entry. Idempotent (200) unless the entry
-        is `awaiting_confirm`.
+        Removes an `awaiting_confirm` entry. No-op (200) unless the entry
+        is `awaiting_confirm` (the current snapshot is returned either way).
 
         Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
         needs the current `X-Repair-Epoch`; otherwise 409
@@ -7720,7 +7720,7 @@ components:
 
     QueueListResponse:
       type: object
-      required: [entries, paused, recycling]
+      required: [entries, paused]
       properties:
         entries:
           type: array

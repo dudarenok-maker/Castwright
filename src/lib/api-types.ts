@@ -1662,7 +1662,7 @@ export interface paths {
         /**
          * Confirm a parked chapter's Qwen to Kokoro fallback
          * @description Flips an `awaiting_confirm` entry to `queued` with `fallbackConfirmed`
-         *     set so the worker renders straight through. Idempotent (200) unless the
+         *     set so the worker renders straight through. No-op (200) unless the
          *     entry is `awaiting_confirm`.
          *
          *     Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
@@ -1687,8 +1687,8 @@ export interface paths {
         put?: never;
         /**
          * Skip a parked chapter instead of rendering it in Kokoro
-         * @description Removes an `awaiting_confirm` entry. Idempotent (200) unless the entry
-         *     is `awaiting_confirm`.
+         * @description Removes an `awaiting_confirm` entry. No-op (200) unless the entry
+         *     is `awaiting_confirm` (the current snapshot is returned either way).
          *
          *     Gated like `/start` (#4029): an entry for a repaired bookId (#3713)
          *     needs the current `X-Repair-Epoch`; otherwise 409
@@ -5502,7 +5502,7 @@ export interface components {
             /** @description Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary. */
             paused: boolean;
             /** @description True when the active sidecar supervisor has no live child process (the sidecar is dead or respawning). The dispatcher holds new claims while this is true; in-flight streams run to completion via the server-side readiness gate. False when there is no managed sidecar (autoStart off). */
-            recycling: boolean;
+            recycling?: boolean;
         };
         QueueEnqueueRequest: {
             /** @description One or more entries to enqueue. The frontend pre-expands `scope:'forward'` (regenerate chapter N + all subsequent) into per-chapter entries before posting. */
