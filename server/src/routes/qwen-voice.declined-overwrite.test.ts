@@ -199,6 +199,7 @@ beforeAll(async () => {
   ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
   const { castDeclineVoiceLinkRouter } = await import('../routes/cast-decline-voice-link.js');
   const { castLinkPriorRouter } = await import('../routes/cast-link-prior.js');
+  const { singleDesignRouter } = await import('../routes/single-design.js');
   const { makeBookId } = await import('../workspace/paths.js');
   for (const t of TITLES) ids[t] = makeBookId(AUTHOR, SERIES, t);
   app = express();
@@ -206,6 +207,7 @@ beforeAll(async () => {
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/books', castDeclineVoiceLinkRouter);
   app.use('/api/books', castLinkPriorRouter);
+  app.use('/api/books', singleDesignRouter);
 });
 beforeEach(() => {
   requested = [];
@@ -1071,5 +1073,76 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(dec.body.error).toMatch(/try again/);
     expect(row('Book Two')).toEqual(twoBefore);
     expect(readdirSync(qwenDir())).toEqual([]);
+  });
+});
+describe('pass 11, P11-1: a design in a book whose cast is not confirmed yet', () => {
+  /* The series walk skips unconfirmed books, the designing one included; the mint
+     stamps the row's own book itself, so the design lands and no other book is
+     left on a uuid without a file. */
+  const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+  const sse = (t: Title, extra: Record<string, unknown> = {}) =>
+    request(app)
+      .post(`/api/books/${ids[t]}/cast/wren/design-voice/stream`)
+      .send({ persona: 'a bright voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra })
+      .then((r) =>
+        r.text
+          .split('\n')
+          .filter((l) => l.startsWith('data: '))
+          .map((l) => JSON.parse(l.slice(6)) as Record<string, any>),
+      );
+  const final = (events: Array<Record<string, any>>) => events.filter((e) => e.type !== 'heartbeat' && e.type !== 'phase').at(-1)!;
+  const keyFile = (t: Title) => pt(row(t).voiceUuid ? `qwen-${row(t).voiceUuid}` : 'qwen-v_wren');
+  const seedLinkedUnconfirmed = () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }], false);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+  };
+  const seedFreshUnconfirmed = () => {
+    reset();
+    writeBook('Book Two', [{ ...legacy, voiceId: undefined }], false);
+  };
+
+  it('(a) REST: Two (unconfirmed) linked to legacy One designs; One keeps a real .pt', async () => {
+    seedLinkedUnconfirmed();
+    const d = await design('Book Two');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(n).toBeTruthy();
+    expect(d.body.voiceId).toBe(`qwen-${n}`);
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(NEW_PT);
+    expect(readFileSync(keyFile('Book One')).length).toBeGreaterThan(0);
+  });
+
+  it('(a) SSE first design: designed, and One keeps a real .pt', async () => {
+    seedLinkedUnconfirmed();
+    const end = final(await sse('Book Two'));
+    expect(end.type, JSON.stringify(end)).toBe('designed');
+    const n = row('Book Two').voiceUuid;
+    expect(end.voiceId).toBe(`qwen-${n}`);
+    expect(readFileSync(keyFile('Book One')).length).toBeGreaterThan(0);
+  });
+
+  it('(a) SSE Design & compare: preview_ready, and One keeps its own bytes', async () => {
+    seedLinkedUnconfirmed();
+    const end = final(await sse('Book Two', { preview: true }));
+    expect(end.type, JSON.stringify(end)).toBe('preview_ready');
+    expect(readFileSync(keyFile('Book One'))).toEqual(ORIG);
+  });
+
+  it('(b) REST: a fresh unlinked character in an unconfirmed book designs', async () => {
+    seedFreshUnconfirmed();
+    const d = await design('Book Two');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceId).toBe(`qwen-${row('Book Two').voiceUuid}`);
+  });
+
+  it('(b) SSE first design and Design & compare: a fresh unlinked character in an unconfirmed book designs', async () => {
+    seedFreshUnconfirmed();
+    const first = final(await sse('Book Two'));
+    expect(first.type, JSON.stringify(first)).toBe('designed');
+    seedFreshUnconfirmed();
+    const compare = final(await sse('Book Two', { preview: true }));
+    expect(compare.type, JSON.stringify(compare)).toBe('preview_ready');
   });
 });

@@ -605,13 +605,15 @@ export function requireDesignVoiceUuid(
   return uuid;
 }
 
-/* PR #4007 pass 11 — stamp `uuid` onto the designing row alone, under its book's
-   cast lock (re-read inside it). A row that gained a uuid meanwhile keeps it, and
-   a row that is gone answers undefined. */
+/* PR #4007 pass 11 — stamp `uuid` onto the designing row under its book's cast
+   lock (re-read inside it); with `sameBookLinkId`, also onto the same book's
+   uuid-less rows on that link id. A row that gained a uuid meanwhile keeps it,
+   and a row that is gone answers undefined. */
 async function stampOwnRow(
   bookDir: string,
   characterId: string,
   uuid: string,
+  sameBookLinkId?: string,
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -619,7 +621,13 @@ async function stampOwnRow(
     if (!fresh || idx === -1) return undefined;
     const row = fresh.characters[idx];
     if (row.voiceUuid) return row.voiceUuid;
-    fresh.characters[idx] = { ...row, voiceUuid: uuid };
+    for (let i = 0; i < fresh.characters.length; i++) {
+      const c = fresh.characters[i];
+      if (c.voiceUuid) continue;
+      if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
+        fresh.characters[i] = { ...c, voiceUuid: uuid };
+      }
+    }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return uuid;
   });
@@ -689,9 +697,18 @@ export async function ensureCharacterVoiceUuid(
       throw e;
     }
     /* The row's uuid as the walk left it, not the one minted here: a row a
-       decline stamped meanwhile keeps its own (#4028 (c)). */
-    const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
-    return after ? (after.voiceUuid ?? undefined) : undefined;
+       decline stamped meanwhile keeps its own (#4028 (c)). P11-1 — the walk skips
+       every book whose cast is not confirmed, the designing book included (a
+       design from the Confirm screen), so a row the walk did not stamp is stamped
+       here, with its same-book rows on the link; every other book stamped holds the
+       copy, so nothing is left without its file even when the row is gone. */
+    const stampedFirst = stampedAny;
+    try {
+      return await stampOwnRow(bookDir, characterId, uuid, linkId);
+    } catch (e) {
+      if (!stampedFirst) await removeFiles(copied);
+      throw e;
+    }
   }
 
   /* Book-scoped — the caller's design lock serialises only against OTHER
