@@ -13,12 +13,14 @@ let root: string;
 let app: Express;
 let paths: typeof import('./paths.js');
 let gate: typeof import('./repaired-book-gate.js');
+let qm: typeof import('./queue-migrate.js');
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'audiobook-repaired-gate-retry-'));
   process.env.WORKSPACE_DIR = root;
   paths = await import('./paths.js');
   gate = await import('./repaired-book-gate.js');
+  qm = await import('./queue-migrate.js');
   const { queueRouter } = await import('../routes/queue.js');
   app = express();
   app.use(express.json());
@@ -108,6 +110,22 @@ describe('the retry inside refuseUnreadRepairedBooks (#4029)', () => {
       .post('/api/queue/enqueue')
       .send({ entries: [{ id: 'q2', bookId: 'unrelated', chapterId: 1, scope: 'this' }] });
     expect(res.status).toBe(200);
+  });
+});
+
+/* #4029 pass 3 -- POST /api/queue/clear takes the retry itself (it has no body id to reach refuseUnreadRepairedBooks):
+   the gate file was unreadable at boot and restored since. Without the retry the gate is empty and clear drops it. */
+describe('the retry inside POST /api/queue/clear (#4029 pass 3)', () => {
+  it('a no-epoch force clear that would drop the repaired book is refused once the restored file is read', async () => {
+    await unreadableThenRestored('kept');
+    const before = await qm.readQueueFile(paths.queueJsonPath());
+    await qm.writeQueueFile(paths.queueJsonPath(), {
+      ...before,
+      entries: [{ id: 'e1', bookId: 'kept', chapterId: 1, scope: 'this', status: 'queued', order: 0, addedAt: '2026-01-01T00:00:00.000Z' }],
+    } as never);
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(409);
+    expect(((await request(app).get('/api/queue')).body.entries as Array<{ id: string }>).map((e) => e.id)).toEqual(['e1']);
   });
 });
 

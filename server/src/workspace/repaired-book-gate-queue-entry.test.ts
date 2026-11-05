@@ -210,6 +210,14 @@ describe('POST /api/queue/clear (#4029)', () => {
     expect(await ids()).toEqual(['e1', 'e2', 'e3']);
   });
 
+  it('force: a repaired book whose ONLY entry is in_progress is still refused (a fresh page\'s in-flight claim)', async () => {
+    await repaired();
+    await seedQueue([{ id: 'e2', bookId: DUP, status: 'in_progress' }, { id: 'e3', bookId: OTHER, status: 'queued' }]);
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(409);
+    expect(await ids()).toEqual(['e2', 'e3']);
+  });
+
   it('a stale epoch is refused; the current epoch clears', async () => {
     await repaired();
     await seedQueue([{ id: 'e1', bookId: DUP, status: 'queued' }]);

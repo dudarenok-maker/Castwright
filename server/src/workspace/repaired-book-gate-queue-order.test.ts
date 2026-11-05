@@ -56,6 +56,12 @@ beforeEach(() => {
   rmSync(paths.queueJsonPath(), { force: true });
 });
 
+it('POST /api/queue/clear settles the gate retry before it reads the queue file', async () => {
+  await request(app).post('/api/queue/clear').send({});
+  expect(events.indexOf('retry:end')).toBeGreaterThanOrEqual(0);
+  expect(events.indexOf('read')).toBeGreaterThan(events.indexOf('retry:end'));
+});
+
 describe.each(['start', 'retry', 'confirm-fallback', 'complete', 'skip-fallback'])('POST /api/queue/:entryId/%s (#4029)', (route) => {
   it('settles the gate retry before it reads the queue file', async () => {
     await request(app).post(`/api/queue/e1/${route}`);
