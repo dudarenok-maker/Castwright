@@ -657,9 +657,11 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
     'one speaker held under two same-name roster ids keeps the twin decline and not the link it declined (%s job)',
     async (kind) => {
       /* The stage-1 roster drifts one speaker into `wren-3` and `wren-4`: two
-         fresh rows sharing a name. The unique-fresh-name condition on the seed's
-         decline union skipped both, so the merge handed the speaker the link the
-         declining twin refused and dropped the decline (#4032). */
+         fresh rows sharing a name. On the main job the unique-fresh-name
+         condition on the seed's decline union skipped both, so the merge handed
+         the speaker the link the declining twin refused and dropped the decline
+         (#4032, the regression this pins). The subset job is a regression guard
+         only: it dedups before it seeds, so it already passed on main. */
       const linked: CastRow = {
         id: 'wren-a',
         name: 'Wren',

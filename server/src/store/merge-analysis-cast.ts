@@ -604,7 +604,9 @@ export function seedReuseGuardsFromPriorCast<
      guard row no longer matches the survivor by id. Bridge a SINGLE same-name
      prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
      fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
-     normalised name shared by >1 prior OR >1 fresh row falls back to id-only.
+     normalised name shared by >1 prior OR >1 fresh row falls back to id-only
+     (except `notLinkedTo` when several fresh rows share the name: the decline
+     union below seeds each of them, #4032).
      #3920 (A2): `matchedFrom` is bridged only from dropped prior rows;
      `notLinkedTo` from any prior row; narrator-id rows are in neither (see the
      doc comment above). */
@@ -657,7 +659,8 @@ export function seedReuseGuardsFromPriorCast<
     // a fresh row with no by-id prior (an id-drifted speaker) would get no
     // decline at all, and the merge's name fallback could then hand it a link a
     // twin declined. Union every same-name prior row's declines onto it: a
-    // spurious copy only prevents a link, which fails safe. That holds for each
+    // spurious copy can only block a link, never land a wrong one (a wrong decline
+    // can block a link the user wanted, #3965's existing trade). That holds for each
     // of several same-name fresh rows too (one speaker held under two roster
     // ids, #4032), so the union does not wait for a unique fresh name.
     if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
