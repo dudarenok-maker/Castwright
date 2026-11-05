@@ -761,7 +761,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   }
   /* #3713 -- a series-scoped write names its book in the body/query, and resolves the series (hence every
      cast.json it writes) from it, so the path gate cannot see it. The workspace scope names no book. */
-  if (scope === 'series' && refuseUnreadRepairedBooks([bookId], req, res)) return;
+  if (scope === 'series' && (await refuseUnreadRepairedBooks([bookId], req, res))) return;
   try {
     ensureWorkspace();
     let seriesFilter: { author: string; series: string } | undefined;

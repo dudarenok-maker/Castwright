@@ -165,7 +165,7 @@ castSeriesPatchRouter.post(
 
       /* #3713 -- a matched mate that is a repaired book, on a request without the current epoch: refuse
          the whole fan-out before the source (or any mate) is written. */
-      if (refuseUnreadRepairedBooks(siblingTargets.map((t) => t.bookId), req, res)) return res;
+      if (await refuseUnreadRepairedBooks(siblingTargets.map((t) => t.bookId), req, res)) return res;
 
       try {
         await patchOne(source.bookDir, { bookId, bookTitle: source.state.title, characterId });

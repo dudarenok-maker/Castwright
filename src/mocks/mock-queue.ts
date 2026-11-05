@@ -99,12 +99,12 @@ export function mockQueueRequest(
 
   if (rest === '/reorder') {
     const order = (init?.body ? (JSON.parse(init.body) as { order?: string[] }).order : []) ?? [];
-    const inFlight = state.entries.find((e) => e.status === 'in_progress');
+    const inFlight = state.entries.filter((e) => e.status === 'in_progress');
     const byId = new Map(
       state.entries.filter((e) => e.status !== 'in_progress').map((e) => [e.id, e] as const),
     );
     const reordered = order.map((id) => byId.get(id)).filter((e): e is QueueEntry => e != null);
-    state.entries = renumber(inFlight ? [inFlight, ...reordered] : reordered);
+    state.entries = renumber([...inFlight, ...reordered]);
     return snapshot();
   }
 

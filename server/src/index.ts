@@ -176,7 +176,7 @@ export async function bootRepairDuplicateBookIds(
   repair: () => Promise<readonly unknown[]> = repairDuplicateBookIds,
 ): Promise<void> {
   try {
-    /* Pass 3: the gate on ids repaired by an EARLIER boot (< 7 days ago) is re-read first. */
+    /* Pass 3: the gate on ids repaired by an EARLIER boot (no expiry: it lasts until the book is deleted) is re-read first. */
     await loadRepairedBookGate();
     const repaired = await repair();
     if (repaired.length > 0) {

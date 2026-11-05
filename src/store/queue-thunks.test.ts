@@ -135,6 +135,24 @@ describe('enqueueQueueEntries and the repair epoch (#3713, PR #4004 pass 6)', ()
     expect(store.getState().queue.entries).toHaveLength(0);
     expect(store.getState().notifications.toasts).toHaveLength(0);
   });
+
+  /* DELETE has two 409 meanings: in_progress ("Pause first") and a repaired book (#4029). repairFetch intercepts the
+     second before cancelQueueEntry sees it, so the user is reloaded, not told to pause. */
+  it('cancelQueueEntry: a book_repaired_reload 409 reloads the page and shows no "Pause the queue" toast', async () => {
+    withEpoch(() => new Response(JSON.stringify({ error: 'repaired', code: 'book_repaired_reload' }), { status: 409 }));
+    loadRepairEpoch();
+    const store = makeStore();
+    const settled = await Promise.race([
+      store.dispatch(cancelQueueEntry('e1')).then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    expect(settled).toBe(false); // held: the reload is decided, no caller toasts or retries
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+  });
 });
 
 describe('enqueueQueueEntries', () => {

@@ -4,10 +4,10 @@
    see a repaired one. This answers the 409 `book_repaired_reload` BEFORE the fan-out writes anything (or
    a design job starts) when a gated book is in the series and the request lacks the current repair epoch.
    `series` undefined is a workspace-wide walk: any gated book is in scope. It is deliberately series-level,
-   not per-match: a stale page reloads once and the repeat carries the epoch. */
+   not per-match (a gated book in scope refuses the request whether or not a voice match would write it): a stale page reloads once and the repeat carries the epoch. */
 
 import type { Request, Response } from 'express';
-import { gatedBookIds, refuseUnreadRepairedBooks } from './repaired-book-gate.js';
+import { carriesRepairEpoch, gatedBookIds, refuseUnreadRepairedBooks, retryUnreadableGate } from './repaired-book-gate.js';
 import { findAuthorSeriesForBookId } from './series-cast-scan.js';
 
 export async function refuseGatedSeriesFanOut(
@@ -15,8 +15,10 @@ export async function refuseGatedSeriesFanOut(
   req: Request,
   res: Response,
 ): Promise<boolean> {
+  await retryUnreadableGate();
   const gated = gatedBookIds();
-  if (gated.length === 0) return false;
+  /* A request that carries the current epoch is never refused: skip the walk (one state.json read per gated id). */
+  if (gated.length === 0 || carriesRepairEpoch(req)) return false;
   let inScope: string | undefined;
   for (const id of gated) {
     if (!series) {

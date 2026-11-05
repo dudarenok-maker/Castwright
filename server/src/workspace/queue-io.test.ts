@@ -128,6 +128,19 @@ describe('queue-io.reorder', () => {
     ]);
   });
 
+  it('#4029 keeps EVERY in-flight entry (the dispatcher runs two workers), not just the first', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2'), sampleEntry('e3'), sampleEntry('e4')]);
+    f = markInProgress(markInProgress(f, 'e1'), 'e2'); // e1 + e2 both in_progress
+    f = reorder(f, ['e4', 'e3']);
+    expect(f.entries.map((e) => [e.id, e.status])).toEqual([
+      ['e1', 'in_progress'],
+      ['e2', 'in_progress'],
+      ['e4', 'queued'],
+      ['e3', 'queued'],
+    ]);
+    expect(f.entries.map((e) => e.order)).toEqual([0, 1, 2, 3]);
+  });
+
   it('rejects a desired list that is the wrong length', () => {
     const f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
     expect(() => reorder(f, ['e1'])).toThrowError(/order length/);
