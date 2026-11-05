@@ -1146,3 +1146,72 @@ describe('pass 11, P11-1: a design in a book whose cast is not confirmed yet', (
     expect(compare.type, JSON.stringify(compare)).toBe('preview_ready');
   });
 });
+describe('pass 11, P11-5 (owner decision: discard and retry when the voice changed under the render)', () => {
+  /* Legacy One designed with angry; legacy Two on its own voice (v_two). A
+     link-prior Two -> One that lands mid-render changes Two's key to One's: the
+     design must not land on another book's key, so it is discarded and the user
+     is asked to design again. */
+  const RETRY = "This character's voice changed while it was being designed. Design it again.";
+  const staged = () => readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'));
+  const seedTwoOwnVoice = () => {
+    reset();
+    writeBook('Book One', [
+      { ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } } },
+    ]);
+    writeBook('Book Two', [{ ...legacy, voiceId: 'v_two', overrideTtsVoices: { qwen: { name: 'qwen-v_two' } } }]);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+    writeFileSync(pt('qwen-v_wren__angry'), Buffer.from('ONE-ANGRY'));
+    writeFileSync(pt('qwen-v_two'), Buffer.from('TWO-OWN'));
+  };
+  const oneUntouched = (oneBefore: Record<string, unknown>) => {
+    expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+    expect(readFileSync(pt('qwen-v_wren__angry')).toString()).toBe('ONE-ANGRY');
+    expect(row('Book One')).toEqual(oneBefore);
+    expect(staged()).toEqual([]);
+  };
+
+  for (const shape of [
+    { name: 'variant (angry)', extra: { emotion: 'angry' } },
+    { name: 'base redesign', extra: {} },
+  ]) {
+    it(`${shape.name}: link-prior Two -> One lands mid-render; the design answers the retry error and One is byte-identical`, async () => {
+      seedTwoOwnVoice();
+      const oneBefore = row('Book One');
+      const entered = holdNextDesign();
+      const designing = design('Book Two', shape.extra).then((r) => r);
+      await entered;
+      const link = await linkPrior('Book Two', 'Book One');
+      expect(link.status, JSON.stringify(link.body)).toBe(200);
+      expect(row('Book Two').voiceId).toBe('v_wren');
+      gate.release!();
+      const d = await designing;
+      expect(d.status).toBe(500);
+      expect(d.body.error).toBe(RETRY);
+      oneUntouched(oneBefore);
+    });
+  }
+
+  it('variant: the link lands after the uuid step, just before the landing; the landing itself refuses it', async () => {
+    seedTwoOwnVoice();
+    const oneBefore = row('Book One');
+    beforeLanding.bookId = ids['Book Two'];
+    let link: { status: number } | undefined;
+    beforeLanding.fn = async () => {
+      link = await linkPrior('Book Two', 'Book One');
+    };
+    const d = await design('Book Two', { emotion: 'angry' });
+    expect(link?.status).toBe(200);
+    expect(d.status).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    oneUntouched(oneBefore);
+  });
+
+  it('control: with no link mid-render, the same base redesign lands on Two’s own new key', async () => {
+    seedTwoOwnVoice();
+    const oneBefore = row('Book One');
+    const d = await design('Book Two');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceId).toBe(`qwen-${row('Book Two').voiceUuid}`);
+    oneUntouched(oneBefore);
+  });
+});

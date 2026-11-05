@@ -283,6 +283,24 @@ export class CharacterGoneError extends Error {
   }
 }
 
+/* PR #4007 pass 11, P11-5 (owner decision: discard and retry) — the key each
+   in-flight design may land on, by `bookId|characterId`. It starts as the row's
+   key when the render begins and moves only with the design's own uuid step and
+   with a separation that moves the row (separateVoiceLocked): any other writer
+   that changes the row's key (a link made mid-render, a re-analysis) leaves it
+   behind, and the landing then discards the render instead of following it onto
+   another book's voice. */
+const designWatchers = new Map<string, { key: string; linkId: string }>();
+const watchTag = (bookId: string, characterId: string): string => `${bookId}|${characterId}`;
+
+/* P11-5 — the render was discarded because the row's voice changed under it. */
+export class DesignVoiceChangedError extends RetryableForkError {
+  constructor() {
+    super("This character's voice changed while it was being designed. Design it again.");
+    this.name = 'DesignVoiceChangedError';
+  }
+}
+
 /* #3992 — the base artifact family of one voice key (no emotion variants). */
 function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
   return kind === 'pt'
@@ -533,6 +551,11 @@ export async function separateVoiceLocked(
     }
     if (restored) await removeFiles(copied);
     throw e;
+  }
+  /* P11-5 — a design in flight on a moved row follows it to the new voice. */
+  for (const m of moved) {
+    const w = designWatchers.get(watchTag(m.bookId, m.characterId));
+    if (w?.key === oldKey) w.key = `qwen-${newUuid}`;
   }
   await dropStagedPreviews(oldKey, moved);
   console.log(
@@ -959,11 +982,16 @@ async function evictSidecarVoices(voiceIds: string[]): Promise<void> {
 
 /* #4028 — the final step: under the row's book-op and cast lock (the locks a
    decline holds while it moves rows), read the row's CURRENT key and move the
-   staged render and its audition onto it. The caller holds the design lock. */
+   staged render and its audition onto it. The caller holds the design lock.
+   P11-5 — the current key must be the one the design may land on (`watcher`: the
+   start key, moved only by the design's own uuid step and by a separation that
+   moved the row); any other change throws DesignVoiceChangedError and the caller
+   discards the render. */
 async function landStagedDesign(
   p: DesignQwenVoiceParams,
   staging: string,
   calibrationText: string,
+  watcher: { key: string },
 ): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
@@ -976,6 +1004,7 @@ async function landStagedDesign(
       const row = cast?.characters?.find((c) => c.id === p.characterId);
       if (!row) throw new CharacterGoneError();
       const base = qwenStorageKey(row, p.characterId);
+      if (base !== watcher.key) throw new DesignVoiceChangedError();
       const designed = p.emotion ? `${base}__${p.emotion}` : base;
       const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
       await moveStaged(staging, voiceId);
@@ -1043,9 +1072,10 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
   if (p.emotion && characterHasClonedSlot(p.character)) {
     throw new Error(clonedVariantRefusal(p.character.name ?? p.characterId));
   }
-  /* The base a variant anchors on (read, never written) and the private key the
-     render writes; the key the design lands on is read only in landStagedDesign. */
-  const baseVoiceId = qwenStorageKey(p.character, p.characterId);
+  /* The base a variant anchors on (read, never written; re-read when the span
+     starts) and the private key the render writes; the key the design lands on
+     is read only in landStagedDesign. */
+  let baseVoiceId = qwenStorageKey(p.character, p.characterId);
   const voiceId = `qwen-staging-${nanoid()}`;
   const calibrationText = buildSampleText(toVoiceLike(p.character), buildHintFromCast(p.character));
   const stagedAudition = voiceSampleFileName({
@@ -1055,20 +1085,48 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
     voiceName: voiceId,
   });
 
+  const tag = watchTag(p.bookId, p.characterId);
   return withDesignLock(p.bookDir, async () => {
     try {
+      /* P11-5 — the key this design may land on, read with the anchor under the
+         book's cast lock as the span starts (a separation writes under it). */
+      const watcher = await withCastLock(p.bookDir, async () => {
+        const start = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
+        if (!start) throw new CharacterGoneError();
+        baseVoiceId = qwenStorageKey(start, p.characterId);
+        const w = { key: baseVoiceId, linkId: start.voiceId ?? start.id };
+        designWatchers.set(tag, w);
+        return w;
+      });
       const rendered = await renderStaged();
-      requireDesignVoiceUuid(
+      /* Before the uuid step: a key some other writer changed during the render
+         (a link) would send the mint across the wrong link. */
+      const now = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
+      if (!now) throw new CharacterGoneError();
+      if (qwenStorageKey(now, p.characterId) !== watcher.key) throw new DesignVoiceChangedError();
+      const uuid = requireDesignVoiceUuid(
         p.character,
         !!p.emotion,
         p.emotion
           ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
           : await ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter),
       );
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText)) };
+      /* The uuid step's own move: a separation already moved the watcher, and a
+         first mint gives a row that had no uuid its new key. A row that had one and
+         now answers another, unannounced, was changed by some other writer; a link
+         that landed during the step changed the row's link id. Both are discarded. */
+      if (uuid && `qwen-${uuid}` !== watcher.key) {
+        if (now.voiceUuid) throw new DesignVoiceChangedError();
+        watcher.key = `qwen-${uuid}`;
+      }
+      const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
+      if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
+      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher)) };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       throw e;
+    } finally {
+      designWatchers.delete(tag);
     }
   });
 
