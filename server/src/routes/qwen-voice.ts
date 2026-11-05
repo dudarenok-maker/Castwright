@@ -170,9 +170,11 @@ export async function persistEmotionVariant(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return 'notFound';
-  /* #4028 — the base the variant LANDED on (`<base>__<emotion>`): only a row
-     whose key is still that base takes the slot, so a row a decline moved after
-     the design landed is never handed a variant its new key does not have. */
+  /* #4028 — the base the variant LANDED on (`<base>__<emotion>`): across the
+     series only a row whose key is still that base takes the slot, so a row a
+     decline moved after the design landed is never handed a variant its new key
+     does not have. (The book-scoped branch below serves a standalone book, which
+     has no series link to decline.) */
   const suffix = `__${emotion}`;
   const landedBase = variantVoiceId.endsWith(suffix)
     ? variantVoiceId.slice(0, -suffix.length)
@@ -264,7 +266,6 @@ export async function persistEmotionVariant(
     const freshCharacter = fresh.characters[idx];
     if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
-    if (baseVoiceId !== landedBase) return 'notFound'; // moved since the variant landed
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return 'applied';
