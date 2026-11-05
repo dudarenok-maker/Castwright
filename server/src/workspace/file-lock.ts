@@ -239,7 +239,7 @@ const PERMANENT_FS_CODES = new Set(['ENOSPC', 'EACCES', 'EROFS']);
 
 /** A node fs error: a string `code` plus the `syscall` or `path` node sets on
  *  every one. A deliberate error that merely carries a code is not one. */
-function isFsError(err: unknown): boolean {
+export function isFsError(err: unknown): boolean {
   const e = err as { code?: unknown; syscall?: unknown; path?: unknown } | null;
   return (
     !!e && typeof e.code === 'string' && (typeof e.syscall === 'string' || typeof e.path === 'string')

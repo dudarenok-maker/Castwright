@@ -94,6 +94,9 @@ let audioDir: string;
 let app: Express;
 const ids = {} as Record<Title, string>;
 let requestedVoiceIds: string[];
+/* #4028 — the sidecar renders to a private staging key; the id a design LANDED on
+   is the response's voiceId. */
+let landedVoiceIds: string[];
 const fetchMock = vi.fn();
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
@@ -180,6 +183,7 @@ beforeEach(() => {
   beforeCopy.fn = null;
   failWriteIn.text = null;
   requestedVoiceIds = [];
+  landedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -189,7 +193,7 @@ beforeEach(() => {
     } catch {
       /* not a design call */
     }
-    if (voiceId) {
+    if (voiceId && !String(_url).includes('evict')) {
       requestedVoiceIds.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
@@ -220,7 +224,11 @@ afterAll(() => {
 const design = (title: Title, extra: Record<string, unknown> = {}) =>
   request(app)
     .post(`/api/books/${ids[title]}/cast/wren/design-voice`)
-    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
+    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra })
+    .then((res) => {
+      if (typeof res.body?.voiceId === 'string') landedVoiceIds.push(res.body.voiceId);
+      return res;
+    });
 
 const book1Intact = () =>
   readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT) &&
@@ -232,8 +240,8 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     const res = await design('Book Two');
     expect(res.status).toBe(200);
 
-    expect(requestedVoiceIds).toHaveLength(1);
-    const fresh = /^qwen-(.+)$/.exec(requestedVoiceIds[0])![1];
+    expect(landedVoiceIds).toHaveLength(1);
+    const fresh = /^qwen-(.+)$/.exec(landedVoiceIds[0])![1];
     expect(fresh).not.toBe('u_shared');
 
     expect(book1Intact()).toBe(true);
@@ -264,7 +272,7 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     const res = await design('Book Two');
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/try again\.$/);
-    expect(requestedVoiceIds).toEqual([]);
+    expect(requestedVoiceIds.every((k) => k.startsWith('qwen-staging-'))).toBe(true); // #4028: only a staged render, removed
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
     expect(readdirSync(qwenDir()).filter((f) => f.endsWith('.pt'))).toEqual(['qwen-u_shared.pt']);
@@ -356,7 +364,7 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     seedChain();
     writeRows('Book One', [{ ...baseRow, voiceUuid: 'u_something_else' }]);
     expect((await design('Book Two')).status).toBe(200);
-    expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
+    expect(landedVoiceIds).toEqual(['qwen-u_shared']);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book Three').voiceUuid).toBe('u_shared');
   });
@@ -440,7 +448,7 @@ describe('#3992 — a row that vanishes mid-fork fails the request, it never fal
     vanish();
     const res = await design('Book Two');
     expect(res.status).toBe(404);
-    expect(requestedVoiceIds).toEqual([]);
+    expect(requestedVoiceIds.every((k) => k.startsWith('qwen-staging-'))).toBe(true); // #4028: only a staged render, removed
     expect(book1Intact()).toBe(true);
     expect(strays()).toEqual([]);
   });
@@ -451,7 +459,7 @@ describe('#3992 — a row that vanishes mid-fork fails the request, it never fal
     vanish();
     const res = await design('Book Two', { emotion: 'angry' });
     expect(res.status).toBe(404);
-    expect(requestedVoiceIds).toEqual([]);
+    expect(requestedVoiceIds.every((k) => k.startsWith('qwen-staging-'))).toBe(true); // #4028: only a staged render, removed
     expect(readFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt')).equals(Buffer.from('ONE-ANGRY'))).toBe(true);
     expect(book1Intact()).toBe(true);
   });
@@ -467,7 +475,7 @@ describe('#3992 — a row that vanishes mid-fork fails the request, it never fal
     vanish();
     const res = await design('Book Two');
     expect(res.status).toBe(404);
-    expect(requestedVoiceIds).toEqual([]);
+    expect(requestedVoiceIds.every((k) => k.startsWith('qwen-staging-'))).toBe(true); // #4028: only a staged render, removed
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
   });
 

@@ -29,6 +29,8 @@ vi.mock('./qwen-voice.js', async (orig) => ({
     return {
       voiceId: p.preview ? `qwen-${p.characterId}-preview` : `qwen-${p.characterId}`,
       url: `/api/voice-sample/${p.characterId}.mp3`,
+      /* #4028 — the core reports the row's uuid as the design landed. */
+      voiceUuid: `u-${p.characterId}`,
     };
   }),
 }));
@@ -229,10 +231,12 @@ describe('single-design job — first design', () => {
 });
 
 describe('single-design job — the character vanishes mid-fork (#3992)', () => {
-  it('ends the job with a not_found error and never designs under the pre-fork uuid', async () => {
+  it('ends the job with a not_found error and reports no design', async () => {
+    /* #4028 — the uuid step and the landing run inside the core, which throws
+       CharacterGoneError for a row that vanished. */
     const qwenMod = await import('./qwen-voice.js');
-    const spy = vi.spyOn(qwenMod, 'ensureCharacterVoiceUuid').mockResolvedValueOnce(undefined);
-    capturedDesignArgs = null;
+    const spy = vi.mocked(qwenMod.designQwenVoiceForCharacter);
+    spy.mockRejectedValueOnce(new qwenMod.CharacterGoneError());
     try {
       const res = await request(app)
         .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
@@ -241,9 +245,8 @@ describe('single-design job — the character vanishes mid-fork (#3992)', () => 
       const events = collectSse(res);
       expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'not_found' });
       expect(events.some((e) => e.type === 'designed' || e.type === 'preview_ready')).toBe(false);
-      expect(capturedDesignArgs).toBeNull();
     } finally {
-      spy.mockRestore();
+      spy.mockClear();
     }
     expect(designLock.isDesignBusy(bookDir)).toBe(false);
   });
@@ -277,8 +280,7 @@ describe('single-design job — preview (re-design)', () => {
     expect(res.status).toBe(200);
     const events = collectSse(res);
     const ready = events.find((e) => e.type === 'preview_ready');
-    expect(typeof ready?.voiceUuid).toBe('string');
-    expect(ready?.voiceUuid).not.toBe('');
+    expect(ready?.voiceUuid).toBe('u-c1'); // the uuid the core landed on (#4028)
   });
 });
 

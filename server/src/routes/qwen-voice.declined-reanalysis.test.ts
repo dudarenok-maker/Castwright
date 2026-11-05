@@ -57,6 +57,9 @@ let bookOneId: string;
 let bookTwoId: string;
 let bookThreeId: string;
 let requestedVoiceIds: string[];
+/* #4028 — the sidecar renders to a private staging key; the id a design LANDED on
+   is the response's voiceId. */
+let landedVoiceIds: string[];
 const fetchMock = vi.fn();
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
@@ -140,6 +143,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requestedVoiceIds = [];
+  landedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -149,7 +153,7 @@ beforeEach(() => {
     } catch {
       /* not a design call */
     }
-    if (voiceId) {
+    if (voiceId && !String(_url).includes('evict')) {
       requestedVoiceIds.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
@@ -208,7 +212,11 @@ async function reanalyse(
 const design = (id: string, extra: Record<string, unknown> = {}) =>
   request(app)
     .post(`/api/books/${id}/cast/wren/design-voice`)
-    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
+    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra })
+    .then((res) => {
+      if (typeof res.body?.voiceId === 'string') landedVoiceIds.push(res.body.voiceId);
+      return res;
+    });
 
 const book1Intact = () => readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT);
 
@@ -224,8 +232,8 @@ describe('#3992 — Don’t reuse survives re-analysis (the four rows of the pas
     writeRows('Book Two', [merged]);
     const res = await design(bookTwoId);
     expect(res.status).toBe(200);
-    expect(requestedVoiceIds).toHaveLength(1);
-    expect(requestedVoiceIds[0]).not.toBe('qwen-u_shared');
+    expect(landedVoiceIds).toHaveLength(1);
+    expect(landedVoiceIds[0]).not.toBe('qwen-u_shared');
     expect(book1Intact()).toBe(true);
     expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
   });

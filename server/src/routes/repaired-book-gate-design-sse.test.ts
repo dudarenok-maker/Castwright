@@ -12,15 +12,21 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-vi.mock('./qwen-voice.js', async (orig) => ({
-  ...(await orig<typeof import('./qwen-voice.js')>()),
-  /* The real core names the voice qwen-<voiceUuid> (qwenStorageKey), and the Save that follows only writes a
-     row on that uuid (#3992: a designed name for another uuid is not meant for it). */
-  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string; character: { voiceUuid?: string } }) => ({
-    voiceId: `qwen-${p.character.voiceUuid ?? p.characterId}`,
-    url: `/api/voice-sample/${p.characterId}.mp3`,
-  })),
-}));
+vi.mock('./qwen-voice.js', async (orig) => {
+  const actual = await orig<typeof import('./qwen-voice.js')>();
+  return {
+    ...actual,
+    /* The real core runs the series uuid step (#4028: inside its one design-lock span) and names the voice
+       qwen-<voiceUuid> (qwenStorageKey); the Save that follows only writes a row on that uuid (#3992: a designed
+       name for another uuid is not meant for it). Only the sidecar render is skipped. */
+    designQwenVoiceForCharacter: vi.fn(
+      async (p: { bookDir: string; characterId: string; seriesFilter?: { author: string; series: string } }) => {
+        const voiceUuid = await actual.ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter);
+        return { voiceId: `qwen-${voiceUuid ?? p.characterId}`, url: `/api/voice-sample/${p.characterId}.mp3`, voiceUuid };
+      },
+    ),
+  };
+});
 vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: vi.fn(async () => 'a persona'),
   personaSharesGpu: vi.fn(() => false),

@@ -576,11 +576,13 @@ describe('#3711 task 5 -- qwen-voice promote / discard / emotion-variant routes'
   it('POST promote-voice', async () => {
     const book = seedBook('Single Promote', { cast: withVariants() });
     mkdirSync(paths.qwenVoicesDir(), { recursive: true });
-    writeFileSync(paths.qwenVoicePtPath('qwen-alice-preview'), 'PT');
+    const { previewVoiceIdFor } = await import('./qwen-voice.js');
+    const previewVoiceId = previewVoiceIdFor('qwen-alice', book.bookId, 'alice'); // #4028: the row's own preview
+    writeFileSync(paths.qwenVoicePtPath(previewVoiceId), 'PT');
     const r = await renameBehind(
       book,
       castGate(book.bookDir),
-      () => request(app).post(api(book, 'cast/alice/promote-voice')).send({ previewVoiceId: 'qwen-alice-preview', sampleVoiceId: 's1', modelKey: 'qwen3-tts-0.6b' }),
+      () => request(app).post(api(book, 'cast/alice/promote-voice')).send({ previewVoiceId, sampleVoiceId: 's1', modelKey: 'qwen3-tts-0.6b' }),
       'Single Promote Renamed',
     );
     expectLandedInNewFolder(r, book);
@@ -589,7 +591,9 @@ describe('#3711 task 5 -- qwen-voice promote / discard / emotion-variant routes'
 
   it('POST discard-voice', async () => {
     const book = seedBook('Single Discard', { cast: withVariants() });
-    const r = await renameBehind(book, readJsonGate('cast.json'), () => request(app).post(api(book, 'cast/alice/discard-voice')).send({ previewVoiceId: 'qwen-alice-preview' }), 'Single Discard Renamed');
+    const { previewVoiceIdFor } = await import('./qwen-voice.js');
+    const previewVoiceId = previewVoiceIdFor('qwen-alice', book.bookId, 'alice'); // #4028: the row's own preview
+    const r = await renameBehind(book, readJsonGate('cast.json'), () => request(app).post(api(book, 'cast/alice/discard-voice')).send({ previewVoiceId }), 'Single Discard Renamed');
     expectLandedInNewFolder(r, book);
     expect(existsSync(paths.castJsonPath(r.newDir))).toBe(true);
   });

@@ -49,6 +49,8 @@ let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
+/* #4028 — the sidecar calls a design makes, without the bounded evicts that follow its landing. */
+const sidecarDesignCalls = () => fetchMock.mock.calls.filter((c) => !String(c[0]).includes('evict'));
 const { personaMock, personaSharesGpuMock } = vi.hoisted(() => ({
   personaMock: vi.fn(),
   /* Default false (a Gemini persona) so the pre-pass is a no-op for all the existing tests
@@ -298,7 +300,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
 
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
     expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sidecarDesignCalls()).toHaveLength(2);
   });
 
   it('bug #1411 code-review follow-up: caches a voiceId-less character\'s sample under the book-scoped scope', async () => {
@@ -369,7 +371,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
     // Only the untouched character was designed — the sidecar call count proves
     // the sweep never even attempted zara.
     expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sidecarDesignCalls()).toHaveLength(1);
 
     const idle = events.find((e) => e.type === 'idle');
     expect(idle).toMatchObject({ done: 1, total: 2, skipped: 1 });
@@ -938,9 +940,10 @@ describe('scope + variantTasks (fs-25)', () => {
     expect(marlow?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
   });
 
-  /* #3992 — the bulk variant path forks a declined, shared uuid before it
-     anchors, exactly as the single route does: the design must be asked for the
-     fork's uuid and the earlier book's row must keep the shared one. */
+  /* #3992 — the bulk variant path forks a declined, shared uuid, exactly as the
+     single route does: the variant lands on the fork's key and the earlier book's
+     row keeps the shared one. #4028: the real core runs (the separation is inside
+     it), against the stubbed sidecar. */
   it('#3992: scope:variants on a declined row designs under a forked uuid, not the earlier book’s', async () => {
     const prequelDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'The Prequel');
     try {
@@ -970,11 +973,6 @@ describe('scope + variantTasks (fs-25)', () => {
         join(prequelDir, '.audiobook', 'cast.json'),
         JSON.stringify({ characters: [{ ...shared }] }),
       );
-      const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
-        voiceId: 'qwen-x__angry',
-        url: '/u',
-      });
-
       const res = await request(app)
         .post(`/api/books/${bookId}/cast/design`)
         .send({
@@ -985,10 +983,11 @@ describe('scope + variantTasks (fs-25)', () => {
         });
       expect(res.status).toBe(200);
 
-      const designedUuid = spy.mock.calls[0][0].character.voiceUuid;
+      const designedUuid = charById('marlow')?.voiceUuid;
       expect(designedUuid).toBeTruthy();
       expect(designedUuid).not.toBe('u_marlow_shared');
-      expect(charById('marlow')?.voiceUuid).toBe(designedUuid);
+      const variant = parseSse(res.text).find((e) => e.type === 'variant_designed');
+      expect(variant?.voiceId).toBe(`qwen-${designedUuid}__angry`);
       const prequel = JSON.parse(readFileSync(join(prequelDir, '.audiobook', 'cast.json'), 'utf8'));
       expect(prequel.characters[0].voiceUuid).toBe('u_marlow_shared');
     } finally {
@@ -2118,17 +2117,19 @@ describe('cast-design — per-character reason on a lock timeout (#2292)', () =>
 describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not job-halting (PR #3161 N1)', () => {
   it('records a curated character_failed for the first character and still designs the second', async () => {
     const qwenVoiceMod = await import('./qwen-voice.js');
-    const original = qwenVoiceMod.ensureCharacterVoiceUuid;
+    const original = qwenVoiceMod.designQwenVoiceForCharacter;
     const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
       '../workspace/file-lock.js'
     );
+    /* #4028 — the uuid step runs inside the design core, so its lock timeout
+       surfaces from there. */
     const spy = vi
-      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
-      .mockImplementation(async (bookDir: string, characterId: string, seriesFilter) => {
-        if (characterId === 'aria') {
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockImplementation(async (params) => {
+        if (params.characterId === 'aria') {
           throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
         }
-        return original(bookDir, characterId, seriesFilter);
+        return original(params);
       });
 
     let res;
@@ -2167,29 +2168,26 @@ describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not
 });
 
 describe('cast-design — a character that vanishes mid-fork fails alone and is never designed (#3992)', () => {
-  it('records character_failed for it, does not call the design core, and still designs the next character', async () => {
-    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
-      voiceId: 'qwen-x',
-      url: '/u',
-    });
-    const real = qwenVoiceMod.ensureCharacterVoiceUuid;
-    /* the race's observable shape: the ensure step answers undefined for a row it
-       can no longer find */
-    const resolveSpy = vi
-      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
-      .mockImplementation(async (dir, id, series) => (id === 'aria' ? undefined : real(dir, id, series)));
+  it('records character_failed for it and still designs the next character', async () => {
+    /* #4028 — the race's observable shape: the core (uuid step and landing)
+       throws CharacterGoneError for a row it can no longer find. */
+    const spy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockImplementation(async (params) => {
+        if (params.characterId === 'aria') throw new qwenVoiceMod.CharacterGoneError();
+        return { voiceId: 'qwen-x', url: '/u' };
+      });
     let res;
     try {
       res = await request(app)
         .post(`/api/books/${bookId}/cast/design`)
         .send({ characterIds: ['aria', 'hart'], modelKey: QWEN_KEY });
     } finally {
-      resolveSpy.mockRestore();
+      spy.mockRestore();
     }
     const events = parseSse(res.text);
     const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
     expect(failed?.errorReason).toBe('Character no longer exists.');
-    expect(spy.mock.calls.every((c) => c[0].characterId !== 'aria')).toBe(true);
     expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'hart')).toBe(true);
   });
 });

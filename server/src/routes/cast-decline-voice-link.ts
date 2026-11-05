@@ -29,11 +29,13 @@
    gates in the analysis merge or the duplicate detector. It is honoured by the
    series linker and the merge (never re-linked to a declined book or voice).
 
-   Locks, in CLAUDE.md's global order: the book's design lock (so no design of
-   this book reads its uuid mid-step), then `withBookOps` over the row's book and
-   every follower's book, then `withCastLocks` over all of them. The book is
-   peeked lock-free only to key the design lock; the locked handle must resolve to
-   the same folder. The whole-roster cast PUT takes the marker from disk
+   Locks, in CLAUDE.md's global order: `withBookOps` over the row's book and
+   every follower's book, then `withCastLocks` over all of them. No design lock
+   (#4028): a design renders to a private staging key and reads the row's key only
+   at its end, under the same book-op and cast lock, so a decline never waits on a
+   running design and a design in flight lands on the row's new voice. The book is
+   peeked lock-free only to plan; the locked handle must resolve to the same
+   folder. The whole-roster cast PUT takes the marker from disk
    (preserveDeclinedVoiceFromOnCastWrite) and keeps disk's voice slot when the
    uuids differ, so a client autosave cannot undo the step. `fromBookId` is NOT
    resolved against the library: a deleted earlier book's id is still a real
@@ -49,7 +51,6 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLocks } from '../workspace/cast-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { RetryableForkError } from '../workspace/voice-uuid-fork.js';
-import { withDesignLock } from '../tts/design-lock.js';
 import { CharacterGoneError, separationPlan, separateVoiceLocked } from './qwen-voice.js';
 
 export const castDeclineVoiceLinkRouter = Router();
@@ -78,7 +79,7 @@ castDeclineVoiceLinkRouter.post(
       const peeked = await peekBook(bookId);
       if (!peeked) return res.status(404).json({ error: 'Book not found.' });
       const bookDir = peeked.bookDir;
-      answer = await withDesignLock(bookDir, async (): Promise<Answer> => {
+      answer = await (async (): Promise<Answer> => {
         const cast = await readJson<CastFile>(castJsonPath(bookDir));
         if (!cast?.characters?.length) {
           return { status: 409, body: { error: 'Book has no cast on disk yet.' } };
@@ -119,7 +120,7 @@ castDeclineVoiceLinkRouter.post(
             voiceUuid: out.voiceUuid ?? null,
           },
         };
-      });
+      })();
     } catch (e) {
       if (e instanceof CharacterGoneError) {
         return res.status(404).json({ error: `Character "${characterId}" not found.` });

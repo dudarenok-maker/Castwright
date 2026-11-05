@@ -88,6 +88,10 @@ let app: Express;
 let bookOneId: string;
 let bookTwoId: string;
 let requestedVoiceIds: string[];
+/* #4028 — the sidecar renders to a private staging key; the id a design LANDED on
+   is the response's voiceId. */
+let landedVoiceIds: string[];
+let previewVoiceIdFor: typeof import('./qwen-voice.js').previewVoiceIdFor;
 const fetchMock = vi.fn();
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
@@ -159,6 +163,7 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock);
 
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
+  ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
   const { voicesRouter } = await import('./voices.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
@@ -174,6 +179,7 @@ beforeEach(() => {
   beforeCopy.fn = null;
   forcedNanoid.value = null;
   requestedVoiceIds = [];
+  landedVoiceIds = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -183,7 +189,7 @@ beforeEach(() => {
     } catch {
       /* not a design call */
     }
-    if (voiceId) {
+    if (voiceId && !String(_url).includes('evict')) {
       requestedVoiceIds.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
@@ -215,7 +221,11 @@ afterAll(() => {
 const design = (id: () => string, extra: Record<string, unknown> = {}) =>
   request(app)
     .post(`/api/books/${id()}/cast/wren/design-voice`)
-    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
+    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra })
+    .then((res) => {
+      if (typeof res.body?.voiceId === 'string') landedVoiceIds.push(res.body.voiceId);
+      return res;
+    });
 
 describe('#3992 — declined series link forks the shared voiceUuid on a base design', () => {
   it('Declined: Book Two gets its own uuid; Book One’s files stay byte-identical', async () => {
@@ -223,8 +233,8 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     const res = await design(() => bookTwoId);
     expect(res.status).toBe(200);
 
-    expect(requestedVoiceIds).toHaveLength(1);
-    const m = /^qwen-(.+)$/.exec(requestedVoiceIds[0]);
+    expect(landedVoiceIds).toHaveLength(1);
+    const m = /^qwen-(.+)$/.exec(landedVoiceIds[0]);
     expect(m).not.toBeNull();
     const fresh = m![1];
     expect(fresh).not.toBe('u_shared');
@@ -243,9 +253,9 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     const res = await design(() => bookTwoId, { preview: true });
     expect(res.status).toBe(200);
 
-    const previewId = requestedVoiceIds[0];
-    expect(previewId).toMatch(/^qwen-.+-preview$/);
-    const fresh = previewId.replace(/^qwen-/, '').replace(/-preview$/, '');
+    const previewId = landedVoiceIds[0];
+    expect(previewId).toMatch(/^qwen-.+-preview-[0-9a-f]{10}$/);
+    const fresh = previewId.replace(/^qwen-/, '').replace(/-preview-[0-9a-f]{10}$/, '');
     expect(fresh).not.toBe('u_shared');
     expect(readRow('Book Two').voiceUuid).toBe(fresh);
 
@@ -268,7 +278,7 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
 
     const res = await design(() => bookTwoId);
     expect(res.status).toBe(200);
-    expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
+    expect(landedVoiceIds).toEqual(['qwen-u_shared']);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
     const { readdirSync } = await import('node:fs');
@@ -282,7 +292,7 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
 
     const res = await design(() => bookOneId);
     expect(res.status).toBe(200);
-    expect(requestedVoiceIds).toEqual(['qwen-u_shared']);
+    expect(landedVoiceIds).toEqual(['qwen-u_shared']);
     expect(readRow('Book One').voiceUuid).toBe('u_shared');
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
@@ -293,7 +303,7 @@ describe('#3992 — declined series link forks the shared voiceUuid on a base de
     expect(res.status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid as string;
     expect(fresh).not.toBe('u_shared');
-    expect(requestedVoiceIds).toEqual([`qwen-${fresh}`]);
+    expect(landedVoiceIds).toEqual([`qwen-${fresh}`]);
     expect(readFileSync(join(qwenDir(), 'qwen-u_shared.pt')).equals(ORIG_PT)).toBe(true);
   });
 });
@@ -314,8 +324,8 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     const res = await design(() => bookTwoId, { emotion: 'angry' });
     expect(res.status).toBe(200);
 
-    expect(requestedVoiceIds).toHaveLength(1);
-    const m = /^qwen-(.+)__angry$/.exec(requestedVoiceIds[0]);
+    expect(landedVoiceIds).toHaveLength(1);
+    const m = /^qwen-(.+)__angry$/.exec(landedVoiceIds[0]);
     expect(m).not.toBeNull();
     const fresh = m![1];
     expect(fresh).not.toBe('u_shared');
@@ -334,7 +344,7 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
 
     const res = await design(() => bookTwoId, { emotion: 'angry' });
     expect(res.status).toBe(200);
-    expect(requestedVoiceIds).toEqual(['qwen-u_shared__angry']);
+    expect(landedVoiceIds).toEqual(['qwen-u_shared__angry']);
     expect(slot('Book One', 'angry')).toBe('qwen-u_shared__angry');
     expect(slot('Book Two', 'angry')).toBe('qwen-u_shared__angry');
   });
@@ -347,7 +357,7 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
 
     await design(() => bookTwoId, { emotion: 'angry' });
     expect(readRow('Book Two').voiceUuid).toBeUndefined();
-    expect(requestedVoiceIds).toEqual(['qwen-v_wren__angry']);
+    expect(landedVoiceIds).toEqual(['qwen-v_wren__angry']);
   });
 
   it('No uuid but declined: separated first (its legacy base family copied), so the variant never lands on the shared legacy key', async () => {
@@ -361,7 +371,7 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect((await design(() => bookTwoId, { emotion: 'angry' })).status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid as string;
     expect(fresh).toBeTruthy();
-    expect(requestedVoiceIds).toEqual([`qwen-${fresh}__angry`]);
+    expect(landedVoiceIds).toEqual([`qwen-${fresh}__angry`]);
     expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).toString()).toBe('LEGACY-BASE'); // the base is not orphaned
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt')).equals(VAR_BYTES)).toBe(true);
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).toString()).toBe('LEGACY-BASE');
@@ -406,7 +416,7 @@ describe('#3992 — a fork leaves no variant the render path cannot resolve', ()
     expect(res.status).toBe(200);
     const discard = await request(app)
       .post(`/api/books/${bookTwoId}/cast/wren/discard-voice`)
-      .send({ previewVoiceId: requestedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: landedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(discard.status).toBe(200);
     expect(await resolves('Book Two', 'angry')).toBe(true);
   });
@@ -535,7 +545,7 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).equals(ORIG_PT)).toBe(true);
     const fresh = readRow('Book Two').voiceUuid as string;
     expect(fresh).toBeTruthy();
-    expect(requestedVoiceIds).toEqual([`qwen-${fresh}`]);
+    expect(landedVoiceIds).toEqual([`qwen-${fresh}`]);
   });
 
   it('preview then Cancel: Book Two sits on its own copy of the earlier bytes', async () => {
@@ -544,7 +554,7 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(res.status).toBe(200);
     const discard = await request(app)
       .post(`/api/books/${bookTwoId}/cast/wren/discard-voice`)
-      .send({ previewVoiceId: requestedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: landedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(discard.status).toBe(200);
     const key = await keyOf('Book Two');
     expect(key).not.toBe('qwen-v_wren');
@@ -620,7 +630,7 @@ describe('#3992 — an unreadable cast.json elsewhere does not fail a design or 
     const res = await design(() => bookOneId);
     expect(res.status).toBe(200);
     expect(readRow('Book One').voiceUuid).toBe('u_solo');
-    expect(requestedVoiceIds).toEqual(['qwen-u_solo']);
+    expect(landedVoiceIds).toEqual(['qwen-u_solo']);
   });
 
   it('a declined fork still forks when an unrelated book is unreadable', async () => {
@@ -638,11 +648,12 @@ describe('#3992 — an unreadable cast.json elsewhere does not fail a design or 
       overrideTtsVoices: { qwen: { name: 'qwen-u_solo', variants: { angry: { name: 'qwen-u_solo__angry' } } } },
     });
     writeFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt'), bytes);
-    writeFileSync(join(qwenDir(), 'qwen-u_solo-preview.pt'), NEW_PT);
+    const previewId = previewVoiceIdFor('qwen-u_solo', bookOneId, 'wren');
+    writeFileSync(join(qwenDir(), `${previewId}.pt`), NEW_PT);
     corrupt();
     const res = await request(app)
       .post(`/api/books/${bookOneId}/cast/wren/promote-voice`)
-      .send({ previewVoiceId: 'qwen-u_solo-preview', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: previewId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(res.status).toBe(200);
     expect((readRow('Book One').overrideTtsVoices as { qwen?: { variants?: unknown } }).qwen?.variants).toBeUndefined();
     expect(readFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt')).equals(bytes)).toBe(true);
@@ -674,7 +685,7 @@ describe('#3992 — a failed copy aborts the fork', () => {
     expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
     expect(JSON.stringify(res.body)).not.toMatch(/EBUSY|copyfile|qwen-u_shared/);
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
-    expect(requestedVoiceIds).toEqual([]);
+    expect(requestedVoiceIds).toHaveLength(1); // #4028: rendered to a staging key first, removed on the failure
     expect(qwenFiles()).toEqual(before);
   });
 
@@ -795,7 +806,7 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
   }
 
   const promote = async (uuid: string) => {
-    const previewId = `qwen-${uuid}-preview`;
+    const previewId = previewVoiceIdFor(`qwen-${uuid}`, bookTwoId, 'wren');
     writeFileSync(join(qwenDir(), `${previewId}.pt`), NEW_PT);
     return request(app)
       .post(`/api/books/${bookTwoId}/cast/wren/promote-voice`)

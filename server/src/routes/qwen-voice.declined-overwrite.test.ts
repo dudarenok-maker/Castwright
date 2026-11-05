@@ -62,9 +62,16 @@ type Title = (typeof TITLES)[number];
 let workspaceRoot: string;
 let audioDir: string;
 let app: Express;
+let previewVoiceIdFor: typeof import('./qwen-voice.js').previewVoiceIdFor;
 const ids = {} as Record<Title, string>;
 let requested: string[];
 const fetchMock = vi.fn();
+/* Holds the next design/mint sidecar call until `release` (pass 10, #4028). */
+const gate = { hold: false, entered: null as null | (() => void), release: null as null | (() => void) };
+const holdNextDesign = (): Promise<void> => {
+  gate.hold = true;
+  return new Promise<void>((r) => (gate.entered = r));
+};
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 const bookDir = (t: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, t);
@@ -152,15 +159,21 @@ function othersIntact(before: Map<string, Buffer>, t: Title) {
     if (name === `${own}.pt` || name.startsWith(`${own}__`) || name.startsWith(`${own}-`) || name === `${own}.json`) continue;
     expect(readFileSync(join(qwenDir(), name)).equals(bytes), `${name} was rewritten`).toBe(true);
   }
-  expect(requested.every((k) => k.startsWith(own)), `the sidecar was asked for ${requested.join(', ')}`).toBe(true);
+  /* #4028 — every render goes to a private staging key, and nothing staged is left. */
+  expect(requested.every((k) => k.startsWith('qwen-staging-')), `the sidecar was asked for ${requested.join(', ')}`).toBe(true);
+  expect(readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'))).toEqual([]);
 }
-/* Design `t` (base or variant) and check nothing another book holds changed. */
+/* Design `t` (base or variant) and check nothing another book holds changed, and
+   that the design landed on `t`'s own key. */
 async function designSafely(t: Title, extra: Record<string, unknown> = {}) {
   const before = snapshot();
   requested = [];
   const res = await design(t, extra);
   expect(res.status, JSON.stringify(res.body)).toBe(200);
   othersIntact(before, t);
+  const own = `qwen-${row(t).voiceUuid}${extra.emotion ? `__${extra.emotion}` : ''}`;
+  expect(res.body.voiceId).toBe(own);
+  expect(readFileSync(pt(own))).toEqual(NEW_PT);
 }
 
 beforeAll(async () => {
@@ -171,6 +184,7 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
   const { qwenVoiceRouter } = await import('../routes/qwen-voice.js');
+  ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
   const { castDeclineVoiceLinkRouter } = await import('../routes/cast-decline-voice-link.js');
   const { castLinkPriorRouter } = await import('../routes/cast-link-prior.js');
   const { makeBookId } = await import('../workspace/paths.js');
@@ -184,6 +198,10 @@ beforeAll(async () => {
 beforeEach(() => {
   requested = [];
   beforeLocks.fn = null;
+  gate.release?.(); // a test that failed while holding a render must not wedge the next
+  gate.hold = false;
+  gate.entered = null;
+  gate.release = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -194,6 +212,13 @@ beforeEach(() => {
       /* */
     }
     if (voiceId && String(_url).includes('/qwen/') && !String(_url).includes('evict')) {
+      if (gate.hold) {
+        gate.hold = false;
+        await new Promise<void>((r) => {
+          gate.release = r;
+          gate.entered?.();
+        });
+      }
       requested.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
@@ -236,7 +261,7 @@ describe('the ordinary cases: a design decides nothing', () => {
   it('a series voice nobody declined is redesigned together, from any book, as before', async () => {
     seedChain();
     expect((await design('Book Three')).status).toBe(200);
-    expect(requested).toEqual(['qwen-u_shared']);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(NEW_PT); // the shared voice, for all three
     expect(row('Book One').voiceUuid).toBe('u_shared');
   });
 
@@ -503,7 +528,7 @@ describe('pass 7', () => {
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
     writeFileSync(pt('qwen-u_shared'), ORIG);
     expect((await design('Book Two', { preview: true })).status).toBe(200);
-    expect(requested).toEqual(['qwen-u_shared-preview']);
+    expect(requested).toHaveLength(1);
     expect((await decline('Book Two', 'Book One')).status).toBe(200);
     const res = await request(app)
       .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
@@ -512,7 +537,11 @@ describe('pass 7', () => {
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
     const own = await request(app)
       .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
-      .send({ previewVoiceId: `qwen-${row('Book Two').voiceUuid}-preview`, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+      .send({
+        previewVoiceId: previewVoiceIdFor(`qwen-${row('Book Two').voiceUuid}`, ids['Book Two'], 'wren'),
+        sampleVoiceId: 'v_wren',
+        modelKey: QWEN_KEY,
+      });
     expect(own.status).toBe(409); // nothing staged under its own key
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
   });
@@ -784,5 +813,180 @@ describe('pass 10, P10-2: a legacy book and a separated one never share a varian
     expect(promote.status, JSON.stringify(promote.body)).toBe(200);
     expect(readFileSync(pt('qwen-v_wren__angry'))).toEqual(ONE_ANGRY);
     expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+  });
+});
+
+describe('pass 10, #4028 (owner decision: stage, then re-check under the locks)', () => {
+  /* A design renders to a private staging key and moves it onto the row's
+     CURRENT key only at the end, under the book-op and cast lock a decline also
+     holds. So a decline that lands mid-render sends the design to the row's new
+     voice, and the declined book's file is never written. */
+  const staged = () => readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'));
+
+  it('(a) cross-book: Three is mid-render when Two declines One; Three moves, and its design lands on its new voice', async () => {
+    seedChain();
+    const entered = holdNextDesign();
+    const designing = design('Book Three').then((r) => r);
+    await entered;
+    const dec = await decline('Book Two', 'Book One');
+    expect(dec.status).toBe(200);
+    const x = row('Book Three').voiceUuid;
+    expect(x).not.toBe('u_shared');
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceUuid).toBe(x);
+    expect(d.body.voiceId).toBe(`qwen-${x}`);
+    expect(readFileSync(pt(`qwen-${x}`))).toEqual(NEW_PT);
+    oneIntact();
+    expect(staged()).toEqual([]);
+  });
+
+  it("(b) same book: Two's own design is mid-render when Two declines; the decline does not wait, and the design lands on Two's new voice", async () => {
+    seedChain();
+    const entered = holdNextDesign();
+    const designing = design('Book Two').then((r) => r);
+    await entered;
+    const dec = await decline('Book Two', 'Book One'); // answers while the render is held
+    expect(dec.status).toBe(200);
+    const x = row('Book Two').voiceUuid;
+    expect(x).not.toBe('u_shared');
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceUuid).toBe(x);
+    expect(readFileSync(pt(`qwen-${x}`))).toEqual(NEW_PT);
+    oneIntact();
+    expect(staged()).toEqual([]);
+  });
+
+  it("(b) same book, the review's shape: Wren's design queued behind Tamsin's, Don't reuse on Wren pressed meanwhile", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    const tamsin = { ...baseRow, id: 'tamsin', name: 'Tamsin', voiceId: 'v_tamsin', voiceUuid: 'u_tamsin', ...slot('u_tamsin') };
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }, tamsin]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    const entered = holdNextDesign();
+    const tamsinDone = request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/tamsin/design-voice`)
+      .send({ sampleVoiceId: 'v_tamsin', modelKey: QWEN_KEY })
+      .then((r) => r);
+    await entered;
+    const wren = design('Book Two').then((r) => r);
+    const dec = await decline('Book Two', 'Book One');
+    expect(dec.status).toBe(200);
+    const x = row('Book Two').voiceUuid;
+    gate.release!();
+    const [a, b] = await Promise.all([tamsinDone, wren]);
+    expect(a.status).toBe(200);
+    expect(b.status, JSON.stringify(b.body)).toBe(200);
+    expect(b.body.voiceUuid).toBe(x);
+    expect(readFileSync(pt(`qwen-${x}`))).toEqual(NEW_PT);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+    expect(staged()).toEqual([]);
+  });
+
+  it('(c) legacy series mint: legacy Three is mid-render when Two declines One; Three lands on its new voice and Book One is untouched', async () => {
+    reset();
+    const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...legacySlot }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two'), ...legacySlot }]);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+    const oneBefore = row('Book One');
+    const entered = holdNextDesign();
+    const designing = design('Book Three').then((r) => r);
+    await entered;
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const x = row('Book Three').voiceUuid;
+    expect(x).toBeTruthy();
+    expect(row('Book Two').voiceUuid).toBe(x);
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceUuid).toBe(x);
+    expect(readFileSync(pt(`qwen-${x}`))).toEqual(NEW_PT);
+    expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+    expect(row('Book One')).toEqual(oneBefore); // no series mint reached it
+    expect(staged()).toEqual([]);
+  });
+
+  it("a variant mid-render when the row declines lands on the new voice, never on the earlier book's variant", async () => {
+    seedChain();
+    const entered = holdNextDesign();
+    const designing = design('Book Two', { emotion: 'sad' }).then((r) => r);
+    await entered;
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const x = row('Book Two').voiceUuid;
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(d.body.voiceId).toBe(`qwen-${x}__sad`);
+    expect(readFileSync(pt(`qwen-${x}__sad`))).toEqual(NEW_PT);
+    expect(readdirSync(qwenDir())).not.toContain('qwen-u_shared__sad.pt');
+    oneIntact();
+    expect(variantsOf('Book One')).toEqual(['angry']);
+    expect(staged()).toEqual([]);
+  });
+
+  it('a sidecar failure after a partial write leaves no staged files and writes no voice', async () => {
+    seedChain();
+    const before = snapshot();
+    fetchMock.mockImplementationOnce(async (_url: unknown, init: { body?: string } | undefined) => {
+      const voiceId = JSON.parse(init?.body ?? '{}').voiceId;
+      writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT); // a partial write, then the failure
+      return {
+        ok: false,
+        status: 500,
+        statusText: 'boom',
+        headers: new Headers(),
+        json: async () => ({ detail: 'boom' }),
+        text: async () => 'boom',
+      };
+    });
+    const d = await design('Book Two');
+    expect(d.status).toBeGreaterThanOrEqual(500);
+    expect(staged()).toEqual([]);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('a row deleted mid-render answers 404 and leaves no staged files', async () => {
+    seedChain();
+    const entered = holdNextDesign();
+    const designing = design('Book Two').then((r) => r);
+    await entered;
+    writeRows('Book Two', []);
+    gate.release!();
+    const d = await designing;
+    expect(d.status).toBe(404);
+    expect(staged()).toEqual([]);
+    oneIntact();
+  });
+
+  it("the stale preview: Don't reuse drops the decliner's staged preview, keeps Book One's own, and Cancel still answers 200", async () => {
+    seedChain();
+    const two = await design('Book Two', { preview: true });
+    const one = await design('Book One', { preview: true });
+    expect(two.status).toBe(200);
+    expect(one.status).toBe(200);
+    expect(two.body.voiceId).not.toBe(one.body.voiceId); // each row stages its own preview
+    expect(readdirSync(qwenDir())).toContain(`${two.body.voiceId}.pt`);
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(readdirSync(qwenDir())).not.toContain(`${two.body.voiceId}.pt`);
+    expect(readdirSync(qwenDir())).toContain(`${one.body.voiceId}.pt`);
+    const promoteStale = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: two.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(promoteStale.status).toBe(400);
+    const cancel = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: two.body.voiceId });
+    expect(cancel.status).toBe(200);
+    /* Book One cannot promote Book Two's preview: it is not One's own. */
+    const onePromotesTwo = await request(app)
+      .post(`/api/books/${ids['Book One']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: two.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(onePromotesTwo.status).toBe(400);
+    oneIntact();
   });
 });
