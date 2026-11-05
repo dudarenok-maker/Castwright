@@ -2566,7 +2566,7 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
           .delete('/api/voice-library/race-a/assign')
           .query({ bookId: 'book-unassign-lock-alone', characterId: 'char-alice' }),
       startSecondWriter: () =>
-        qwenVoice.persistEmotionVariant(bookDir, 'char-bob', 'angry', 'qwen-v_char-bob__angry'),
+        qwenVoice.persistEmotionVariant(bookDir, 'char-bob', 'angry', 'qwen-char-bob__angry'),
     });
     /* Premise pin: while the route was parked, the second writer queued on
        the cast lock only — it took no `book-op:` key. If someone later wraps
@@ -2591,7 +2591,7 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
     /* ... and the second writer's own mutation survived the route's write —
        the lost-update this test pins. */
     expect(bob.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_char-bob__angry',
+      name: 'qwen-char-bob__angry',
     });
   });
 });

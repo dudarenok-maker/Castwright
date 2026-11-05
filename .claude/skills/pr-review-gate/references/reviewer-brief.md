@@ -1065,6 +1065,31 @@ recite:
     chain), not in a filter afterwards, so what lies past it is not reached
     either.
 
+84. **A read-back of a fan-out writer's result, where the writer's scope
+    filter can exclude the caller's own record** — PR #4007 pass 11 (#3992,
+    P11-1): the series mint stamped a uuid through
+    `forEachMatchingCastCharacter`, then read the designing row back to learn
+    the uuid it landed on. The walk skips every book whose cast is not
+    confirmed, the designing book included (a design from the Confirm screen),
+    so the read-back was absent, was read as "the character is gone", and the
+    design failed after the walk had already re-keyed other books. Checkable:
+    for every read-back of a fan-out writer's result, list the writer's
+    filters (confirmed, standalone, series match, unreadable, moved) and test
+    the caller's own record outside each one; never read an absent value as
+    "gone" after siblings were written.
+
+85. **A "re-read at commit" rule written for one writer that accepts every
+    writer's change** — PR #4007 pass 11 (#3992, P11-5): the staged-design
+    landing read the row's CURRENT key so a "Don't reuse" made mid-render sent
+    the design to the row's new voice. A link-prior made mid-render also
+    changes that key, to the earlier book's, and the landing followed it there:
+    the earlier book's variant was overwritten with a take anchored on another
+    base. Checkable: list every writer of the field the commit re-reads, and
+    for each ask whether the commit may follow that writer's change; a rule
+    meant for one writer has to say how it recognises that writer's change
+    (here: the in-flight design's key moves only with a separation of the row,
+    and anything else discards the render).
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

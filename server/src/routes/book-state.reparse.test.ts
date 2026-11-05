@@ -1217,7 +1217,7 @@ describe('reparse handler — #3773: cast lock alone serialises the cast.json re
       expect(intercepted).toBe(true);
       expect(castReads).toBe(1); // only the parked reparse read so far
 
-      secondPromise = persistEmotionVariant(lockBookDir, 'nova', 'angry', 'qwen-v_nova__angry');
+      secondPromise = persistEmotionVariant(lockBookDir, 'nova', 'angry', 'qwen-nova__angry');
       secondPromise.catch(() => {}); // force dispatch now
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind reparse's still-held lock when locked.

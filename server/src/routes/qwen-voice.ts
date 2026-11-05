@@ -27,8 +27,8 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
@@ -40,6 +40,7 @@ import {
   qwenVoiceSidecarPath,
   qwenVoicePtPath,
   qwenVoiceWavPath,
+  qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
@@ -170,11 +171,11 @@ export async function persistEmotionVariant(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return 'notFound';
-  /* #4028 — the base the variant LANDED on (`<base>__<emotion>`): across the
-     series only a row whose key is still that base takes the slot, so a row a
-     decline moved after the design landed is never handed a variant its new key
-     does not have. (The book-scoped branch below serves a standalone book, which
-     has no series link to decline.) */
+  /* #4028 — the base the variant LANDED on (`<base>__<emotion>`): only a row
+     whose key is still that base takes the slot, so a row a decline moved after
+     the design landed is never handed a variant its new key does not have. The
+     book-scoped branch checks it too (pass 11, Y4): a variant id naming another
+     base is not this row's. */
   const suffix = `__${emotion}`;
   const landedBase = variantVoiceId.endsWith(suffix)
     ? variantVoiceId.slice(0, -suffix.length)
@@ -266,6 +267,7 @@ export async function persistEmotionVariant(
     const freshCharacter = fresh.characters[idx];
     if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
+    if (baseVoiceId !== landedBase) return 'notFound'; // moved since the variant landed
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return 'applied';
@@ -884,9 +886,13 @@ qwenVoiceRouter.get(
         the staged files (and the audition) are moved onto it.
    "Don't reuse" takes no design lock; it moves rows under the same book-op and
    cast locks, so a decline that lands mid-render sends the design to the row's
-   new voice, never to the voice it left. Every failure removes the staged
-   files. A variant anchors on the base the row held when the render started (a
-   separation copies that base, so the anchor is the same bytes). */
+   new voice, never to the voice it left. Any OTHER change of the row's key (a
+   link made mid-render) discards the render with DesignVoiceChangedError (pass
+   11, P11-5). Every failure removes the staged files; after an abort or a
+   timeout they are removed again later, since the sidecar may still write them
+   (Y2). A variant anchors on the base the row held when the span started, re-read
+   under the cast lock (a separation copies that base, so the anchor is the same
+   bytes; a link would change them, and is discarded). */
 export interface DesignQwenVoiceParams {
   /** The row's book, for the final step's book-op. */
   bookId: string;
@@ -905,6 +911,11 @@ export interface DesignQwenVoiceParams {
   emotion?: Exclude<Emotion, 'neutral'>;
   /** Stage under a `-preview` sibling id (A/B compare) instead of in place. */
   preview?: boolean;
+  /** A first base design the caller persists (the SSE and bulk jobs): the landing
+      also gives the book's rows on the landed key a qwen slot when they have none,
+      under its lock, so a decline right after it moves a row that has one (pass 11,
+      Y1). The caller's series-wide applyOverrideToCastFiles still follows. */
+  persistSlot?: boolean;
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
@@ -944,6 +955,30 @@ async function removeStaged(staging: string, auditionFile: string): Promise<void
     qwenVoicePtPath(`${staging}__1.7b`),
     voiceSampleFilePath(auditionFile),
   ]);
+}
+
+/* PR #4007 pass 11, Y2 — the sidecar's design runs in a worker thread that a
+   dropped connection does not stop, so after an abort, a timeout or an
+   unreachable sidecar it can still write the staged family once removeStaged has
+   run. That family is removed again later (mutable for tests). */
+export const LATE_STAGING_SWEEP = { delayMs: 15 * 60_000 };
+function scheduleLateStagingSweep(staging: string, auditionFile: string): void {
+  const timer = setTimeout(() => void removeStaged(staging, auditionFile), LATE_STAGING_SWEEP.delayMs);
+  timer.unref?.();
+}
+
+/* Y2 — at startup, before the server listens (no design is in flight): remove
+   every `qwen-staging-*` file a previous run left behind. Never throws. */
+export async function sweepStaleDesignStaging(): Promise<number> {
+  let names: string[];
+  try {
+    names = await readdir(qwenVoicesDir());
+  } catch {
+    return 0;
+  }
+  const stale = names.filter((n) => n.startsWith('qwen-staging-'));
+  await removeFiles(stale.map((n) => join(qwenVoicesDir(), n)));
+  return stale.length;
 }
 
 /* #4028 — move a staged family onto `target`, rm-then-rename like promote (a
@@ -1008,6 +1043,15 @@ async function landStagedDesign(
       const designed = p.emotion ? `${base}__${p.emotion}` : base;
       const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
       await moveStaged(staging, voiceId);
+      if (p.persistSlot && !p.emotion && !p.preview && cast) {
+        let slotted = false;
+        const characters = cast.characters.map((c) => {
+          if (c.overrideTtsVoices?.qwen || characterHasClonedSlot(c) || qwenStorageKey(c, c.id) !== base) return c;
+          slotted = true;
+          return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { name: voiceId } } };
+        });
+        if (slotted) await writeJsonAtomic(castJsonPath(p.bookDir), { ...cast, characters });
+      }
       const landedAudition = audition(voiceId);
       await rm(voiceSampleFilePath(landedAudition), { force: true });
       await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
@@ -1124,6 +1168,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher)) };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
+      if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);
       throw e;
     } finally {
       designWatchers.delete(tag);

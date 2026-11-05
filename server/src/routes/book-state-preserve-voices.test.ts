@@ -588,7 +588,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       expect(intercepted).toBe(true);
       expect(castReads).toBe(1); // only the parked PUT read so far
 
-      secondPromise = persistEmotionVariant(raceBookDir, 'nova', 'angry', 'qwen-v_nova__angry');
+      secondPromise = persistEmotionVariant(raceBookDir, 'nova', 'angry', 'qwen-nova__angry');
       secondPromise.catch(() => {}); // force dispatch now
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the PUT's still-held lock when locked.
@@ -615,7 +615,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     const qwen = (nova.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
       | undefined)?.qwen;
-    expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_nova__angry' });
+    expect(qwen?.variants?.angry).toEqual({ name: 'qwen-nova__angry' });
   });
 });
 

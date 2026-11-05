@@ -148,6 +148,7 @@ async function runSingleDesign(
       modelKey,
       language,
       preview: job.preview,
+      persistSlot: !job.preview,
       progressToken,
       progressUrl,
     });

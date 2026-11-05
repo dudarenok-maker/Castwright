@@ -653,6 +653,7 @@ async function runDesignJob(
             modelKey,
             language,
             emotion,
+            persistSlot: !emotion,
             signal: job.controller.signal,
           });
 

@@ -80,6 +80,9 @@ let requested: string[];
 const fetchMock = vi.fn();
 /* Holds the next design/mint sidecar call until `release` (pass 10, #4028). */
 const gate = { hold: false, entered: null as null | (() => void), release: null as null | (() => void) };
+/* Pass 11, Y1 — runs (and is awaited) once, inside the first sidecar evict a
+   design makes after its landing released the locks. */
+const afterLanding = { fn: null as null | (() => Promise<void>) };
 const holdNextDesign = (): Promise<void> => {
   gate.hold = true;
   return new Promise<void>((r) => (gate.entered = r));
@@ -214,12 +217,18 @@ beforeEach(() => {
   beforeLocks.fn = null;
   beforeLanding.fn = null;
   beforeLanding.bookId = null;
+  afterLanding.fn = null;
   gate.release?.(); // a test that failed while holding a render must not wedge the next
   gate.hold = false;
   gate.entered = null;
   gate.release = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: unknown, init: { body?: string } | undefined) => {
+    if (String(_url).includes('evict-voice') && afterLanding.fn) {
+      const run = afterLanding.fn;
+      afterLanding.fn = null;
+      await run();
+    }
     let voiceId: string | undefined;
     try {
       const b = JSON.parse(init?.body ?? '{}');
@@ -1213,5 +1222,60 @@ describe('pass 11, P11-5 (owner decision: discard and retry when the voice chang
     expect(d.status, JSON.stringify(d.body)).toBe(200);
     expect(d.body.voiceId).toBe(`qwen-${row('Book Two').voiceUuid}`);
     oneUntouched(oneBefore);
+  });
+});
+describe('pass 11, Y1: a first design stamps its own slot under the landing lock', () => {
+  it("Don't reuse right after an SSE first design lands: the moved row keeps a .pt AND a qwen slot", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One') }]);
+    let dec: { status: number } | undefined;
+    afterLanding.fn = async () => {
+      dec = await decline('Book Two', 'Book One');
+    };
+    const res = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/design-voice/stream`)
+      .send({ persona: 'a bright voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(dec?.status).toBe(200);
+    const two = row('Book Two');
+    expect(two.voiceUuid).not.toBe('u_shared');
+    expect(readFileSync(pt(`qwen-${two.voiceUuid}`))).toEqual(NEW_PT);
+    const { pickVoiceForEngine } = await import('../tts/voice-mapping.js');
+    expect(pickVoiceForEngine('qwen', two as never)).toBe(`qwen-${two.voiceUuid}`);
+  });
+});
+describe('pass 11, Y2: staged files a late sidecar write leaves behind are swept', () => {
+  it('startup: every qwen-staging-* file goes, every other voice file stays', async () => {
+    reset();
+    for (const f of ['qwen-staging-abc.pt', 'qwen-staging-abc.json', 'qwen-staging-abc__master.wav', 'qwen-keep.pt']) {
+      writeFileSync(join(qwenDir(), f), 'x');
+    }
+    const { sweepStaleDesignStaging } = await import('./qwen-voice.js');
+    expect(await sweepStaleDesignStaging()).toBe(3);
+    expect(readdirSync(qwenDir())).toEqual(['qwen-keep.pt']);
+  });
+
+  it('a render that timed out: the files the sidecar writes afterwards are removed later', async () => {
+    seedChain();
+    const qv = await import('./qwen-voice.js');
+    const delay = qv.LATE_STAGING_SWEEP.delayMs;
+    qv.LATE_STAGING_SWEEP.delayMs = 50;
+    try {
+      let staging = '';
+      fetchMock.mockImplementationOnce(async (_url: unknown, init: { body?: string } | undefined) => {
+        staging = JSON.parse(init?.body ?? '{}').voiceId;
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      });
+      const d = await design('Book Two');
+      expect(d.status).toBeGreaterThanOrEqual(500);
+      expect(staging).toMatch(/^qwen-staging-/);
+      writeFileSync(pt(staging), NEW_PT); // the sidecar's thread finishes after the abort
+      await new Promise((r) => setTimeout(r, 300));
+      expect(readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'))).toEqual([]);
+      oneIntact();
+    } finally {
+      qv.LATE_STAGING_SWEEP.delayMs = delay;
+    }
   });
 });

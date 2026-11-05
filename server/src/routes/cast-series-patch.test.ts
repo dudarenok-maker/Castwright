@@ -446,7 +446,7 @@ describe('#1981 — two series-patch calls for different characters in one book 
       }
       expect(castReads).toBe(3);
 
-      secondPromise = persistEmotionVariant(raceBookDir, 'race-b', 'angry', 'qwen-v_race-b__angry');
+      secondPromise = persistEmotionVariant(raceBookDir, 'race-b', 'angry', 'qwen-race-b__angry');
       secondPromise.catch(() => {}); // force dispatch now (see above)
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind series-patch's still-held lock when locked.
@@ -477,7 +477,7 @@ describe('#1981 — two series-patch calls for different characters in one book 
     const raceB = byId['race-b'] as {
       overrideTtsVoices?: { qwen?: { variants?: Record<string, { name: string }> } };
     };
-    expect(raceB.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_race-b__angry' });
+    expect(raceB.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-race-b__angry' });
   });
 
   it('keeps both patches when two series-patch calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {

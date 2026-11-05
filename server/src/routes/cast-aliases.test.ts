@@ -625,7 +625,7 @@ describe('#1981 — two add-alias calls for one book overlap', () => {
           .post(`/api/books/${raceBookId}/cast/add-alias`)
           .send({ characterId: 'race-x', aliasName: 'Xander' }),
       startSecondWriter: () =>
-        persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-v_race-y__angry'),
+        persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-race-y__angry'),
     });
     /* Premise pin: while the route was parked, the second writer queued on
        the cast lock only — it took no `book-op:` key. If someone later wraps
@@ -649,7 +649,7 @@ describe('#1981 — two add-alias calls for one book overlap', () => {
     /* ... and the second writer's own mutation survived the route's write —
        the lost-update this test pins. */
     expect(byId['race-y'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_race-y__angry',
+      name: 'qwen-race-y__angry',
     });
   });
 });
@@ -746,7 +746,7 @@ describe('#1981 — two unlink-alias calls for one book overlap', () => {
           .post(`/api/books/${raceBookId}/cast/unlink-alias`)
           .send({ sourceCharacterId: 'src-p', aliasName: 'AliasP' }),
       startSecondWriter: () =>
-        persistEmotionVariant(raceBookDir, 'src-q', 'angry', 'qwen-v_src-q__angry'),
+        persistEmotionVariant(raceBookDir, 'src-q', 'angry', 'qwen-src-q__angry'),
     });
     /* Premise pin: while the route was parked, the second writer queued on
        the cast lock only — it took no `book-op:` key. If someone later wraps
@@ -770,7 +770,7 @@ describe('#1981 — two unlink-alias calls for one book overlap', () => {
     expect(Object.keys(byId)).toContain('aliasp');
     /* the second writer's own mutation survived — the lost-update this test pins */
     expect(byId['src-q'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_src-q__angry',
+      name: 'qwen-src-q__angry',
     });
     expect(byId['src-q'].aliases).toEqual(['AliasQ']);
   });
@@ -865,7 +865,7 @@ describe('#1981 — two repoint-alias calls for one book overlap', () => {
           .post(`/api/books/${raceBookId}/cast/repoint-alias`)
           .send({ sourceCharacterId: 'src-m', aliasName: 'AliasM', targetCharacterId: 'tgt-m' }),
       startSecondWriter: () =>
-        persistEmotionVariant(raceBookDir, 'tgt-n', 'angry', 'qwen-v_tgt-n__angry'),
+        persistEmotionVariant(raceBookDir, 'tgt-n', 'angry', 'qwen-tgt-n__angry'),
     });
     /* Premise pin: while the route was parked, the second writer queued on
        the cast lock only — it took no `book-op:` key. If someone later wraps
@@ -889,7 +889,7 @@ describe('#1981 — two repoint-alias calls for one book overlap', () => {
     expect(byId['tgt-m'].aliases).toEqual(['AliasM']);
     /* the second writer's own mutation survived — the lost-update this test pins */
     expect(byId['tgt-n'].overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_tgt-n__angry',
+      name: 'qwen-tgt-n__angry',
     });
   });
 });

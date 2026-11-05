@@ -170,6 +170,15 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
     expect(marlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
     expect(marlowOf(bookTwo)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
+
+  /* PR #4007 pass 11, Y4 — the book-scoped write checks the landed base as the
+     series walk does: a variant id naming another base is not this row's. */
+  it('book-scoped: a variant id naming a different base is refused and writes no slot', async () => {
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
+
+    expect(await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-someone-else__angry')).toBe('notFound');
+    expect(marlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
 });
 
 describe('applyOverrideToCastFiles — preserves designed variants', () => {
