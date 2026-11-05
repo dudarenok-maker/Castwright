@@ -64,7 +64,25 @@ describe('scanVoiceHolders (#3992)', () => {
     const s = await scan(two, { id: 'c' }, holdsUuid(U));
     expect(s.followers.map((f) => f.bookId)).toEqual([THREE_ID, 'book-four-id']); // breadth-first order
     expect(s.heldElsewhere).toBe(true); // One
-    expect([...s.holderBookIds].sort()).toEqual([ONE_ID, 'book-four-id', THREE_ID].sort());
+    expect([...s.holderBookIds]).toEqual([ONE_ID]); // followers move with X: never holders (P10-1)
+  });
+
+  it('P10-1: a row in the declined book (fromBookId, or on declinedVoiceFrom) is never a follower; it cuts a cycle and holds the voice', async () => {
+    reset();
+    /* One <-> Two, and One -> Three -> Two: both cycles run through One. */
+    book('One', ONE_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: THREE_ID, characterId: 'c' } }]);
+    const two = book('Two', TWO_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: ONE_ID, characterId: 'c' } }]);
+    book('Three', THREE_ID, [{ id: 'c', voiceUuid: U, matchedFrom: { bookId: TWO_ID, characterId: 'c' } }]);
+    const unmarked = await scan(two, { id: 'c' }, holdsUuid(U));
+    expect(unmarked.followers.map((f) => f.bookId)).toEqual([THREE_ID, ONE_ID]); // the cycle, without a decline
+    for (const s of [
+      await scan(two, { id: 'c' }, holdsUuid(U), ONE_ID),
+      await scan(two, { id: 'c', declinedVoiceFrom: [ONE_ID] }, holdsUuid(U)),
+    ]) {
+      expect(s.followers.map((f) => f.bookId)).toEqual([THREE_ID]);
+      expect(s.heldElsewhere).toBe(true);
+      expect([...s.holderBookIds]).toEqual([ONE_ID]);
+    }
   });
 
   it('a hop resolves through the MIDDLE book’s id history; a cycle terminates; a row off the voice cuts the chain', async () => {

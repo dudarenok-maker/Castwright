@@ -86,7 +86,7 @@ castDeclineVoiceLinkRouter.post(
         if (!cast.characters.some((c) => c.id === characterId)) {
           return { status: 404, body: { error: `Character "${characterId}" not found.` } };
         }
-        const plan = await separationPlan(bookDir, characterId);
+        const plan = await separationPlan(bookDir, characterId, fromBookId);
         const out = await withBookOps(plan.bookIds, (books) => {
           const own = books.find((b) => b.bookId === bookId);
           if (!own || resolve(own.bookDir) !== resolve(bookDir)) {

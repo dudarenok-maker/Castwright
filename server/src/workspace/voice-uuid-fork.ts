@@ -20,8 +20,8 @@
    history); a `matchedFrom` with a bookId but no characterId names the row with
    the SAME id. X's FOLLOWERS are the whole chain that leads down to it (Three
    links to X, Four links to Three, ...) among rows that still hold X's voice: a
-   row that left the voice, or links elsewhere, is not one, and neither is what
-   links to it. One library scan builds the graph; a breadth-first walk with a
+   row that left the voice, or links elsewhere, or sits in a book X declined, is
+   not one, and neither is what links to it. One library scan builds the graph; a breadth-first walk with a
    visited set computes the set, so a cycle terminates.
 
    The one place a design still separates is a row declined BEFORE the decline
@@ -166,12 +166,17 @@ type MatchedFrom = { bookId?: string; characterId?: string } | null | undefined;
    order. The graph is the one library scan in `others`; a visited set makes a
    cycle terminate. A row off the voice is no node, so it cuts the chain: what
    links to it stays. Each hop resolves the link's characterId through the linked
-   book's live cast and id history. */
+   book's live cast and id history.
+   P10-1 (owner decision: stop at the declined book): a row in a book X declined
+   (`declined`: the decline's `fromBookId` plus X's `declinedVoiceFrom`) is never a
+   follower, however a link cycle reaches it (Confirm's auto-match links an earlier
+   book to a later one too). It cuts the chain there, and it holds the voice. */
 async function chainFollowers(
   selfDir: string,
   character: { id: string },
   holds: VoiceHolds,
   others: OtherBook[],
+  declined: ReadonlySet<string>,
 ): Promise<LinkFollower[]> {
   const selfBookId = await readBookId(selfDir);
   if (!selfBookId) return []; // a book with no id cannot be named by a link
@@ -202,7 +207,7 @@ async function chainFollowers(
     for (const book of others) {
       /* A book with no bookId cannot be locked by id (no route can move it either),
          so it cannot be moved with X: it stays on the voice. */
-      if (!book.bookId) continue;
+      if (!book.bookId || declined.has(book.bookId)) continue;
       for (const y of book.rows) {
         if (!holds(y)) continue;
         const key = rowKey(book.dir, y.id);
@@ -225,7 +230,7 @@ export interface VoiceScan {
   followers: LinkFollower[];
   /** A row in another readable book that is NOT a follower holds X's voice. */
   heldElsewhere: boolean;
-  /** Readable bookIds with a row on X's voice. */
+  /** Readable bookIds with a row on X's voice that is NOT a follower. */
   holderBookIds: Set<string>;
   /** Folders of the other books that could not be read (anything could be in them). */
   unreadableDirs: string[];
@@ -233,23 +238,27 @@ export interface VoiceScan {
 
 /* One bounded pass over the library: who else holds X's voice, split into X's
    followers (the whole chain) and everyone else. Read-only and lock-free; the separation
-   re-runs it inside the locks it takes. */
+   re-runs it inside the locks it takes. `fromBookId` is the book a decline is
+   declining (not yet on X's `declinedVoiceFrom`); it and X's declined books are
+   never followers (chainFollowers). */
 export async function scanVoiceHolders(
   bookDir: string,
-  character: { id: string },
+  character: { id: string; declinedVoiceFrom?: string[] | null },
   holds: VoiceHolds,
+  fromBookId?: string,
 ): Promise<VoiceScan> {
   const selfDir = resolve(bookDir);
   const { books, unreadableDirs } = await loadOtherBooks(selfDir);
-  const followers = await chainFollowers(selfDir, character, holds, books);
+  const declined = new Set([...(character.declinedVoiceFrom ?? []), ...(fromBookId ? [fromBookId] : [])]);
+  const followers = await chainFollowers(selfDir, character, holds, books, declined);
   const followed = new Set(followers.map((f) => rowKey(f.dir, f.characterId)));
   const holderBookIds = new Set<string>();
   let heldElsewhere = false;
   for (const b of books) {
     for (const y of b.rows) {
-      if (!holds(y)) continue;
+      if (!holds(y) || followed.has(rowKey(b.dir, y.id))) continue;
+      heldElsewhere = true;
       if (b.bookId) holderBookIds.add(b.bookId);
-      if (!followed.has(rowKey(b.dir, y.id))) heldElsewhere = true;
     }
   }
   return { followers, heldElsewhere, holderBookIds, unreadableDirs };

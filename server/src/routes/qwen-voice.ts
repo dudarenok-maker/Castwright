@@ -361,17 +361,19 @@ function withDeclineMark(row: MarkedCharacter, fromBookId: string | undefined, l
 /* #3992 — the books a separation must hold: the row's own and those of its
    followers, the whole chain that leads down to it (they move with it). Lock-free and read-only; the locked step re-scans
    and fails when the set it finds is not covered. Throws CharacterGoneError for a
-   row that is not there. */
+   row that is not there. `fromBookId` is the book a decline declines (never a
+   follower's book). */
 export async function separationPlan(
   bookDir: string,
   characterId: string,
+  fromBookId?: string,
 ): Promise<{ bookIds: string[]; followers: LinkFollower[] }> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
-  const x = cast?.characters?.find((c) => c.id === characterId);
+  const x = cast?.characters?.find((c) => c.id === characterId) as MarkedCharacter | undefined;
   if (!x) throw new CharacterGoneError();
   const xBookId = await readBookId(bookDir);
   if (!xBookId) throw new Error('Cannot separate a voice in a book that has no bookId.');
-  const { followers } = await scanVoiceHolders(bookDir, x, voiceHeldBy(x));
+  const { followers } = await scanVoiceHolders(bookDir, x, voiceHeldBy(x), fromBookId);
   return { bookIds: [xBookId, ...followers.map((f) => f.bookId)], followers };
 }
 
@@ -419,7 +421,7 @@ export async function separateVoiceLocked(
   if (!fresh || idx === -1) throw new CharacterGoneError();
   const x = fresh.characters[idx] as MarkedCharacter;
   const holds = voiceHeldBy(x);
-  const scan = await scanVoiceHolders(bookDir, x, holds);
+  const scan = await scanVoiceHolders(bookDir, x, holds, decline?.fromBookId);
   const separate = decline ? mustSeparateOnDecline(x, scan, decline.fromBookId) : mustSeparateOnDesign(x, scan);
 
   if (!separate) {

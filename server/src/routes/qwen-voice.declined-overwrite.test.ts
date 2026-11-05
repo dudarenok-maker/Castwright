@@ -635,3 +635,71 @@ describe('passes 3 and 4', () => {
     expect(row('Book One').voiceUuid).toBeUndefined();
   });
 });
+
+describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
+  /* Confirm's auto-match links an earlier book to a later one too, so a link
+     cycle through the declined book is ordinary. A row in the declined book is
+     never a follower: it cuts the chain and holds the voice. The declined book's
+     cast.json is compared by content: a series walk that changes nothing still
+     rewrites it (an idempotent write, voices.ts forEachMatchingCastCharacter). */
+  const raw = (t: Title) => JSON.parse(readFileSync(castPath(t), 'utf8'));
+
+  it("(a) One <-> Two on one uuid: Don't reuse on Two leaves Book One's voice file byte-identical and its cast.json unchanged, and designs never re-separate", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    const oneCast = raw('Book One');
+    const res = await decline('Book Two', 'Book One');
+    expect(res.status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(res.body.voiceUuid).toBe(two);
+    await designSafely('Book Two');
+    await designSafely('Book Two', { emotion: 'angry' });
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two); // never re-separated
+    expect(variantsOf('Book Two')).toEqual(['angry']);
+    expect(raw('Book One'), "Book One's cast.json was rewritten").toEqual(oneCast);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("(b) Two <-> Three with One an unlinked holder: Don't reuse on Two (from Three) moves Two alone; Three's voice and cast are unchanged and Two keeps its variants", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared') }]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    const threeCast = raw('Book Three');
+    expect((await decline('Book Two', 'Book Three')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).toBe('u_shared');
+    await designSafely('Book Two', { emotion: 'angry' });
+    await designSafely('Book Two');
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two);
+    expect(variantsOf('Book Two')).toEqual(['angry']);
+    expect(raw('Book Three'), "Book Three's cast.json was rewritten").toEqual(threeCast);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+
+  it("(c) the cycle One -> Three -> Two -> One: Don't reuse on Two (from One) moves Two and Three; One's voice and cast are unchanged", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    writeBook('Book Three', [{ ...baseRow, ...linkTo('Book Two'), ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    const oneCast = raw('Book One');
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    const two = row('Book Two').voiceUuid;
+    expect(two).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).toBe(two); // Three follows Two
+    await designSafely('Book Two');
+    await designSafely('Book Three');
+    await designSafely('Book Two');
+    expect(row('Book Two').voiceUuid).toBe(two);
+    expect(raw('Book One'), "Book One's cast.json was rewritten").toEqual(oneCast);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
+  });
+});
