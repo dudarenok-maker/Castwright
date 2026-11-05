@@ -11,6 +11,7 @@ let onDesign: Mod['mustSeparateOnDesign'];
 let holdsUuid: Mod['holdsUuid'];
 let holdsLegacyKey: Mod['holdsLegacyKey'];
 let voiceHeldBy: Mod['voiceHeldBy'];
+let variantUsed: Mod['isVariantUsedByOtherVoiceUuid'];
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -47,6 +48,7 @@ beforeAll(async () => {
     holdsUuid,
     holdsLegacyKey,
     voiceHeldBy,
+    isVariantUsedByOtherVoiceUuid: variantUsed,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -208,5 +210,20 @@ describe('mustSeparateOnDesign (#3992 — rows declined before the route separat
   it('a row the route already separated (its uuid is not a declined one) never separates again, however its chain grows', () => {
     const row = { voiceUuid: 'own', declinedVoiceFrom: [ONE_ID], declinedVoiceUuids: [U] };
     expect(onDesign(row, { ...empty, heldElsewhere: true, holderBookIds: new Set([THREE_ID, 'book-four-id']), unreadableDirs: ['x'] })).toBe(false);
+  });
+});
+
+describe('isVariantUsedByOtherVoiceUuid (#3992, P10-2)', () => {
+  const angry = (name: string) => ({ overrideTtsVoices: { qwen: { variants: { angry: { name } } } } });
+  it('counts a legacy row (no uuid) on a different key, and never a row on the same key', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]); // legacy earlier book
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'own', ...angry('qwen-v__angry') }]);
+    expect(await variantUsed('qwen-v__angry', 'qwen-own')).toBe(true); // One still names it
+    expect(await variantUsed('qwen-v__angry', 'qwen-v')).toBe(true); // Two names it under another key
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]);
+    expect(await variantUsed('qwen-v__angry', 'qwen-v')).toBe(false); // a linked legacy pair shares the key
   });
 });

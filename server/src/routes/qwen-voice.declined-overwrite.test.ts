@@ -703,3 +703,86 @@ describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
   });
 });
+
+describe('pass 10, P10-2: a legacy book and a separated one never share a variant', () => {
+  /* One and Two are legacy (`v_wren`) and linked; "Don't reuse" gives Two a uuid
+     of its own while One stays legacy. A variant slot only signals presence:
+     render re-derives `<row's key>__<emotion>`, so a slot on a row whose key
+     differs from the variant's base asks for a file that does not exist. */
+  const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+  const ONE_ANGRY = Buffer.from('ONE-ANGRY');
+  function seedLegacyPair() {
+    reset();
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...legacySlot }]);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+  }
+  /* Every variant slot a row carries names a file under the row's own key. */
+  function rendersOnlyOwnVariants(t: Title) {
+    const r = row(t);
+    const key = r.voiceUuid ? `qwen-${r.voiceUuid}` : `qwen-${r.voiceId ?? r.id}`;
+    for (const e of Object.keys(r.overrideTtsVoices?.qwen?.variants ?? {})) {
+      expect(readdirSync(qwenDir()).includes(`${key}__${e}.pt`), `${t}'s ${e} slot asks for a missing ${key}__${e}`).toBe(true);
+    }
+  }
+  /* Two still carries One's angry slot: the state a design made before this fix. */
+  function plantOnesSlotOnTwo() {
+    writeRows('Book Two', [
+      {
+        ...row('Book Two'),
+        overrideTtsVoices: { qwen: { ...row('Book Two').overrideTtsVoices.qwen, variants: { angry: { name: 'qwen-v_wren__angry' } } } },
+      },
+    ]);
+  }
+
+  it("One (legacy) designs angry after Two declined: Two gains no slot, and both books render only their own variants", async () => {
+    seedLegacyPair();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect(row('Book Two').voiceUuid).toBeTruthy();
+    expect(row('Book One').voiceUuid).toBeUndefined();
+    expect((await design('Book One', { emotion: 'angry' })).status).toBe(200);
+    expect(readdirSync(qwenDir())).toContain('qwen-v_wren__angry.pt');
+    expect(variantsOf('Book One')).toEqual(['angry']);
+    expect(variantsOf('Book Two')).toEqual([]);
+    rendersOnlyOwnVariants('Book One');
+    rendersOnlyOwnVariants('Book Two');
+  });
+
+  it('the reverse: Two (separated) designs angry, and legacy One gains no slot', async () => {
+    seedLegacyPair();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    expect((await design('Book Two', { emotion: 'angry' })).status).toBe(200);
+    expect(variantsOf('Book Two')).toEqual(['angry']);
+    expect(variantsOf('Book One')).toEqual([]);
+    rendersOnlyOwnVariants('Book One');
+    rendersOnlyOwnVariants('Book Two');
+  });
+
+  it("Two's DELETE of a slot naming One's legacy variant keeps One's file", async () => {
+    seedLegacyPair();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    writeRows('Book One', [{ ...row('Book One'), overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } } }]);
+    writeFileSync(pt('qwen-v_wren__angry'), ONE_ANGRY);
+    plantOnesSlotOnTwo();
+    const del = await request(app).delete(`/api/books/${ids['Book Two']}/cast/wren/emotion-variant/angry`);
+    expect(del.status).toBe(200);
+    expect(variantsOf('Book Two')).toEqual([]);
+    expect(readFileSync(pt('qwen-v_wren__angry'))).toEqual(ONE_ANGRY);
+  });
+
+  it("Two's redesign and promote keep One's legacy variant file", async () => {
+    seedLegacyPair();
+    expect((await decline('Book Two', 'Book One')).status).toBe(200);
+    writeRows('Book One', [{ ...row('Book One'), overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } } }]);
+    writeFileSync(pt('qwen-v_wren__angry'), ONE_ANGRY);
+    plantOnesSlotOnTwo();
+    const p = await design('Book Two', { preview: true });
+    expect(p.status, JSON.stringify(p.body)).toBe(200);
+    const promote = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: p.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(promote.status, JSON.stringify(promote.body)).toBe(200);
+    expect(readFileSync(pt('qwen-v_wren__angry'))).toEqual(ONE_ANGRY);
+    expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+  });
+});
