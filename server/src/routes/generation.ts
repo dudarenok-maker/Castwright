@@ -30,6 +30,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { serializeQueueMutation } from '../workspace/queue-mutex.js';
 import {
   completeEntry,
   markAwaitingConfirm,
@@ -510,21 +511,9 @@ export function abortInFlightChapterJob(bookId: string, chapterId: number): void
   inFlightByChapter.get(chapterKey(bookId, null))?.controller.abort();
 }
 
-/* srv-16 — serialise every server-side `.queue.json` read-modify-write through
-   one promise chain. There's no file-level lock, and the server now mutates the
-   queue from two concurrent contexts (per-chapter completion below + the
-   srv-12 orphan-recovery reset), so without this two near-simultaneous chapter
-   completions could each read the same snapshot and the later write would drop
-   the earlier removal. The frontend `/complete` is still a backstop, so a race
-   would only fall back to today's behaviour — but serialising makes it correct
-   for N>1 workers. The chain swallows errors so one failed mutation can't wedge
-   the next. */
-let queueMutationChain: Promise<unknown> = Promise.resolve();
-function serializeQueueMutation(mutate: () => Promise<void>): Promise<void> {
-  const next = queueMutationChain.then(mutate, mutate);
-  queueMutationChain = next.catch(() => undefined);
-  return next;
-}
+/* srv-16 — `serializeQueueMutation` (workspace/queue-mutex.ts, shared with the queue
+   routes since #4029) serialises every server-side `.queue.json` read-modify-write: per-chapter
+   completion below, the srv-12 orphan-recovery reset, the recycle-storm pause. */
 
 /* srv-16 — mark a chapter's queue entry done from the SERVER once the chapter
    is actually rendered + persisted, instead of relying solely on the frontend
@@ -2381,8 +2370,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          job (no queueEntryId) is untouched — it keeps relying on the cascade. */
       if (isRecycleStorm && job.queueEntryId != null) {
         try {
-          const before = await readQueueFile(queueJsonPath());
-          await writeQueueFile(queueJsonPath(), setPaused(before, true));
+          await serializeQueueMutation(async () => {
+            const before = await readQueueFile(queueJsonPath());
+            await writeQueueFile(queueJsonPath(), setPaused(before, true));
+          });
           console.error(
             '[generation] RECYCLE STORM: paused the queue — restart the TTS sidecar / ' +
               'restore headroom, then resume.',

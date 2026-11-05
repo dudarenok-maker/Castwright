@@ -30,6 +30,7 @@ import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
 import { refuseGatedBooksNow, refuseUnreadRepairedBooks, retryUnreadableGate } from '../workspace/repaired-book-gate.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { serializeQueueMutation } from '../workspace/queue-mutex.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { isTtsModelKey } from '../tts/model-keys.js';
 import {
@@ -148,17 +149,19 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       }
     }),
   );
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    const after = enqueue(before, inputs);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    /* Duplicate-id rejection from enqueue() lands here. The frontend
-       should re-mint and retry; surface 409 so it knows the difference
-       from a 500. */
-    res.status(409).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      const after = enqueue(before, inputs);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      /* Duplicate-id rejection from enqueue() lands here. The frontend
+         should re-mint and retry; surface 409 so it knows the difference
+         from a 500. */
+      res.status(409).json({ error: (e as Error).message });
+    }
+  });
 });
 
 interface ReorderRequestBody {
@@ -170,16 +173,18 @@ queueRouter.post('/reorder', async (req: Request, res: Response) => {
   if (!Array.isArray(body.order) || !body.order.every(isString)) {
     return res.status(400).json({ error: 'order must be a string[] of entry ids' });
   }
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    const after = reorder(before, body.order as string[]);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    /* Mismatch = client raced a concurrent enqueue. 409 so the
-       frontend can refetch + retry without surfacing as a 500. */
-    res.status(409).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      const after = reorder(before, body.order as string[]);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      /* Mismatch = client raced a concurrent enqueue. 409 so the
+         frontend can refetch + retry without surfacing as a 500. */
+      res.status(409).json({ error: (e as Error).message });
+    }
+  });
 });
 
 interface PauseRequestBody {
@@ -191,14 +196,17 @@ queueRouter.post('/pause', async (req: Request, res: Response) => {
   if (typeof body.paused !== 'boolean') {
     return res.status(400).json({ error: 'paused must be a boolean' });
   }
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    const after = setPaused(before, body.paused);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  const paused = body.paused;
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      const after = setPaused(before, paused);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 interface ClearRequestBody {
@@ -213,26 +221,29 @@ queueRouter.post('/clear', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as ClearRequestBody;
   const force = body.force === true;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    const after = clearQueue(before, { force });
-    /* #4029 -- the bulk form of DELETE: gated by the bookIds of the entries it would drop. */
-    const kept = new Set(after.entries.map((e) => e.id));
-    const dropped = before.entries.filter((e) => !kept.has(e.id)).map((e) => e.bookId);
-    if (refuseGatedBooksNow(dropped, req, res)) return;
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      const after = clearQueue(before, { force });
+      /* #4029 -- the bulk form of DELETE: gated by the bookIds of the entries it would drop. */
+      const kept = new Set(after.entries.map((e) => e.id));
+      const dropped = before.entries.filter((e) => !kept.has(e.id)).map((e) => e.bookId);
+      if (refuseGatedBooksNow(dropped, req, res)) return;
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 /* #4029 -- every route that carries only an entry id (start / retry / confirm-fallback, and the ones that remove or
    fail an entry: complete, DELETE, skip-fallback) keys the gate on the entry's OWN bookId (same rule as enqueue),
    so a page that predates a repair is refused whole. A stale tab's /start would strand a fresh page's entry for a
    repaired book in_progress; its fail+retry would requeue it. An id that names no entry stays an idempotent no-op.
-   The gate-file retry settles BEFORE the queue is read (`await retryUnreadableGate()` in each handler), so this check
-   is synchronous and no await sits between the queue read and its write. */
+   The gate-file retry settles BEFORE the serialised span (`await retryUnreadableGate()` in each handler); the check runs
+   INSIDE it, synchronously, against the snapshot the write is made from, so a concurrent queue write cannot slip between
+   the decision and the write (every handler's read -> write goes through `serializeQueueMutation`). */
 function refuseRepairedEntry(
   entryId: string,
   file: { entries: Array<{ id: string; bookId: string }> },
@@ -252,15 +263,17 @@ function refuseRepairedEntry(
 queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = markInProgress(before, entryId);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = markInProgress(before, entryId);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 /* Drop a finished entry from the queue — the dispatcher's reconcile fires this
@@ -277,15 +290,17 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
   const outcome = body.outcome === 'failed' ? 'failed' : 'done';
   const errorReason = typeof body.errorReason === 'string' ? body.errorReason : undefined;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = completeEntry(before, entryId, outcome, errorReason);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = completeEntry(before, entryId, outcome, errorReason);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 /* POST /api/queue/:entryId/retry — re-queue a FAILED entry (status → queued,
@@ -294,15 +309,17 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
 queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = retry(before, entryId);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = retry(before, entryId);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 /* POST /api/queue/:entryId/confirm-fallback — the user confirms a parked
@@ -313,15 +330,17 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
 queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = confirmFallback(before, entryId);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = confirmFallback(before, entryId);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 /* POST /api/queue/:entryId/skip-fallback — the user skips a parked chapter
@@ -330,15 +349,17 @@ queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Respons
 queueRouter.post('/:entryId/skip-fallback', async (req: Request, res: Response) => {
   const { entryId } = req.params;
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = skipFallback(before, entryId);
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = skipFallback(before, entryId);
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
 });
 
 queueRouter.delete('/:entryId', async (req: Request, res: Response) => {
@@ -349,15 +370,17 @@ queueRouter.delete('/:entryId', async (req: Request, res: Response) => {
      the chapter just idles into a no-op reconcile against the now-gone id. */
   const force = req.query.force === 'true';
   await retryUnreadableGate();
-  try {
-    const before = await readQueueFile(queueJsonPath());
-    if (refuseRepairedEntry(entryId, before, req, res)) return;
-    const after = cancel(before, entryId, { force });
-    await writeQueueFile(queueJsonPath(), after);
-    res.json({ entries: after.entries, paused: after.paused });
-  } catch (e) {
-    /* in_progress rejection from cancel() (force not set) — 409 because the
-       user must Pause first for a normally-cancellable in-flight entry. */
-    res.status(409).json({ error: (e as Error).message });
-  }
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (refuseRepairedEntry(entryId, before, req, res)) return;
+      const after = cancel(before, entryId, { force });
+      await writeQueueFile(queueJsonPath(), after);
+      res.json({ entries: after.entries, paused: after.paused });
+    } catch (e) {
+      /* in_progress rejection from cancel() (force not set) — 409 because the
+         user must Pause first for a normally-cancellable in-flight entry. */
+      res.status(409).json({ error: (e as Error).message });
+    }
+  });
 });
