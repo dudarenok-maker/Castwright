@@ -309,6 +309,9 @@ describe('#3992 pass-1 finding 3 — a row nobody declined never forks', () => {
     const noUuid = { ...baseRow, voiceUuid: undefined };
     writeBook('Book One', 1, bookOneId, [{ ...noUuid }]);
     writeBook('Book Two', 2, bookTwoId, [{ ...noUuid }]);
+    /* Pass 11 (owner decision): the series mint stamps the linked rows only when
+       it has a designed legacy voice to copy, so the shared key is designed. */
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), ORIG_PT);
     expect((await design(bookOneId)).status).toBe(200);
     const first = readRow('Book One').voiceUuid;
     expect(first).toBeTruthy();

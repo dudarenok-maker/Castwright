@@ -38,6 +38,10 @@ vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
 /* Runs once, just before a separation takes its book-ops (the window between the
    lock-free plan and the locked step). */
 const beforeLocks = vi.hoisted(() => ({ fn: null as (() => void) | null }));
+/* Pass 11 — runs (and is awaited) once, just before a design's landing takes the
+   row's book-op: the landing is the only single-book book-op taken with no opts
+   (the series walk passes `hintDir`). */
+const beforeLanding = vi.hoisted(() => ({ bookId: null as string | null, fn: null as (() => Promise<void>) | null }));
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
   const withBookOps: typeof actual.withBookOps = (ids, fn, opts) => {
@@ -48,7 +52,15 @@ vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
     }
     return actual.withBookOps(ids, fn, opts);
   };
-  return { ...actual, withBookOps };
+  const withBookOp = (async (id: string, fn: never, opts?: never) => {
+    if (beforeLanding.fn && !opts && id === beforeLanding.bookId) {
+      const run = beforeLanding.fn;
+      beforeLanding.fn = null;
+      await run();
+    }
+    return (actual.withBookOp as (...a: unknown[]) => unknown)(id, fn, opts);
+  }) as typeof actual.withBookOp;
+  return { ...actual, withBookOps, withBookOp };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -198,6 +210,8 @@ beforeAll(async () => {
 beforeEach(() => {
   requested = [];
   beforeLocks.fn = null;
+  beforeLanding.fn = null;
+  beforeLanding.bookId = null;
   gate.release?.(); // a test that failed while holding a render must not wedge the next
   gate.hold = false;
   gate.entered = null;
@@ -988,5 +1002,74 @@ describe('pass 10, #4028 (owner decision: stage, then re-check under the locks)'
       .send({ previewVoiceId: two.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(onePromotesTwo.status).toBe(400);
     oneIntact();
+  });
+});
+
+describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before it stamps)', () => {
+  const legacySlot = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+  /* Legacy One <- Two (<- Three), One designed; nobody has a uuid yet. */
+  const seedLegacyChain = (three = false) => {
+    reset();
+    writeBook('Book One', [{ ...legacy, ...legacySlot }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...legacySlot }]);
+    if (three) writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two'), ...legacySlot }]);
+    writeFileSync(pt('qwen-v_wren'), ORIG);
+  };
+  const keyFile = (t: Title) => pt(row(t).voiceUuid ? `qwen-${row(t).voiceUuid}` : 'qwen-v_wren');
+
+  it('P11-3: Design & compare on Two, then Cancel: both books still speak One’s voice', async () => {
+    seedLegacyChain();
+    const d = await design('Book Two', { preview: true });
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(n).toBeTruthy();
+    expect(row('Book One').voiceUuid).toBe(n); // the mint still unifies the series voice
+    const cancel = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: d.body.voiceId });
+    expect(cancel.status).toBe(200);
+    expect(readFileSync(keyFile('Book One'))).toEqual(ORIG);
+    expect(readFileSync(keyFile('Book Two'))).toEqual(ORIG);
+    expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
+  });
+
+  it('P11-3: a never-designed legacy key has nothing to copy, so only the designing row is stamped', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    const d = await design('Book Two');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(row('Book Two').voiceUuid).toBeTruthy();
+    expect(row('Book One').voiceUuid).toBeUndefined();
+    expect(readdirSync(qwenDir()).sort()).toEqual([`qwen-${row('Book Two').voiceUuid}.pt`]);
+  });
+
+  it("P11-2: Don't reuse on Two lands between Three's mint and its landing: One keeps a voice file", async () => {
+    seedLegacyChain(true);
+    beforeLanding.bookId = ids['Book Three'];
+    let dec: { status: number } | undefined;
+    beforeLanding.fn = async () => {
+      dec = await decline('Book Two', 'Book One');
+    };
+    const d = await design('Book Three');
+    expect(dec?.status).toBe(200);
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const x = row('Book Three').voiceUuid;
+    expect(row('Book Two').voiceUuid).toBe(x);
+    expect(d.body.voiceId).toBe(`qwen-${x}`);
+    expect(readFileSync(pt(`qwen-${x}`))).toEqual(NEW_PT);
+    expect(readFileSync(keyFile('Book One'))).toEqual(ORIG);
+  });
+
+  it("P11-2 guard: a decline whose source .pt is missing while the row has a designed slot fails retryably and moves nothing", async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
+    const twoBefore = row('Book Two');
+    const dec = await decline('Book Two', 'Book One');
+    expect(dec.status).toBe(500);
+    expect(dec.body.error).toMatch(/try again/);
+    expect(row('Book Two')).toEqual(twoBefore);
+    expect(readdirSync(qwenDir())).toEqual([]);
   });
 });

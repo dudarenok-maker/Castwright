@@ -586,7 +586,10 @@ describe('#3992 â€” a declined row with no uuid does not move the earlier bookâ€
     expect(readRow('Book One').voiceUuid).toBe(fresh);
   });
 
-  it('Nobody has designed yet, nobody declined: the series mint still stamps both rows with one uuid', async () => {
+  /* Pass 11 (owner decision: the series mint copies before it stamps) â€” with no
+     designed legacy voice there is nothing to copy, so only the designing row is
+     stamped: no other book is left on a uuid whose file may never exist. */
+  it('Nobody has designed yet, nobody declined: only the designing row is stamped', async () => {
     seed({ declinedVoiceFrom: undefined });
     noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
     noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
@@ -594,7 +597,7 @@ describe('#3992 â€” a declined row with no uuid does not move the earlier bookâ€
     expect(res.status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
     expect(fresh).toBeTruthy();
-    expect(readRow('Book One').voiceUuid).toBe(fresh);
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
   });
 
   it('Nobody has designed yet, Book Two declined: Book Two gets a uuid of its own and Book One is not stamped', async () => {

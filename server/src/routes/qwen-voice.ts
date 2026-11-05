@@ -467,6 +467,17 @@ export async function separateVoiceLocked(
   const newUuid = nanoid();
   const oldKey = oldUuid ? `qwen-${oldUuid}` : `qwen-${linkId}`;
   const copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
+  /* PR #4007 pass 11, P11-2 — a missing source `.pt` means "nobody designed it"
+     only when no row being moved has a designed slot. A row that has one lost its
+     file to a writer in flight (a landing between its rm and its rename): moving
+     it onto an empty key would leave it voiceless, so the step fails, retryably,
+     before anything is written. */
+  const sourceDesigned = copied.includes(qwenVoicePtPath(`qwen-${newUuid}`));
+  const refuseEmptyMove = (c: CastCharacter): void => {
+    if (!sourceDesigned && c.overrideTtsVoices?.qwen?.name && !characterHasClonedSlot(c)) {
+      throw new RetryableForkError("This character's voice is being saved right now; try again.");
+    }
+  };
   /* Every row moved, by book: their previews staged under the old key go (#4028). */
   const moved: Array<{ bookId: string; characterId: string }> = [];
   const movedSameBook: string[] = [];
@@ -485,6 +496,7 @@ export async function separateVoiceLocked(
       const followerBookId = scan.followers.find((f) => resolve(f.dir) === dir)!.bookId;
       const characters = cast.characters.map((c) => {
         if (!holds(c) || !linkIds.has(c.voiceId ?? c.id)) return c;
+        refuseEmptyMove(c);
         changed = true;
         moved.push({ bookId: followerBookId, characterId: c.id });
         return withForkedUuid(c, newUuid);
@@ -498,6 +510,7 @@ export async function separateVoiceLocked(
     for (let i = 0; i < fresh.characters.length; i++) {
       const c = fresh.characters[i];
       if ((c.voiceId ?? c.id) !== linkId || !holds(c)) continue;
+      refuseEmptyMove(c);
       fresh.characters[i] = withForkedUuid(c, newUuid);
       if (ownBookId) moved.push({ bookId: ownBookId, characterId: c.id });
       if (c.id !== characterId) movedSameBook.push(c.id);
@@ -592,6 +605,26 @@ export function requireDesignVoiceUuid(
   return uuid;
 }
 
+/* PR #4007 pass 11 — stamp `uuid` onto the designing row alone, under its book's
+   cast lock (re-read inside it). A row that gained a uuid meanwhile keeps it, and
+   a row that is gone answers undefined. */
+async function stampOwnRow(
+  bookDir: string,
+  characterId: string,
+  uuid: string,
+): Promise<string | undefined> {
+  return withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) return undefined;
+    const row = fresh.characters[idx];
+    if (row.voiceUuid) return row.voiceUuid;
+    fresh.characters[idx] = { ...row, voiceUuid: uuid };
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return uuid;
+  });
+}
+
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
    voice is designed (the .pt is named from qwenStorageKey, which reads the
    uuid). Idempotent for a live character: returns the existing uuid untouched.
@@ -599,8 +632,10 @@ export function requireDesignVoiceUuid(
    this inside its one span) so two concurrent designs of one character can't
    mint two uuids. Stamps the SAME uuid onto every linked-cast
    sibling (matching voiceId ?? id) so a series-shared voice keeps one identity
-   — series-scoped when seriesFilter is given (mirrors persistEmotionVariant),
-   else book-scoped. Returns undefined for an unknown character.
+   — series-scoped when seriesFilter is given (mirrors persistEmotionVariant;
+   since pass 11 only after copying the legacy key's designed base family to the
+   new key, and only the designing row when there is nothing to copy), else
+   book-scoped. Returns undefined for an unknown character.
 
    #3992: no design decides anything about a shared voice. "Don't reuse" already
    moved a declining row onto a voice of its own (cast-decline-voice-link.ts), so
@@ -622,12 +657,37 @@ export async function ensureCharacterVoiceUuid(
     /* forEachMatchingCastCharacter takes its own per-book cast lock as it
        walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
        unlocked and delegating; it must not gain a lock of its own. */
+    const linkId = character.voiceId ?? character.id;
     const uuid = nanoid();
+    /* PR #4007 pass 11, P11-3 (owner decision: the mint copies before it stamps) —
+       a linked legacy row is stamped only once `qwen-<uuid>` holds a copy of the
+       legacy key's base family, so a stamped row always has its file: a design
+       that never lands (Design & compare then Cancel, a failed landing, a decline
+       in between) leaves every stamped book speaking its own voice. With nothing
+       to copy (nobody designed the legacy key) only the designing row is stamped.
+       The caller holds the design lock. */
+    const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
+    if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
+      await removeFiles(copied);
+      return stampOwnRow(bookDir, characterId, uuid);
+    }
     /* A row that already has its own uuid keeps it: a separated row still shares
        `voiceId` with the earlier book, and restamping it would orphan its own
        designed voice. */
-    const stamp = (c: CastCharacter): CastCharacter => (c.voiceUuid ? c : { ...c, voiceUuid: uuid });
-    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, stamp);
+    let stampedAny = false;
+    const stamp = (c: CastCharacter): CastCharacter => {
+      if (c.voiceUuid) return c;
+      stampedAny = true;
+      return { ...c, voiceUuid: uuid };
+    };
+    try {
+      await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
+    } catch (e) {
+      /* A book stamped before the failure points at the copy, which is its own
+         voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
+      if (!stampedAny) await removeFiles(copied);
+      throw e;
+    }
     /* The row's uuid as the walk left it, not the one minted here: a row a
        decline stamped meanwhile keeps its own (#4028 (c)). */
     const after = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
