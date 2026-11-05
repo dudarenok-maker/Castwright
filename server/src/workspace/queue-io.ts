@@ -151,8 +151,8 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
 }
 
 /** Reorder the queue to match `desiredOrder` — a list of entry ids in the
- *  new order. The list MUST exclude the in-flight pinned entry (the
- *  frontend doesn't render a drag handle for it). Returns the new file
+ *  new order. The list MUST exclude every in-flight entry (the
+ *  frontend doesn't render a drag handle for them). Returns the new file
  *  on success; throws on mismatch (concurrent enqueue happened; client
  *  refetches + retries). */
 export function reorder(file: QueueFile, desiredOrder: string[]): QueueFile {

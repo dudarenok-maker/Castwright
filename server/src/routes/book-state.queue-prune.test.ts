@@ -147,3 +147,47 @@ describe('DELETE /api/books/:bookId prunes queue entries', () => {
     expect(res.status).toBe(204);
   });
 });
+
+/* #4034 -- the prune is a read -> write on the shared queue file, so it goes through serializeQueueMutation. Moving
+   its read above the span would let a same-tick queue write land between that read and the prune's write and be
+   erased by it. */
+describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
+  it('a same-tick /start, /pause and enqueue all survive the prune', async () => {
+    const { queueJsonPath, makeBookId } = await import('../workspace/paths.js');
+    const { writeQueueFile, readQueueFile } = await import('../workspace/queue-migrate.js');
+    const { queueRouter } = await import('./queue.js');
+    const queueApp = express();
+    queueApp.use(express.json());
+    queueApp.use('/api/queue', queueRouter);
+    const title = 'Prune Race';
+    const bookId = makeBookId(AUTHOR, SERIES, title);
+    const e = (id: string, bid: string, order: number) => ({
+      id, bookId: bid, chapterId: order + 1, scope: 'this' as const, addedAt: '2026-05-23T00:00:00.000Z', status: 'queued' as const, order,
+    });
+    for (let round = 0; round < 10; round++) {
+      const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(bookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId, manuscriptId: 'm_prune_race', title, author: AUTHOR, series: SERIES,
+          updatedAt: '2026-05-23T00:00:00.000Z', schema: 1, chapters: [],
+        }),
+      );
+      await writeQueueFile(queueJsonPath(), {
+        entries: [e('p1', bookId, 0), e('k1', 'keep-book', 1), e('k2', 'keep-book', 2)],
+        paused: false,
+      });
+      const rs = await Promise.all([
+        request(app).delete(`/api/books/${bookId}`),
+        request(queueApp).post('/api/queue/k1/start'),
+        request(queueApp).post('/api/queue/pause').send({ paused: true }),
+        request(queueApp).post('/api/queue/enqueue').send({ entries: [{ id: `n${round}`, bookId: 'keep-book', chapterId: 9, scope: 'this' }] }),
+      ]);
+      expect(rs.map((r) => r.status)).toEqual([204, 200, 200, 200]);
+      const q = await readQueueFile(queueJsonPath());
+      expect(q.paused).toBe(true);
+      expect(q.entries.map((x) => `${x.id}:${x.status}`).sort()).toEqual(['k1:in_progress', 'k2:queued', `n${round}:queued`].sort());
+    }
+  });
+});
