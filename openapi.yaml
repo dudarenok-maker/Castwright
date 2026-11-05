@@ -4662,7 +4662,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid]
+                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid, movedCharacterIds]
                 properties:
                   declinedVoiceFrom:
                     type: array
@@ -4674,6 +4674,10 @@ paths:
                     type: string
                     nullable: true
                     description: The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own).
+                  movedCharacterIds:
+                    type: array
+                    items: { type: string }
+                    description: Other characters in the same book that moved onto the new voiceUuid with it (they shared its voice key). Empty when nothing moved. The client mirrors their new voiceUuid.
         '400':
           description: Missing `fromBookId`, or it names the book itself
         '404':

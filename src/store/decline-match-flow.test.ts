@@ -48,7 +48,7 @@ function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books'
 
 beforeEach(() => {
   vi.mocked(api.declineVoiceLink).mockReset();
-  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null });
+  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
 });
 
 describe('declineMatchFlow (#3992)', () => {
@@ -110,7 +110,7 @@ describe('declineMatchFlow (#3992)', () => {
     const order: string[] = [];
     vi.mocked(api.declineVoiceLink).mockImplementation(async () => {
       order.push(`request saw matchedFrom=${store.getState().cast.characters[0].matchedFrom?.bookId}`);
-      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null };
+      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
     });
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(order).toEqual(['request saw matchedFrom=book-one']);
@@ -124,7 +124,7 @@ describe('declineMatchFlow (#3992)', () => {
     vi.mocked(api.declineVoiceLink).mockImplementation(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null });
+          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
         }),
     );
     const pending = (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -147,6 +147,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: null,
+      movedCharacterIds: [],
     });
     const store = makeStore([matched]);
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -173,6 +174,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: 'u_own',
+      movedCharacterIds: [],
     });
     const store = makeStore([
       {
@@ -185,6 +187,30 @@ describe('declineMatchFlow (#3992)', () => {
     const row = store.getState().cast.characters[0] as Character & { voiceUuid?: string };
     expect(row.voiceUuid).toBe('u_own');
     expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('mirrors the same-book rows the route moved with it (pass 10), and only those', async () => {
+    vi.mocked(api.declineVoiceLink).mockResolvedValue({
+      declinedVoiceFrom: ['book-one'],
+      declinedVoiceUuids: ['u_shared'],
+      voiceUuid: 'u_own',
+      movedCharacterIds: ['wren_b'],
+    });
+    const onShared = {
+      voiceUuid: 'u_shared',
+      overrideTtsVoices: { qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+    };
+    const store = makeStore([
+      { ...matched, ...onShared } as unknown as Character,
+      { ...matched, id: 'wren_b', matchedFrom: undefined, ...onShared } as unknown as Character,
+      { ...matched, id: 'other', matchedFrom: undefined, ...onShared } as unknown as Character,
+    ]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    const [, moved, other] = store.getState().cast.characters as Array<Character & { voiceUuid?: string }>;
+    expect(moved.voiceUuid).toBe('u_own');
+    expect(moved.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    expect(other.voiceUuid).toBe('u_shared');
+    expect(other.overrideTtsVoices?.qwen?.variants).toBeDefined();
   });
 
   it('a failed record applies no marker either (the link and the row stay as they were)', async () => {

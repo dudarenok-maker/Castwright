@@ -37,7 +37,7 @@ export function declineMatchFlow(characterId: string) {
     const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
 
     let marker:
-      | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null }
+      | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null; movedCharacterIds?: string[] }
       | undefined;
     if (bookId && fromBookId) {
       try {
@@ -57,11 +57,16 @@ export function declineMatchFlow(characterId: string) {
     if (!selectIsOpenBook(getState(), openBook)) return;
     dispatch(castActions.declineMatch(characterId));
     if (marker) {
-      const { voiceUuid, ...lists } = marker;
-      dispatch(castActions.setDeclinedVoice({ characterId, ...lists }));
-      /* The route may have moved the row onto a voice of its own; the reducer drops
-         the stale variant slots when the uuid changes. */
-      if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId, voiceUuid }));
+      const { voiceUuid, movedCharacterIds, declinedVoiceFrom, declinedVoiceUuids } = marker;
+      dispatch(castActions.setDeclinedVoice({ characterId, declinedVoiceFrom, declinedVoiceUuids }));
+      /* The route may have moved the row onto a voice of its own, with the other
+         rows of this book on the same key (pass 10); the reducer drops the stale
+         variant slots when the uuid changes. */
+      if (voiceUuid) {
+        for (const id of [characterId, ...(movedCharacterIds ?? [])]) {
+          dispatch(castActions.setCharacterVoiceUuid({ characterId: id, voiceUuid }));
+        }
+      }
     }
   };
 }

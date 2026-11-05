@@ -118,6 +118,8 @@ castDeclineVoiceLinkRouter.post(
             declinedVoiceFrom: out.row.declinedVoiceFrom ?? [fromBookId],
             declinedVoiceUuids: out.row.declinedVoiceUuids ?? [],
             voiceUuid: out.voiceUuid ?? null,
+            /* Other rows of this book that moved with it, for the client to mirror. */
+            movedCharacterIds: out.movedSameBook,
           },
         };
       })();

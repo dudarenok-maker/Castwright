@@ -4984,6 +4984,8 @@ export interface DeclineVoiceLinkResponse {
   declinedVoiceFrom: string[];
   declinedVoiceUuids: string[];
   voiceUuid: string | null;
+  /** Other rows of the same book that moved onto `voiceUuid` with it. */
+  movedCharacterIds: string[];
 }
 
 async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
@@ -5010,7 +5012,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
 
 async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   await wait(80);
-  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null };
+  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
 }
 
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task

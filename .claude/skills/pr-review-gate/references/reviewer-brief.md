@@ -1050,6 +1050,21 @@ recite:
     rename) and test each move; better, establish the invariant at the event
     instead of reconstructing it afterwards.
 
+83. **An inclusion set computed by a graph walk that can contain the very
+    party the operation excludes** — PR #4007 pass 10 (#3992): "Don't reuse"
+    moved the decliner together with its FOLLOWERS, the rows whose link chain
+    leads down to it. Confirm's auto-match links an earlier book to a later one
+    too, so a cycle through the declined book made that book's own row a
+    follower: the decline left the decliner on the declined voice, and a later
+    design moved the declined book's row onto the decliner's new voice. The walk
+    was correct as a walk; nothing told it which node the operation is defined
+    against. Checkable: for every set a walk builds and an operation then acts
+    on, name the parties the operation must never touch (the declined book, the
+    source of a copy, the row being excluded) and test a cycle and a back-edge
+    that reach each of them. The fix belongs in the walk (that node cuts the
+    chain), not in a filter afterwards, so what lies past it is not reached
+    either.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

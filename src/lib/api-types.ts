@@ -12981,6 +12981,8 @@ export interface operations {
                         declinedVoiceUuids: string[];
                         /** @description The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own). */
                         voiceUuid: string | null;
+                        /** @description Other characters in the same book that moved onto the new voiceUuid with it (they shared its voice key). Empty when nothing moved. The client mirrors their new voiceUuid. */
+                        movedCharacterIds: string[];
                     };
                 };
             };

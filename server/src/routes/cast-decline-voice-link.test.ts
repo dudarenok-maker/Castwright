@@ -180,7 +180,7 @@ describe('the marker', () => {
   it('records the declined book on the row, and only that row', async () => {
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two' });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
     const rows = readRows('Book Two');
     expect(rows[0].declinedVoiceFrom).toEqual([oneId]);
     expect(rows[1].declinedVoiceFrom).toBeUndefined();
@@ -239,7 +239,7 @@ describe('the separation: after a decline the row is on a voice no other book ho
     const two = readRows('Book Two')[0];
     const fresh = two.voiceUuid as string;
     expect(fresh).not.toBe('u_shared');
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh, movedCharacterIds: [] });
     expect(two.overrideTtsVoices.qwen.variants).toBeUndefined();
     for (const base of ['.pt', '.json', '__1.7b.pt', '__master.wav']) {
       expect(readFileSync(voiceFile(`qwen-${fresh}${base}`)).equals(FAMILY[`qwen-u_shared${base}`])).toBe(true);
@@ -352,17 +352,19 @@ describe('the separation: after a decline the row is on a voice no other book ho
       castFile('Book Two'),
       JSON.stringify({ characters: [rows[0], { ...rows[0], id: 'wren_b', matchedFrom: undefined }, wren({ id: 'x', voiceId: 'v_x', voiceUuid: 'u_shared' })] }),
     );
-    await decline(twoId, 'wren', { fromBookId: oneId });
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
     const after = readRows('Book Two');
     expect(after[1].voiceUuid).toBe(after[0].voiceUuid);
     expect(after[2].voiceUuid).toBe('u_shared');
+    /* The client mirrors the same-book rows that moved (pass 10): only wren_b. */
+    expect(res.body.movedCharacterIds).toEqual(['wren_b']);
   });
 
   it('only its followers (or nobody) hold the voice: no separation, the marker alone is recorded', async () => {
     book('Book Two', [wren({ voiceUuid: 'u_two', ...slot('u_two', ['angry']) })]);
     book('Book Three', [wren({ voiceUuid: 'u_two', ...linkTo('Book Two') })]);
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two' });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
     expect(Object.keys(readRows('Book Two')[0].overrideTtsVoices.qwen.variants)).toEqual(['angry']);
     expect(voiceFiles()).toEqual([]);
   });
