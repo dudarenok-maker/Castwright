@@ -278,7 +278,7 @@ describe('main() boot order (#3713, PR #4004)', () => {
     expect(sweep).toBeLessThan(listen);
   });
 
-  it('re-reads the persisted repaired-id gate before the sweep runs (pass 3: the gate lasts 7 days)', () => {
+  it('re-reads the persisted repaired-id gate before the sweep runs (pass 3: the gate outlives the process)', () => {
     expect(at('await loadRepairedBookGate();')).toBeLessThan(at('const repaired = await repair();'));
   });
 

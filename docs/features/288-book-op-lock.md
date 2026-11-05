@@ -944,7 +944,7 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
   the mount as well. Confirmed safe, with why: `POST /api/voice-library/promote` (reads the book's character, writes
   only the voice library), `POST /api/voice-library/:uuid/revoke` and `DELETE /api/voice-library/:uuid` (fan out by
   voice uuid, name no book),
-  `POST /api/queue/*` other than `enqueue` (see below), `POST /api/books` and `POST /api/import` (mint a new book),
+  `POST /api/queue/{reorder,pause}` (pause flips a flag; reorder only reorders the entry ids it is given, keeps every in_progress entry (all of them, not just the first; #4029), drops nothing and starts no render; `clear` and every route that takes an entry id are gated, see below), `POST /api/books` and `POST /api/import` (mint a new book),
   `library-sync-manifest` (its `bookId` query only selects a manifest).
 - **A series fan-out that would write a repaired series-mate is refused whole (owner decision, PR #4004 pass 6,
   replacing pass 5's skip).** The mates of `series-patch`, `voice-override-linked`, `cast/tier`, `PUT
@@ -966,8 +966,20 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
 - **The queue enqueue is gated (pass 6).** `POST /api/queue/enqueue` names its book in the body; an entry for a
   repaired id from a request without the current epoch refuses the whole batch (409), so a stale tab's Regenerate
   cannot leave a queue entry the dispatcher later renders onto the twin that kept the id. `queue-thunks.ts` posts
-  through `repairFetch`, so the refusal reloads the page. The other queue routes stay ungated: they act on entries
-  that already exist.
+  through `repairFetch`, so the refusal reloads the page. `POST /api/queue/:entryId/{start,retry,confirm-fallback,complete,skip-fallback}`
+  and `DELETE /api/queue/:entryId` carry only an entry id, so they are gated by the entry's own `bookId` (#4029; an
+  id naming no entry stays an idempotent no-op): a stale `/start` can no longer strand a fresh page's entry, a stale
+  fail+retry cannot requeue it, and a stale `/complete`, cancel or skip is refused whole like every other write from a
+  page that predates the repair. `POST /api/queue/clear` is gated by the bookIds of the entries it would drop (the bulk form of DELETE; a non-force clear that leaves a repaired book's in_progress entry alone needs no epoch for it). Only `reorder` and `pause` stay ungated: neither drops an entry (`reorder` keeps every in_progress entry, #4029), writes a book or starts a render. Each handler
+  settles the gate-file retry BEFORE it reads the queue, so no await sits between the queue's read and its write. `refuseUnreadRepairedBooks` and `refuseGatedSeriesFanOut`
+  retry an unreadable gate file first, the way the mount middlewares do (#4029).
+- **Known limit (#4029 pass 2): a page loaded while the gate file was unreadable at boot.** `GET /api/info` serves
+  `repairEpoch: null` in that window, so such a page sends no epoch and the mount gate lets its render of a gated book
+  start. If the file is then restored and that chapter fails, the page's own `POST /api/queue/:id/complete
+  {outcome:'failed'}` runs the retry, merges the file and is refused (409, the page reloads). The entry stays
+  `in_progress` ("In flight") because the job is already deregistered, so the SSE-close orphan reset skips it and a
+  fresh page's dispatcher claims only `queued` entries; force-Remove (or a restart) clears it. The window needs an
+  unreadable gate file at boot, a restore mid-render and a failing chapter. Accepted, with no server-side failure mark.
 - One mount in `app.ts` (`app.use('/api/books/:bookId', repairedBookGate)` and `app.use('/api/manuscripts/:id', ...)`)
   ahead of every router under those paths, so a new route is covered without being listed. `repaired-book-gate.test.ts`
   pins that order against `app.ts` itself.

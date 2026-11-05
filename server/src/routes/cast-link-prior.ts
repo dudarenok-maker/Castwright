@@ -94,7 +94,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
 
   /* #3713 -- the path book is gated by the app-level repairedBookGate; the TARGET is named in the
      body (and its cast.json is written below), so the path gate cannot see it. */
-  if (refuseUnreadRepairedBooks([targetBookId], req, res)) return;
+  if (await refuseUnreadRepairedBooks([targetBookId], req, res)) return;
 
   /* #3711 -- both books' book-op (sorted, so the opposite-role call cannot AB/BA),
      then both cast locks; the handles are resolved UNDER the locks, so a rename

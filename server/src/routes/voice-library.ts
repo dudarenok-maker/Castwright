@@ -1631,7 +1631,7 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
   try {
     const { voiceUuid } = req.params;
     /* #3713 pass 3 -- the book is named in the body, so the path gate cannot see it. */
-    if (refuseUnreadRepairedBooks([(req.body as { bookId?: unknown } | undefined)?.bookId], req, res)) return;
+    if (await refuseUnreadRepairedBooks([(req.body as { bookId?: unknown } | undefined)?.bookId], req, res)) return;
 
     return await withLibraryVoiceLock(voiceUuid, async () => {
       const entry = await readEntry(voiceUuid);
@@ -2075,7 +2075,7 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
   try {
     const { voiceUuid } = req.params;
     /* #3713 pass 3 -- the book is named in the query, so the path gate cannot see it. */
-    if (refuseUnreadRepairedBooks([req.query.bookId], req, res)) return;
+    if (await refuseUnreadRepairedBooks([req.query.bookId], req, res)) return;
     const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
     const characterId =
       typeof req.query.characterId === 'string' ? req.query.characterId : undefined;

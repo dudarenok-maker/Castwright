@@ -43,10 +43,12 @@
      PUT    /api/voices/:voiceId/override             (scope 'series': body or query bookId)
      POST   /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
      DELETE /api/books/:bookId/cast/:characterId/not-linked-to    (body otherBookId; the path book by the mount)
+     POST   /api/queue/enqueue                                    (every entry's bookId)
+     POST   /api/queue/:entryId/{start,retry,confirm-fallback,complete,skip-fallback} and DELETE /api/queue/:entryId
+                                                                  (the entry's own bookId; an id naming no entry is a no-op)
+     POST   /api/queue/clear                                      (the bookIds of the entries it would drop)
    Confirmed safe, not gated: POST /api/voice-library/promote (reads the origin book, writes only the voice
-   library); voice-library revoke and DELETE /:uuid, and PUT /api/voices/:id/override with scope 'workspace'
-   (keyed by voice, name no book); /api/queue/* (writes the queue); POST /api/books and /api/import (mint a
-   new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
+   library); voice-library revoke and DELETE /:uuid; the queue routes that write no book and drop no entry (pause flips a flag; reorder only reorders the ids it is given, keeps EVERY in_progress entry, drops nothing, starts no render); POST /api/books and /api/import (mint a new book); library-sync-manifest (a query bookId only selects a manifest). See plan 288, "Every other write".
 
    A series fan-out is REFUSED whole, never partly applied. Series-patch, voice-override-linked, cast/tier,
    the series (and workspace) scope of PUT /api/voices/:id/override, and the design writers that propagate a
@@ -133,6 +135,7 @@ let writing: Promise<void> = Promise.resolve();
  *  unknown, so the file is never overwritten with this process's own, and a gated write retries the read. */
 let unreadable = false;
 let lastReadAttempt = 0;
+let retrying: Promise<void> | null = null;
 const READ_RETRY_DELAYS_MS = [100, 300];
 const READ_RETRY_INTERVAL_MS = 1000;
 
@@ -303,6 +306,8 @@ export function __clearRepairedBookGateMemoryForTest(): void {
   epoch = null;
   mintedThisProcess = false;
   unreadable = false;
+  retrying = null;
+  lastReadAttempt = 0;
 }
 
 export function __resetRepairedBookGateForTest(): void {
@@ -317,6 +322,9 @@ const LISTENER_WRITE_PATHS: ReadonlySet<string> = new Set(['/listen-progress', '
 
 /** True when the request carries the current epoch (a page loaded after the newest repair). */
 const carriesEpoch = (header: string | undefined): boolean => header !== undefined && header === requiredEpoch();
+
+/** True when `req` carries the current epoch: nothing it names can be refused. */
+export const carriesRepairEpoch = (req: Request): boolean => carriesEpoch(req.get(REPAIR_EPOCH_HEADER));
 
 function refuseUnlessCurrent(gated: boolean, req: Request, res: Response, next: NextFunction): void {
   if (!gated || carriesEpoch(req.get(REPAIR_EPOCH_HEADER))) {
@@ -338,10 +346,20 @@ export async function repairedBookGate(req: Request, res: Response, next: NextFu
 /** A gate file that could not be read at boot is retried by the next gated write (at most once a second), so the
  *  ids it names are refused again as soon as it can be read instead of staying ungated for the whole boot. A
  *  retry that reads it writes the merge back, so this boot's own repairs survive the next restart. */
-async function retryUnreadableGate(): Promise<void> {
-  if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return;
-  await ingestGateFile(Date.now(), false);
-  if (!unreadable) await persistRepairedBookGate();
+export function retryUnreadableGate(): Promise<void> {
+  /* One retry at a time: a request that arrives while the read is in flight AWAITS it. Returning at once (the
+     attempt time is stamped before the read) would let it pass ungated for a file that is readable right now. */
+  if (retrying) return retrying;
+  if (!unreadable || Date.now() - lastReadAttempt < READ_RETRY_INTERVAL_MS) return Promise.resolve();
+  retrying = (async () => {
+    try {
+      await ingestGateFile(Date.now(), false);
+    } finally {
+      retrying = null;
+    }
+    if (!unreadable) await persistRepairedBookGate();
+  })();
+  return retrying;
 }
 
 /** `app.use('/api/manuscripts/:id', ...)`: the manuscriptId-keyed analysis writes. */
@@ -355,7 +373,14 @@ export async function repairedManuscriptGate(req: Request, res: Response, next: 
 /** Gate a write that names its book(s) in the request BODY or query, not the path (the routes listed in the
  *  header comment): if any named book is gated, the request must carry the current epoch. Answers the 409
  *  itself; returns true when it did, so the handler returns. */
-export function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): boolean {
+export async function refuseUnreadRepairedBooks(bookIds: readonly unknown[], req: Request, res: Response): Promise<boolean> {
+  await retryUnreadableGate();
+  return refuseGatedBooksNow(bookIds, req, res);
+}
+
+/** The check of `refuseUnreadRepairedBooks` without the retry: synchronous, for a handler that has already awaited
+ *  `retryUnreadableGate()` and must not await between its read and its write. */
+export function refuseGatedBooksNow(bookIds: readonly unknown[], req: Request, res: Response): boolean {
   const gated = bookIds.some((id) => typeof id === 'string' && id !== '' && isGatedBook(id));
   let passed = false;
   refuseUnlessCurrent(gated, req, res, () => {

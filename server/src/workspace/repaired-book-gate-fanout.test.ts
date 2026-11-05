@@ -161,6 +161,13 @@ describe('POST /books/:id/cast/tier with a repaired series-mate (#3713)', () => 
     expect(everything()).toEqual(before);
   });
 
+  it('a stale epoch is refused the same way (#4029)', async () => {
+    await repaired();
+    const before = everything();
+    refused(await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Repair-Epoch', 'pre-repair').send(body));
+    expect(everything()).toEqual(before);
+  });
+
   it('with the current epoch every mate is written', async () => {
     await repaired();
     const res = await request(app).post(`/api/books/${SRC}/cast/tier`).set('X-Repair-Epoch', E()).send(body);
@@ -189,6 +196,13 @@ describe('PUT /voices/:id/override with a repaired series-mate (#3713)', () => {
     expect(read(src)).toContain('af_heart');
   });
 
+  it('workspace scope, a stale epoch: refused whole (#4029)', async () => {
+    await repaired();
+    const before = everything();
+    refused(await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', 'pre-repair').send(workspace));
+    expect(everything()).toEqual(before);
+  });
+
   it('workspace scope, no epoch: refused whole; with the current epoch the kept twin is written', async () => {
     await repaired();
     const before = everything();
@@ -197,6 +211,58 @@ describe('PUT /voices/:id/override with a repaired series-mate (#3713)', () => {
     const res = await request(app).put('/api/voices/c0/override').set('X-Repair-Epoch', E()).send(workspace);
     expect(res.status).toBe(204);
     expect(read(kept)).toContain('af_heart');
+  });
+});
+
+/* #4029 item 2 -- the body/series checks retry an unreadable gate file the way the mount middlewares do. */
+describe('a gate file that was unreadable at boot and is readable now (#4029)', () => {
+  const file = () => paths.repairedBookGateJsonPath();
+  /* A directory where the file should be: readFile fails with EISDIR -- the "exists but unreadable" shape. */
+  const makeUnreadable = () => {
+    rmSync(file(), { recursive: true, force: true });
+    mkdirSync(file(), { recursive: true });
+  };
+  const restoreFileNaming = (...ids: string[]) => {
+    rmSync(file(), { recursive: true, force: true });
+    writeFileSync(
+      file(),
+      JSON.stringify({ version: 2, epoch: 'ep-file', entries: ids.map((bookId) => ({ bookId, repairedAt: new Date().toISOString() })), manuscripts: [] }),
+    );
+  };
+  async function unreadableThenRestored(): Promise<void> {
+    seed('Book', DUP, { rendered: true });
+    kept = seed('Book other', 'auth__ser__kept', { rendered: true });
+    src = seed('Src', SRC, { rendered: false });
+    gate.__clearRepairedBookGateMemoryForTest();
+    makeUnreadable();
+    await gate.loadRepairedBookGate();
+    expect(gate.gatedBookIds()).toEqual([]);
+    restoreFileNaming('auth__ser__kept');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+  }
+  afterEach(() => {
+    vi.useRealTimers();
+    gate.__clearRepairedBookGateMemoryForTest();
+    rmSync(file(), { recursive: true, force: true });
+  });
+
+  it('a workspace-scope override without the epoch is refused whole and writes nothing', async () => {
+    await unreadableThenRestored();
+    const before = everything();
+    refused(await request(app).put('/api/voices/c0/override').send({ override: { engine: 'kokoro', name: 'af_heart' } }));
+    expect(everything()).toEqual(before);
+  });
+
+  it('a series-scope override naming the gated book is refused whole and writes nothing', async () => {
+    await unreadableThenRestored();
+    const before = everything();
+    refused(
+      await request(app)
+        .put('/api/voices/c0/override')
+        .send({ override: { engine: 'kokoro', name: 'af_heart' }, scope: 'series', bookId: 'auth__ser__kept' }),
+    );
+    expect(everything()).toEqual(before);
   });
 });
 

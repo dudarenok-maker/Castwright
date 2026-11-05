@@ -69,6 +69,7 @@ import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { serializeQueueMutation } from '../workspace/queue-mutex.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import {
@@ -2466,11 +2467,13 @@ bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
      "book not found" rather than corrupting the queue. */
   const pruneQueue = async (): Promise<void> => {
     try {
-      const queue = await readQueueFile(queueJsonPath());
-      const pruned = pruneByBook(queue, req.params.bookId);
-      if (pruned.entries.length !== queue.entries.length) {
-        await writeQueueFile(queueJsonPath(), pruned);
-      }
+      await serializeQueueMutation(async () => {
+        const queue = await readQueueFile(queueJsonPath());
+        const pruned = pruneByBook(queue, req.params.bookId);
+        if (pruned.entries.length !== queue.entries.length) {
+          await writeQueueFile(queueJsonPath(), pruned);
+        }
+      });
     } catch (queueErr) {
       console.warn(
         `[book-state] queue prune failed for ${req.params.bookId}: ${(queueErr as Error).message}`,

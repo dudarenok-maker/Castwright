@@ -1,7 +1,7 @@
 /* #3713 / PR #4004 (owner decision after pass 5) — the client half of the server's repaired-id write gate
    (server/src/workspace/repaired-book-gate.ts).
 
-   For 7 days after a duplicate-bookId repair the server refuses every book-content write that names a
+   From a duplicate-bookId repair until the repaired book is deleted (no expiry) the server refuses every book-content write that names a
    repaired id, with 409 `book_repaired_reload`, unless the request carries `X-Repair-Epoch` equal to the
    current repair epoch. This page reads that epoch ONCE, from `GET /api/info`, when it loads
    (`loadRepairEpoch`, called by main.tsx), and `repairFetch` sends it on every write. It is never

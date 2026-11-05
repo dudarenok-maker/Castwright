@@ -151,6 +151,13 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 6)', () =
     expect(read(kept)).toContain('qwen-c0');
   });
 
+  it('a stale epoch is refused at start too (#4029)', async () => {
+    await repaired();
+    const before = [read(kept), read(src)];
+    refused(await single('pre-repair'));
+    expect([read(kept), read(src)]).toEqual(before);
+  });
+
   it('CONTROL: with no repair a start needs no epoch', async () => {
     seed('Book', 'auth__ser__book', { rendered: true });
     src = seed('Src', SRC, { rendered: false });

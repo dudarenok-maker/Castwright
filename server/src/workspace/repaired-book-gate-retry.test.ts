@@ -1,0 +1,152 @@
+/* #4029 pass 1 -- the retry of an unreadable gate file. (1) Concurrent gated requests that arrive while the first
+   retry's read is in flight must AWAIT it, not pass ungated. (2) The retry inside refuseUnreadRepairedBooks is
+   pinned through a route that reaches only that check (POST /api/queue/enqueue). */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import type { Request, Response } from 'express';
+import request from 'supertest';
+
+let root: string;
+let app: Express;
+let paths: typeof import('./paths.js');
+let gate: typeof import('./repaired-book-gate.js');
+let qm: typeof import('./queue-migrate.js');
+
+beforeAll(async () => {
+  root = mkdtempSync(join(tmpdir(), 'audiobook-repaired-gate-retry-'));
+  process.env.WORKSPACE_DIR = root;
+  paths = await import('./paths.js');
+  gate = await import('./repaired-book-gate.js');
+  qm = await import('./queue-migrate.js');
+  const { queueRouter } = await import('../routes/queue.js');
+  app = express();
+  app.use(express.json());
+  app.use('/api/books/:bookId', gate.repairedBookGate);
+  app.post('/api/books/:bookId/x', (_req, res) => res.json({ ok: true }));
+  app.use('/api/queue', queueRouter);
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+}, 120_000);
+
+afterAll(() => {
+  vi.restoreAllMocks();
+  rmSync(root, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  gate.__clearRepairedBookGateMemoryForTest();
+  rmSync(paths.repairedBookGateJsonPath(), { recursive: true, force: true });
+  rmSync(paths.queueJsonPath(), { force: true });
+});
+
+/* A directory where the file should be: readFile fails with EISDIR -- the "exists but unreadable" shape. */
+async function unreadableThenRestored(...ids: string[]): Promise<void> {
+  const file = paths.repairedBookGateJsonPath();
+  gate.__clearRepairedBookGateMemoryForTest();
+  rmSync(file, { recursive: true, force: true });
+  mkdirSync(file, { recursive: true });
+  await gate.loadRepairedBookGate();
+  expect(gate.gatedBookIds()).toEqual([]);
+  rmSync(file, { recursive: true, force: true });
+  writeFileSync(
+    file,
+    JSON.stringify({ version: 2, epoch: 'ep-file', entries: ids.map((bookId) => ({ bookId, repairedAt: new Date().toISOString() })), manuscripts: [] }),
+  );
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10_000);
+}
+
+const noEpoch = { get: () => undefined } as unknown as Request;
+const makeRes = () => {
+  const res = { status: vi.fn(), json: vi.fn() };
+  res.status.mockReturnValue(res);
+  return res as unknown as Response & typeof res;
+};
+const enqueueBody = (id: string) => ({ entries: [{ id, bookId: 'kept', chapterId: 1, scope: 'this' }] });
+
+describe('concurrent gated requests during the retry read (#4029)', () => {
+  it('two simultaneous refuseUnreadRepairedBooks calls both refuse', async () => {
+    await unreadableThenRestored('kept');
+    const [a, b] = await Promise.all([
+      gate.refuseUnreadRepairedBooks(['kept'], noEpoch, makeRes()),
+      gate.refuseUnreadRepairedBooks(['kept'], noEpoch, makeRes()),
+    ]);
+    expect({ a, b }).toEqual({ a: true, b: true });
+  });
+
+  it('two simultaneous no-epoch POST /api/queue/enqueue both answer 409', async () => {
+    await unreadableThenRestored('kept');
+    const [x, y] = await Promise.all([
+      request(app).post('/api/queue/enqueue').send(enqueueBody('q1')),
+      request(app).post('/api/queue/enqueue').send(enqueueBody('q2')),
+    ]);
+    expect([x.status, y.status]).toEqual([409, 409]);
+  });
+
+  it('two simultaneous writes through the mounted /api/books/:bookId gate both answer 409', async () => {
+    await unreadableThenRestored('kept');
+    const [x, y] = await Promise.all([request(app).post('/api/books/kept/x'), request(app).post('/api/books/kept/x')]);
+    expect([x.status, y.status]).toEqual([409, 409]);
+  });
+});
+
+describe('the retry inside refuseUnreadRepairedBooks (#4029)', () => {
+  /* /api/queue/enqueue reaches ONLY the body-named check (no mount middleware, no series fan-out). */
+  it('POST /api/queue/enqueue for an id the restored file names is refused without the epoch', async () => {
+    await unreadableThenRestored('kept');
+    const res = await request(app).post('/api/queue/enqueue').send(enqueueBody('q1'));
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('book_repaired_reload');
+  });
+
+  it('CONTROL: an id the restored file does not name is enqueued', async () => {
+    await unreadableThenRestored('kept');
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'q2', bookId: 'unrelated', chapterId: 1, scope: 'this' }] });
+    expect(res.status).toBe(200);
+  });
+});
+
+/* #4029 pass 3 -- POST /api/queue/clear takes the retry itself (it has no body id to reach refuseUnreadRepairedBooks):
+   the gate file was unreadable at boot and restored since. Without the retry the gate is empty and clear drops it. */
+describe('the retry inside POST /api/queue/clear (#4029 pass 3)', () => {
+  it('a no-epoch force clear that would drop the repaired book is refused once the restored file is read', async () => {
+    await unreadableThenRestored('kept');
+    const before = await qm.readQueueFile(paths.queueJsonPath());
+    await qm.writeQueueFile(paths.queueJsonPath(), {
+      ...before,
+      entries: [{ id: 'e1', bookId: 'kept', chapterId: 1, scope: 'this', status: 'queued', order: 0, addedAt: '2026-01-01T00:00:00.000Z' }],
+    } as never);
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(409);
+    expect(((await request(app).get('/api/queue')).body.entries as Array<{ id: string }>).map((e) => e.id)).toEqual(['e1']);
+  });
+});
+
+describe('a retry that fails does not end the retrying (#4029 pass 2)', () => {
+  it('a retry that still cannot read leaves the NEXT retry able to read the restored file', async () => {
+    const file = paths.repairedBookGateJsonPath();
+    gate.__clearRepairedBookGateMemoryForTest();
+    rmSync(file, { recursive: true, force: true });
+    mkdirSync(file, { recursive: true });
+    await gate.loadRepairedBookGate();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
+    // The retry fails (still a directory): the write passes, the gate stays unreadable.
+    expect((await request(app).post('/api/books/kept/x')).status).toBe(200);
+    rmSync(file, { recursive: true, force: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ version: 2, epoch: 'ep-file', entries: [{ bookId: 'kept', repairedAt: new Date().toISOString() }], manuscripts: [] }),
+    );
+    vi.setSystemTime(Date.now() + 10_000);
+    // The failed retry must not have left the shared marker set: this one reads the file.
+    expect((await request(app).post('/api/books/kept/x')).status).toBe(409);
+  });
+});
