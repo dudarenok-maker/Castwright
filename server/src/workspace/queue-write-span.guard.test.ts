@@ -10,18 +10,28 @@
    every caller must import it un-aliased from that module: a private chain of the same name is the #4029 defect class
    itself. Only `queue-boot.ts` is allowlisted: it runs once at boot, before any route can mutate the queue.
 
+   A write must be awaited or returned (`await w(...)`, `return w(...)`, an arrow's concise body): a stored, chained,
+   `&&`-ed or `Promise.all`-ed promise can outlive the span, so it is `unawaited-write`.
+
+   NEVER NEST A SPAN. `serializeQueueMutation` inside a span waits on its own tail and wedges the chain for the whole
+   process (pinned at runtime below). A helper whose write is flagged `no-span` must NOT be given its own span when a
+   span calls it: keep the write in the caller's span and pass the snapshot in. `nested-span` flags a span call whose
+   ancestors include a span callback, and a call from inside a span to a same-file function that (transitively) opens a
+   span. A helper that opens a span and is called from a span in ANOTHER file is not seen (no call graph).
+
    FALSE NEGATIVES (not caught): an aliased `writeQueueFile as w` (the alias call is invisible; an aliased
-   `serializeQueueMutation` import IS flagged); a write reached through a helper function called from a span (the
-   helper's own call site is what is checked, so a helper that wraps a write needs its own span); a path held in a
-   variable and passed to a bare `writeJsonAtomic`/fs call; a write whose promise is chained (`writeQueueFile(...).then`)
-   rather than awaited; a data-flow that launders the snapshot through a property, a closure or a reassignment (the
-   check follows `const`/`let` initialisers by name, not values). */
-import { describe, it, expect, afterEach } from 'vitest';
+   `serializeQueueMutation` import IS flagged); a path held in a variable and passed to a bare `writeJsonAtomic`/fs call;
+   an fs writer outside the set below; a data-flow that launders the snapshot through a property, a closure, a function
+   parameter or a reassignment (the check follows `const`/`let` initialisers by name, not values), or a hoisted snapshot
+   whose name is re-declared inside the span (the inner declaration shadows it); `open(queueJsonPath(), 'r')` is NOT a
+   write, but `open` with any other mode is. A `serializeQueueMutation` bound by a parameter or destructuring counts as
+   a second declaration, but a `serializeQueueMutation` reached through a property of another object is not seen. */
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep, dirname, resolve } from 'node:path';
 import * as ts from 'typescript';
-import { collectSourceFiles } from '../test-utils/guard-scan.js';
+import { collectSourceFiles, lineOf } from '../test-utils/guard-scan.js';
 
 /** Relative (posix) path -> why the file may write the queue outside a span, and how many such writes. */
 const ALLOWED: Record<string, { writes: number; reason: string }> = {
@@ -50,7 +60,14 @@ const FS_WRITERS = new Set([
   'truncateSync',
   'copyFile',
   'copyFileSync',
+  'cp',
+  'cpSync',
+  'open',
+  'openSync',
+  'createWriteStream',
   'writeJsonAtomic',
+  'writeJsonAtomicOrdered',
+  'enqueuePathOp',
 ]);
 
 /** `f(...)` -> `f`; `ns.f(...)` -> `f`. */
@@ -73,12 +90,23 @@ const isQueuePathCall = (a: ts.Node): boolean => ts.isCallExpression(a) && calle
 function isQueueWrite(n: ts.CallExpression): boolean {
   const name = calleeName(n);
   if (name === 'writeQueueFile') return true;
-  return name !== undefined && FS_WRITERS.has(name) && n.arguments.some(isQueuePathCall);
+  if (name === undefined || !FS_WRITERS.has(name) || !n.arguments.some(isQueuePathCall)) return false;
+  /* `open(queueJsonPath(), 'r')` only reads. */
+  const mode = n.arguments[1];
+  return !((name === 'open' || name === 'openSync') && mode && ts.isStringLiteral(mode) && mode.text === 'r');
 }
 
 /** Writes that carry a snapshot (so the data-flow check applies); `rm`/`rename` carry none. */
 const carriesSnapshot = (n: ts.CallExpression): boolean =>
-  calleeName(n) === 'writeQueueFile' || calleeName(n) === 'writeJsonAtomic';
+  ['writeQueueFile', 'writeJsonAtomic', 'writeJsonAtomicOrdered'].includes(calleeName(n) ?? '');
+
+/** The write's promise is awaited or returned, so it settles inside the span. */
+function isAwaitedOrReturned(n: ts.CallExpression): boolean {
+  let c: ts.Node = n;
+  while (ts.isParenthesizedExpression(c.parent)) c = c.parent;
+  const p = c.parent;
+  return ts.isAwaitExpression(p) || ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === c);
+}
 
 function containsCall(root: ts.Node, name: string): boolean {
   let found = false;
@@ -99,13 +127,19 @@ function bindingNames(name: ts.BindingName, out: string[]): void {
   else for (const el of name.elements) if (ts.isBindingElement(el)) bindingNames(el.name, out);
 }
 
+/** Does `root` reference (as an identifier, not as a property name) one of `names`? */
 function mentions(root: ts.Node, names: Set<string>): boolean {
   let found = false;
   const visit = (n: ts.Node): void => {
     if (found) return;
     if (ts.isIdentifier(n) && names.has(n.text)) {
-      found = true;
-      return;
+      const p = n.parent;
+      const propertyName =
+        (ts.isPropertyAccessExpression(p) && p.name === n) || (ts.isPropertyAssignment(p) && p.name === n);
+      if (!propertyName) {
+        found = true;
+        return;
+      }
     }
     ts.forEachChild(n, visit);
   };
@@ -113,14 +147,15 @@ function mentions(root: ts.Node, names: Set<string>): boolean {
   return found;
 }
 
-/** Identifiers in `span` bound from a `readQueueFile` result, directly or through another such binding (to a fixpoint). */
-function snapshotNames(span: ts.Node): Set<string> {
+/** Identifiers declared under `root` (skipping the subtree `skip`) bound from a `readQueueFile` result, directly or through another such binding (to a fixpoint). */
+function snapshotNames(root: ts.Node, skip?: ts.Node): Set<string> {
   const decls: ts.VariableDeclaration[] = [];
   const collect = (n: ts.Node): void => {
+    if (n === skip) return;
     if (ts.isVariableDeclaration(n) && n.initializer) decls.push(n);
     ts.forEachChild(n, collect);
   };
-  collect(span);
+  collect(root);
   const tainted = new Set<string>();
   for (let grew = true; grew; ) {
     grew = false;
@@ -146,7 +181,19 @@ type Why =
   | 'stale-snapshot'
   | 'deferred-write'
   | 'unawaited-write'
+  | 'nested-span'
   | 'bad-span-import';
+
+/** Every name declared (variable or parameter) anywhere under `root`. */
+function declaredNames(root: ts.Node): Set<string> {
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && n.name) bindingNames(n.name, out);
+    ts.forEachChild(n, visit);
+  };
+  visit(root);
+  return new Set(out);
+}
 
 interface Violation {
   file: string;
@@ -193,10 +240,11 @@ function scan(
   let writes = 0;
   for (const file of collectSourceFiles(root)) {
     const rel = relative(root, file).split(sep).join('/');
-    const sf = ts.createSourceFile(file, ts.sys.readFile(file) ?? '', ts.ScriptTarget.Latest, true);
-    const lineOf = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+    const text = ts.sys.readFile(file) ?? '';
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const lineAt = (n: ts.Node): number => lineOf(text, n.getStart(sf));
     const bindings = spanBindings(sf, file, root, (n) =>
-      violations.push({ file: rel, line: lineOf(n), why: 'bad-span-import' }),
+      violations.push({ file: rel, line: lineAt(n), why: 'bad-span-import' }),
     );
     const isSpanCall = (c: ts.CallExpression): boolean =>
       calleeName(c) === SPAN_FN &&
@@ -208,12 +256,61 @@ function scan(
     /** `p` is the callback (first argument) of a valid span call. */
     const isSpanCallback = (p: ts.Node): boolean =>
       isFn(p) && ts.isCallExpression(p.parent) && isSpanCall(p.parent) && p.parent.arguments[0] === p;
+    const insideSpan = (n: ts.Node): boolean => {
+      for (let p: ts.Node | undefined = n.parent; p; p = p.parent) if (isSpanCallback(p)) return true;
+      return false;
+    };
+    /* Same-file functions that open a span, directly or through another such function (to a fixpoint): calling one
+       from inside a span nests a span. */
+    const helperName = (f: ts.Node): string | undefined =>
+      ts.isFunctionDeclaration(f) && f.name
+        ? f.name.text
+        : isFn(f) && ts.isVariableDeclaration(f.parent) && ts.isIdentifier(f.parent.name)
+          ? f.parent.name.text
+          : undefined;
+    const spanHelpers = new Set<string>();
+    const opensSpan = (root: ts.Node): boolean => {
+      let found = false;
+      const walk = (n: ts.Node): void => {
+        if (found) return;
+        if (
+          ts.isCallExpression(n) &&
+          (isSpanCall(n) || (ts.isIdentifier(n.expression) && spanHelpers.has(n.expression.text)))
+        ) {
+          found = true;
+          return;
+        }
+        ts.forEachChild(n, walk);
+      };
+      walk(root);
+      return found;
+    };
+    for (let grew = true; grew; ) {
+      grew = false;
+      const find = (n: ts.Node): void => {
+        const nm = isFnLike(n) ? helperName(n) : undefined;
+        if (nm && !spanHelpers.has(nm) && opensSpan(n)) {
+          spanHelpers.add(nm);
+          grew = true;
+        }
+        ts.forEachChild(n, find);
+      };
+      find(sf);
+    }
     const visit = (n: ts.Node): void => {
       if (
         (ts.isFunctionDeclaration(n) && n.name?.text === SPAN_FN) ||
-        (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === SPAN_FN)
+        (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === SPAN_FN) ||
+        ((ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name) && n.name.text === SPAN_FN)
       ) {
         declarations.push(rel);
+      }
+      if (
+        ts.isCallExpression(n) &&
+        (isSpanCall(n) || (ts.isIdentifier(n.expression) && spanHelpers.has(n.expression.text))) &&
+        insideSpan(n)
+      ) {
+        violations.push({ file: rel, line: lineAt(n), why: 'nested-span' });
       }
       if (ts.isCallExpression(n) && isQueueWrite(n)) {
         writes++;
@@ -238,19 +335,30 @@ function scan(
               }
             }
           }
-          const line = lineOf(n);
+          const line = lineAt(n);
           if (!span) violations.push({ file: rel, line, why: 'no-span' });
           else if (nested) violations.push({ file: rel, line, why: 'deferred-write' });
-          else if (ts.isVoidExpression(n.parent) || ts.isExpressionStatement(n.parent)) {
+          else if (!isAwaitedOrReturned(n)) {
             violations.push({ file: rel, line, why: 'unawaited-write' });
           } else if (!containsCall(span, 'readQueueFile')) {
             violations.push({ file: rel, line, why: 'read-outside-span' });
           } else if (carriesSnapshot(n)) {
             const names = snapshotNames(span);
-            const carried = n.arguments
-              .filter((a) => !isQueuePathCall(a))
-              .some((a) => containsCall(a, 'readQueueFile') || mentions(a, names));
-            if (!carried) violations.push({ file: rel, line, why: 'stale-snapshot' });
+            /* A snapshot hoisted above the span: bound from a read in the enclosing function, and not re-declared in the span. */
+            let scope: ts.Node = sf;
+            for (let p: ts.Node | undefined = span.parent; p; p = p.parent) {
+              if (isFnLike(p)) {
+                scope = p;
+                break;
+              }
+            }
+            const inner = declaredNames(span);
+            const stale = new Set([...snapshotNames(scope, span)].filter((s) => !inner.has(s)));
+            const args = n.arguments.filter((a) => !isQueuePathCall(a));
+            const carried = args.some((a) => containsCall(a, 'readQueueFile') || mentions(a, names));
+            if (!carried || args.some((a) => mentions(a, stale))) {
+              violations.push({ file: rel, line, why: 'stale-snapshot' });
+            }
           }
         }
       }
@@ -273,6 +381,19 @@ describe('every .queue.json write sits in a serializeQueueMutation span that hol
     );
     /* One chain, one declaration: a second `serializeQueueMutation` is a second, private chain. */
     expect(declarations).toEqual([SPAN_MODULE]);
+  });
+
+  it('why `nested-span` exists: a span awaited inside a span waits on its own tail and wedges the chain', async () => {
+    vi.resetModules();
+    const m = await import('./queue-mutex.js');
+    const settled = (p: Promise<unknown>) =>
+      Promise.race([p.then(() => 'settled'), new Promise<string>((r) => setTimeout(() => r('timeout'), 150))]);
+    expect(await settled(m.serializeQueueMutation(async () => 'flat'))).toBe('settled');
+    expect(await settled(m.serializeQueueMutation(async () => m.serializeQueueMutation(async () => 'inner')))).toBe(
+      'timeout',
+    );
+    /* Wedged for good: an unrelated later span never runs either. */
+    expect(await settled(m.serializeQueueMutation(async () => 'later'))).toBe('timeout');
   });
 
   describe('negative controls: each failing shape is caught in a temp tree', () => {
@@ -345,7 +466,35 @@ describe('every .queue.json write sits in a serializeQueueMutation span that hol
           IMPORT +
           `async function f() { await serializeQueueMutation(async () => { const b = await readQueueFile(p()); await serializeQueueMutation(async () => { await writeQueueFile(p(), b); }); }); }`,
       });
-      expect(whys(r)).toEqual(['read-outside-span']);
+      expect(whys(r).sort()).toEqual(['nested-span', 'read-outside-span']);
+    });
+
+    it('a span nested lexically in a span is nested-span, even with its own read', () => {
+      const r = run({
+        'routes/nested-lexical.ts':
+          IMPORT +
+          `async function f() { await serializeQueueMutation(async () => { const b = await readQueueFile(p()); if (b.paused) return; await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), c); }); }); }`,
+      });
+      expect(whys(r)).toEqual(['nested-span']);
+    });
+
+    it('a same-file helper that opens its own span, called from a span, is nested-span (directly and through another helper)', () => {
+      const r = run({
+        'routes/nested-helper.ts':
+          IMPORT +
+          `async function markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }
+          const viaArrow = async (id: string) => { await markDone(id); };
+          export async function f(id: string) { await serializeQueueMutation(async () => { const b = await readQueueFile(p()); if (b.paused) return; await viaArrow(id); }); }`,
+      });
+      expect(whys(r)).toEqual(['nested-span']);
+      /* The same helper called outside any span is fine. */
+      const ok = run({
+        'routes/helper-ok.ts':
+          IMPORT +
+          `async function markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }
+          export async function f(id: string) { await markDone(id); }`,
+      });
+      expect(ok.violations).toEqual([]);
     });
 
     it('a write in a function that is not the span callback (a later callback)', () => {
@@ -426,6 +575,99 @@ describe('every .queue.json write sits in a serializeQueueMutation span that hol
         'routes/other-module.ts:bad-span-import',
         'routes/other-module.ts:no-span',
       ]);
+    });
+
+    it('a namespace import of ANOTHER module is not the span, even though the call name matches', () => {
+      const r = run({
+        'routes/ns-other.ts': `import * as c from './my-chain.js';
+          export async function f() { await c.serializeQueueMutation(async () => { const b = await readQueueFile(p()); await writeQueueFile(p(), b); }); }`,
+      });
+      expect(whys(r)).toEqual(['no-span']);
+    });
+
+    it('a const serializeQueueMutation in a file that also imports the real one is a second declaration', () => {
+      const r = run({
+        'routes/shadow.ts':
+          IMPORT +
+          `export async function f() { const serializeQueueMutation = (m: () => Promise<unknown>) => m(); await serializeQueueMutation(async () => { const b = await readQueueFile(p()); await writeQueueFile(p(), b); }); }`,
+      });
+      expect(r.declarations).toEqual(['routes/shadow.ts']);
+    });
+
+    it('a parameter or destructured binding named serializeQueueMutation is a declaration too', () => {
+      const r = run({
+        'routes/param.ts': IMPORT + `export function g(serializeQueueMutation: unknown) { return serializeQueueMutation; }`,
+        'routes/destructured.ts': IMPORT + `export const { serializeQueueMutation: _x, serializeQueueMutation } = makeChain();`,
+      });
+      expect(r.declarations.sort()).toEqual(['routes/destructured.ts', 'routes/param.ts']);
+    });
+
+    it('a write whose promise is stored, short-circuited, collected or chained is unawaited; a returned one is fine', () => {
+      const body = (w: string) =>
+        IMPORT +
+        `export async function f(c: boolean) { await serializeQueueMutation(async () => { const b = await readQueueFile(p()); ${w} }); }`;
+      const r = run({
+        'routes/stored.ts': body(`const w = writeQueueFile(p(), b);`),
+        'routes/and.ts': body(`c && writeQueueFile(p(), b);`),
+        'routes/all.ts': body(`Promise.all([writeQueueFile(p(), b)]);`),
+        'routes/then.ts': body(`await writeQueueFile(p(), b).then(noop);`),
+        'routes/returned.ts': body(`return writeQueueFile(p(), b);`),
+      });
+      expect(r.violations.map((v) => `${v.file}:${v.why}`).sort()).toEqual([
+        'routes/all.ts:unawaited-write',
+        'routes/and.ts:unawaited-write',
+        'routes/stored.ts:unawaited-write',
+        'routes/then.ts:unawaited-write',
+      ]);
+    });
+
+    it('writeJsonAtomicOrdered, cp, open, createWriteStream and enqueuePathOp on queueJsonPath() are writes; a read-mode open is not', () => {
+      const r = run({
+        'routes/writers.ts': `export async function f() {
+          await writeJsonAtomicOrdered(queueJsonPath(), b); await cp(x, queueJsonPath()); await open(queueJsonPath(), 'w');
+          createWriteStream(queueJsonPath()); await enqueuePathOp(queueJsonPath(), fn); await open(queueJsonPath(), 'r'); }`,
+      });
+      expect(r.writes).toBe(5);
+      expect(whys(r)).toEqual(['no-span', 'no-span', 'no-span', 'no-span', 'no-span']);
+    });
+
+    it('a property NAME that matches a hoisted snapshot is not a reference to it', () => {
+      const r = run({
+        'routes/propname.ts':
+          IMPORT +
+          `export async function f() { const before = await readQueueFile(p());
+            await serializeQueueMutation(async () => { const { paused } = await readQueueFile(p()); if (paused) return;
+              await writeQueueFile(p(), { ...other, before: paused }); }); }`,
+      });
+      expect(r.violations).toEqual([]);
+      const stale = run({
+        'routes/propname-stale.ts':
+          IMPORT +
+          `export async function f() { await serializeQueueMutation(async () => { const { paused } = await readQueueFile(p()); if (paused) return;
+              await writeQueueFile(p(), { ...other, paused: true }); }); }`,
+      });
+      expect(whys(stale)).toEqual(['stale-snapshot']);
+    });
+
+    it('a name re-declared from a fresh read inside the span shadows the hoisted one (documented limit)', () => {
+      const r = run({
+        'routes/shadowed.ts':
+          IMPORT +
+          `export async function f() { const before = await readQueueFile(p());
+            await serializeQueueMutation(async () => { const before = await readQueueFile(p()); await writeQueueFile(p(), before); }); }`,
+      });
+      expect(r.violations).toEqual([]);
+    });
+
+    it('a write argument mixing the fresh read with a hoisted snapshot is stale', () => {
+      const r = run({
+        'routes/mixed.ts':
+          IMPORT +
+          `export async function f(idx: number) { const before = await readQueueFile(p());
+            await serializeQueueMutation(async () => { const fresh = await readQueueFile(p()); const i = fresh.entries.length;
+              await writeQueueFile(p(), removeAt(before, i)); }); }`,
+      });
+      expect(whys(r)).toEqual(['stale-snapshot']);
     });
 
     it('a namespace import of queue-mutex is a span; a namespace write is still a write', () => {
