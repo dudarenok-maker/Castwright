@@ -513,7 +513,8 @@ export function abortInFlightChapterJob(bookId: string, chapterId: number): void
 
 /* srv-16 — `serializeQueueMutation` (workspace/queue-mutex.ts, shared with the queue
    routes since #4029) serialises every server-side `.queue.json` read-modify-write: per-chapter
-   completion below, the srv-12 orphan-recovery reset, the recycle-storm pause. */
+   completion below, the fallback park (`markQueueEntryAwaitingConfirmOnDisk`), the srv-12
+   orphan-recovery reset, the recycle-storm pause. */
 
 /* srv-16 — mark a chapter's queue entry done from the SERVER once the chapter
    is actually rendered + persisted, instead of relying solely on the frontend

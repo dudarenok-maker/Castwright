@@ -132,16 +132,53 @@ describe('queue routes are serialised (#4029 pass 3)', () => {
   });
 });
 
-describe('every writer of .queue.json outside boot is wrapped (#4029 pass 3)', () => {
-  const count = (src: string, re: RegExp) => (src.match(re) ?? []).length;
-  const routes = join(__dirname, '..', 'routes');
-  it.each([
-    ['queue.ts', 10],
-    ['generation.ts', 4],
-    ['book-state.ts', 1],
-  ])('%s: each of its %i writeQueueFile calls sits in a serializeQueueMutation span', (file, writes) => {
-    const src = readFileSync(join(routes, file), 'utf8');
-    expect(count(src, /\bwriteQueueFile\(/g)).toBe(writes);
-    expect(count(src, /\bserializeQueueMutation\(/g)).toBe(writes);
+describe('every serialised queue site holds its read inside the span (#4034)', () => {
+  /* One tick, one entry per site. Moving any handler's `readQueueFile` above its `serializeQueueMutation` makes
+     that handler work from a snapshot taken before the others wrote, so its write drops their change. The
+     distinct-entry design means every serial order ends in the same final file, so a lost update is unambiguous. */
+  it('start / complete / retry / confirm-fallback / skip-fallback / DELETE / enqueue / pause in one tick all land', async () => {
+    for (let round = 0; round < 10; round++) {
+      await seed([
+        entry('s1', 'other', 'queued', 0),
+        entry('c1', 'other', 'in_progress', 1),
+        entry('f1', 'other', 'failed', 2),
+        entry('a1', 'other', 'awaiting_confirm', 3),
+        entry('a2', 'other', 'awaiting_confirm', 4),
+        entry('d1', 'other', 'queued', 5),
+      ]);
+      const rs = await Promise.all([
+        request(app).post('/api/queue/s1/start'),
+        request(app).post('/api/queue/c1/complete'),
+        request(app).post('/api/queue/f1/retry'),
+        request(app).post('/api/queue/a1/confirm-fallback'),
+        request(app).post('/api/queue/a2/skip-fallback'),
+        request(app).delete('/api/queue/d1'),
+        request(app).post('/api/queue/enqueue').send(enqueueBody(`n${round}`, 'other')),
+        request(app).post('/api/queue/pause').send({ paused: true }),
+      ]);
+      expect(rs.map((r) => r.status)).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
+      const file = JSON.parse(readFileSync(paths.queueJsonPath(), 'utf8')) as { paused: boolean };
+      expect(file.paused).toBe(true);
+      expect(onDisk().map((e) => `${e.id}:${e.status}`).sort()).toEqual(
+        ['a1:queued', 'f1:queued', `n${round}:queued`, 's1:in_progress'].sort(),
+      );
+    }
+  });
+
+  it('reorder and a start in the same tick both land', async () => {
+    for (let round = 0; round < 10; round++) {
+      await seed([entry('r1', 'other', 'queued', 0), entry('r2', 'other', 'queued', 1), entry('r3', 'other', 'queued', 2)]);
+      const rs = await Promise.all([
+        request(app).post('/api/queue/reorder').send({ order: ['r3', 'r1', 'r2'] }),
+        request(app).post('/api/queue/r2/start'),
+      ]);
+      /* Either serial order is legal: reorder first lands both changes; start first makes reorder refuse (409) because
+         an in_progress entry may not move, and then only the start lands. A hoisted read loses one of them either way. */
+      expect(rs[1].status).toBe(200);
+      expect([200, 409]).toContain(rs[0].status);
+      expect(onDisk().map((e) => `${e.id}:${e.status}`)).toEqual(
+        rs[0].status === 200 ? ['r3:queued', 'r1:queued', 'r2:in_progress'] : ['r1:queued', 'r2:in_progress', 'r3:queued'],
+      );
+    }
   });
 });

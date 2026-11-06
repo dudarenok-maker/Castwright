@@ -24,8 +24,8 @@
    `runBookJob` registration (workspace/book-jobs.ts), not this path-keyed busy
    registry. */
 
-/* Per-bookDir promise chain — the same idiom as generation's
-   `serializeQueueMutation`. A waiter chains onto the tail; the lock is released
+/* Per-bookDir promise chain — the same idiom as
+   `serializeQueueMutation` (workspace/queue-mutex.ts). A waiter chains onto the tail; the lock is released
    when its critical section settles. */
 const designChains = new Map<string, Promise<unknown>>();
 
