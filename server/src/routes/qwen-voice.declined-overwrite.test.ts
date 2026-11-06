@@ -42,6 +42,21 @@ const beforeLocks = vi.hoisted(() => ({ fn: null as (() => void) | null }));
    row's book-op: the landing is the only single-book book-op taken with no opts
    (the series walk passes `hintDir`). */
 const beforeLanding = vi.hoisted(() => ({ bookId: null as string | null, fn: null as (() => Promise<void>) | null }));
+/* Pass 11, P11-2 — runs (and is awaited) once, inside a landing, between its rm of
+   the target `.pt` and the rename onto it. */
+const midLanding = vi.hoisted(() => ({ target: null as string | null, fn: null as (() => Promise<void>) | null }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const rename = async (from: unknown, to: unknown) => {
+    if (midLanding.fn && midLanding.target && String(to).endsWith(midLanding.target)) {
+      const run = midLanding.fn;
+      midLanding.fn = null;
+      await run();
+    }
+    return actual.rename(from as string, to as string);
+  };
+  return { ...actual, default: { ...actual, rename }, rename };
+});
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
   const withBookOps: typeof actual.withBookOps = (ids, fn, opts) => {
@@ -217,6 +232,8 @@ beforeEach(() => {
   beforeLocks.fn = null;
   beforeLanding.fn = null;
   beforeLanding.bookId = null;
+  midLanding.fn = null;
+  midLanding.target = null;
   afterLanding.fn = null;
   gate.release?.(); // a test that failed while holding a render must not wedge the next
   gate.hold = false;
@@ -1101,16 +1118,44 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(readFileSync(keyFile('Book One'))).toEqual(ORIG);
   });
 
-  it("P11-2 guard: a decline whose source .pt is missing while the row has a designed slot fails retryably and moves nothing", async () => {
+  /* Owner decision (refuse only mid-save): a source .pt that is missing while
+     nothing is saving it is a voice nobody designed (or one deleted by hand). */
+  it('P11-2: a hand-deleted source .pt with no save in flight: the decline succeeds and the row gets a fresh uuid', async () => {
     reset();
     writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
-    const twoBefore = row('Book Two');
     const dec = await decline('Book Two', 'Book One');
-    expect(dec.status).toBe(500);
-    expect(dec.body.error).toMatch(/try again/);
+    expect(dec.status, JSON.stringify(dec.body)).toBe(200);
+    const fresh = row('Book Two').voiceUuid;
+    expect(fresh).toBeTruthy();
+    expect(fresh).not.toBe('u_shared');
+    expect(row('Book Two').declinedVoiceFrom).toContain(ids['Book One']);
+    expect(row('Book One').voiceUuid).toBe('u_shared');
+  });
+
+  it('P11-2: a decline during a landing of the source key fails retryably, then succeeds once it has landed', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    const twoBefore = row('Book Two');
+    let mid: { status: number; body: Record<string, any> } | undefined;
+    midLanding.target = 'qwen-u_shared.pt';
+    midLanding.fn = async () => {
+      mid = await decline('Book Two', 'Book One');
+    };
+    const d = await design('Book One');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(mid?.status, JSON.stringify(mid?.body)).toBe(500);
+    expect(mid?.body.error).toMatch(/try again/);
     expect(row('Book Two')).toEqual(twoBefore);
-    expect(readdirSync(qwenDir())).toEqual([]);
+    expect(readdirSync(qwenDir()).filter((f) => f !== 'qwen-u_shared.pt')).toEqual([]);
+    const after = await decline('Book Two', 'Book One');
+    expect(after.status, JSON.stringify(after.body)).toBe(200);
+    const fresh = row('Book Two').voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(readFileSync(pt(`qwen-${fresh}`))).toEqual(NEW_PT);
+    expect(row('Book One').voiceUuid).toBe('u_shared');
   });
 });
 describe('pass 11, P11-1: a design in a book whose cast is not confirmed yet', () => {

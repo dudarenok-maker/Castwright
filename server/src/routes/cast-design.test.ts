@@ -973,11 +973,6 @@ describe('scope + variantTasks (fs-25)', () => {
         join(prequelDir, '.audiobook', 'cast.json'),
         JSON.stringify({ characters: [{ ...shared }] }),
       );
-      /* The shared base is designed (the row carries its slot): its file exists,
-         so the separation copies it (pass 11, P11-2 refuses moving a designed row
-         onto an empty key). */
-      mkdirSync(join(workspaceRoot, 'voices', 'qwen'), { recursive: true });
-      writeFileSync(join(workspaceRoot, 'voices', 'qwen', 'qwen-u_marlow_shared.pt'), Buffer.from('SHARED-BASE'));
       const res = await request(app)
         .post(`/api/books/${bookId}/cast/design`)
         .send({

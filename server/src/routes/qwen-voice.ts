@@ -296,6 +296,26 @@ export class CharacterGoneError extends Error {
 const designWatchers = new Map<string, { key: string; linkId: string }>();
 const watchTag = (bookId: string, characterId: string): string => `${bookId}|${characterId}`;
 
+/* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — the voice keys
+   whose base family a landing, a promote or a series mint is writing right now
+   (`active` writers), and how many writes have ever begun on each, so a
+   separation can tell a `.pt` missing mid-save from one nobody designed. One
+   small entry per key saved by this process; never pruned, so `begun` is never
+   reset under a reader. */
+const savingKeys = new Map<string, { active: number; begun: number }>();
+async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const s = savingKeys.get(key) ?? { active: 0, begun: 0 };
+  savingKeys.set(key, s);
+  s.active++;
+  s.begun++;
+  try {
+    return await fn();
+  } finally {
+    s.active--;
+  }
+}
+const savesOf = (key: string): { active: number; begun: number } => ({ ...(savingKeys.get(key) ?? { active: 0, begun: 0 }) });
+
 /* P11-5 — the render was discarded because the row's voice changed under it. */
 export class DesignVoiceChangedError extends RetryableForkError {
   constructor() {
@@ -487,18 +507,20 @@ export async function separateVoiceLocked(
   const oldUuid = x.voiceUuid ?? undefined;
   const newUuid = nanoid();
   const oldKey = oldUuid ? `qwen-${oldUuid}` : `qwen-${linkId}`;
+  const savesBefore = savesOf(oldKey);
   const copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
-  /* PR #4007 pass 11, P11-2 — a missing source `.pt` means "nobody designed it"
-     only when no row being moved has a designed slot. A row that has one lost its
-     file to a writer in flight (a landing between its rm and its rename): moving
-     it onto an empty key would leave it voiceless, so the step fails, retryably,
-     before anything is written. */
-  const sourceDesigned = copied.includes(qwenVoicePtPath(`qwen-${newUuid}`));
-  const refuseEmptyMove = (c: CastCharacter): void => {
-    if (!sourceDesigned && c.overrideTtsVoices?.qwen?.name && !characterHasClonedSlot(c)) {
+  /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — a missing
+     source `.pt` is a voice nobody designed (or one deleted by hand), and the row
+     moves onto the empty key like any other, UNLESS a landing, promote or mint of
+     that key was saving it across the copy (between its rm and its rename): then
+     the step fails, retryably, before anything is written. */
+  if (!copied.includes(qwenVoicePtPath(`qwen-${newUuid}`))) {
+    const savesAfter = savesOf(oldKey);
+    if (savesBefore.active > 0 || savesAfter.active > 0 || savesAfter.begun !== savesBefore.begun) {
+      await removeFiles(copied);
       throw new RetryableForkError("This character's voice is being saved right now; try again.");
     }
-  };
+  }
   /* Every row moved, by book: their previews staged under the old key go (#4028). */
   const moved: Array<{ bookId: string; characterId: string }> = [];
   const movedSameBook: string[] = [];
@@ -517,7 +539,6 @@ export async function separateVoiceLocked(
       const followerBookId = scan.followers.find((f) => resolve(f.dir) === dir)!.bookId;
       const characters = cast.characters.map((c) => {
         if (!holds(c) || !linkIds.has(c.voiceId ?? c.id)) return c;
-        refuseEmptyMove(c);
         changed = true;
         moved.push({ bookId: followerBookId, characterId: c.id });
         return withForkedUuid(c, newUuid);
@@ -531,7 +552,6 @@ export async function separateVoiceLocked(
     for (let i = 0; i < fresh.characters.length; i++) {
       const c = fresh.characters[i];
       if ((c.voiceId ?? c.id) !== linkId || !holds(c)) continue;
-      refuseEmptyMove(c);
       fresh.characters[i] = withForkedUuid(c, newUuid);
       if (ownBookId) moved.push({ bookId: ownBookId, characterId: c.id });
       if (c.id !== characterId) movedSameBook.push(c.id);
@@ -703,45 +723,48 @@ export async function ensureCharacterVoiceUuid(
        in between) leaves every stamped book speaking its own voice. With nothing
        to copy (nobody designed the legacy key) only the designing row is stamped.
        The caller holds the design lock. */
-    const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
-    if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
-      await removeFiles(copied);
-      /* Owner decision (share a first design): the landing shares it once the file
-         exists, under its locks (shareFirstDesign). */
-      const own = await stampOwnRow(bookDir, characterId, uuid);
-      if (own === uuid) onFirstDesign?.({ linkId, uuid });
-      return own;
-    }
-    /* A row that already has its own uuid keeps it: a separated row still shares
-       `voiceId` with the earlier book, and restamping it would orphan its own
-       designed voice. */
-    let stampedAny = false;
-    const stamp = (c: CastCharacter): CastCharacter => {
-      if (c.voiceUuid) return c;
-      stampedAny = true;
-      return { ...c, voiceUuid: uuid };
-    };
-    try {
-      await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
-    } catch (e) {
-      /* A book stamped before the failure points at the copy, which is its own
-         voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
-      if (!stampedAny) await removeFiles(copied);
-      throw e;
-    }
-    /* The row's uuid as the walk left it, not the one minted here: a row a
-       decline stamped meanwhile keeps its own (#4028 (c)). P11-1 — the walk skips
-       every book whose cast is not confirmed, the designing book included (a
-       design from the Confirm screen), so a row the walk did not stamp is stamped
-       here, with its same-book rows on the link; every other book stamped holds the
-       copy, so nothing is left without its file even when the row is gone. */
-    const stampedFirst = stampedAny;
-    try {
-      return await stampOwnRow(bookDir, characterId, uuid, linkId);
-    } catch (e) {
-      if (!stampedFirst) await removeFiles(copied);
-      throw e;
-    }
+    /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
+    return whileSaving(`qwen-${uuid}`, async () => {
+      const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
+      if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
+        await removeFiles(copied);
+        /* Owner decision (share a first design): the landing shares it once the file
+           exists, under its locks (shareFirstDesign). */
+        const own = await stampOwnRow(bookDir, characterId, uuid);
+        if (own === uuid) onFirstDesign?.({ linkId, uuid });
+        return own;
+      }
+      /* A row that already has its own uuid keeps it: a separated row still shares
+         `voiceId` with the earlier book, and restamping it would orphan its own
+         designed voice. */
+      let stampedAny = false;
+      const stamp = (c: CastCharacter): CastCharacter => {
+        if (c.voiceUuid) return c;
+        stampedAny = true;
+        return { ...c, voiceUuid: uuid };
+      };
+      try {
+        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
+      } catch (e) {
+        /* A book stamped before the failure points at the copy, which is its own
+           voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
+        if (!stampedAny) await removeFiles(copied);
+        throw e;
+      }
+      /* The row's uuid as the walk left it, not the one minted here: a row a
+         decline stamped meanwhile keeps its own (#4028 (c)). P11-1 — the walk skips
+         every book whose cast is not confirmed, the designing book included (a
+         design from the Confirm screen), so a row the walk did not stamp is stamped
+         here, with its same-book rows on the link; every other book stamped holds the
+         copy, so nothing is left without its file even when the row is gone. */
+      const stampedFirst = stampedAny;
+      try {
+        return await stampOwnRow(bookDir, characterId, uuid, linkId);
+      } catch (e) {
+        if (!stampedFirst) await removeFiles(copied);
+        throw e;
+      }
+    });
   }
 
   /* Book-scoped — the caller's design lock serialises only against OTHER
@@ -1129,7 +1152,7 @@ async function landStagedDesign(
     if (base !== watcher.key) throw new DesignVoiceChangedError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
-    await moveStaged(staging, voiceId);
+    await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
       const characters = cast.characters.map((c) => {
@@ -1766,8 +1789,11 @@ qwenVoiceRouter.post(
         console.warn('[qwen-voice] promote: no staged preview', e);
         return { status: 409, body: { error: 'No staged preview voice to promote.' } };
       }
-      await rm(qwenVoicePtPath(realVoiceId), { force: true });
-      await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
+      /* P11-2 — the real key is saving between this rm and its rename. */
+      await whileSaving(realVoiceId, async () => {
+        await rm(qwenVoicePtPath(realVoiceId), { force: true });
+        await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
+      });
       await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
       await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
         () => {},
