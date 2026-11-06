@@ -482,3 +482,24 @@ describe('P13-1 failure paths — the record and the rows move together', () => 
     expect(recorded()).toEqual([]);
   });
 });
+
+describe("Y1 — promote shares only the key's FIRST file", () => {
+  it('a Keep that replaces an existing file stamps nothing (Three was unconfirmed at the first design, confirmed since)', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book One') }], false);
+    expect((await design('Book Two')).status).toBe(200);
+    const n = rowOf('Book Two').voiceUuid as string;
+    expect(n).toBeTruthy();
+    expect(rowOf('Book One').voiceUuid).toBe(n);
+    expect(rowOf('Book Three').voiceUuid).toBeUndefined(); // unconfirmed: skipped
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book One') }], true); // confirmed later
+    const preview = await design('Book Two', { preview: true });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    const kept = await promote('Book Two', preview.body.voiceId);
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect(kept.body.voiceId).toBe(`qwen-${n}`);
+    expect(rowOf('Book Three').voiceUuid, 'a redesign Keep was shared as a first design').toBeUndefined();
+  });
+});
