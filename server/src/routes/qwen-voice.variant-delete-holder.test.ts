@@ -422,6 +422,98 @@ describe('#4026 — a holder book renamed while the teardown scans', () => {
   });
 });
 
+/* Two legacy (no-uuid) narrators in different series, both rendering
+   `qwen-narrator__angry`. X (Other Author) names the slot and is deleted; Y (the
+   test series, no angry slot yet) designs angry. Y's design needs none of X's
+   book-ops, so it can land and finish while X's teardown is scanning. The scan
+   reads Y's folder first, so a gate on X's cast.json lands after Y was read. */
+const X_AUTHOR = 'Other Author';
+const X_SERIES = 'Other Series';
+const X_TITLE = 'Book X';
+let xBookId: string;
+const xDir = () => join(workspaceRoot, 'books', X_AUTHOR, X_SERIES, X_TITLE);
+const xCast = () => join(xDir(), '.audiobook', 'cast.json');
+const narr = { id: 'narrator', name: 'Narrator', role: 'narrator', voiceStyle: 'a calm narrator', evidence: [{ quote: '"So."' }], gender: 'male', ageRange: 'adult' };
+function seedCrossSeries() {
+  reset();
+  writeBook('Book One', [{ ...narr, overrideTtsVoices: { qwen: { name: 'qwen-narrator' } } }]); // Y
+  mkdirSync(join(xDir(), '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(xDir(), '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: xBookId, manuscriptId: 'm_x', title: X_TITLE, author: X_AUTHOR, series: X_SERIES,
+      seriesPosition: 1, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+      chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(xDir(), 'manuscript.txt'), 'placeholder');
+  writeFileSync(
+    xCast(),
+    JSON.stringify({ characters: [{ ...narr, overrideTtsVoices: { qwen: { name: 'qwen-narrator', variants: { angry: { name: 'qwen-narrator__angry' } } } } }] }),
+  );
+  writeFileSync(pt('qwen-narrator'), Buffer.from('BASE'));
+  writeFileSync(pt('qwen-narrator__angry'), Buffer.from('OLD-ANGRY'));
+}
+const designY = () =>
+  request(app).post(`/api/books/${ids['Book One']}/cast/narrator/design-voice`).send({ sampleVoiceId: 'v_n', modelKey: QWEN_KEY, emotion: 'angry' });
+const deleteX = () => request(app).delete(`/api/books/${xBookId}/cast/narrator/emotion-variant/angry`);
+const yAngry = () => rowOf('Book One', 'narrator')?.overrideTtsVoices?.qwen?.variants?.angry?.name;
+const pauseScanAfterReadingX = () => {
+  scanGate.path = resolve(xCast());
+  scanGate.nth = 2; // the first read is the teardown's own pre-scan read of X
+  scanGate.seen = 0;
+  scanGate.when = 'after';
+  return gate(scanGate);
+};
+
+describe('#4026 — the teardown\'s before/during/after check against a design in another series', () => {
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    xBookId = makeBookId(X_AUTHOR, X_SERIES, X_TITLE);
+  });
+
+  it('a whole design that lands and writes its slot during the scan (begun moved, nothing active at either end): kept', async () => {
+    seedCrossSeries();
+    const scan = pauseScanAfterReadingX();
+    const deleting = deleteX().then((r) => r);
+    try {
+      await scan.entered; // the scan has read Y (no angry slot) and X (dropped)
+      const r = await designY();
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    } finally {
+      scan.release();
+    }
+    expect((await deleting).status).toBe(200);
+    expect(yAngry()).toBe('qwen-narrator__angry');
+    expect(existsSync(pt('qwen-narrator__angry')), 'deleted a file Y names').toBe(true);
+  });
+
+  it('a hold already active when the teardown starts and released during its scan (active at the start only): kept', async () => {
+    seedCrossSeries();
+    walkGate.armed = true;
+    const walk = gate(walkGate);
+    const designing = designY().then((r) => r);
+    await walk.entered; // landed, holding
+    const scan = pauseScanAfterReadingX();
+    const deleting = deleteX().then((r) => r);
+    try {
+      /* With the start-of-teardown check the DELETE answers without scanning at
+         all; without it the scan runs and parks here while the hold is released. */
+      await Promise.race([scan.entered, deleting]);
+      walk.release();
+      const r = await designing;
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    } finally {
+      walk.release();
+      scan.release();
+    }
+    expect((await deleting).status).toBe(200);
+    expect(yAngry()).toBe('qwen-narrator__angry');
+    expect(existsSync(pt('qwen-narrator__angry')), 'deleted a file Y names').toBe(true);
+  });
+});
+
 describe('#4026 — promote keeps a stale variant file another row still names', () => {
   it("an unforked declined row (a pre-#4007 decline): Two's preview is staged through design-voice, which separates it; One keeps its base, file and slot", async () => {
     seedShared({ declinedVoiceFrom: [ids['Book One']] });
