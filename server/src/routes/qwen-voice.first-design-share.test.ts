@@ -285,3 +285,35 @@ describe("P12-1 — a decliner's kept first design is never shared", () => {
     expect(readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'))).toEqual([]);
   });
 });
+
+describe('P12-4 — the share does not depend on the mint path', () => {
+  it('Design & compare -> Cancel, then a plain first design: the linked rows share it (as Keep does)', async () => {
+    seedNeverDesigned();
+    const preview = await design('Book Two', { preview: true });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    const cancel = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: preview.body.voiceId });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(existsSync(pt(`qwen-${n}`))).toBe(true);
+    expect(row('Book One').voiceUuid, 'One (linked) did not get the first design').toBe(n);
+    expect(row('Book Three').voiceUuid, 'Three (linked) did not get the first design').toBe(n);
+  });
+
+  it('a redesign (the key already has its file) shares nothing', async () => {
+    seedNeverDesigned();
+    const preview = await design('Book Two', { preview: true });
+    await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: preview.body.voiceId });
+    const n = row('Book Two').voiceUuid as string;
+    writeFileSync(pt(`qwen-${n}`), Buffer.from('ALREADY-DESIGNED'));
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(row('Book One').voiceUuid).toBeUndefined();
+    expect(row('Book Three').voiceUuid).toBeUndefined();
+  });
+});

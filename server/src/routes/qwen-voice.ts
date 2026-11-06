@@ -688,9 +688,9 @@ async function stampOwnRow(
    sibling (matching voiceId ?? id) so a series-shared voice keeps one identity
    — series-scoped when seriesFilter is given (mirrors persistEmotionVariant;
    since pass 11 only after copying the legacy key's designed base family to the
-   new key, and only the designing row when there is nothing to copy: then
-   `onFirstDesign` hears the link id and uuid, and the landing shares the design
-   with the linked rows once its file exists), else book-scoped. Returns
+   new key, and only the designing row when there is nothing to copy: then the
+   landing shares the design with the linked rows when it writes the key's first
+   file, shareFirstDesign), else book-scoped. Returns
    undefined for an unknown character.
 
    #3992: no design decides anything about a shared voice. "Don't reuse" already
@@ -702,7 +702,6 @@ export async function ensureCharacterVoiceUuid(
   bookDir: string,
   characterId: string,
   seriesFilter?: { author: string; series: string },
-  onFirstDesign?: (share: FirstDesignShare) => void,
 ): Promise<string | undefined> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
@@ -728,11 +727,9 @@ export async function ensureCharacterVoiceUuid(
       const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
       if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
         await removeFiles(copied);
-        /* Owner decision (share a first design): the landing shares it once the file
-           exists, under its locks (shareFirstDesign). */
-        const own = await stampOwnRow(bookDir, characterId, uuid);
-        if (own === uuid) onFirstDesign?.({ linkId, uuid });
-        return own;
+        /* Owner decision (share a first design): the landing shares it when it
+           writes the key's first file, under its locks (shareFirstDesign). */
+        return stampOwnRow(bookDir, characterId, uuid);
       }
       /* A row that already has its own uuid keeps it: a separated row still shares
          `voiceId` with the earlier book, and restamping it would orphan its own
@@ -1047,8 +1044,9 @@ async function evictSidecarVoices(voiceIds: string[]): Promise<void> {
 }
 
 /* PR #4007 pass 11 (owner decision: share a first design) — a first design of a
-   never-designed legacy key (`qwen-<linkId>` has no `.pt`): the mint stamped only
-   the designing row (`uuid`), and the landing shares the design. */
+   never-designed legacy key (`qwen-<linkId>` has no `.pt`) by a row on its own
+   uuid (`uuid`), whose key gets its first file from this write (a landing or a
+   promote); the write shares the design. */
 interface FirstDesignShare {
   linkId: string;
   uuid: string;
@@ -1155,21 +1153,29 @@ async function shareKeptDesign(
    start key, moved only by the design's own uuid step and by a separation that
    moved the row); any other change throws DesignVoiceChangedError and the caller
    discards the render.
-   A first design (`share`) also takes the book-ops and cast locks of the other
-   books with a row on the never-designed key, and shares the design with them
-   (shareFirstDesign). When one of those books is gone by then, it lands on the
-   row's own book alone. */
+   A base design that writes the first file of the row's uuid key (P12-4: however
+   the uuid was minted, a Cancel or a discarded landing included) also takes the
+   book-ops and cast locks of the other books with a row on the never-designed
+   legacy key, and shares the design with them (shareFirstDesign), unless the row
+   carries a decline marker (P12-1). The holders are planned lock-free and the
+   rule is re-decided under the locks. When one of those books is gone by then,
+   it lands on the row's own book alone. */
 async function landStagedDesign(
   p: DesignQwenVoiceParams,
   staging: string,
   calibrationText: string,
   watcher: { key: string },
-  share?: FirstDesignShare,
 ): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
-  const sharing = share && !p.emotion && !p.preview ? share : undefined;
+  const mayShare = !p.emotion && !p.preview && !!p.seriesFilter;
+  /* The first-design rule for a row: on its own uuid, no decline marker, and no
+     file at its key yet (this write creates it). */
+  const firstDesignOf = async (c: CastCharacter | undefined): Promise<FirstDesignShare | undefined> =>
+    mayShare && c?.voiceUuid && !hasDeclineMarker(c) && !(await exists(qwenVoicePtPath(`qwen-${c.voiceUuid}`)))
+      ? { linkId: c.voiceId ?? c.id, uuid: c.voiceUuid }
+      : undefined;
   /* The landing proper; the caller holds the row's book's cast lock (and those of
      `others`) and passes `writeCast` built inside it. */
   const land = async (others: BookHandle[], writeCast: CastWriter) => {
@@ -1180,6 +1186,7 @@ async function landStagedDesign(
     if (base !== watcher.key) throw new DesignVoiceChangedError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
+    const sharing = await firstDesignOf(row); // decided before the move creates the file
     await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
@@ -1196,7 +1203,10 @@ async function landStagedDesign(
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
     return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined };
   };
-  const shareIds = sharing ? await legacyKeyHolderBookIds(p.bookDir, sharing.linkId) : [];
+  const planned = await firstDesignOf(
+    (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
+  );
+  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId) : [];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (shareIds.length) {
     out = await withBookOps([p.bookId, ...shareIds], async (books) => {
@@ -1304,13 +1314,12 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       const now = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (!now) throw new CharacterGoneError();
       if (qwenStorageKey(now, p.characterId) !== watcher.key) throw new DesignVoiceChangedError();
-      let share: FirstDesignShare | undefined;
       const uuid = requireDesignVoiceUuid(
         p.character,
         !!p.emotion,
         p.emotion
           ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
-          : await ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter, (s) => (share = s)),
+          : await ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter),
       );
       /* The uuid step's own move: a separation already moved the watcher, and a
          first mint gives a row that had no uuid its new key. A row that had one and
@@ -1322,7 +1331,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, share)) };
+      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher)) };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);
